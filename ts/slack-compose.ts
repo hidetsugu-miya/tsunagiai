@@ -615,7 +615,6 @@ async function postFields(): Promise<Fields> {
 }
 
 export function initSlackCompose() {
-  $("thread-slack").onclick = openCompose;
   $("slack-back").onclick = back;
   $("slack-mode-claude").onclick = () => setMode("claude");
   $("slack-mode-manual").onclick = () => setMode("manual");

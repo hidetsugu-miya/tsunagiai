@@ -4,6 +4,7 @@ import { setFooterCount } from "./footer.js";
 import { showFailure } from "./error-card.js";
 import { invoke } from "./ipc.js";
 import { syncMailClaude } from "./mail-claude.js";
+import { mailSlackOpen } from "./mail-slack.js";
 import { toast } from "./toast.js";
 
 // Whether `claude` can be used: the AI summary button is shown only then, in a thread.
@@ -46,9 +47,12 @@ export function show(view: View) {
   $("new-mail").hidden = view !== "new-mail";
   $("main").hidden = own;
   $("mail-screen").hidden = own;
-  // The right side (M-11) is shown with a new mail only; an open thread has none.
-  $("mail-side").hidden = view !== "new-mail";
+  // The right side is shown with a new mail (M-11, the pane of Claude), and with an open thread while its Slack pane is open (S-28); the pane of Claude and its row belong to the new mail only.
+  const slackPane = view === "thread" && mailSlackOpen();
+  $("mail-side").hidden = view !== "new-mail" && !slackPane;
   $("mail-split").hidden = $("mail-side").hidden;
+  $("mail-tools").hidden = $("mail-claude").hidden = view !== "new-mail";
+  $("mail-slack").hidden = !slackPane;
   $("login").hidden = view !== "login";
   $("relogin").hidden = view !== "list" || !$("relogin").hasChildNodes();
   $("inbox-state").hidden = view !== "list";
