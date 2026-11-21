@@ -132,19 +132,20 @@ An issue that carries a decision of the owner (a new feature, a change of spec o
 - The owner has decided the spec, in the session. While a decision is open, there is no issue.
 - The AI has verified the spec against the code: it can be built as decided, and what it touches.
 - The plan of the implementation is set: the files to touch, and the order.
-- The owner has accepted a prototype, shown as an Artifact page: a mock of the screen for UI work, the result of the verification for work without a screen (decided by the agent, 2026-11-21, at the owner's leave; #1207).
+- The owner has accepted a prototype, shown as an HTML page in the preview of the development tab (`preview_open` of `tsunagiai-mcp`): a mock of the screen for UI work, the result of the verification for work without a screen (decided by the agent, 2026-11-21, at the owner's leave; #1207).
 
 The gate has three scopes (decided by the agent, 2026-11-21, at the owner's leave; #1207):
 - An issue that carries a decision of the owner: the whole gate above.
-- An issue that the AI decides at the owner's leave (`improvement-proposal`, "Issue decided by the AI"): the verification, the plan and a prototype Artifact all the same, with the URL in the body, but the AI accepts the prototype in the owner's place and the section `AI が決めたこと` says why.
+- An issue that the AI decides at the owner's leave (`improvement-proposal`, "Issue decided by the AI"): the verification, the plan and a prototype HTML all the same, but the AI accepts the prototype in the owner's place and the section `AI が決めたこと` says why.
 - No gate and no prototype: an issue for a Dependabot pull request (`dependabot-issues.sh`), a bug whose correct behavior a requirement already states, an issue that changes only `.claude/` or the tools (the harness), an issue of the Lows that a merged pull request's review left (`review.md`; at the owner's instruction, 2026-11-21; #1211), an issue of a flaky test (`review.md`; at the owner's instruction, 2026-11-21; #1212), and an issue of a retrospective (`.claude/skills/retrospective/SKILL.md`; at the owner's instruction, 2026-11-21; #1213). Its body records what was found and the plan only.
 
-Write in the body of the issue the background, what was investigated, the decision (with the options put to the owner), the plan and the URL of the prototype, as far as its scope asks, so that the reason for the choice can be found on GitHub later (`issue-plan`, step 2).
+Write in the body of the issue the background, what was investigated, the decision (with the options put to the owner), the plan and the prototype, as far as its scope asks, so that the reason for the choice can be found on GitHub later (`issue-plan`, step 2).
+The prototype goes in as the HTML that the owner was shown, unchanged, at the end of the body, inside a `<details>` and a code block of `html`; the body holds no URL of it (at the owner's instruction, 2026-11-22; #1235. It replaces the Artifact and its URL).
 The repository is public, so keep personal information out (`publishing.md`).
 
 ```text
-Good: two layouts are put to the owner in the session -> the owner picks A -> the code is checked and the files are listed -> a mock of A as an Artifact -> the owner accepts it -> the issue is made with the decision, the plan and the URL of the mock
-Good: improvement-proposal finds a hook message that names a removed command -> the AI checks it, lists the files, publishes the verification as an Artifact, accepts it, and files the issue with "AI が決めたこと" and the URL
+Good: two layouts are put to the owner in the session -> the owner picks A -> the code is checked and the files are listed -> a mock of A as HTML, opened in the preview -> the owner accepts it -> the issue is made with the decision, the plan and the HTML of the mock in a `<details>`
+Good: improvement-proposal finds a hook message that names a removed command -> the AI checks it, lists the files, writes the verification as an HTML page, accepts it, and files the issue with "AI が決めたこと" and the HTML in a `<details>`
 Good: a spec of the README photos no longer fits the screen -> the issue records what was found and the plan, with no prototype, because it changes only `.claude/`
 Good: a list stops scrolling, which its requirement says it must do -> the bug issue records the reproduction and the plan, with no prototype
 Bad:  two layouts are put to the owner, and the issue is made before the owner has picked one
