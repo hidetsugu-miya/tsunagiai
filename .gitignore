@@ -7,6 +7,7 @@ AGENTS.local.md
 mise.toml
 .claude/*
 !.claude/agents/
+!.claude/evals/
 !.claude/hooks/
 !.claude/rules/
 !.claude/skills/
