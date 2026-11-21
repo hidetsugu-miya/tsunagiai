@@ -12,7 +12,7 @@ export type OrcaRow = { group: OrcaGroup, repo: string, branch: string,
  */
 line: string, 
 /**
- * The first line of the newer of the agent's prompt and its last answer (`latest_of`), which the list shows in place of the line; `None` when the newer one has no text, or is data, the output of a process or a message of the harness (the list then shows the line).
+ * The first line of the newer of the agent's prompt and its last answer (the one `answer_is_newer` picks), which the list shows in place of the line; `None` when the newer one has no text, or is data, the output of a process or a message of the harness (the list then shows the line).
  */
 latest: string | null, 
 /**

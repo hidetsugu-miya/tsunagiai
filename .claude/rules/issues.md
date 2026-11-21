@@ -140,7 +140,7 @@ The gate has three scopes (decided by the agent, 2026-11-21, at the owner's leav
 - No gate and no prototype: an issue for a Dependabot pull request (`dependabot-issues.sh`), a bug whose correct behavior a requirement already states, an issue that changes only `.claude/` or the tools (the harness), an issue of the Lows that a merged pull request's review left (`review.md`; at the owner's instruction, 2026-11-21; #1211), an issue of a flaky test (`review.md`; at the owner's instruction, 2026-11-21; #1212), and an issue of a retrospective (`.claude/skills/retrospective/SKILL.md`; at the owner's instruction, 2026-11-21; #1213). Its body records what was found and the plan only.
 
 Write in the body of the issue the background, what was investigated, the decision (with the options put to the owner), the plan and the prototype, as far as its scope asks, so that the reason for the choice can be found on GitHub later (`issue-plan`, step 2).
-The prototype goes in as the HTML that the owner was shown, unchanged, at the end of the body, inside a `<details>` and a code block of `html`; the body holds no URL of it (at the owner's instruction, 2026-11-22; #1235. It replaces the Artifact and its URL).
+The prototype goes in as the HTML that the owner was shown, unchanged, at the end of the body, inside a `<details>` and a code block of `html`; the body holds no URL of it (at the owner's instruction, 2026-11-22; #1235. It replaces the Artifact and its URL). The file is kept in `tmp/` of the main checkout until the issue is made, because a worktree may be parked before the owner decides, and is deleted then.
 The repository is public, so keep personal information out (`publishing.md`).
 
 ```text

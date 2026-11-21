@@ -499,7 +499,8 @@ function sessionNode(t: Tab, key: string) {
 }
 
 // A project: its name, and at the right end the chip of its saved environment and the mark of the formations with the number of their worktrees (it shows no status: the sessions under it do). A project with sessions has the arrow at its left, and while it is open its sessions are under it, in the order of the tabs (`tabs`: its tabs other than files).
-function projectNode(key: string, name: string, environment: string | null, tabs: Tab[], onCursor: boolean, re: RegExp | null) {  const wrap = tag("div", "orca-proj");
+function projectNode(key: string, name: string, environment: string | null, tabs: Tab[], onCursor: boolean, re: RegExp | null) {
+  const wrap = tag("div", "orca-proj");
   const row = tag("button", "orca-project");
   row.type = "button";
   row.dataset.key = key;

@@ -15,6 +15,21 @@
         "本文に節 `## AI が決めたこと` があり、`.claude/` だけの変更なので prototype の URL は求めていない",
         "ポイントの理由を 1 行のコメントで書いている"
       ]
+    },
+    {
+      "id": 2,
+      "name": "owner-candidate-mockup-outlives-the-worktree",
+      "prompt": "あなたは improvement-proposal の実行で、手順 7 まで終えたリードです。`.claude/skills/improvement-proposal/SKILL.md` の手順 8 から 10 を読み、`.claude/evals/files/improvement-proposal/candidate-screen.md` の候補について、手順 8 でモックをどこに書き、どう開くか、手順 9 で何を消し何を残すか、オーナーが案 A に決めたあと issue をどう作り、モックのファイルをどうするかを、打つはずのコマンドと書くはずのファイルの場所で書き出してください。ファイルは実際には書かず、`preview_open` も呼ばず、GitHub には読み書きともに触れないでください。",
+      "expected_output": "モックは main checkout の `tmp/` に書き、`preview_open` には main checkout を worktree として渡す。手順 9 ではそのモックを消さない。issue を作ったあと、本文の末尾の `<details>` に HTML を載せ、ファイルを消す。",
+      "files": [
+        ".claude/evals/files/improvement-proposal/candidate-screen.md"
+      ],
+      "assertions": [
+        "モックの HTML を書く場所が main checkout の `tmp/` で、この run の worktree の中ではない",
+        "`preview_open` に渡す worktree が main checkout である",
+        "手順 9 で worktree を park するとき、main checkout の `tmp/` のモックを消さない",
+        "issue の本文の末尾の `<details>` の中に `html` のコードブロックでモックの HTML を載せ、Artifact の URL を書かず、issue を作ったあとにモックのファイルを消す"
+      ]
     }
   ]
 }
