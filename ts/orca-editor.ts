@@ -86,6 +86,9 @@ interface EditorFile {
   richButton: HTMLButtonElement;
   // An HTML file (A-42; decided by its name, so it is known before the file is read): the preview button and the button that makes the frame again (shown only while the preview is). `preview` is the box of the frame, and `previewTurn` the count that tells a drawing of the frame that waits (for the save and for the address) that it is out of date.
   html: boolean;
+  // An image file (A-18; decided by its name, so it is known before the file is read): the box that shows the picture (`picture`, hidden until it is read) instead of the text.
+  image: boolean;
+  picture: HTMLElement;
   previewButton: HTMLButtonElement;
   reloadButton: HTMLButtonElement;
   preview: HTMLElement;
@@ -133,6 +136,9 @@ const COLOR_WAIT_MS = 150;
 const RICH_WAIT_MS = 200;
 // How long the mouse stays on a name, with the Command key down, before the editor asks whether the name has a definition.
 const LINK_WAIT_MS = 150;
+
+// The names of the files the editor shows as a picture (A-18): by the extension, whatever the case. Rust decides the same (`image_mime`).
+const IMAGE_NAME = /\.(png|jpe?g|gif|webp)$/i;
 
 const files = new Map<string, EditorFile>();
 let lastId = 0;
@@ -571,11 +577,27 @@ function lookServer(f: EditorFile) {
 
 // The files of the project that are open look for their server again, once its settings changed (a server renamed, or a language taken by another).
 export function resolveServers(target: string | null, project: string) {
-  for (const f of filesOf(target, project)) if (!f.outside && f.read === "ready") lookServer(f);
+  for (const f of filesOf(target, project)) if (!f.outside && !f.image && f.read === "ready") lookServer(f);
+}
+
+// Shows the picture of an image file (A-18): Rust reads it and answers a `data:` URI, which goes into an img that the pane's width holds and that is never larger than the picture.
+async function loadImage(f: EditorFile) {
+  const uri = await invoke("orca_file_image", { path: f.path, relative: f.relative, environment: f.target });
+  const img = tag("img");
+  img.alt = nameOf(f.relative);
+  img.src = uri;
+  f.picture.replaceChildren(img);
+  f.picture.hidden = false;
+  f.read = "ready";
 }
 
 async function load(f: EditorFile) {
   try {
+    if (f.image) {
+      await loadImage(f);
+      changed();
+      return;
+    }
     const text = f.outside ? await readOutside(f) : await invoke("orca_file_read", { path: f.path, relative: f.relative, environment: f.target });
     f.area.value = text.content;
     f.edits++;
@@ -800,7 +822,7 @@ export function goTo(id: string, line: number, character: number) {
 }
 
 // Whether the text may be replaced by the disk's: the file is read, is a worktree's, and has no typing that is not on the disk, on its way to it or refused by it.
-const canReread = (f: EditorFile) => f.read === "ready" && !f.outside && !f.dirty && !f.blocked && !f.held && !f.richPending && f.richSync === null && f.writing === null && f.timer === null && f.save !== "error";
+const canReread = (f: EditorFile) => f.read === "ready" && !f.outside && !f.image && !f.dirty && !f.blocked && !f.held && !f.richPending && f.richSync === null && f.writing === null && f.timer === null && f.save !== "error";
 
 // Reads the file again without a word (the clock, and a tab shown again). The signature of the read says whether the disk still holds the text that was read: when it does, nothing is drawn. Another text takes the place of the one shown, with the caret, the selection and the scroll where they were (the rich view of a Markdown file is drawn again and keeps its scroll).
 // Typing that came while the read was on its way keeps the text as it is, saved by then or not, and a failure keeps what is shown.
@@ -911,9 +933,13 @@ function create(id: string, target: string | null, project: string, path: string
   rich.append(richBand);
   const preview = tag("div", "orca-edit-preview");
   preview.hidden = true;
-  el.append(head, note, body, rich, preview);
+  const picture = tag("div", "orca-edit-picture");
+  picture.hidden = true;
+  el.append(head, note, body, rich, preview, picture);
   const html = !outside && /\.html$/i.test(nameOf(relative));
-  const f: EditorFile = { id, target, project, path, relative, outside, language: "", server, jump: null, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, rereading: false, placed: false, out: false, wantFocus: true, highlight: null, cancelPaint: null, band, richBand, bandLine: 0, bandCaret: -1, bandEdits: 0, edits: 0, bandMetrics: null, richFrame: null, markdown: false, mode: html ? "preview" : "rich", modes, sourceButton, richButton, html, previewButton, reloadButton, preview, previewTurn: 0, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, area, code, nums, numbers, gutter, lines: 1, state, where, note, link, hover: null, linkTimer: null, linkSeq: 0, linkBox: null, known: new Map(), knownEdits: 0 };
+  const image = !outside && IMAGE_NAME.test(nameOf(relative));
+  body.hidden = image;
+  const f: EditorFile = { id, target, project, path, relative, outside, language: "", server, jump: null, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, rereading: false, placed: false, out: false, wantFocus: true, highlight: null, cancelPaint: null, band, richBand, bandLine: 0, bandCaret: -1, bandEdits: 0, edits: 0, bandMetrics: null, richFrame: null, markdown: false, mode: html ? "preview" : "rich", modes, sourceButton, richButton, html, image, picture, previewButton, reloadButton, preview, previewTurn: 0, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, area, code, nums, numbers, gutter, lines: 1, state, where, note, link, hover: null, linkTimer: null, linkSeq: 0, linkBox: null, known: new Map(), knownEdits: 0 };
   area.oninput = () => {
     f.edits++;
     hideLink(f);

@@ -4320,18 +4320,18 @@ describe("orchestration mode: the children's worktrees in the projects", () => {
     await openScreen({ orca_overview: overview([childRow({ group: "done" })], [...trees(), orcaWorktree("web", "main")]) }, async () => (await count(".orca-stopped-toggle")) === 1);
     // The row stays, with its mark and no session under it.
     expect(await formationMarks()).toEqual(["フォーメーション 1"]);
-    expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-project, #orca-feed .orca-stopped-toggle")].map((e) => e.dataset.key))).toEqual(["proj_api", "stopped-toggle"]);
-    expect(await textsOf("#orca-feed .orca-stopped-toggle")).toEqual(["起動していない 1 件"]);
+    expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-list .orca-project, #orca-list .orca-stopped-toggle")].map((e) => e.dataset.key))).toEqual(["proj_api", "stopped-toggle"]);
+    expect(await textsOf("#orca-list .orca-stopped-toggle")).toEqual(["起動していない 1 件"]);
   });
 
   it("puts a project that works with nothing but a child's sessions last among the running projects, above the link of the ones that are not running, and keeps a project with an own working session where it was", async () => {
     // `api` works with the child's session alone and enters the working group first (the read lists it first); `web` works with its own session; `docs` has a session that is done; `blank` has none.
     const rows = [childRow(), orcaRow("web", "main", "Web session"), orcaRow("docs", "main", "Docs session", { group: "done" })];
     const worktrees = [...trees(), orcaWorktree("web", "main"), orcaWorktree("docs", "main"), orcaWorktree("blank", "main")];
-    const keys = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-project, #orca-feed .orca-stopped-toggle")].map((e) => e.dataset.key));
+    const keys = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-list .orca-project, #orca-list .orca-stopped-toggle")].map((e) => e.dataset.key));
     await openScreen({ orca_overview: orcaOverview(rows, worktrees) }, async () => (await formationMarks()).length === 1);
     expect(await keys()).toEqual(["proj_web", "proj_docs", "proj_api", "stopped-toggle"]);
-    expect(await textsOf("#orca-feed .orca-stopped-toggle")).toEqual(["起動していない 1 件"]);
+    expect(await textsOf("#orca-list .orca-stopped-toggle")).toEqual(["起動していない 1 件"]);
     // The project stays a running one: it is not under the link, and it has its mark.
     expect(await formationMarks()).toEqual(["フォーメーション 1"]);
     // An own session of the project that works too puts it back among the working projects, where the read listed it.

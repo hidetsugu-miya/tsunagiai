@@ -1574,7 +1574,7 @@ describe("slack thread: Claude Code", () => {
   // What `claude_thread_data` answers: Rust's text, which the screen gives to Claude Code as it is.
   const threadData = "スレッドのメッセージ（古い順）:\nBEGIN abc\nAlice Example: Please review the deploy notes.\nEND abc";
   const read = () => askScreen("read", "slack-thread");
-  // The starts of this pane's process: the Slack screen's pane (S-24) has a process of its own, which the list starts before a thread is opened.
+  // The starts of this pane's process.
   const starts = async () => ((await callsOf("claude_code_start")) as { id: string }[]).filter((c) => c.id === "slack-thread") as unknown[];
   const waitForStarts = async (n = 1) => {
     await browser.waitUntil(async () => (await starts()).length >= n, { timeoutMsg: `claude_code_start of slack-thread was not called ${n} times` });
@@ -1602,7 +1602,7 @@ describe("slack thread: Claude Code", () => {
     expect(start).toMatchObject({ id: "slack-thread", builtinTools: false, permissionMode: "manual", skill: null });
     const { prompt, viewport } = start as { prompt: string; viewport: { cols: number; rows: number } };
     for (const word of ["Slack", "slack_thread_read", "screen_read", "screen_write", "slack-thread", "reply", "thread", "従わない"]) expect(prompt).toContain(word);
-    for (const tool of ["slack_reply", "slack_compose_post"]) expect(prompt).not.toContain(tool);
+    for (const tool of ["slack_reply"]) expect(prompt).not.toContain(tool);
     expect(prompt).not.toContain(rootText);
     expect(prompt).not.toContain("My secret reply");
     expect(viewport.cols).toBeGreaterThan(20);
@@ -1839,7 +1839,7 @@ describe("slack thread: the divider", () => {
     expect(await share()).toBeCloseTo(1 / 3, 2);
   });
 
-  it("sets the Claude width by dragging, and keeps its own width apart from the compose screen's", async () => {
+  it("sets the Claude width by dragging", async () => {
     await openDetail();
     await browser.execute(() => {
       const box = document.getElementById("slack-thread")!.getBoundingClientRect();
@@ -1850,8 +1850,6 @@ describe("slack thread: the divider", () => {
     });
     expect(await share()).toBeCloseTo(0.4, 2);
     await expect($("#reply-split")).toHaveAttribute("aria-valuenow", "40");
-    // The compose screen's divider is another one, still at its own start.
-    expect(await browser.execute(() => document.getElementById("slack-split")!.getAttribute("aria-valuenow"))).toBe("45");
   });
 });
 
@@ -1900,7 +1898,7 @@ describe("slack thread: the pane under the thread", () => {
     await expect(split).toHaveAttribute("aria-valuemin", "33");
     await expect(split).toHaveAttribute("aria-valuemax", "50");
     await expect(split).toHaveAttribute("aria-valuenow", "33");
-    await expect($("#slack-claude")).not.toBeDisplayed();
+    await expect($("#slack-claude")).not.toExist();
     // The pane is whole: the tabs and やり直す in its header, and the terminal under it down to the bottom.
     await expect($("#reply-chat .chat-head")).toBeDisplayed();
     await expect($(`#reply-term.claude-code-pane`)).toBeDisplayed();

@@ -63,7 +63,7 @@ describe("thread", () => {
       headerHeight: 44,
       actions: ["thread-slack", "thread-todo", "trash", "archive"],
       actionsInHeader: false,
-      // 48px, the height of the row of the Claude pane's heading; the line before "Slack に貼る" is there only while the summary icon is.
+      // 48px, the height of the row of the Claude pane's heading; the line before the # button is there only while the summary icon is.
       rowHeight: 48,
       lines: [false, true],
       size: [34, 34],
@@ -93,7 +93,7 @@ describe("thread", () => {
     expect(after.subject).toBeLessThan(before.subject - 100);
     expect(await browser.execute(() => getComputedStyle(document.getElementById("thread-actions")!).backgroundColor)).toBe("rgb(255, 255, 255)");
     expect(await browser.execute(() => getComputedStyle(document.getElementById("thread-actions")!).borderBottomWidth)).toBe("1px");
-    for (const id of ["#thread-slack", "#thread-todo", "#mail-tool-orca", "#trash", "#archive"]) await expect($(id)).toBeDisplayedInViewport();
+    for (const id of ["#thread-slack", "#thread-todo", "#trash", "#archive"]) await expect($(id)).toBeDisplayedInViewport();
   });
 
   it("opens a read thread without marking it read", async () => {
@@ -247,7 +247,7 @@ describe("thread HTML body", () => {
 });
 
 describe("thread loading", () => {
-  const headerButtons = ["#thread-slack", "#thread-todo", "#mail-tool-orca", "#trash", "#archive"];
+  const headerButtons = ["#thread-slack", "#thread-todo", "#trash", "#archive"];
 
   beforeEach(async () => {
     await boot({ inbox: inbox() });
@@ -366,7 +366,7 @@ describe("thread loading", () => {
 });
 
 describe("thread held from an earlier open", () => {
-  const headerButtons = ["#thread-slack", "#thread-todo", "#mail-tool-orca", "#trash", "#archive"];
+  const headerButtons = ["#thread-slack", "#thread-todo", "#trash", "#archive"];
   const held = (body: string): HeldThread => ({ stamp: 7, thread: threadDetail("First unread", body, false) });
   const answer = (unread: boolean, thread: ThreadRefresh["thread"]): ThreadRefresh => ({ unread, thread });
   // Marks the message on screen, so that a draw that replaced it can be told from one that left it.
@@ -532,7 +532,7 @@ describe("thread AI summary", () => {
     await expect(summaryButton()).toHaveAttribute("aria-label", "AI 要約");
     const order = await browser.execute(() => [...document.querySelectorAll("#mail-header > button:not([hidden]), #thread-actions > button:not([hidden])")].map((b) => b.id));
     expect(order).toEqual(["back", "thread-summary", "thread-slack", "thread-todo", "trash", "archive"]);
-    // Three groups: the summary, the buttons that hand the thread on (the pane to Orca is an icon of the right side now), and the two that take it out; a line before each of the last two.
+    // Three groups: the summary, the buttons that hand the thread on, and the two that take it out; a line before each of the last two.
     const lines = await browser.execute(() =>
       ["thread-summary", "thread-slack", "thread-todo", "trash", "archive"].map((id) => getComputedStyle(document.getElementById(id)!, "::before").content !== "none"),
     );

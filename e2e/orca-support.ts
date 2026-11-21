@@ -85,4 +85,4 @@ export async function pickItem(label: string) {
 // The pane's own has no `hidden` of its own (the pane around it has), so it is found by the pane.
 export const filesToggle = () => $(".orca-tabbar .orca-files-toggle:not([hidden]), #orca-files:not([hidden]) .orca-files-toggle");
 
-export const project = (name: string) => $(`//div[@id="orca-feed"]//button[contains(@class,"orca-project")][.//span[@class="orca-project-name"][. = "${name}"]]`);
+export const project = (name: string) => $(`//*[@id="orca-list"]//button[contains(@class,"orca-project")][.//span[@class="orca-project-name"][. = "${name}"]]`);

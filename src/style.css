@@ -12,7 +12,7 @@ body { font-family: var(--ff-base); font-size: calc(14px * var(--fs)); margin: 0
 #calendar { --fs: var(--fs-calendar, 1); font-family: var(--ff-calendar, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #projects { --fs: var(--fs-todo-list, 1); font-family: var(--ff-todo-list, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #todo-body, #todo-handoff, #todo-claude { --fs: var(--fs-todo-work, 1); font-family: var(--ff-todo-work, var(--ff-base)); font-size: calc(14px * var(--fs)); }
-#slack-side, #slack-list, #slack-channel, #slack-claude, #slack-thread, #slack-compose { --fs: var(--fs-slack, 1); font-family: var(--ff-slack, var(--ff-base)); font-size: calc(14px * var(--fs)); }
+#slack-side, #slack-list, #slack-channel, #slack-thread { --fs: var(--fs-slack, 1); font-family: var(--ff-slack, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #orca-list { --fs: var(--fs-orca-list, 1); font-family: var(--ff-orca-list, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #orca-work, #orca-files { --fs: var(--fs-orca-pane, 1); font-family: var(--ff-orca-pane, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
@@ -98,8 +98,8 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .icon-btn { width: 36px; height: 36px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-soft); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
 .icon-btn:hover:not(:disabled) { background: var(--soft); }
 .icon-btn:disabled { opacity: .4; cursor: default; }
-#mail-header .icon-btn, #inbox-header .icon-btn, #new-mail-header .icon-btn, #mail-tools .icon-btn, #cal-bar .icon-btn, #todo-body > header .icon-btn, #todo-tools .icon-btn, #slack-header .icon-btn, #sc-head .icon-btn, #st-head .icon-btn, #prompt > header .icon-btn, #slack-compose > header .icon-btn, #orca-header .icon-btn, #formation-head .icon-btn, #database-side-head .icon-btn, #database-header .icon-btn, #database-terminal-head .icon-btn { width: var(--header-btn); height: var(--header-btn); }
-#mail-header .icon-btn svg, #inbox-header .icon-btn svg, #new-mail-header .icon-btn svg, #mail-tools .icon-btn svg, #cal-bar .icon-btn svg, #todo-body > header .icon-btn svg, #todo-tools .icon-btn svg, #slack-header .icon-btn svg, #sc-head .icon-btn svg, #st-head .icon-btn svg, #prompt > header .icon-btn svg, #slack-compose > header .icon-btn svg, #orca-header .icon-btn svg, #formation-head .icon-btn svg, #database-side-head .icon-btn svg, #database-header .icon-btn svg, #database-terminal-head .icon-btn svg { width: var(--header-ic); height: var(--header-ic); }
+#mail-header .icon-btn, #inbox-header .icon-btn, #new-mail-header .icon-btn, #mail-tools .icon-btn, #cal-bar .icon-btn, #todo-body > header .icon-btn, #todo-tools .icon-btn, #slack-header .icon-btn, #sc-head .icon-btn, #st-head .icon-btn, #prompt > header .icon-btn, #orca-header .icon-btn, #formation-head .icon-btn, #database-side-head .icon-btn, #database-header .icon-btn, #database-terminal-head .icon-btn { width: var(--header-btn); height: var(--header-btn); }
+#mail-header .icon-btn svg, #inbox-header .icon-btn svg, #new-mail-header .icon-btn svg, #mail-tools .icon-btn svg, #cal-bar .icon-btn svg, #todo-body > header .icon-btn svg, #todo-tools .icon-btn svg, #slack-header .icon-btn svg, #sc-head .icon-btn svg, #st-head .icon-btn svg, #prompt > header .icon-btn svg, #orca-header .icon-btn svg, #formation-head .icon-btn svg, #database-side-head .icon-btn svg, #database-header .icon-btn svg, #database-terminal-head .icon-btn svg { width: var(--header-ic); height: var(--header-ic); }
 /* A-28: the failures at the bottom right (ts/error-card.ts). The newest card is on top, and each stays until its × is pressed. The first child's auto margin puts the stack at the bottom while it fits, and lets it scroll from the newest card when it does not. They stand above the toast (--toast-bottom) and the footer. */
 #error-cards { position: fixed; right: 16px; bottom: calc(var(--toast-bottom, 24px) + 52px); z-index: 16; box-sizing: border-box; width: 340px; max-width: calc(100vw - 32px); max-height: calc(100vh - 160px); display: flex; flex-direction: column; gap: 8px; overflow-y: auto; pointer-events: none; }
 #error-cards > :first-child { margin-top: auto; }
@@ -111,10 +111,10 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 
 /* Only the main area scrolls; the scrollbar is styled explicitly because macOS WebView hides the overlay one. */
 #main { flex: 1; overflow-y: auto; padding: 8px 24px 32px 32px; }
-#main::-webkit-scrollbar, #cal-scroll::-webkit-scrollbar, #todo-main::-webkit-scrollbar, #settings::-webkit-scrollbar, #slack-feed::-webkit-scrollbar,, #slack-side-feed::-webkit-scrollbar, #orca-feed::-webkit-scrollbar, #formation-list-feed::-webkit-scrollbar, #formation-flow-body::-webkit-scrollbar, #st-msgs::-webkit-scrollbar { width: 12px; }
-#main::-webkit-scrollbar-track, #cal-scroll::-webkit-scrollbar-track, #todo-main::-webkit-scrollbar-track, #settings::-webkit-scrollbar-track, #slack-feed::-webkit-scrollbar-track,, #slack-side-feed::-webkit-scrollbar-track, #orca-feed::-webkit-scrollbar-track, #formation-list-feed::-webkit-scrollbar-track, #formation-flow-body::-webkit-scrollbar-track, #st-msgs::-webkit-scrollbar-track { background: var(--bar); }
-#main::-webkit-scrollbar-thumb, #cal-scroll::-webkit-scrollbar-thumb, #todo-main::-webkit-scrollbar-thumb, #settings::-webkit-scrollbar-thumb, #slack-feed::-webkit-scrollbar-thumb,, #slack-side-feed::-webkit-scrollbar-thumb, #orca-feed::-webkit-scrollbar-thumb, #formation-list-feed::-webkit-scrollbar-thumb, #formation-flow-body::-webkit-scrollbar-thumb, #st-msgs::-webkit-scrollbar-thumb { background: var(--chip-line); border-radius: 6px; border: 3px solid var(--bar); }
-#main::-webkit-scrollbar-thumb:hover, #cal-scroll::-webkit-scrollbar-thumb:hover, #todo-main::-webkit-scrollbar-thumb:hover, #settings::-webkit-scrollbar-thumb:hover, #slack-feed::-webkit-scrollbar-thumb:hover,, #slack-side-feed::-webkit-scrollbar-thumb:hover, #orca-feed::-webkit-scrollbar-thumb:hover, #formation-list-feed::-webkit-scrollbar-thumb:hover, #formation-flow-body::-webkit-scrollbar-thumb:hover, #st-msgs::-webkit-scrollbar-thumb:hover { background: var(--side-fg); }
+#main::-webkit-scrollbar, #cal-scroll::-webkit-scrollbar, #todo-main::-webkit-scrollbar, #settings::-webkit-scrollbar, #slack-feed::-webkit-scrollbar,, #slack-side-feed::-webkit-scrollbar, #orca-feed::-webkit-scrollbar, #orca-stopped-feed::-webkit-scrollbar, #formation-list-feed::-webkit-scrollbar, #formation-flow-body::-webkit-scrollbar, #st-msgs::-webkit-scrollbar { width: 12px; }
+#main::-webkit-scrollbar-track, #cal-scroll::-webkit-scrollbar-track, #todo-main::-webkit-scrollbar-track, #settings::-webkit-scrollbar-track, #slack-feed::-webkit-scrollbar-track,, #slack-side-feed::-webkit-scrollbar-track, #orca-feed::-webkit-scrollbar-track, #orca-stopped-feed::-webkit-scrollbar-track, #formation-list-feed::-webkit-scrollbar-track, #formation-flow-body::-webkit-scrollbar-track, #st-msgs::-webkit-scrollbar-track { background: var(--bar); }
+#main::-webkit-scrollbar-thumb, #cal-scroll::-webkit-scrollbar-thumb, #todo-main::-webkit-scrollbar-thumb, #settings::-webkit-scrollbar-thumb, #slack-feed::-webkit-scrollbar-thumb,, #slack-side-feed::-webkit-scrollbar-thumb, #orca-feed::-webkit-scrollbar-thumb, #orca-stopped-feed::-webkit-scrollbar-thumb, #formation-list-feed::-webkit-scrollbar-thumb, #formation-flow-body::-webkit-scrollbar-thumb, #st-msgs::-webkit-scrollbar-thumb { background: var(--chip-line); border-radius: 6px; border: 3px solid var(--bar); }
+#main::-webkit-scrollbar-thumb:hover, #cal-scroll::-webkit-scrollbar-thumb:hover, #todo-main::-webkit-scrollbar-thumb:hover, #settings::-webkit-scrollbar-thumb:hover, #slack-feed::-webkit-scrollbar-thumb:hover,, #slack-side-feed::-webkit-scrollbar-thumb:hover, #orca-feed::-webkit-scrollbar-thumb:hover, #orca-stopped-feed::-webkit-scrollbar-thumb:hover, #formation-list-feed::-webkit-scrollbar-thumb:hover, #formation-flow-body::-webkit-scrollbar-thumb:hover, #st-msgs::-webkit-scrollbar-thumb:hover { background: var(--side-fg); }
 
 #login { display: flex; justify-content: center; padding: 64px; }
 #relogin { margin-bottom: 8px; }
@@ -172,7 +172,7 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 #slack-header .icon-btn { color: #444746; border-radius: 50%; }
 #unread-heading .text-btn:disabled { opacity: .4; cursor: default; }
 #unread-heading .text-btn:disabled:hover { background: var(--surface); }
-/* The operations of the open mail (M-2): a row of icons, 48px high, at the right end of the body (its left padding keeps them right of the subject's column, 56px), which stays at the top of #main while the messages scroll. It reaches the edges of #main's padding and has the color of the body, so that nothing shows through it, and a line under it. The icons are in three groups, set apart by a line drawn by the first button of a group: the summary, then "Slack に貼る", "Todo にする" and "Orca に渡す", then the two that take the row out; so no line is there when the group before it, or the group itself, is hidden. */
+/* The operations of the open mail (M-2): a row of icons, 48px high, at the right end of the body (its left padding keeps them right of the subject's column, 56px), which stays at the top of #main while the messages scroll. It reaches the edges of #main's padding and has the color of the body, so that nothing shows through it, and a line under it. The icons are in three groups, set apart by a line drawn by the first button of a group: the summary, then "Slack に投稿", "Todo にする" and "Orca に渡す", then the two that take the row out; so no line is there when the group before it, or the group itself, is hidden. */
 #thread-actions { position: sticky; top: 0; z-index: 2; flex: none; box-sizing: border-box; height: 48px; display: flex; align-items: center; justify-content: flex-end; gap: 4px; margin: 0 -24px 0 -32px; padding: 0 24px 0 88px; background: var(--surface); border-bottom: 1px solid var(--line); }
 #thread-actions .icon-btn { width: 34px; height: 34px; color: var(--ink-soft); border-radius: 50%; }
 #thread-actions .icon-btn svg { width: 20px; height: 20px; }
@@ -437,6 +437,8 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 /* Todo: project column on the left, tasks on the right. */
 /* The toast stacks above the update popup while it shows (ts/update.ts sets --toast-bottom). */
 .toast { position: fixed; right: 24px; bottom: var(--toast-bottom, 24px); z-index: 20; padding: 10px 16px; border-radius: 10px; background: var(--side); color: var(--on-accent); font-size: calc(13px * var(--fs)); }
+.toast.stay { display: flex; align-items: center; gap: 10px; }
+.toast .spin { border-color: var(--side-fg); border-top-color: var(--on-accent); }
 .toast button { margin-left: 12px; padding: 0; border: 0; background: transparent; color: var(--side-fg); font: inherit; cursor: pointer; }
 #todo { flex: 1; min-height: 0; display: flex; }
 #projects { width: 220px; flex: none; border-right: 1px solid var(--line); padding: 0 12px 20px; box-sizing: border-box; overflow-y: auto; }
@@ -935,26 +937,13 @@ button.status:hover { filter: brightness(.95); }
 @keyframes pane-in { from { transform: translateX(100%); } }
 @media (prefers-reduced-motion: reduce) { .pane { animation: none; } }
 
-/* The destination picker of the Slack compose screen (a .menu under the chip). */
-.slack-pop { width: 340px; max-height: calc(100vh - 32px); overflow-y: auto; padding: 12px; gap: 8px; }
-.slack-pop select, .slack-pop input { box-sizing: border-box; width: 100%; padding: 6px 8px; border: 1px solid var(--chip-line); border-radius: 8px; font: inherit; }
-.slack-pop select:focus, .slack-pop input:focus { outline: 2px solid var(--accent); border-color: transparent; }
-.slack-pop .text-btn { align-self: flex-end; justify-content: center; }
-.slack-pop .err { margin: 0; color: #b00020; font-size: calc(12px * var(--fs)); }
-.slack-pop h3 { margin: 4px 0 0; font-size: calc(12px * var(--fs)); color: #666; font-weight: normal; }
-.slack-pop .pick-list { display: flex; flex-direction: column; max-height: 132px; overflow-y: auto; }
-.slack-pop .pick-list button { flex: none; }
-.slack-pop .pick-list .empty { padding: 4px 10px; color: #888; font-size: calc(12px * var(--fs)); }
-.slack-pop .pick-list .ws { margin-left: auto; color: #888; font-size: calc(12px * var(--fs)); }
-.slack-pop .row { display: flex; gap: 8px; }
-.slack-pop .row .text-btn { align-self: auto; flex: none; }
 
 /* The Todo prompt screen: the fixed part and the editable body on the left, the conversation with Claude on the right. */
-#prompt, #slack-compose { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-#prompt header, #slack-compose header { box-sizing: border-box; min-height: var(--header-h); gap: 8px; padding: 0 24px 0 16px; border-bottom: 1px solid var(--line); }
-#prompt h1, #slack-compose h1 { flex: none; }
-#prompt .grow, #slack-compose .grow { flex: 1; }
-#prompt-error, #slack-error { margin: 8px 24px 0; }
+#prompt { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+#prompt header { box-sizing: border-box; min-height: var(--header-h); gap: 8px; padding: 0 24px 0 16px; border-bottom: 1px solid var(--line); }
+#prompt h1 { flex: none; }
+#prompt .grow { flex: 1; }
+#prompt-error { margin: 8px 24px 0; }
 #prompt-main { flex: 1; min-height: 0; display: flex; }
 #prompt-edit { flex: 1; min-width: 0; box-sizing: border-box; padding: 16px 24px 24px; display: flex; flex-direction: column; gap: 14px; }
 .prompt-label { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-size: calc(12px * var(--fs)); color: #666; }
@@ -962,9 +951,9 @@ button.status:hover { filter: brightness(.95); }
 #prompt-fixed, #prompt-fixed-after, #prompt-body { font-family: var(--ff-mono, ) ui-monospace, Menlo, monospace; font-size: calc(12px * var(--fs)); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 #prompt-fixed, #prompt-fixed-after { margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--code); color: #555; }
 .prompt-body-box { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-#prompt-body, #slack-body { flex: 1; min-height: 0; box-sizing: border-box; resize: none; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 8px; color: #222; }
-#prompt-body:focus, #slack-body:focus { outline: 2px solid var(--soft); }
-#prompt-body:disabled, #slack-body:disabled { border-color: var(--chip-line); background: var(--bar); }
+#prompt-body { flex: 1; min-height: 0; box-sizing: border-box; resize: none; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 8px; color: #222; }
+#prompt-body:focus { outline: 2px solid var(--soft); }
+#prompt-body:disabled { border-color: var(--chip-line); background: var(--bar); }
 /* The model and effort of a Claude pane's purpose, without a frame: under the request field on the prompt screen, in the frame's row for the panes made by ts/composer.ts. */
 .chat-model { display: flex; justify-content: flex-end; gap: 2px; margin-top: 8px; }
 .chat-model:empty { display: none; }
@@ -992,58 +981,9 @@ button.status:hover { filter: brightness(.95); }
 .chat-send:disabled:hover { background: var(--accent); filter: none; }
 .chat-clear { margin-left: auto; height: 26px; padding: 0 12px; border-radius: 13px; font: inherit; font-size: calc(12px * var(--fs)); font-weight: normal; }
 
-/* The Slack compose screen has two modes (`data-mode` of `#slack-compose`, S-27). Claude mode: the terminal of Claude Code in a column on the left (A-36; 45% of the screen body at first, 35% to 60% by the divider, `--term-w` of ts/split.ts is where the divider put it, and the clamp holds it to that range),
-   and the original message with the things to do and "投稿" in the part on the right. Manual mode: the same part over the whole width, with no column and no divider.
-   The Slack thread has the three parts of `.split-main` too, with the Claude pane a third to a half as wide (`--chat-w`). */
-#slack-main { flex: 1; min-height: 0; display: flex; }
+/* The Slack thread has the three parts of `.split-main`, with the Claude pane a third to a half as wide (`--chat-w`). */
 .split-main.dragging { user-select: none; -webkit-user-select: none; cursor: col-resize; }
 .split-main.dragging-row { cursor: row-resize; }
-/* The two heads (the terminal's and the edit part's) are one height, `--slack-head`. The edit part has three parts: a head, a part that scrolls, and a foot fixed at the bottom (`--slack-foot`). */
-#slack-compose { --slack-foot: calc(89px + 60px * var(--fs)); --slack-head: 48px; }
-#slack-edit { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-#slack-compose-claude { flex: none; width: clamp(35%, var(--term-w, 45%), 60%); box-sizing: border-box; min-height: 0; }
-#slack-compose[data-mode="manual"] #slack-compose-claude, #slack-compose[data-mode="manual"] #slack-split { display: none; }
-#slack-mode { flex: none; display: flex; gap: 4px; margin-left: auto; }
-#slack-mode .text-btn { height: 28px; padding: 0 14px; }
-#slack-edit-head, #slack-compose-claude .chat-head { flex: none; box-sizing: border-box; height: var(--slack-head); }
-#slack-edit-head { display: flex; align-items: center; gap: 10px; padding: 0 16px 0 24px; border-bottom: 1px solid var(--line); }
-#slack-edit-head .prompt-label { margin-bottom: 0; }
-/* The row above the fields with "元に戻す", which takes back what Claude Code wrote (S-4). */
-#slack-undo-bar { flex: none; display: flex; align-items: center; padding: 8px 24px 0; }
-#slack-undo { height: 26px; padding: 0 12px; font-size: calc(12px * var(--fs)); }
-#slack-reset { margin-left: auto; height: 26px; padding: 0 12px; font-size: calc(12px * var(--fs)); }
-#slack-reset:disabled { opacity: .4; cursor: default; }
-#slack-reset:disabled:hover { background: var(--surface); }
-#slack-edit-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; padding: 16px 24px; }
-#slack-preview { flex: 1 0 auto; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: #222; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; }
-#slack-preview:hover { border-color: var(--chip-line); }
-#slack-preview:focus-visible { outline: 2px solid var(--accent); }
-#slack-body { flex: 1; font: inherit; line-height: 1.7; overflow-wrap: anywhere; }
-/* "行うこと": numbered cards (where and what each one posts) and the plus under them. The pane takes what its cards need, up to half of the left pane, and scrolls inside. */
-#slack-actions-pane { flex: none; max-height: 50%; box-sizing: border-box; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 12px 24px; border-top: 1px solid var(--line); }
-#slack-actions-pane .prompt-label { flex: none; margin-bottom: 0; }
-#slack-actions { flex: none; display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
-#slack-actions:empty { display: none; }
-.slack-action { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
-.slack-action.posted { background: var(--bar); }
-.slack-no { flex: none; min-width: 16px; line-height: 26px; color: var(--ink-soft); font-size: calc(12px * var(--fs)); text-align: center; }
-.slack-action-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
-.slack-action-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.slack-action .review-chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.slack-action .review-chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
-.slack-action .review-chip:disabled { opacity: .5; cursor: default; }
-.slack-action .review-chip:disabled:hover { background: var(--surface); }
-.slack-remove { margin-left: auto; width: 26px; height: 26px; }
-.slack-remove svg { width: 14px; height: 14px; }
-.slack-done { margin-left: auto; }
-.slack-text { box-sizing: border-box; width: 100%; height: calc(64px * var(--fs)); resize: none; padding: 8px 10px; border: 1px solid var(--chip-line); border-radius: 8px; color: #222; font: inherit; line-height: 1.6; overflow-wrap: anywhere; }
-.slack-text:focus { outline: 2px solid var(--soft); border-color: var(--accent); }
-.slack-text:disabled { background: var(--bar); }
-#slack-add { flex: none; align-self: flex-start; width: 28px; height: 28px; }
-#slack-add svg { width: 16px; height: 16px; }
-#slack-edit-foot { flex: none; box-sizing: border-box; height: var(--slack-foot); display: flex; align-items: center; justify-content: flex-end; padding: 0 16px; border-top: 1px solid var(--line); background: var(--bar); }
-#slack-edit-foot .text-btn { height: 36px; padding: 0 20px; border-radius: 18px; font: inherit; font-weight: bold; }
-#slack-edit-foot .text-btn:disabled { opacity: .4; cursor: default; }
 .split-bar { flex: none; width: 7px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; border-left: 1px solid var(--line); background: var(--bar); cursor: col-resize; touch-action: none; }
 .split-bar span { width: 3px; height: 32px; border-radius: 2px; background: var(--chip-line); }
 .split-bar:hover span, .split-bar:focus-visible span, .dragging .split-bar span { background: var(--accent-dim); }
@@ -1480,6 +1420,10 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-project-name b { font-weight: 800; }
 #orca-notice:not(:empty) { padding: 8px 12px 0; }
 #orca-feed { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 8px 8px; }
+/* A-8: the link of the projects that are not running is fixed at the bottom of the list, and what it opens is a region of at most half the list's height that scrolls by itself, so the running projects stay in view above it. */
+#orca-stopped { flex: none; display: flex; flex-direction: column; max-height: 50%; box-sizing: border-box; padding: 4px 8px 8px; border-top: 1px solid var(--line); }
+#orca-stopped-bar { flex: none; }
+#orca-stopped-feed { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 /* The icons of a status (Orca's): the question mark, a ring that turns, the pulse, and dots. */
 .orca-ic { flex: none; width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; }
 .orca-ic svg { width: 13px; height: 13px; fill: none; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
@@ -1581,7 +1525,6 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-tab-close { flex: none; width: 22px; height: 22px; margin-right: 4px; color: inherit; }
 .orca-tab-close svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 #orca-panes .orca-empty { margin: 0; padding: 48px 24px; }
-#orca-started { margin: 16px 24px 0; }
 /* The terminal fills the pane. The box of each tab has a definite size (it is placed in the pane), so that the fit counts the rows that show and the bottom is not cut off. */
 #orca-panes .orca-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
 /* The file pane (A-18) on the right of the work pane: the tree of the selected tab's worktree (`--files-w` is where the divider put it, 15% to 40% of the screen), and the editor of a file in the place of a terminal. */
@@ -1619,17 +1562,6 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-dest-chev { display: flex; }
 .orca-dest-chev svg { width: 12px; height: 12px; }
 .orca-dest-more-btn[aria-expanded="true"] .orca-dest-chev svg { transform: rotate(180deg); }
-/* S-1 (#905): the dialog that asks where the later posts go before "N 件を投稿" sends them, over the dimmed screen of .scrim. */
-.slack-ask-scrim { align-items: center; justify-content: center; }
-.slack-ask { display: flex; flex-direction: column; gap: 12px; width: 360px; max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); overflow-y: auto; box-sizing: border-box; padding: 14px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); box-shadow: 0 8px 24px rgba(0, 0, 0, .18); font-size: calc(13px * var(--fs)); }
-.slack-ask-item { display: flex; flex-direction: column; gap: 4px; min-width: 0; margin: 0; padding: 0; border: 0; }
-.slack-ask-item legend { padding: 0; margin-bottom: 4px; font-weight: 700; }
-.slack-ask-choice { display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 0 8px; border-radius: 6px; cursor: pointer; overflow-wrap: anywhere; }
-.slack-ask-choice:hover { background: var(--hover); }
-.slack-ask-choice input { flex: none; width: 16px; height: 16px; margin: 0; cursor: pointer; }
-.slack-ask-buttons { display: flex; justify-content: flex-end; gap: 8px; }
-.slack-ask-buttons .text-btn { justify-content: center; height: 28px; padding: 0 16px; border-radius: 14px; }
-.slack-ask-buttons .text-btn:disabled { opacity: .4; cursor: default; }
 .orca-dest-list .empty.fail { color: var(--warn); }
 #orca-files-tree { flex: 1; min-height: 0; overflow: auto; padding: 4px 4px 8px; }
 #orca-files-tree .pending { margin: 4px; }
@@ -1778,6 +1710,8 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-edit-mode[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
 /* A-26: the rich view of a Markdown file. Milkdown draws ProseMirror content here (read only for a file that cannot be edited in it); there is no theme, so the elements get their looks below. */
 /* A-42: the preview of an HTML file, a frame as big as the body; the page is drawn on white, whatever the theme of the app. */
+.orca-edit-picture { flex: 1; min-height: 0; overflow: auto; padding: 12px; background: var(--surface); }
+.orca-edit-picture img { display: block; max-width: 100%; height: auto; margin: 0 auto; }
 .orca-edit-preview { position: relative; flex: 1; min-height: 0; background: #fff; }
 .orca-edit-preview iframe { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
 .orca-edit-rich { position: relative; flex: 1; min-height: 0; overflow: auto; background: var(--surface); }
@@ -1958,8 +1892,8 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .orca-browse-buttons .text-btn:disabled { opacity: .4; cursor: default; }
 .orca-dest-list .empty { margin: 0; padding: 4px 10px; color: #888; font-size: calc(12px * var(--fs)); }
 
-/* A-9: the pane that hands the open mail, Slack thread or Todo to Orca. The mail has it on the right of the screen (40% at first, a third to a half; the divider of ts/split.ts); the Todo has it under the comments of the open task; the Slack thread has it as the Orca tab of its right pane. */
-/* M-10, M-11: the mail screen is the column of the headers and the body at the left, and the right side (the Claude Code pane or the pane to Orca, switched by the two icons of its first row) at the right, from the top of the window to the bottom, so that the bottom of the reply field and of the band of a new mail is the bottom of the pane. The side is shown while a thread or a new mail is. */
+/* A-9: the pane that hands the open Slack thread or Todo to Orca. The Todo has it under the comments of the open task; the Slack thread has it as the Orca tab of its right pane. */
+/* M-11: the mail screen is the column of the headers and the body at the left, and the right side (the Claude Code pane, opened by the ✳ of its first row) at the right, from the top of the window to the bottom, so that the bottom of the band of a new mail is the bottom of the pane. The side is shown while a new mail is. */
 #mail-screen { flex: 1; min-width: 0; min-height: 0; display: flex; }
 #mail-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 #mail-area { flex: 1; min-height: 0; display: flex; }
@@ -1971,12 +1905,33 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 #mail-tool-claude { color: var(--claude); }
 #mail-tools .icon-btn[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
 #mail-claude { flex: 1; min-height: 0; }
-#mail-claude .chat-head, #mail-handoff .ho-head { box-sizing: border-box; height: 48px; }
+#mail-claude .chat-head { box-sizing: border-box; height: 48px; }
 /* M-10: the pane is closed at first and shows the question, as the Todo's does (T-7); open, the terminal fills what is left of the pane's height. */
 #mail-claude-term { flex: 1; min-height: 0; }
 #mail-claude-ask { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; }
 #mail-claude-ask p { margin: 0; color: var(--ink-soft); }
-#mail-handoff { flex: 1; }
+#thread-actions .icon-btn[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+/* S-28: the post pane on the right of an open mail, opened by the # of the row of operations: a header with the channel button and a close button, an empty body, the error line, and a foot with the text field and the send button. */
+#mail-slack { flex: 1; min-height: 0; }
+#mail-slack-head { flex: none; box-sizing: border-box; min-height: var(--header-h); display: flex; align-items: center; gap: 8px; padding: 0 16px; background: var(--bar); border-bottom: 1px solid var(--line); }
+#mail-slack-head .icon-btn { width: var(--header-btn); height: var(--header-btn); color: #444746; border-radius: 50%; }
+#mail-slack-head .icon-btn svg { width: var(--header-ic); height: var(--header-ic); }
+#mail-slack-close { margin-left: auto; }
+#mail-slack-channel { min-width: 0; display: inline-flex; align-items: center; gap: 4px; height: var(--header-btn); padding: 0 10px 0 12px; border: 1px solid var(--chip-line); border-radius: calc(var(--header-btn) / 2); background: var(--surface); color: inherit; font: inherit; cursor: pointer; }
+#mail-slack-channel:hover:not(:disabled), #mail-slack-channel[aria-expanded="true"] { background: var(--soft); }
+#mail-slack-channel:disabled { opacity: .4; cursor: default; }
+#mail-slack-channel .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#mail-slack-channel svg { flex: none; width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+#mail-slack-body { flex: 1; min-height: 0; }
+#mail-slack-error { flex: none; margin: 0; padding: 6px 16px; color: var(--danger); font-size: calc(12px * var(--fs)); overflow-wrap: anywhere; }
+#mail-slack-foot { flex: none; display: flex; align-items: flex-end; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); background: var(--bar); }
+#mail-slack-text { flex: 1; min-width: 0; box-sizing: border-box; min-height: 64px; max-height: 200px; resize: none; padding: 8px 12px; border: 1px solid var(--chip-line); border-radius: 16px; background: var(--surface); color: inherit; font: inherit; }
+#mail-slack-text:focus { outline: 2px solid var(--accent); border-color: transparent; }
+#mail-slack-text:disabled { background: var(--bar); }
+#mail-slack-send:disabled { opacity: .4; cursor: default; }
+.mail-slack-pop { width: 320px; max-height: calc(100vh - 32px); }
+.mail-slack-pop .menu-group { flex: none; padding: 8px 10px 2px; color: var(--muted); font-size: calc(12px * var(--fs)); }
+.mail-slack-pop .menu-group.fail { color: var(--danger); overflow-wrap: anywhere; }
 .ho-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bar); }
 /* The mail's side is 40% wide at first, at least 400px; the Todo's right side (T-7) is 30% at first, its least, between 30% and 45%; the Slack tab keeps the width of the Claude pane, at least 400px. */
 #todo-side { flex: none; display: flex; flex-direction: column; min-width: 0; width: clamp(30%, var(--chat-w, 30%), 45%); }
@@ -2099,27 +2054,9 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .slack-side-item:hover .slack-side-hide, .slack-side-item:focus-within .slack-side-hide, .slack-side-item.keep .slack-side-hide { visibility: visible; }
 .slack-side-item:hover .slack-side-n, .slack-side-item:focus-within .slack-side-n, .slack-side-item.keep .slack-side-n { visibility: hidden; }
 #slack-list, #slack-channel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-/* S-24: the Claude pane on the right of the list, the watch and a channel's history: 30% of the screen at first, between 25% and 40% (ts/split.ts; the clamp holds the same range). Its head is the band of T-7: --soft with a 2px line of --accent. */
-#slack-claude { flex: none; width: clamp(25%, var(--slack-claude-w, 30%), 40%); min-height: 0; }
-/* S-24: the first row of the pane is the band of the ✳ (as high as every header, --header-h, so that its line meets the headers of the body); under it, while the pane is open, the heading of Claude's pane (48px, as in T-7 and M-10) and the terminal; closed, the question takes the place of both. */
-#slack-tools { flex: none; box-sizing: border-box; min-height: var(--header-h); display: flex; align-items: center; justify-content: flex-end; gap: 4px; padding: 0 16px; background: var(--bar); border-bottom: 1px solid var(--line); }
-#slack-tools .icon-btn { width: var(--header-btn); height: var(--header-btn); border-radius: 50%; color: var(--claude); }
-#slack-tools .icon-btn svg { width: var(--header-ic); height: var(--header-ic); }
-#slack-tools .icon-btn:hover:not(:disabled) { background: var(--hover); }
-#slack-tools .icon-btn[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
-#slack-claude .chat-head { box-sizing: border-box; height: 48px; }
-#slack-claude-term { flex: 1; min-height: 0; }
-#slack-claude-ask { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; }
-#slack-claude-ask p { margin: 0; color: var(--ink-soft); }
-/* S-24, S-7: where the body's column (`#slack-pane`) would be under 600px with Claude on its right, `ts/slack-claude.ts` gives `#slack-screen` the class `below`: Claude goes under that column (the list of channels stays whole on the left). `#slack-work` is not a box while Claude is on the right.
-   In the list, the watch and a channel's history the pane of S-24 is 30% to 45% of the column's height (`--slack-claude-h`, the plain ratio that `ts/split.ts` writes, used as a flex-grow so that no height has to be known; the range is held here too). While a thread is shown the pane of S-24 is hidden, and a thread has the pane of S-7 inside it, so the column is all its own. */
-#slack-work { display: contents; }
-#slack-screen.below #slack-work { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-#slack-screen.below #slack-pane { flex-grow: calc(1 - clamp(0.3, var(--slack-claude-h, 0.3), 0.45)); flex-shrink: 1; flex-basis: 0; }
-#slack-screen.below:has(#slack-thread:not([hidden])) #slack-pane { flex-grow: 1; }
-#slack-screen.below #slack-claude { width: auto; flex-grow: clamp(0.3, var(--slack-claude-h, 0.3), 0.45); flex-shrink: 1; flex-basis: 0; }
-#slack-screen.below #slack-claude-split, #slack-screen.below #reply-split { width: auto; height: 7px; border-left: 0; border-top: 1px solid var(--line); cursor: row-resize; }
-#slack-screen.below #slack-claude-split span, #slack-screen.below #reply-split span { width: 32px; height: 3px; }
+/* S-7: where the thread's body would be under 600px, `ts/slack-thread.ts` gives `#slack-screen` the class `below`: the pane of the thread goes under it (the list of channels stays whole on the left), and its divider lies down. */
+#slack-screen.below #reply-split { width: auto; height: 7px; border-left: 0; border-top: 1px solid var(--line); cursor: row-resize; }
+#slack-screen.below #reply-split span { width: 32px; height: 3px; }
 #slack-pending { padding: 8px 32px 0; }
 #slack-notice:not(:empty) { padding-top: 8px; }
 #slack-feed, #sc-feed { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 12px 24px 16px; }
@@ -2330,8 +2267,8 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 #st-reply, #sc-reply { flex: none; padding: 12px 24px 16px; border-top: 1px solid var(--line); }
 /* S-7: the host of Claude Code's terminal takes the rows of the old log and request field in the grid of the pane; 「元に戻す」 of its writes is above the reply field, at the right. */
 #reply-term { grid-row: 2 / -1; min-height: 0; overflow: hidden; }
-#st-undo-bar, #sc-undo-bar { display: flex; justify-content: flex-end; margin-bottom: 8px; }
-#st-undo, #sc-undo { height: 26px; padding: 0 12px; font-size: calc(12px * var(--fs)); }
+#st-undo-bar { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+#st-undo { height: 26px; padding: 0 12px; font-size: calc(12px * var(--fs)); }
 #st-error, #sc-error { margin: 0 0 8px; }
 
 /* D-1, D-3: the database screen is the column of connections (like #slack-side, with its divider), which open into databases and tables, and the work pane, which holds the tables of the database that was pressed last. The edit pane that registers or edits a connection takes the place of the work pane. */
