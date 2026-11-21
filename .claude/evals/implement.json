@@ -1,0 +1,33 @@
+{
+  "skill_name": "implement",
+  "evals": [
+    {
+      "id": 1,
+      "name": "harness-only-lows-get-documentation",
+      "prompt": "あなたは implement の実行の手順 5 で PR をマージしたリードです。`.claude/skills/implement/SKILL.md` の手順 5 と、そこが指す `.claude/rules/review.md` の該当節を読み、`.claude/evals/files/implement/run-harness-lows.md` の実行について、手順 5 の「残った Low」の issue を作ってください。この記録が、あなたの持つ実行の文脈です。GitHub には読み書きともに触れないでください。`gh issue create` は実行せずに、打つはずのコマンド、題、ラベル、本文をそのまま書き出してください。`guard-public.sh text` はそのまま実行して構いません。",
+      "expected_output": "`issue` に振り分けた R-1 と R-2 だけを 1 つの issue にまとめ、2 件とも `.claude/evals/` か `.claude/skills/` の中なので `documentation` ラベルを付ける。",
+      "files": [
+        ".claude/evals/files/implement/run-harness-lows.md"
+      ],
+      "assertions": [
+        "`gh issue create` が 1 件だけで、題が「PR #1400 のレビューで残った Low」",
+        "ラベルが `importance:low`、`point:2`、`documentation` で、`point:5` と `point:8` は無い（2 件とも `.claude/evals/` か `.claude/skills/` の中にあるので `documentation` を付ける）",
+        "本文に R-1 と R-2 が ID、`path:line` と要旨つきで入り、`drop` の R-3 は入らない",
+        "本文を `gh` に渡す前に `guard-public.sh text` に通している"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "a-finding-in-code-gets-no-documentation",
+      "prompt": "あなたは implement の実行の手順 5 で PR をマージしたリードです。`.claude/skills/implement/SKILL.md` の手順 5 と、そこが指す `.claude/rules/review.md` の該当節を読み、`.claude/evals/files/implement/run-mixed-lows.md` の実行について、手順 5 の「残った Low」の issue を作ってください。この記録が、あなたの持つ実行の文脈です。GitHub には読み書きともに触れないでください。`gh issue create` は実行せずに、打つはずのコマンド、題、ラベル、本文をそのまま書き出してください。`guard-public.sh text` はそのまま実行して構いません。",
+      "expected_output": "R-2 が `ts/` の中なので、`documentation` ラベルは付けない。",
+      "files": [
+        ".claude/evals/files/implement/run-mixed-lows.md"
+      ],
+      "assertions": [
+        "`gh issue create` が 1 件だけで、題が「PR #1401 のレビューで残った Low」",
+        "ラベルに `documentation` が無く、`importance:low` と `point:2` がある"
+      ]
+    }
+  ]
+}
