@@ -16,6 +16,14 @@ line: string,
  */
 latest: string | null, 
 /**
+ * The first line of the agent's last prompt (`prompt`), read as `first_text_line` says; `None` when it has no text, or is data, the output of a process or a message of the harness. It is the prompt whether or not the answer is newer.
+ */
+promptLine?: string | null, 
+/**
+ * The first line of the agent's last answer (`lastAssistantMessage`), read as `first_text_line` says; `None` when it has no text, or is data, the output of a process or a message of the harness. It is the answer whether or not the prompt is newer.
+ */
+answerLine?: string | null, 
+/**
  * How many of the agent's subagents are at work (A-8); 0 when it has none.
  */
 subagents: number, 
