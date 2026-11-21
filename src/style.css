@@ -12,7 +12,7 @@ body { font-family: var(--ff-base); font-size: calc(14px * var(--fs)); margin: 0
 #calendar { --fs: var(--fs-calendar, 1); font-family: var(--ff-calendar, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #projects { --fs: var(--fs-todo-list, 1); font-family: var(--ff-todo-list, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #todo-body, #todo-handoff, #todo-claude { --fs: var(--fs-todo-work, 1); font-family: var(--ff-todo-work, var(--ff-base)); font-size: calc(14px * var(--fs)); }
-#slack-side, #slack-list, #slack-channel, #slack-thread, #slack-compose { --fs: var(--fs-slack, 1); font-family: var(--ff-slack, var(--ff-base)); font-size: calc(14px * var(--fs)); }
+#slack-side, #slack-list, #slack-channel, #slack-thread { --fs: var(--fs-slack, 1); font-family: var(--ff-slack, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #orca-list { --fs: var(--fs-orca-list, 1); font-family: var(--ff-orca-list, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #orca-work, #orca-files { --fs: var(--fs-orca-pane, 1); font-family: var(--ff-orca-pane, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
@@ -98,8 +98,8 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .icon-btn { width: 36px; height: 36px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-soft); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
 .icon-btn:hover:not(:disabled) { background: var(--soft); }
 .icon-btn:disabled { opacity: .4; cursor: default; }
-#mail-header .icon-btn, #inbox-header .icon-btn, #new-mail-header .icon-btn, #mail-tools .icon-btn, #cal-bar .icon-btn, #todo-body > header .icon-btn, #todo-tools .icon-btn, #slack-header .icon-btn, #sc-head .icon-btn, #st-head .icon-btn, #prompt > header .icon-btn, #slack-compose > header .icon-btn, #orca-header .icon-btn, #formation-head .icon-btn, #database-side-head .icon-btn, #database-header .icon-btn, #database-terminal-head .icon-btn { width: var(--header-btn); height: var(--header-btn); }
-#mail-header .icon-btn svg, #inbox-header .icon-btn svg, #new-mail-header .icon-btn svg, #mail-tools .icon-btn svg, #cal-bar .icon-btn svg, #todo-body > header .icon-btn svg, #todo-tools .icon-btn svg, #slack-header .icon-btn svg, #sc-head .icon-btn svg, #st-head .icon-btn svg, #prompt > header .icon-btn svg, #slack-compose > header .icon-btn svg, #orca-header .icon-btn svg, #formation-head .icon-btn svg, #database-side-head .icon-btn svg, #database-header .icon-btn svg, #database-terminal-head .icon-btn svg { width: var(--header-ic); height: var(--header-ic); }
+#mail-header .icon-btn, #inbox-header .icon-btn, #new-mail-header .icon-btn, #mail-tools .icon-btn, #cal-bar .icon-btn, #todo-body > header .icon-btn, #todo-tools .icon-btn, #slack-header .icon-btn, #sc-head .icon-btn, #st-head .icon-btn, #prompt > header .icon-btn, #orca-header .icon-btn, #formation-head .icon-btn, #database-side-head .icon-btn, #database-header .icon-btn, #database-terminal-head .icon-btn { width: var(--header-btn); height: var(--header-btn); }
+#mail-header .icon-btn svg, #inbox-header .icon-btn svg, #new-mail-header .icon-btn svg, #mail-tools .icon-btn svg, #cal-bar .icon-btn svg, #todo-body > header .icon-btn svg, #todo-tools .icon-btn svg, #slack-header .icon-btn svg, #sc-head .icon-btn svg, #st-head .icon-btn svg, #prompt > header .icon-btn svg, #orca-header .icon-btn svg, #formation-head .icon-btn svg, #database-side-head .icon-btn svg, #database-header .icon-btn svg, #database-terminal-head .icon-btn svg { width: var(--header-ic); height: var(--header-ic); }
 /* A-28: the failures at the bottom right (ts/error-card.ts). The newest card is on top, and each stays until its × is pressed. The first child's auto margin puts the stack at the bottom while it fits, and lets it scroll from the newest card when it does not. They stand above the toast (--toast-bottom) and the footer. */
 #error-cards { position: fixed; right: 16px; bottom: calc(var(--toast-bottom, 24px) + 52px); z-index: 16; box-sizing: border-box; width: 340px; max-width: calc(100vw - 32px); max-height: calc(100vh - 160px); display: flex; flex-direction: column; gap: 8px; overflow-y: auto; pointer-events: none; }
 #error-cards > :first-child { margin-top: auto; }
@@ -172,7 +172,7 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 #slack-header .icon-btn { color: #444746; border-radius: 50%; }
 #unread-heading .text-btn:disabled { opacity: .4; cursor: default; }
 #unread-heading .text-btn:disabled:hover { background: var(--surface); }
-/* The operations of the open mail (M-2): a row of icons, 48px high, at the right end of the body (its left padding keeps them right of the subject's column, 56px), which stays at the top of #main while the messages scroll. It reaches the edges of #main's padding and has the color of the body, so that nothing shows through it, and a line under it. The icons are in three groups, set apart by a line drawn by the first button of a group: the summary, then "Slack に貼る", "Todo にする" and "Orca に渡す", then the two that take the row out; so no line is there when the group before it, or the group itself, is hidden. */
+/* The operations of the open mail (M-2): a row of icons, 48px high, at the right end of the body (its left padding keeps them right of the subject's column, 56px), which stays at the top of #main while the messages scroll. It reaches the edges of #main's padding and has the color of the body, so that nothing shows through it, and a line under it. The icons are in three groups, set apart by a line drawn by the first button of a group: the summary, then "Slack に投稿", "Todo にする" and "Orca に渡す", then the two that take the row out; so no line is there when the group before it, or the group itself, is hidden. */
 #thread-actions { position: sticky; top: 0; z-index: 2; flex: none; box-sizing: border-box; height: 48px; display: flex; align-items: center; justify-content: flex-end; gap: 4px; margin: 0 -24px 0 -32px; padding: 0 24px 0 88px; background: var(--surface); border-bottom: 1px solid var(--line); }
 #thread-actions .icon-btn { width: 34px; height: 34px; color: var(--ink-soft); border-radius: 50%; }
 #thread-actions .icon-btn svg { width: 20px; height: 20px; }
@@ -935,26 +935,13 @@ button.status:hover { filter: brightness(.95); }
 @keyframes pane-in { from { transform: translateX(100%); } }
 @media (prefers-reduced-motion: reduce) { .pane { animation: none; } }
 
-/* The destination picker of the Slack compose screen (a .menu under the chip). */
-.slack-pop { width: 340px; max-height: calc(100vh - 32px); overflow-y: auto; padding: 12px; gap: 8px; }
-.slack-pop select, .slack-pop input { box-sizing: border-box; width: 100%; padding: 6px 8px; border: 1px solid var(--chip-line); border-radius: 8px; font: inherit; }
-.slack-pop select:focus, .slack-pop input:focus { outline: 2px solid var(--accent); border-color: transparent; }
-.slack-pop .text-btn { align-self: flex-end; justify-content: center; }
-.slack-pop .err { margin: 0; color: #b00020; font-size: calc(12px * var(--fs)); }
-.slack-pop h3 { margin: 4px 0 0; font-size: calc(12px * var(--fs)); color: #666; font-weight: normal; }
-.slack-pop .pick-list { display: flex; flex-direction: column; max-height: 132px; overflow-y: auto; }
-.slack-pop .pick-list button { flex: none; }
-.slack-pop .pick-list .empty { padding: 4px 10px; color: #888; font-size: calc(12px * var(--fs)); }
-.slack-pop .pick-list .ws { margin-left: auto; color: #888; font-size: calc(12px * var(--fs)); }
-.slack-pop .row { display: flex; gap: 8px; }
-.slack-pop .row .text-btn { align-self: auto; flex: none; }
 
 /* The Todo prompt screen: the fixed part and the editable body on the left, the conversation with Claude on the right. */
-#prompt, #slack-compose { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-#prompt header, #slack-compose header { box-sizing: border-box; min-height: var(--header-h); gap: 8px; padding: 0 24px 0 16px; border-bottom: 1px solid var(--line); }
-#prompt h1, #slack-compose h1 { flex: none; }
-#prompt .grow, #slack-compose .grow { flex: 1; }
-#prompt-error, #slack-error { margin: 8px 24px 0; }
+#prompt { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+#prompt header { box-sizing: border-box; min-height: var(--header-h); gap: 8px; padding: 0 24px 0 16px; border-bottom: 1px solid var(--line); }
+#prompt h1 { flex: none; }
+#prompt .grow { flex: 1; }
+#prompt-error { margin: 8px 24px 0; }
 #prompt-main { flex: 1; min-height: 0; display: flex; }
 #prompt-edit { flex: 1; min-width: 0; box-sizing: border-box; padding: 16px 24px 24px; display: flex; flex-direction: column; gap: 14px; }
 .prompt-label { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-size: calc(12px * var(--fs)); color: #666; }
@@ -962,9 +949,9 @@ button.status:hover { filter: brightness(.95); }
 #prompt-fixed, #prompt-fixed-after, #prompt-body { font-family: var(--ff-mono, ) ui-monospace, Menlo, monospace; font-size: calc(12px * var(--fs)); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 #prompt-fixed, #prompt-fixed-after { margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--code); color: #555; }
 .prompt-body-box { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-#prompt-body, #slack-body { flex: 1; min-height: 0; box-sizing: border-box; resize: none; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 8px; color: #222; }
-#prompt-body:focus, #slack-body:focus { outline: 2px solid var(--soft); }
-#prompt-body:disabled, #slack-body:disabled { border-color: var(--chip-line); background: var(--bar); }
+#prompt-body { flex: 1; min-height: 0; box-sizing: border-box; resize: none; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 8px; color: #222; }
+#prompt-body:focus { outline: 2px solid var(--soft); }
+#prompt-body:disabled { border-color: var(--chip-line); background: var(--bar); }
 /* The model and effort of a Claude pane's purpose, without a frame: under the request field on the prompt screen, in the frame's row for the panes made by ts/composer.ts. */
 .chat-model { display: flex; justify-content: flex-end; gap: 2px; margin-top: 8px; }
 .chat-model:empty { display: none; }
@@ -992,58 +979,9 @@ button.status:hover { filter: brightness(.95); }
 .chat-send:disabled:hover { background: var(--accent); filter: none; }
 .chat-clear { margin-left: auto; height: 26px; padding: 0 12px; border-radius: 13px; font: inherit; font-size: calc(12px * var(--fs)); font-weight: normal; }
 
-/* The Slack compose screen has two modes (`data-mode` of `#slack-compose`, S-27). Claude mode: the terminal of Claude Code in a column on the left (A-36; 45% of the screen body at first, 35% to 60% by the divider, `--term-w` of ts/split.ts is where the divider put it, and the clamp holds it to that range),
-   and the original message with the things to do and "投稿" in the part on the right. Manual mode: the same part over the whole width, with no column and no divider.
-   The Slack thread has the three parts of `.split-main` too, with the Claude pane a third to a half as wide (`--chat-w`). */
-#slack-main { flex: 1; min-height: 0; display: flex; }
+/* The Slack thread has the three parts of `.split-main`, with the Claude pane a third to a half as wide (`--chat-w`). */
 .split-main.dragging { user-select: none; -webkit-user-select: none; cursor: col-resize; }
 .split-main.dragging-row { cursor: row-resize; }
-/* The two heads (the terminal's and the edit part's) are one height, `--slack-head`. The edit part has three parts: a head, a part that scrolls, and a foot fixed at the bottom (`--slack-foot`). */
-#slack-compose { --slack-foot: calc(89px + 60px * var(--fs)); --slack-head: 48px; }
-#slack-edit { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-#slack-compose-claude { flex: none; width: clamp(35%, var(--term-w, 45%), 60%); box-sizing: border-box; min-height: 0; }
-#slack-compose[data-mode="manual"] #slack-compose-claude, #slack-compose[data-mode="manual"] #slack-split { display: none; }
-#slack-mode { flex: none; display: flex; gap: 4px; margin-left: auto; }
-#slack-mode .text-btn { height: 28px; padding: 0 14px; }
-#slack-edit-head, #slack-compose-claude .chat-head { flex: none; box-sizing: border-box; height: var(--slack-head); }
-#slack-edit-head { display: flex; align-items: center; gap: 10px; padding: 0 16px 0 24px; border-bottom: 1px solid var(--line); }
-#slack-edit-head .prompt-label { margin-bottom: 0; }
-/* The row above the fields with "元に戻す", which takes back what Claude Code wrote (S-4). */
-#slack-undo-bar { flex: none; display: flex; align-items: center; padding: 8px 24px 0; }
-#slack-undo { height: 26px; padding: 0 12px; font-size: calc(12px * var(--fs)); }
-#slack-reset { margin-left: auto; height: 26px; padding: 0 12px; font-size: calc(12px * var(--fs)); }
-#slack-reset:disabled { opacity: .4; cursor: default; }
-#slack-reset:disabled:hover { background: var(--surface); }
-#slack-edit-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; padding: 16px 24px; }
-#slack-preview { flex: 1 0 auto; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: #222; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; }
-#slack-preview:hover { border-color: var(--chip-line); }
-#slack-preview:focus-visible { outline: 2px solid var(--accent); }
-#slack-body { flex: 1; font: inherit; line-height: 1.7; overflow-wrap: anywhere; }
-/* "行うこと": numbered cards (where and what each one posts) and the plus under them. The pane takes what its cards need, up to half of the left pane, and scrolls inside. */
-#slack-actions-pane { flex: none; max-height: 50%; box-sizing: border-box; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 12px 24px; border-top: 1px solid var(--line); }
-#slack-actions-pane .prompt-label { flex: none; margin-bottom: 0; }
-#slack-actions { flex: none; display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
-#slack-actions:empty { display: none; }
-.slack-action { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
-.slack-action.posted { background: var(--bar); }
-.slack-no { flex: none; min-width: 16px; line-height: 26px; color: var(--ink-soft); font-size: calc(12px * var(--fs)); text-align: center; }
-.slack-action-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
-.slack-action-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.slack-action .review-chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.slack-action .review-chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
-.slack-action .review-chip:disabled { opacity: .5; cursor: default; }
-.slack-action .review-chip:disabled:hover { background: var(--surface); }
-.slack-remove { margin-left: auto; width: 26px; height: 26px; }
-.slack-remove svg { width: 14px; height: 14px; }
-.slack-done { margin-left: auto; }
-.slack-text { box-sizing: border-box; width: 100%; height: calc(64px * var(--fs)); resize: none; padding: 8px 10px; border: 1px solid var(--chip-line); border-radius: 8px; color: #222; font: inherit; line-height: 1.6; overflow-wrap: anywhere; }
-.slack-text:focus { outline: 2px solid var(--soft); border-color: var(--accent); }
-.slack-text:disabled { background: var(--bar); }
-#slack-add { flex: none; align-self: flex-start; width: 28px; height: 28px; }
-#slack-add svg { width: 16px; height: 16px; }
-#slack-edit-foot { flex: none; box-sizing: border-box; height: var(--slack-foot); display: flex; align-items: center; justify-content: flex-end; padding: 0 16px; border-top: 1px solid var(--line); background: var(--bar); }
-#slack-edit-foot .text-btn { height: 36px; padding: 0 20px; border-radius: 18px; font: inherit; font-weight: bold; }
-#slack-edit-foot .text-btn:disabled { opacity: .4; cursor: default; }
 .split-bar { flex: none; width: 7px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; border-left: 1px solid var(--line); background: var(--bar); cursor: col-resize; touch-action: none; }
 .split-bar span { width: 3px; height: 32px; border-radius: 2px; background: var(--chip-line); }
 .split-bar:hover span, .split-bar:focus-visible span, .dragging .split-bar span { background: var(--accent-dim); }
@@ -1619,17 +1557,6 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-dest-chev { display: flex; }
 .orca-dest-chev svg { width: 12px; height: 12px; }
 .orca-dest-more-btn[aria-expanded="true"] .orca-dest-chev svg { transform: rotate(180deg); }
-/* S-1 (#905): the dialog that asks where the later posts go before "N 件を投稿" sends them, over the dimmed screen of .scrim. */
-.slack-ask-scrim { align-items: center; justify-content: center; }
-.slack-ask { display: flex; flex-direction: column; gap: 12px; width: 360px; max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); overflow-y: auto; box-sizing: border-box; padding: 14px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); box-shadow: 0 8px 24px rgba(0, 0, 0, .18); font-size: calc(13px * var(--fs)); }
-.slack-ask-item { display: flex; flex-direction: column; gap: 4px; min-width: 0; margin: 0; padding: 0; border: 0; }
-.slack-ask-item legend { padding: 0; margin-bottom: 4px; font-weight: 700; }
-.slack-ask-choice { display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 0 8px; border-radius: 6px; cursor: pointer; overflow-wrap: anywhere; }
-.slack-ask-choice:hover { background: var(--hover); }
-.slack-ask-choice input { flex: none; width: 16px; height: 16px; margin: 0; cursor: pointer; }
-.slack-ask-buttons { display: flex; justify-content: flex-end; gap: 8px; }
-.slack-ask-buttons .text-btn { justify-content: center; height: 28px; padding: 0 16px; border-radius: 14px; }
-.slack-ask-buttons .text-btn:disabled { opacity: .4; cursor: default; }
 .orca-dest-list .empty.fail { color: var(--warn); }
 #orca-files-tree { flex: 1; min-height: 0; overflow: auto; padding: 4px 4px 8px; }
 #orca-files-tree .pending { margin: 4px; }

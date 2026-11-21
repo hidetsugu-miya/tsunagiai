@@ -63,7 +63,7 @@ describe("thread", () => {
       headerHeight: 44,
       actions: ["thread-slack", "thread-todo", "trash", "archive"],
       actionsInHeader: false,
-      // 48px, the height of the row of the Claude pane's heading; the line before "Slack に貼る" is there only while the summary icon is.
+      // 48px, the height of the row of the Claude pane's heading; the line before the # button is there only while the summary icon is.
       rowHeight: 48,
       lines: [false, true],
       size: [34, 34],

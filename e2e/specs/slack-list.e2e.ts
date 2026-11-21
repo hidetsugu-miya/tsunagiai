@@ -394,7 +394,7 @@ describe("slack list", () => {
   it("drops the rows and the failure of the last workspace when it was removed", async () => {
     await openList(timeline(sample()));
     await waitForCount("#slack-feed .feed-row", 2);
-    await mock("slack_load", { workspaces: [], recent: [] });
+    await mock("slack_load", { workspaces: [] });
     await $("#nav-todo").click();
     await $("#nav-slack").click();
     await expect($("#slack-feed .feed-empty")).toHaveText(expect.stringContaining("ワークスペースが接続されていません"));
@@ -1387,7 +1387,7 @@ describe("slack list", () => {
   it("lists nothing but the notice when only some workspaces failed, and offers 再読み込み only when every workspace failed", async () => {
     const other = { ...workspace, teamId: "T2", team: "Other Team" };
     const failure = { teamId: "T2", team: "Other Team", error: "接続できません" };
-    await boot({ inbox: inbox(), slack_load: { workspaces: [workspace, other], recent: [] }, slack_timeline: timeline([], { failed: [failure], refreshSecs: 1 }), claude_status: claudeReady });
+    await boot({ inbox: inbox(), slack_load: { workspaces: [workspace, other] }, slack_timeline: timeline([], { failed: [failure], refreshSecs: 1 }), claude_status: claudeReady });
     await $("#nav-slack").click();
     await expect($("#slack-feed .feed-empty")).toHaveText("メッセージはありません");
     expect(await count("#slack-feed .pending.fail")).toBe(0);

@@ -230,7 +230,7 @@ function draw(t: ThreadDetail, { id, account, li }: ThreadTarget, seq: number) {
   const drawn = ++drawCount;
   $("thread").removeAttribute("aria-busy");
   loading.current = null;
-  // Gmail's answer for the thread already drawn keeps the object, so that what started from it ("Slack に貼る") still sees the same open thread.
+  // Gmail's answer for the thread already drawn keeps the object, so that what started from it still sees the same open thread.
   const shown = opened.current;
   const drawing = { li, messages: t.messages, subject: t.subject };
   const thread: OpenThread = shown && shown.id === id && shown.account === account ? Object.assign(shown, drawing) : { id, account, ...drawing };

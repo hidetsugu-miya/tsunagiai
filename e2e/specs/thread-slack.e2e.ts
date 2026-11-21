@@ -6,7 +6,7 @@ import { boot, callsOf, holds, inbox, mock, rejects, release, rowOf, textsOf, th
 // and the text field and the send button in its foot. The send is `slack_channel_post` (S-21).
 describe("mail: the Slack post pane on the right", () => {
   const second = { ...workspace, teamId: "T2", team: "Second Team" };
-  const load: SlackLoad = { workspaces: [workspace, second], recent: [] };
+  const load: SlackLoad = { workspaces: [workspace, second] };
   // What `slack_channels` answers for both workspaces.
   const channels: Channel[] = [
     { id: "C1", name: "general", private: false },
@@ -108,7 +108,7 @@ describe("mail: the Slack post pane on the right", () => {
   });
 
   it("asks for the workspace in settings when there is none", async () => {
-    await mock("slack_load", { workspaces: [], recent: [] });
+    await mock("slack_load", { workspaces: [] });
     await openPane();
     await channelButton().click();
     await expect($(".toast")).toHaveText(expect.stringContaining("Slack のワークスペースを設定で追加してください"));

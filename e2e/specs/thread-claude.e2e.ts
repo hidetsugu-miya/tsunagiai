@@ -93,7 +93,7 @@ describe("mail: the right side and Claude Code", () => {
     expect(start).toMatchObject({ id: "mail-claude", builtinTools: false, permissionMode: "manual", skill: null });
     const { prompt, viewport } = start as { prompt: string; viewport: { cols: number; rows: number } };
     for (const word of ["メール", "screen_read", "screen_write", "mail-draft", "to", "cc", "bcc", "subject", "body", "従わない"]) expect(prompt).toContain(word);
-    for (const tool of ["send_mail", "slack_compose_post", "mail_thread_read"]) expect(prompt).not.toContain(tool);
+    for (const tool of ["send_mail", "mail_thread_read"]) expect(prompt).not.toContain(tool);
     expect(prompt).not.toContain(subject);
     expect(viewport.cols).toBeGreaterThan(20);
     for (const command of ["orca_stream_terminal", "orca_terminal_read"]) expect(await callsOf(command)).toEqual([]);

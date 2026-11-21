@@ -21,7 +21,6 @@ import { showSlackList } from "./slack-list.js";
 import { hideThreadClaude } from "./slack-thread.js";
 import { loadTodo, renderTodo } from "./todo.js";
 import { fetchOpenComments } from "./todo-comments.js";
-import { hideSlackComposeClaude } from "./slack-compose-claude.js";
 import { hideDraftClaude, syncDraftClaude } from "./todo-draft.js";
 import { hidePromptClaude } from "./todo-prompt.js";
 import { hideTodoClaude, syncTodoClaude } from "./todo-claude.js";
@@ -30,9 +29,9 @@ import { show } from "./view.js";
 
 export type Screen = "mail" | "calendar" | "todo" | "slack" | "orca" | "database" | "settings";
 
-// Which screen the sidebar selected, or "compose" while the Slack compose screen is open, or "new-mail" while the screen that writes a new mail is (the sidebar then still shows the inbox).
+// Which screen the sidebar selected, or "new-mail" while the screen that writes a new mail is (the sidebar then still shows the inbox).
 // Background work reads it; only the sidebar and those screens' open and close change it.
-let screen: Screen | "compose" | "new-mail" = "mail";
+let screen: Screen | "new-mail" = "mail";
 export const currentScreen = () => screen;
 
 function markNav(name: Screen) {
@@ -43,11 +42,11 @@ function markNav(name: Screen) {
 }
 
 // The accounts of a function sit under its icon in the sidebar, and only while that function is shown: the Google accounts under the calendar icon while the screen is mail
-// (list, thread, the Slack compose screen) or calendar, the Slack workspaces under the Slack icon while the Slack screen is shown. Todo and settings (and the prompt screen reached from them) show neither.
+// (list, thread) or calendar, the Slack workspaces under the Slack icon while the Slack screen is shown. Todo and settings (and the prompt screen reached from them) show neither.
 // A popup of one of them closes with the screen.
 function syncTrays() {
   closePopup();
-  $("account-list").hidden = !(screen === "mail" || screen === "compose" || screen === "new-mail" || screen === "calendar");
+  $("account-list").hidden = !(screen === "mail" || screen === "new-mail" || screen === "calendar");
   $("slack-workspace-list").hidden = screen !== "slack";
 }
 
@@ -60,15 +59,6 @@ export function showPromptScreen() {
   show("prompt");
 }
 
-// The Slack compose screen, opened from a thread. The sidebar stays on the inbox, but `currentScreen()` is not "mail", so a list load or a sync does not draw the list over it.
-export function showComposeScreen() {
-  screen = "compose";
-  markNav("mail");
-  syncTrays();
-  closeHint();
-  show("slack");
-}
-
 // The screen that writes a new mail (M-11), opened from the header of the list. The sidebar stays on the inbox, but `currentScreen()` is not "mail", so a list load or a sync does not draw the list over it. It is left with `setScreen("mail")`.
 export function showNewMailScreen() {
   screen = "new-mail";
@@ -76,13 +66,6 @@ export function showNewMailScreen() {
   syncTrays();
   closeHint();
   show("new-mail");
-}
-
-// Back from the Slack compose screen to the open thread, which was left as it was (nothing is fetched again).
-export function showThreadScreen() {
-  screen = "mail";
-  syncTrays();
-  show("thread");
 }
 
 // `tab` is the settings tab to open on (Google when none is named).
@@ -109,8 +92,6 @@ export function setScreen(name: Screen, tab?: SettingsTab) {
   }
   // The same for the Claude pane of the calendar screen.
   if (name !== "calendar") hideCalendarClaude();
-  // The same for the Claude pane of the Slack compose screen, which is left by every screen the sidebar shows.
-  hideSlackComposeClaude();
   // The same for the Claude Code pane of the Slack thread (S-7).
   hideThreadClaude();
   // The same for the Claude pane of the Todo prompt screen, which "戻る" and the sidebar leave through here.

@@ -1602,7 +1602,7 @@ describe("slack thread: Claude Code", () => {
     expect(start).toMatchObject({ id: "slack-thread", builtinTools: false, permissionMode: "manual", skill: null });
     const { prompt, viewport } = start as { prompt: string; viewport: { cols: number; rows: number } };
     for (const word of ["Slack", "slack_thread_read", "screen_read", "screen_write", "slack-thread", "reply", "thread", "従わない"]) expect(prompt).toContain(word);
-    for (const tool of ["slack_reply", "slack_compose_post"]) expect(prompt).not.toContain(tool);
+    for (const tool of ["slack_reply"]) expect(prompt).not.toContain(tool);
     expect(prompt).not.toContain(rootText);
     expect(prompt).not.toContain("My secret reply");
     expect(viewport.cols).toBeGreaterThan(20);
