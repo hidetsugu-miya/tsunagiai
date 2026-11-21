@@ -45,6 +45,7 @@ import { openScratchpad } from "./orca-scratchpad.js";
 import { hideTerminals, initOrcaTerminal, type Placement, pruneTerminals, showTerminals, type TermSource } from "./orca-terminal.js";
 import { type Fields, registerDraftTarget } from "./screen-bridge.js";
 import { initSplit } from "./split.js";
+import { hideStay, showStay } from "./toast.js";
 import { logError, showFailure } from "./error-card.js";
 import { copyText, setNavCount, show } from "./view.js";
 
@@ -975,16 +976,11 @@ function openDiff(relative: string, commit: DiffCommit | null = null) {
   draw();
 }
 
-// The note of a start that was answered: it waits for the tab of the session, or (Orca named neither its pane nor its terminal) says it was started.
+// The note of a start that was answered, at the bottom right (toast.ts): it waits for the tab of the session, or (Orca named neither its pane nor its terminal) says it was started.
 function drawStarted() {
-  const box = $("orca-started");
-  box.hidden = started === null;
-  if (box.hidden) return;
-  const waiting = startWaits();
-  const key = String(waiting);
-  if (box.dataset.state === key) return;
-  box.dataset.state = key;
-  box.replaceChildren(...(waiting ? [tag("span", "spin"), tag("span", "sp", "セッションを始めました。一覧に現れるのを待っています…")] : [tag("span", "sp", "セッションを始めました。Orca の画面で開けます。")]));
+  if (started === null) hideStay();
+  else if (startWaits()) showStay("セッションを始めました。一覧に現れるのを待っています…");
+  else showStay("セッションを始めました。Orca の画面で開けます。", false);
 }
 
 // Takes a read as the one shown. A read that did not learn the target and the environments (a poll, or a failed `environment list`) leaves the ones held;

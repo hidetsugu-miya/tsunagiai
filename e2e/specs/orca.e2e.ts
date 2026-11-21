@@ -506,8 +506,9 @@ describe("orca", () => {
     await expect($(".orca-dest-pop")).not.toExist();
     expect(await callsOf(create)).toHaveLength(0);
     // Orca named neither its pane nor its terminal: nothing can be followed, and the plus starts another.
-    await expect($("#orca-started")).toHaveText("セッションを始めました。Orca の画面で開けます。");
+    await expect($(".toast")).toHaveText("セッションを始めました。Orca の画面で開けます。");
     await expect($(".orca-plus")).toBeEnabled();
+    await expect($(".toast .spin")).not.toExist();
     await plus("example-app", CLAUDE);
     expect(await waitForCalls(start, 2)).toEqual([
       { path: "/work/example-api", environment: null },
@@ -523,7 +524,7 @@ describe("orca", () => {
     expect(await waitForCalls(create)).toEqual([{ path: "/work/example-api", environment: "Studio" }]);
     await expect($(".orca-dest-pop")).not.toExist();
     expect(await callsOf(start)).toHaveLength(0);
-    await expect($("#orca-started")).toHaveText("セッションを始めました。Orca の画面で開けます。");
+    await expect($(".toast")).toHaveText("セッションを始めました。Orca の画面で開けます。");
   });
 
   it("asks which worktree when the project has several, narrowed to that project's, and starts in the one picked", async () => {
@@ -572,7 +573,7 @@ describe("orca", () => {
     await plus("example-app", CLAUDE);
     await waitForCalls(start);
     await expect($(CARD)).toHaveText("Worktree not found");
-    await expect($("#orca-started")).not.toBeDisplayed();
+    await expect($(".toast")).not.toBeDisplayed();
     await expect($(".orca-plus")).toBeEnabled();
     await expect($('#orca-feed .orca-project[data-key="proj_example-app"]')).toHaveAttribute("aria-pressed", "true");
     const create = await mock("orca_terminal_create", rejects("起動先の worktree が見つかりません。一覧を読み直してください"));
@@ -582,7 +583,7 @@ describe("orca", () => {
     // A text that differs makes a second card, put above the first.
     await expect($$(CARD)[0]).toHaveText("起動先の worktree が見つかりません。一覧を読み直してください");
     expect(await textsOf(CARD)).toEqual(["起動先の worktree が見つかりません。一覧を読み直してください", "Worktree not found"]);
-    await expect($("#orca-started")).not.toBeDisplayed();
+    await expect($(".toast")).not.toBeDisplayed();
     await expect($(".orca-plus")).toBeEnabled();
   });
 
@@ -612,8 +613,12 @@ describe("orca", () => {
     await mock("orca_overview", orcaOverview(sample(), worktrees()));
     await plus("example-api", CLAUDE);
     await waitForCalls(start);
-    await expect($("#orca-started")).toHaveText("セッションを始めました。一覧に現れるのを待っています…");
+    await expect($(".toast")).toHaveText("セッションを始めました。一覧に現れるのを待っています…");
+    await expect($(".toast .spin")).toBeDisplayed();
     await expect($(".orca-plus")).toBeDisabled();
+    // The note is at the bottom right and no timer hides it: it is still there after the 4 seconds of a toast.
+    await browser.pause(4500);
+    await expect($(".toast")).toBeDisplayed();
     // The project stays selected while the session is waited for.
     await expect($('#orca-feed .orca-project[data-key="proj_example-api"]')).toHaveAttribute("aria-pressed", "true");
     // The row appears in a later read: its project and tab are selected, and its terminal shows.
@@ -621,7 +626,7 @@ describe("orca", () => {
     await mock("orca_overview", orcaOverview([...sample(), startedRow()], worktrees()));
     await showAgain();
     expect((await waitForCalls(read))[0]).toEqual({ handle: "term_new" });
-    await expect($("#orca-started")).not.toBeDisplayed();
+    await expect($(".toast")).not.toBeDisplayed();
     await expect($('#orca-feed .orca-project[data-key="proj_example-api"]')).toHaveAttribute("aria-pressed", "true");
     await expect($('.orca-tabs [data-tab="claude:tab_new:leaf_1"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
     await expect($(".orca-plus")).toBeEnabled();
@@ -634,11 +639,11 @@ describe("orca", () => {
     await mock("orca_overview", orcaOverview(sample(), worktrees()));
     await plus("example-api", CLAUDE);
     await waitForCalls(start);
-    await expect($("#orca-started")).toHaveText("セッションを始めました。一覧に現れるのを待っています…");
+    await expect($(".toast")).toHaveText("セッションを始めました。一覧に現れるのを待っています…");
     await mock("orca_overview", orcaOverview([...sample(), startedRow()], worktrees()));
     await showAgain();
     await expect($('.orca-tabs [data-tab="claude:tab_new:leaf_1"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
-    await expect($("#orca-started")).not.toBeDisplayed();
+    await expect($(".toast")).not.toBeDisplayed();
   });
 
   it("follows the terminal it opened: waits for its tab, then selects it and mirrors it", async () => {
@@ -647,14 +652,14 @@ describe("orca", () => {
     await mock("orca_overview", orcaOverview(sample(), worktrees()));
     await plus("example-api", TERMINAL);
     expect(await waitForCalls(create)).toEqual([{ path: "/work/example-api", environment: null }]);
-    await expect($("#orca-started")).toHaveText("セッションを始めました。一覧に現れるのを待っています…");
+    await expect($(".toast")).toHaveText("セッションを始めました。一覧に現れるのを待っています…");
     await expect($(".orca-plus")).toBeDisabled();
     // The terminal appears in a later read: it is a plain terminal, so its tab is selected and its screen shows.
     const read = await mock("orca_terminal_read", ["$ pwd"]);
     await mock("orca_overview", orcaOverview(sample(), worktrees(), { terminals: [createdTerminal()] }));
     await showAgain();
     expect((await waitForCalls(read))[0]).toEqual({ handle: "term_new_sh" });
-    await expect($("#orca-started")).not.toBeDisplayed();
+    await expect($(".toast")).not.toBeDisplayed();
     await expect($('#orca-feed .orca-project[data-key="proj_example-api"]')).toHaveAttribute("aria-pressed", "true");
     await expect($('.orca-tabs [data-tab="orca:term_new_sh"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
     await expect($(".orca-plus")).toBeEnabled();
@@ -668,10 +673,10 @@ describe("orca", () => {
     const create = await mock("orca_terminal_create", created);
     await plus("example-api", TERMINAL);
     expect(await waitForCalls(create)).toEqual([{ path: "/work/example-api", environment: "Studio" }]);
-    await expect($("#orca-started")).toHaveText("セッションを始めました。一覧に現れるのを待っています…");
+    await expect($(".toast")).toHaveText("セッションを始めました。一覧に現れるのを待っています…");
     await sendStream(streamList(sample(), worktrees(), [createdTerminal()]));
     await expect($('.orca-tabs [data-tab="orca:term_new_sh"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
-    await expect($("#orca-started")).not.toBeDisplayed();
+    await expect($(".toast")).not.toBeDisplayed();
   });
 
   it("selects the terminal of a saved environment that the streamed list held before the reply came", async () => {
@@ -685,7 +690,7 @@ describe("orca", () => {
     await sendStream(streamList(sample(), worktrees(), [createdTerminal()]));
     await release(create, created);
     await expect($('.orca-tabs [data-tab="orca:term_new_sh"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
-    await expect($("#orca-started")).not.toBeDisplayed();
+    await expect($(".toast")).not.toBeDisplayed();
     await expect($(".orca-plus")).toBeEnabled();
   });
 
@@ -696,11 +701,11 @@ describe("orca", () => {
     const create = await mock("orca_terminal_create", created);
     await plus("example-api", TERMINAL);
     await waitForCalls(create);
-    await expect($("#orca-started")).toBeDisplayed();
+    await expect($(".toast")).toBeDisplayed();
     await expect($(".orca-plus")).toBeDisabled();
     const later = new Date(Date.now() + 31_000);
     await setClock(`${isoDate(later)}T${later.toTimeString().slice(0, 8)}`);
-    await expect($("#orca-started")).not.toBeDisplayed();
+    await expect($(".toast")).not.toBeDisplayed();
     await expect($(".orca-plus")).toBeEnabled();
   });
 
@@ -710,10 +715,10 @@ describe("orca", () => {
     await mock("orca_overview", orcaOverview(sample(), worktrees()));
     await plus("example-api", CLAUDE);
     await waitForCalls(start);
-    await expect($("#orca-started")).toBeDisplayed();
+    await expect($(".toast")).toBeDisplayed();
     // Choosing a project drops the wait, and a row that appears later does not take the selection.
     await $('#orca-feed .orca-project[data-key="proj_example-app"]').click();
-    await expect($("#orca-started")).not.toBeDisplayed();
+    await expect($(".toast")).not.toBeDisplayed();
     await expect($(".orca-plus")).toBeEnabled();
     await mock("orca_overview", orcaOverview([...sample(), startedRow()], worktrees()));
     await showAgain();
@@ -730,7 +735,7 @@ describe("orca", () => {
     await $('#orca-feed .orca-project[data-key="proj_example-app"]').click();
     await release(create, created);
     await expect($(".orca-plus")).toBeEnabled();
-    await expect($("#orca-started")).not.toBeDisplayed();
+    await expect($(".toast")).not.toBeDisplayed();
     await mock("orca_overview", orcaOverview(sample(), worktrees(), { terminals: [createdTerminal()] }));
     await showAgain();
     await waitForCalls("orca_overview");
@@ -4053,7 +4058,7 @@ describe("orca: this machine and a saved environment in one list (A-33)", () => 
     // The streamed target says nothing of it: the list of this machine is read at once, and the tab is selected when it holds it.
     expect(await waitForCalls(destination)).toEqual([{ environment: null, force: false }]);
     await expect(selectedTab()).toHaveText(expect.stringContaining("New session"));
-    await expect($("#orca-started")).not.toBeDisplayed();
+    await expect($(".toast")).not.toBeDisplayed();
   });
 
   describe("while the target is streamed", () => {

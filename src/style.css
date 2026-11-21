@@ -437,6 +437,8 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 /* Todo: project column on the left, tasks on the right. */
 /* The toast stacks above the update popup while it shows (ts/update.ts sets --toast-bottom). */
 .toast { position: fixed; right: 24px; bottom: var(--toast-bottom, 24px); z-index: 20; padding: 10px 16px; border-radius: 10px; background: var(--side); color: var(--on-accent); font-size: calc(13px * var(--fs)); }
+.toast.stay { display: flex; align-items: center; gap: 10px; }
+.toast .spin { border-color: var(--side-fg); border-top-color: var(--on-accent); }
 .toast button { margin-left: 12px; padding: 0; border: 0; background: transparent; color: var(--side-fg); font: inherit; cursor: pointer; }
 #todo { flex: 1; min-height: 0; display: flex; }
 #projects { width: 220px; flex: none; border-right: 1px solid var(--line); padding: 0 12px 20px; box-sizing: border-box; overflow-y: auto; }
@@ -1519,7 +1521,6 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-tab-close { flex: none; width: 22px; height: 22px; margin-right: 4px; color: inherit; }
 .orca-tab-close svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 #orca-panes .orca-empty { margin: 0; padding: 48px 24px; }
-#orca-started { margin: 16px 24px 0; }
 /* The terminal fills the pane. The box of each tab has a definite size (it is placed in the pane), so that the fit counts the rows that show and the bottom is not cut off. */
 #orca-panes .orca-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
 /* The file pane (A-18) on the right of the work pane: the tree of the selected tab's worktree (`--files-w` is where the divider put it, 15% to 40% of the screen), and the editor of a file in the place of a terminal. */
