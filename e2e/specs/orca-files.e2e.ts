@@ -1310,7 +1310,7 @@ describe("orca: files and editor (A-18)", () => {
 
   // example-idle is not running (A-8), so the list keeps it under the link until the link is pressed.
   const pickIdle = async () => {
-    await $("#orca-feed .orca-stopped-toggle").click();
+    await $("#orca-list .orca-stopped-toggle").click();
     await project("example-idle").click();
   };
 

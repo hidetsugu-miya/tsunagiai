@@ -37,8 +37,8 @@ const screenText = () => $(".orca-term .orca-term-box:not([hidden]) .xterm-rows"
 
 // Selects the project of `repo` in the list pane (the plus starts in the selected one).
 async function pickProject(repo: string) {
-  await $(`#orca-feed .orca-project[data-key="proj_${repo}"]`).click();
-  await expect($(`#orca-feed .orca-project[data-key="proj_${repo}"]`)).toHaveAttribute("aria-pressed", "true");
+  await $(`#orca-list .orca-project[data-key="proj_${repo}"]`).click();
+  await expect($(`#orca-list .orca-project[data-key="proj_${repo}"]`)).toHaveAttribute("aria-pressed", "true");
 }
 
 // The page's own press of the plus (the driver's click focuses the button after the page's handler ran, which no real press does). The press of an item of its menu is `pickItem` (`../orca-support`).
@@ -997,8 +997,8 @@ describe("orca: projects", () => {
     orcaOverview(sample(), [...worktrees(), orcaWorktree("example-idle", "main")], {
       terminals: [orcaTerminal("example-app", "zsh")],
     });
-  const projectNames = () => textsOf("#orca-feed .orca-project-name");
-  const projectStatuses = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-project .orca-ic")].map((i) => i.dataset.status));
+  const projectNames = () => textsOf("#orca-list .orca-project-name");
+  const projectStatuses = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-list .orca-project .orca-ic")].map((i) => i.dataset.status));
 
   it("starts with the projects: a status icon and the name, and no number of sessions", async () => {
     await openOrca(withTerminals());
@@ -1022,15 +1022,15 @@ describe("orca: projects", () => {
   });
 
   // The link under the running projects (A-8): the projects whose icon is the gray dot, with no session and no terminal, are left out until it is pressed.
-  const stoppedLink = () => $("#orca-feed .orca-stopped-toggle");
-  const listed = () => browser.execute(() => [...document.querySelectorAll("#orca-feed .orca-project-name, #orca-feed .orca-stopped-toggle")].map((n) => n.textContent));
+  const stoppedLink = () => $("#orca-list .orca-stopped-toggle");
+  const listed = () => browser.execute(() => [...document.querySelectorAll("#orca-list .orca-project-name, #orca-list .orca-stopped-toggle")].map((n) => n.textContent));
 
   it("leaves out the projects that are not running, and draws under the running ones a link with their number", async () => {
     await openOrca(withTerminals());
     expect(await projectNames()).toEqual(["example-app", "example-web", "example-api", "example-lib"]);
     expect(await listed()).toEqual(["example-app", "example-web", "example-api", "example-lib", "起動していない 1 件"]);
     await expect(stoppedLink()).toHaveAttribute("aria-expanded", "false");
-    await expect($("#orca-feed .orca-project[data-key=\"proj_example-idle\"]")).not.toExist();
+    await expect($("#orca-list .orca-project[data-key=\"proj_example-idle\"]")).not.toExist();
   });
 
   it("opens the projects that are not running under the link, which then hides them, and keeps it through a read", async () => {
@@ -1046,6 +1046,54 @@ describe("orca: projects", () => {
     expect(await listed()).toEqual(["example-app", "example-web", "example-api", "example-lib", "起動していないものを隠す", "example-idle"]);
     await stoppedLink().click();
     expect(await listed()).toEqual(["example-app", "example-web", "example-api", "example-lib", "起動していない 1 件"]);
+  });
+
+  const boxes = () =>
+    browser.execute(() => {
+      const r = (id: string) => document.getElementById(id)!.getBoundingClientRect();
+      const region = document.getElementById("orca-stopped-feed")!;
+      return { list: r("orca-list"), feed: r("orca-feed"), bar: r("orca-stopped-bar"), stopped: r("orca-stopped"), region: r("orca-stopped-feed"), scrolls: region.scrollHeight > region.clientHeight };
+    });
+
+  it("fixes the link at the bottom of the list, under the running projects, and opens the others under it while the running ones stay in view (A-8)", async () => {
+    await openOrca(withTerminals());
+    const closed = await boxes();
+    expect(closed.stopped.bottom).toBeLessThanOrEqual(closed.list.bottom);
+    expect(closed.stopped.bottom).toBeGreaterThan(closed.list.bottom - 12);
+    expect(closed.bar.top).toBeGreaterThanOrEqual(closed.feed.bottom - 1);
+    await stoppedLink().click();
+    await expect($("#orca-stopped-feed")).toBeDisplayed();
+    const open = await boxes();
+    // The link stays at the bottom of the list, the opened projects are under it, and the running ones are still above.
+    expect(open.stopped.bottom).toBeGreaterThan(open.list.bottom - 12);
+    expect(open.bar.top).toBeGreaterThanOrEqual(open.feed.bottom - 1);
+    expect(open.region.top).toBeGreaterThanOrEqual(open.bar.bottom - 1);
+    expect(await projectNames()).toEqual(["example-app", "example-web", "example-api", "example-lib", "example-idle"]);
+    await expect(project("example-app")).toBeDisplayed();
+    expect(await count("#orca-feed .orca-project")).toBe(4);
+    expect(await count("#orca-stopped-feed .orca-project")).toBe(1);
+  });
+
+  it("limits the opened region to half the height of the list, and scrolls it by itself", async () => {
+    const idle = Array.from({ length: 40 }, (_, i) => orcaWorktree(`example-idle-${String(i).padStart(2, "0")}`, "main"));
+    await openOrca(orcaOverview(sample(), [...worktrees(), ...idle]));
+    await expect(stoppedLink()).toHaveText("起動していない 40 件");
+    await stoppedLink().click();
+    const open = await boxes();
+    expect(open.stopped.height).toBeLessThanOrEqual(open.list.height / 2 + 1);
+    expect(open.scrolls).toBe(true);
+    expect(open.feed.height).toBeGreaterThan(0);
+    // The scroll is the region's own: the running list does not move with it.
+    const moved = await browser.execute(() => {
+      const region = document.getElementById("orca-stopped-feed")!;
+      const feed = document.getElementById("orca-feed")!;
+      region.scrollTop = 120;
+      return { region: region.scrollTop, feed: feed.scrollTop };
+    });
+    expect(moved.region).toBeGreaterThan(0);
+    expect(moved.feed).toBe(0);
+    await stoppedLink().click();
+    await expect($("#orca-stopped-feed")).not.toBeDisplayed();
   });
 
   it("draws no link when every project is running, and only the link when none is", async () => {
@@ -1175,7 +1223,7 @@ describe("orca: projects", () => {
 
   it("says a project has no session, with the tab strip empty", async () => {
     await openOrca(withTerminals());
-    await $("#orca-feed .orca-stopped-toggle").click();
+    await $("#orca-list .orca-stopped-toggle").click();
     await project("example-idle").click();
     await expect($(".orca-empty")).toBeDisplayed();
     await expect($(".orca-empty")).toHaveText("セッションはありません");
@@ -3370,7 +3418,7 @@ describe("orca: search the list (A-19)", () => {
   // What the list draws while nothing is typed: example-idle is not running, so it is left out under the link (A-8).
   const RUNNING = ALL.slice(0, 4);
   const input = () => $("#orca-search-input");
-  const names = () => textsOf("#orca-feed .orca-project-name");
+  const names = () => textsOf("#orca-list .orca-project-name");
   const focusedId = () => browser.execute(() => document.activeElement?.id ?? "");
   // The name of each row and the letters of it in bold.
   const bolds = () =>
@@ -3440,7 +3488,7 @@ describe("orca: search the list (A-19)", () => {
 
   it("finds a project that is not running with no link drawn, and brings the list back as it was when the text is cleared", async () => {
     await openOrca(overview());
-    const link = $("#orca-feed .orca-stopped-toggle");
+    const link = $("#orca-list .orca-stopped-toggle");
     await expect(link).toHaveText("起動していない 1 件");
     await search("idle");
     expect(await names()).toEqual(["example-idle"]);
@@ -4357,7 +4405,7 @@ describe("orca: add a project (A-38)", () => {
     await expect(pop()).not.toExist();
     expect((await waitForCalls(read))[0]).toMatchObject({ scope: "full" });
     // The new project has no session, so it is under the link (A-8).
-    await expect($("#orca-feed .orca-stopped-toggle")).toHaveText("起動していない 1 件");
+    await expect($("#orca-list .orca-stopped-toggle")).toHaveText("起動していない 1 件");
     await expect($(CARDS)).not.toExist();
   });
 
