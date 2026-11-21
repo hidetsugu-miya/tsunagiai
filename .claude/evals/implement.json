@@ -28,6 +28,19 @@
         "`gh issue create` が 1 件だけで、題が「PR #1401 のレビューで残った Low」",
         "ラベルに `documentation` が無く、`importance:low` と `point:2` がある"
       ]
+    },
+    {
+      "id": 3,
+      "name": "flaky-fix-passes-three-times",
+      "prompt": "あなたは implement の実行の手順 6 で、flaky なテストの項目を直しているリードです。`.claude/skills/implement/SKILL.md` の手順 6 を読み、`.claude/evals/files/implement/flaky-fixed.md` の記録について、この修正を通してコミットしてよいかを決めてください。この記録が、あなたの持つ実行の文脈です。コマンドは実行せず、打つはずのコマンドを書き出してください。",
+      "expected_output": "`run-e2e.sh --only orca-files` が 3 回続けて通っているので、修正は通る。4 回目や 5 回目は要らない。",
+      "files": [
+        ".claude/evals/files/implement/flaky-fixed.md"
+      ],
+      "assertions": [
+        "3 回続けて通ったことを、修正が通る条件として扱う",
+        "`run-e2e.sh --only orca-files` をさらに回すコマンドを書いていない（5 回目まで回そうとしない）"
+      ]
     }
   ]
 }
