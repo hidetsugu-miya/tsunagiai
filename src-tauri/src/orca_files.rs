@@ -1429,6 +1429,10 @@ impl Sink for Gathered {
                 IMAGE_READ_LIMIT / (1024 * 1024)
             ));
         }
+        // The whole size is known from the first piece: the room is made once, and never past the read limit.
+        if self.0.capacity() == 0 {
+            self.0.reserve_exact(total.min(IMAGE_READ_LIMIT) as usize);
+        }
         self.0.extend_from_slice(&bytes);
         Ok(())
     }

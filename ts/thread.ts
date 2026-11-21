@@ -9,6 +9,7 @@ import { rows, setReadState, updateBadge } from "./inbox-rows.js";
 import { invoke } from "./ipc.js";
 import { autoFit, fitAfterImages, frameObserver, linkTextUrls, plainBody, routeLinks, withBodyCsp } from "./mail-frame.js";
 import { externalImages, knownSenders, offerImages, resetImageBars, showCidImages, type ThreadCtx } from "./mail-images.js";
+import { resetMailSlack } from "./mail-slack.js";
 import { clearSummary, renderSummary, summaryPressed } from "./mail-summary.js";
 import { linkify } from "./mail-text.js";
 import { currentScreen, setScreen } from "./nav.js";
@@ -305,6 +306,7 @@ export async function openThread(
   threadOrigin = origin;
   clearSummary();
   resetReply();
+  resetMailSlack();
   $("thread-subject").textContent = subject === undefined ? "" : subject || "(件名なし)";
   // Empty until Rust says whether it holds the thread (an answer from memory), so a held thread never shows the note.
   $("messages").replaceChildren();

@@ -139,15 +139,16 @@ describe("orca", () => {
   it("has no footer, no label of the target and no menu of it at the bottom of the list pane, whatever the read says", async () => {
     await openOrca(orcaOverview(sample(), worktrees(), studio));
     const absent = () => browser.execute(() => ({ gone: ["orca-foot", "orca-status", "orca-target"].filter((id) => document.getElementById(id) !== null), last: document.getElementById("orca-list")!.lastElementChild!.id }));
-    expect(await absent()).toEqual({ gone: [], last: "orca-feed" });
+    // The last child is the region of the projects that are not running, pinned at the bottom (A-8): it is no footer, label or menu.
+    expect(await absent()).toEqual({ gone: [], last: "orca-stopped" });
     await mock("orca_overview", orcaOverview([], [], { state: "failed", message: "Orca is not running", ...studio }));
     await showAgain();
     await expect($("#orca-notice")).toHaveText("Studio を読み込めませんでした: Orca is not running");
-    expect(await absent()).toEqual({ gone: [], last: "orca-feed" });
+    expect(await absent()).toEqual({ gone: [], last: "orca-stopped" });
     await mock("orca_overview", orcaOverview([], [], { state: "missing" }));
     await showAgain();
     await expect($("#orca-notice")).toHaveText(expect.stringContaining("orca コマンドが見つかりません"));
-    expect(await absent()).toEqual({ gone: [], last: "orca-feed" });
+    expect(await absent()).toEqual({ gone: [], last: "orca-stopped" });
   });
 
   it("makes the header of the list, the bar of a pane and the bar of the file pane a place to drag the window by", async () => {
@@ -709,6 +710,21 @@ describe("orca", () => {
     await expect($(".orca-plus")).toBeEnabled();
   });
 
+  it("keeps the note of the wait on another screen, and hides it when the wait ends there", async () => {
+    await openOrca(orcaOverview(sample(), worktrees(), studio));
+    await waitForCalls("orca_stream_open");
+    await sendStream(streamList(sample(), worktrees()));
+    const create = await mock("orca_terminal_create", created);
+    await plus("example-api", TERMINAL);
+    await waitForCalls(create);
+    await $("#nav-mail").click();
+    await expect($("#orca")).not.toBeDisplayed();
+    await expect($(".toast")).toHaveText("セッションを始めました。一覧に現れるのを待っています…");
+    const later = new Date(Date.now() + 31_000);
+    await setClock(`${isoDate(later)}T${later.toTimeString().slice(0, 8)}`);
+    await expect($(".toast")).not.toBeDisplayed();
+  });
+
   it("drops the wait when the user selects another project", async () => {
     await openOrca();
     const start = await mock("orca_start", reply);
@@ -1050,7 +1066,10 @@ describe("orca: projects", () => {
 
   const boxes = () =>
     browser.execute(() => {
-      const r = (id: string) => document.getElementById(id)!.getBoundingClientRect();
+      const r = (id: string) => {
+        const { top, bottom, height } = document.getElementById(id)!.getBoundingClientRect();
+        return { top, bottom, height };
+      };
       const region = document.getElementById("orca-stopped-feed")!;
       return { list: r("orca-list"), feed: r("orca-feed"), bar: r("orca-stopped-bar"), stopped: r("orca-stopped"), region: r("orca-stopped-feed"), scrolls: region.scrollHeight > region.clientHeight };
     });

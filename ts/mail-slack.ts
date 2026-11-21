@@ -27,6 +27,14 @@ const field = () => $<HTMLTextAreaElement>("mail-slack-text");
 
 export const mailSlackOpen = () => open;
 
+// A mail is opened (S-28): the text written for the mail before is not the new one's, so the field and its error are emptied; a text whose post is still on its way stays.
+export function resetMailSlack() {
+  if (posting) return;
+  field().value = "";
+  $("mail-slack-error").hidden = true;
+  draw();
+}
+
 // Draws what follows from the state: the chosen channel on its button, and which of the field, the channel button and the send button can be used.
 function draw() {
   const button = $<HTMLButtonElement>("mail-slack-channel");

@@ -577,7 +577,7 @@ function lookServer(f: EditorFile) {
 
 // The files of the project that are open look for their server again, once its settings changed (a server renamed, or a language taken by another).
 export function resolveServers(target: string | null, project: string) {
-  for (const f of filesOf(target, project)) if (!f.outside && f.read === "ready") lookServer(f);
+  for (const f of filesOf(target, project)) if (!f.outside && !f.image && f.read === "ready") lookServer(f);
 }
 
 // Shows the picture of an image file (A-18): Rust reads it and answers a `data:` URI, which goes into an img that the pane's width holds and that is never larger than the picture.

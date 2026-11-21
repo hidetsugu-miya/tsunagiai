@@ -270,6 +270,10 @@ pub fn run() {
                     if let Err(e) = formation::migrate_folder(&dir) {
                         gmail::log_failure("formation_migrate", "-", e);
                     }
+                    // The file of the recent destinations of the retired screen of S-1 (S-28).
+                    if let Err(e) = slack::remove_recent_file(&dir) {
+                        gmail::log_failure("slack_recent_remove", "-", e);
+                    }
                     // The socket through which `tsunagiai-mcp` reads and writes the fields of the screens (A-36, #731).
                     screen_bridge::start(app.handle().clone(), dir);
                 }

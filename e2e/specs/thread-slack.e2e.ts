@@ -46,7 +46,9 @@ describe("mail: the Slack post pane on the right", () => {
   it("opens and closes with the #, and shows nothing of the mail or of Claude", async () => {
     for (const id of ["#mail-side", "#mail-split", "#mail-slack"]) await expect($(id)).not.toBeDisplayed();
     await expect($("#thread-slack")).toHaveAttribute("aria-pressed", "false");
-    await openPane();
+    // The page's own click: the driver's click focuses the button after the handler has given the keyboard to the field.
+    await browser.execute(() => document.getElementById("thread-slack")!.click());
+    await expect($("#mail-slack")).toBeDisplayed();
     await expect($("#mail-side")).toBeDisplayed();
     await expect($("#mail-split")).toBeDisplayed();
     for (const id of ["#mail-tools", "#mail-claude"]) await expect($(id)).not.toBeDisplayed();
@@ -102,7 +104,9 @@ describe("mail: the Slack post pane on the right", () => {
     await openPane();
     await mock("slack_channels", rejects("missing_scope"));
     await channelButton().click();
-    await expect($(".mail-slack-pop .menu-group.fail")).toHaveText(expect.stringContaining("missing_scope"));
+    // Both workspaces fail with the same answer: each says why under its name.
+    await browser.waitUntil(async () => (await textsOf(".mail-slack-pop .menu-group.fail")).length === 2, { timeoutMsg: "the errors of the workspaces never came" });
+    expect(await textsOf(".mail-slack-pop .menu-group")).toEqual(["Example Team", expect.stringContaining("missing_scope"), "Second Team", expect.stringContaining("missing_scope")]);
     await browser.keys("Escape");
     await expect($(".mail-slack-pop")).not.toExist();
   });
@@ -168,6 +172,27 @@ describe("mail: the Slack post pane on the right", () => {
     await expect(channelButton()).toHaveText("#general");
     await field().addValue("！");
     await expect($("#mail-slack-error")).not.toBeDisplayed();
+  });
+
+  it("empties the field and its error when another mail is opened, and the pane stays open", async () => {
+    await openPane();
+    await openList();
+    await pick(0);
+    const post = await mock("slack_channel_post", rejects("channel_not_found"));
+    await field().setValue("前のメールの文");
+    await send().click();
+    await waitForCalls(post);
+    await expect($("#mail-slack-error")).toBeDisplayed();
+    await $("#back").click();
+    await waitForCount("#unread-threads li", 2);
+    await mock("thread", threadDetail("Second unread", "Hello from Bob", false));
+    await rowOf("unread-threads", "Second unread").$(".subject").click();
+    await expect($("#thread-subject")).toHaveText("Second unread");
+    await threadLoaded();
+    await expect($("#mail-slack")).toBeDisplayed();
+    await expect(field()).toHaveValue("");
+    await expect($("#mail-slack-error")).not.toBeDisplayed();
+    await expect(channelButton()).toHaveText("#general");
   });
 
   it("turns the field, the channel button and the send off while the post is on its way, so that nothing is posted twice", async () => {

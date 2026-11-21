@@ -798,7 +798,6 @@ function drawWork(tabs: Tab[]) {
   const plusDisabled = busy || startWaits() || projectKey === null || view === null || view.state === "missing";
   const empty: TreeModel = { kind: "pane", pane: { id: "", key: "", tabs: () => [], focused: false, empty: emptyText(tabs, undefined), terminal: false, editor: false, plusDisabled, filesShown: filesShown(), listOpen } };
   paneHosts = drawTree(layout?.root ? treeOf(layout.root, tabs, layout.focus, plusDisabled, (id) => tabOfId(tabs, id)) : empty);
-  drawStarted();
 }
 
 // Shows the terminal of the tab selected in each pane while the screen is shown: streamed from a saved environment or from this machine's paired Orca, else mirrored.
@@ -990,7 +989,7 @@ function openDiff(relative: string, commit: DiffCommit | null = null) {
   draw();
 }
 
-// The note of a start that was answered, at the bottom right (toast.ts): it waits for the tab of the session, or (Orca named neither its pane nor its terminal) says it was started.
+// The note of a start that was answered, at the bottom right (toast.ts): it waits for the tab of the session, or (Orca named neither its pane nor its terminal) says it was started. `draw` shows it on every screen, so that it goes with the wait whichever screen is shown.
 function drawStarted() {
   if (started === null) hideStay();
   else if (startWaits()) showStay("セッションを始めました。一覧に現れるのを待っています…");
@@ -1121,6 +1120,7 @@ function syncPeek() {
 function draw() {
   syncServers(serverGone, worktreeGone);
   drawBadge();
+  drawStarted();
   // Before the terminals of the screen are shown, so that a terminal the project selected now owns is not held by the modal.
   syncPeek();
   if (!listShown()) return pauseLsp();

@@ -1839,7 +1839,7 @@ describe("slack thread: the divider", () => {
     expect(await share()).toBeCloseTo(1 / 3, 2);
   });
 
-  it("sets the Claude width by dragging, and keeps its own width apart from the compose screen's", async () => {
+  it("sets the Claude width by dragging", async () => {
     await openDetail();
     await browser.execute(() => {
       const box = document.getElementById("slack-thread")!.getBoundingClientRect();
@@ -1850,8 +1850,6 @@ describe("slack thread: the divider", () => {
     });
     expect(await share()).toBeCloseTo(0.4, 2);
     await expect($("#reply-split")).toHaveAttribute("aria-valuenow", "40");
-    // The compose screen's divider is another one, still at its own start.
-    expect(await browser.execute(() => document.getElementById("slack-split")!.getAttribute("aria-valuenow"))).toBe("45");
   });
 });
 

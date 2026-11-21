@@ -55,6 +55,8 @@ const THREAD_SEEN_FILE: &str = "slack-thread-seen.json";
 const THREAD_SEEN_KEY: &str = "seen";
 /// v0.11.0's registered destinations, which are not carried over.
 const LEGACY_FILE: &str = "slack-destinations.json";
+/// The recent destinations of the retired screen of S-1: nothing reads or writes the file any more, and it is removed at each start.
+const RECENT_FILE: &str = "slack-recent.json";
 /// `users.conversations` answers in pages of 200 channels; the channels past this many pages are left out.
 const CHANNEL_PAGES: usize = 50;
 const CHANNELS_TTL: Duration = Duration::from_secs(10 * 60);
@@ -838,13 +840,23 @@ async fn register(
     .await
 }
 
-fn remove_legacy_file(dir: PathBuf) -> Result<(), String> {
-    match std::fs::remove_file(dir.join(LEGACY_FILE)) {
+/// Removes `name` from `dir`; a file that is not there is fine.
+fn remove_file_in(dir: &Path, name: &str) -> Result<(), String> {
+    match std::fs::remove_file(dir.join(name)) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-            Err(format!("{LEGACY_FILE} を消せません: {e}"))
+            Err(format!("{name} を消せません: {e}"))
         }
         _ => Ok(()),
     }
+}
+
+fn remove_legacy_file(dir: PathBuf) -> Result<(), String> {
+    remove_file_in(&dir, LEGACY_FILE)
+}
+
+/// Removes the file of the recent destinations that the retired screen of S-1 left in the config folder (called once at each start).
+pub fn remove_recent_file(dir: &Path) -> Result<(), String> {
+    remove_file_in(dir, RECENT_FILE)
 }
 
 /// The first load of a run moves v0.11.0's token to its workspace's key and drops that version's destinations.
@@ -6533,6 +6545,19 @@ mod tests {
         std::fs::write(dir.join(LEGACY_FILE), "{}").unwrap();
         assert_eq!(remove_legacy_file(dir.clone()), Ok(()));
         assert!(!dir.join(LEGACY_FILE).exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_recent_destinations_file_is_removed_and_its_absence_is_fine() {
+        let dir = temp_dir("recent");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(remove_recent_file(&dir), Ok(()));
+        std::fs::write(dir.join(RECENT_FILE), "{}").unwrap();
+        std::fs::write(dir.join(WORKSPACES_FILE), "{}").unwrap();
+        assert_eq!(remove_recent_file(&dir), Ok(()));
+        assert!(!dir.join(RECENT_FILE).exists());
+        assert!(dir.join(WORKSPACES_FILE).exists());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
