@@ -422,6 +422,7 @@ pub fn run() {
             orca_files::orca_files_ignored,
             orca_files::orca_files_changes,
             orca_files::orca_file_read,
+            orca_files::orca_file_image,
             orca_files::orca_file_write,
             orca_files::orca_file_create,
             orca_files::orca_scratchpad_create,

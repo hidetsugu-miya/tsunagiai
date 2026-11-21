@@ -410,6 +410,8 @@ export interface Commands {
   markdown_patch: { args: { original: string; before: string; after: string }; result: MarkdownPatchResult };
   // A-18: the text of the file `relative` of the worktree, for the editor, with LF line ends (`crlf`: the file has CRLF) and the signature of what the disk holds. A binary file, one over 384 KiB and one that is not UTF-8 are errors.
   orca_file_read: { args: { path: string; relative: string; environment: string | null }; result: OrcaFileText };
+  // A-18: the image file `relative` of the worktree as a `data:` URI (png, jpg, jpeg, gif and webp by the extension; one over 3 MiB is made a smaller JPEG). A file with another extension, and one that cannot be made to fit, are errors.
+  orca_file_image: { args: { path: string; relative: string; environment: string | null }; result: string };
   // A-18: saves `content` over the file only if the disk still holds the text with `signature` (`crlf`: write CRLF). `state` says whether it was written (`saved`, with the new signature) or the disk had changed (`changed`, `missing`, `not-utf8`: nothing written).
   orca_file_write: { args: { path: string; relative: string; content: string; crlf: boolean; signature: string; environment: string | null }; result: OrcaSaved };
   // A-18: makes a file, or with `folder` a folder, named `name` in the folder `dir` of the worktree (the empty `dir` is its root), and answers its path from the worktree. A name that is not one name, and one that is taken, are errors; nothing is overwritten.

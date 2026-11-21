@@ -1504,6 +1504,81 @@ describe("orca: files and editor (A-18)", () => {
     expect(await dirtyMarks()).toBe(0);
   });
 
+  // A-18: an image file is shown as a picture, read by Rust (`orca_file_image`, a `data:` URI), and never as text.
+  describe("an image file", () => {
+    const svg = (width: number, height: number) => `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="#2a7"/></svg>`)}`;
+    const withImages = () =>
+      openFiles({
+        orca_files_list: dirOf("", [
+          ["logo.png", false],
+          ["PHOTO.JPG", false],
+          ["data.bin", false],
+        ]),
+        orca_files_ignored: [],
+      });
+    // The picture waits for the img to load; then its natural width and the width it is drawn at, and the width the pane gives it.
+    const picture = async () => {
+      await browser.waitUntil(() => browser.execute(() => (document.querySelector<HTMLImageElement>(".orca-edit-picture img")?.naturalWidth ?? 0) > 0), { timeoutMsg: "the picture never loaded" });
+      return browser.execute(() => {
+        const img = document.querySelector<HTMLImageElement>(".orca-edit-picture img")!;
+        const box = document.querySelector<HTMLElement>(".orca-edit-picture")!;
+        const style = getComputedStyle(box);
+        return { natural: img.naturalWidth, shown: Math.round(img.getBoundingClientRect().width), room: Math.round(box.clientWidth - Number.parseFloat(style.paddingLeft) - Number.parseFloat(style.paddingRight)) };
+      });
+    };
+
+    it("draws a picture wider than the pane at the width of the pane", async () => {
+      await withImages();
+      await mock("orca_file_read", text("never read"));
+      await mock("orca_file_image", svg(4000, 20));
+      await waitForCount("#orca-files-tree .orca-file", 3);
+      await doublePress("logo.png");
+      await expect($(".orca-edit-picture img")).toBeDisplayed();
+      await expect($(".orca-edit-body")).not.toBeDisplayed();
+      await expect($(".orca-edit-area")).not.toBeDisplayed();
+      const drawn = await picture();
+      expect(drawn.natural).toBe(4000);
+      expect(drawn.shown).toBe(drawn.room);
+      expect(drawn.shown).toBeLessThan(4000);
+      expect(await callsOf("orca_file_image")).toEqual([{ path: "/work/example-app", relative: "logo.png", environment: null }]);
+      expect(await callsOf("orca_file_read")).toEqual([]);
+      expect(await dirtyMarks()).toBe(0);
+    });
+
+    it("keeps a small picture at its own size, and takes the extension in any case", async () => {
+      await withImages();
+      await mock("orca_file_image", svg(20, 20));
+      await waitForCount("#orca-files-tree .orca-file", 3);
+      await doublePress("PHOTO.JPG");
+      const drawn = await picture();
+      expect(drawn.natural).toBe(20);
+      expect(drawn.shown).toBe(20);
+      expect(await callsOf("orca_file_image")).toEqual([{ path: "/work/example-app", relative: "PHOTO.JPG", environment: null }]);
+    });
+
+    it("shows the message of an image that cannot be read, in the tab, with no picture", async () => {
+      await withImages();
+      await mock("orca_file_image", rejects("画像が大きすぎます（4096 KiB。3072 KiB までに縮められませんでした）"));
+      await waitForCount("#orca-files-tree .orca-file", 3);
+      await doublePress("logo.png");
+      await expect($(".orca-edit .orca-empty")).toHaveText("画像が大きすぎます（4096 KiB。3072 KiB までに縮められませんでした）");
+      await expect($(".orca-edit-picture")).not.toBeDisplayed();
+      await expect($(".orca-edit-area")).not.toBeDisplayed();
+    });
+
+    it("leaves a binary file that is no image to the text read, which refuses it", async () => {
+      await withImages();
+      await mock("orca_file_image", svg(20, 20));
+      await mock("orca_file_read", rejects("バイナリのファイルは開けません"));
+      await waitForCount("#orca-files-tree .orca-file", 3);
+      await doublePress("data.bin");
+      await expect($(".orca-edit .orca-empty")).toHaveText("バイナリのファイルは開けません");
+      await expect($(".orca-edit-picture")).not.toBeDisplayed();
+      expect(await callsOf("orca_file_image")).toEqual([]);
+      expect(await callsOf("orca_file_read")).toEqual([{ path: "/work/example-app", relative: "data.bin", environment: null }]);
+    });
+  });
+
   it("saves by itself once the typing has stopped: waiting, saving, saved, and the mark of the tab goes", async () => {
     await openFiles({ editor_settings: { autosaveMs: 500 } });
     await openA();
