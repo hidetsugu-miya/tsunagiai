@@ -1,0 +1,18 @@
+{
+  "skill_name": "release",
+  "evals": [
+    {
+      "id": 1,
+      "name": "harness-only-change-does-not-wait",
+      "prompt": "あなたは implement の実行の手順 7 に来たリードです。`.claude/skills/release/SKILL.md` を読み、手順 A の入口として、`.claude/evals/files/release/merged-harness-fix.md` の状況でリリースを待つ変更があるかを判断してください。コマンドは実行せず、判断とその根拠、次にすること（Release PR を用意するか）を書いてください。GitHub には読み書きともに触れないでください。",
+      "expected_output": "#1500 は `.claude/skills/` と `.claude/evals/` だけの変更なので待つ変更に数えず、Release PR は用意しない。",
+      "files": [
+        ".claude/evals/files/release/merged-harness-fix.md"
+      ],
+      "assertions": [
+        "#1500 を、リリースを待つ変更に数えていない（ドキュメント、`.claude/agents/`、`.claude/evals/`、`.claude/rules/`、`.claude/skills/` だけの変更だから）",
+        "Release PR を用意せず、何も用意するものが無いと結論している"
+      ]
+    }
+  ]
+}

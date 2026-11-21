@@ -1,0 +1,8 @@
+# issue にする依頼
+
+オーナーがこのセッションで、次の直しを issue にするよう頼んだ。作者はオーナーで、新しい issue である。
+
+- 内容：`implement` の手順 5 の「Push」に、push の前に新しい HEAD の CI と E2E の記録が要ることを 1 行足す。
+- 見つかった事実：`logs/hooks-2026-11-20.log` で、`pre-git.sh` が同じ理由で 2 回 push を拒んだ。
+- 直す場所の計画：`.claude/skills/implement/SKILL.md` の手順 5 と手順 6.5 を直し、`.claude/evals/implement.json` にその eval を足す。順は skill、eval。ほかのファイルは触れない。
+- 画面も要件も変えない。ポイントは 1 から 3 のどれかとして構わない。

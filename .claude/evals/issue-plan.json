@@ -1,0 +1,32 @@
+{
+  "skill_name": "issue-plan",
+  "evals": [
+    {
+      "id": 1,
+      "name": "harness-only-issue-gets-documentation",
+      "prompt": "あなたは issue を作るよう頼まれたリードです。`.claude/skills/issue-plan/SKILL.md` を読み、`.claude/evals/files/issue-plan/request-harness-only.md` の依頼について、手順 1 と 2 のとおりに issue を書いてください。この記録が、あなたの持つ文脈です。GitHub には読み書きともに触れないでください。`gh issue create` や `gh issue comment` は実行せずに、打つはずのコマンド、題、ラベル、本文、コメントをそのまま書き出してください。`guard-public.sh text` はそのまま実行して構いません。",
+      "expected_output": "`.claude/` の skill と eval だけを直す issue なので、ゲートも prototype も要らず、`documentation` ラベルを付ける。",
+      "files": [
+        ".claude/evals/files/issue-plan/request-harness-only.md"
+      ],
+      "assertions": [
+        "`gh issue create` が 1 件で、ラベルに `point:1`、`point:2`、`point:3` のどれか 1 つと `documentation` がある（直す場所が `.claude/skills/` と `.claude/evals/` だけなので `documentation` を付ける）",
+        "`adds:requirement`、`urgency:high`、`priority:*` のラベルは無い",
+        "本文に prototype の URL を求めず、ゲートが要らない種類（`.claude/` のみの変更）だと扱っている",
+        "ポイントの理由を 1 行のコメントで書いている"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "code-change-gets-no-documentation",
+      "prompt": "あなたは issue を作るよう頼まれたリードです。`.claude/skills/issue-plan/SKILL.md` を読み、`.claude/evals/files/issue-plan/request-with-code.md` の依頼について、手順 1 と 2 のとおりに issue を書いてください。この記録が、あなたの持つ文脈です。GitHub には読み書きともに触れないでください。`gh issue create` や `gh issue comment` は実行せずに、打つはずのコマンド、題、ラベル、本文、コメントをそのまま書き出してください。`guard-public.sh text` はそのまま実行して構いません。",
+      "expected_output": "`ts/` も直すので `documentation` ラベルは付けない。",
+      "files": [
+        ".claude/evals/files/issue-plan/request-with-code.md"
+      ],
+      "assertions": [
+        "`gh issue create` が 1 件で、ラベルに `documentation` が無く、`point:1`、`point:2`、`point:3` のどれか 1 つがある"
+      ]
+    }
+  ]
+}
