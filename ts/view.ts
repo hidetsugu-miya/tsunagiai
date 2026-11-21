@@ -4,7 +4,6 @@ import { setFooterCount } from "./footer.js";
 import { showFailure } from "./error-card.js";
 import { invoke } from "./ipc.js";
 import { syncMailClaude } from "./mail-claude.js";
-import { syncSlackClaude } from "./slack-claude.js";
 import { toast } from "./toast.js";
 
 // Whether `claude` can be used: the AI summary button is shown only then, in a thread.
@@ -36,11 +35,6 @@ export function show(view: View) {
   $("slack-list").hidden = view !== "slack-list";
   $("slack-channel").hidden = view !== "slack-channel";
   $("slack-thread").hidden = view !== "slack-thread";
-  // The thread has a Claude pane of its own (S-7); the other three share the one of S-24.
-  $("slack-claude").hidden = view === "slack-thread";
-  $("slack-claude-split").hidden = view === "slack-thread";
-  // The terminal of the pane of S-24 is shown while the pane is in view, and hidden (its process goes on) when a thread, another view or another screen is.
-  syncSlackClaude();
   $("orca").hidden = view !== "orca";
   $("database").hidden = view !== "database";
   // The mail header is the thread's bar with "戻る": the list and the login screen have none.

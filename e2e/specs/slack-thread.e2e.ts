@@ -1574,7 +1574,7 @@ describe("slack thread: Claude Code", () => {
   // What `claude_thread_data` answers: Rust's text, which the screen gives to Claude Code as it is.
   const threadData = "スレッドのメッセージ（古い順）:\nBEGIN abc\nAlice Example: Please review the deploy notes.\nEND abc";
   const read = () => askScreen("read", "slack-thread");
-  // The starts of this pane's process: the Slack screen's pane (S-24) has a process of its own, which the list starts before a thread is opened.
+  // The starts of this pane's process.
   const starts = async () => ((await callsOf("claude_code_start")) as { id: string }[]).filter((c) => c.id === "slack-thread") as unknown[];
   const waitForStarts = async (n = 1) => {
     await browser.waitUntil(async () => (await starts()).length >= n, { timeoutMsg: `claude_code_start of slack-thread was not called ${n} times` });
@@ -1900,7 +1900,7 @@ describe("slack thread: the pane under the thread", () => {
     await expect(split).toHaveAttribute("aria-valuemin", "33");
     await expect(split).toHaveAttribute("aria-valuemax", "50");
     await expect(split).toHaveAttribute("aria-valuenow", "33");
-    await expect($("#slack-claude")).not.toBeDisplayed();
+    await expect($("#slack-claude")).not.toExist();
     // The pane is whole: the tabs and やり直す in its header, and the terminal under it down to the bottom.
     await expect($("#reply-chat .chat-head")).toBeDisplayed();
     await expect($(`#reply-term.claude-code-pane`)).toBeDisplayed();

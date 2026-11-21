@@ -56,7 +56,6 @@ pub const RULES: Rules = Rules {
         "todo-prompt",
         "todo-draft",
         "slack-thread",
-        "slack-channel",
         "mail-draft",
         "preview-open",
     ],
@@ -672,7 +671,6 @@ mod tests {
                 "todo-prompt",
                 "todo-draft",
                 "slack-thread",
-                "slack-channel",
                 "mail-draft",
                 "preview-open"
             ]

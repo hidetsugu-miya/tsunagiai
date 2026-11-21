@@ -896,7 +896,7 @@ describe("settings: Claude model and effort", () => {
     ["slackReply", "Slack のスレッドの相談", "スレッド詳細の Claude 欄"],
     ["orcaHandoff", "Orca に渡す要約", "Orca に渡すペインで、渡す内容を要約するとき"],
     ["todoChat", "Todo の相談", "Todo の Claude ペインで、タスクを頼むとき"],
-    ["slackChat", "Slack の相談", "Slack の一覧とチャンネルの Claude ペイン"],
+    ["slackChat", "Slack の相談", "どのペインも使っていません"],
   ];
   // The default effort of a purpose: medium, and high for the Slack thread conversation.
   const defaultEffort = (purpose: Purpose) => (purpose === "slackReply" ? "high" : "medium");

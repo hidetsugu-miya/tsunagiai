@@ -323,9 +323,6 @@ export interface Commands {
   claude_todo_prompt_reset: { args: undefined; result: TodoPrompt };
   // A-9: Claude's summary of the content to hand over (the mail, the Slack thread or the Todo of the card), as points. `context` is quoted to Claude as data, never followed; the instruction the user wrote is not sent to Claude: Rust only checks it with the content against the limit of the prompt, before the call. The model and effort are those of `orcaHandoff`. Nothing is saved.
   claude_summarize_handoff: { args: { context: HandoffContext; instruction: string }; result: HandoffSummary };
-  // S-24: the history of the open channel as Claude Code reads it (the field `channel` of the target "slack-channel"): `teamId` and `channel` must be a connected workspace and a channel of its list (a refusal is a Japanese message), and `messages` are its recent messages as the screen draws them (`text` of `TimelineMessage`), oldest first.
-  // The answer names the channel by the workspace's name and the channel's name Rust holds, and encloses the messages as data between boundary lines. Nothing is sent or saved.
-  claude_channel_data: { args: { channel: { teamId: string; channel: string; messages: { name: string; ts: string; text: string }[] } }; result: string };
   // S-7: the open Slack thread as Claude Code reads it (the field `thread` of the target "slack-thread"): its messages as the screen shows them (`text` of `ThreadMessage`), with `truncated` (the read stopped before the end of the thread), enclosed as data between boundary lines. Nothing is sent or saved.
   claude_thread_data: { args: { thread: { name: string; ts: string; text: string }[]; truncated: boolean }; result: string };
   // The agents that run in the Orca in use and its worktrees. Never rejects for a read that failed: `state` says "missing" (no orca command) or "failed" (with `message`).
