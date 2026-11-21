@@ -3,7 +3,7 @@ import type { OrcaFileText } from "../../ts/bindings/OrcaFileText";
 import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import type { PaneLayout } from "../../ts/bindings/PaneLayout";
 import type { PaneNode } from "../../ts/bindings/PaneNode";
-import { askScreen, boot, callsOf, chooseAppearance, chooseOption, chooseTheme, copiedTexts, count, fire, fontSettings, ghosttyImport, holds, huge, image, inbox, isoDate, logged, mock, note, onceId, orcaRow, orcaTerminal, orcaWorktree, PNG, rejects, release, rowOf as threadRowOf, sendStream, sendTerm, setClock, setDark, stubClipboard, terminalThemes, textsOf, threadDetail, timers, waitForCalls, waitForCount, CARD, CARDS } from "../support";
+import { askScreen, boot, callsOf, claudeReady, chooseAppearance, chooseOption, chooseTheme, copiedTexts, count, fire, fontSettings, ghosttyImport, holds, huge, image, inbox, isoDate, logged, mock, note, onceId, orcaRow, orcaTerminal, orcaWorktree, PNG, rejects, release, sendStream, sendTerm, setClock, slackLoad, setDark, stubClipboard, terminalThemes, textsOf, timers, todoData, waitForCalls, waitForCount, CARD, CARDS } from "../support";
 import { beside, claudeTab, filesToggle, onThisMachine, openOrca, orcaOverview, pickItem, project, sample, selectedTab, showAgain, streamList, studio, tabOf, tabTitles, worktrees } from "../orca-support";
 
 // example-app with a second worktree, so that the plus asks which one (A-16); example-api keeps its one.
@@ -369,17 +369,16 @@ describe("orca", () => {
   });
 
   it("keeps the notice of a session that finished while another screen is shown, until the Orca screen shows it", async () => {
-    await openOrca(orcaOverview([working("example-app"), working("example-api")], worktrees()));
+    await openOrca(orcaOverview([working("example-app"), working("example-api")], worktrees()), { todoist_load: todoData(), slack_load: slackLoad, claude_status: claudeReady });
     await select("example-app");
-    await $("#nav-mail").click();
+    await $("#nav-todo").click();
     await expect($("#orca")).not.toBeDisplayed();
-    await waitForCount("#unread-threads li", 2);
-    await mock("thread", threadDetail("請求書の件", "本文", false));
-    await threadRowOf("read-threads", "Already read").$(".subject").click();
-    await expect($("#thread-subject")).toHaveText("請求書の件");
-    // The pane of the thread reads the list when it opens, and that read finds the selected session done.
+    await waitForCount("#todo-list li.task", 1);
+    await $("#todo-list li.task").click();
+    await expect($("#todo-back")).toBeDisplayed();
+    // The pane of the task reads the list when it opens, and that read finds the selected session done.
     const overview = await mock("orca_overview", orcaOverview([finished("example-app"), working("example-api")], worktrees()));
-    await $("#mail-tool-orca").click();
+    await $("#todo-orca-open").click();
     await waitForCalls(overview);
     await expectCount(1);
     await $("#nav-orca").click();

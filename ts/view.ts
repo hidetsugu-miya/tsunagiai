@@ -46,10 +46,9 @@ export function show(view: View) {
   $("new-mail").hidden = view !== "new-mail";
   $("main").hidden = own;
   $("mail-screen").hidden = own;
-  // The right side (M-10, M-11) is shown with a thread or a new mail; the pane to Orca belongs to a thread (a new mail has nothing to hand over).
-  $("mail-side").hidden = view !== "thread" && view !== "new-mail";
+  // The right side (M-11) is shown with a new mail only; an open thread has none.
+  $("mail-side").hidden = view !== "new-mail";
   $("mail-split").hidden = $("mail-side").hidden;
-  $("mail-tool-orca").hidden = view !== "thread";
   $("login").hidden = view !== "login";
   $("relogin").hidden = view !== "list" || !$("relogin").hasChildNodes();
   $("inbox-state").hidden = view !== "list";

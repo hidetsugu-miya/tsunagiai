@@ -3,7 +3,7 @@ import { accountButtons } from "./accounts.js";
 import { $, tag } from "./dom.js";
 import { applySync } from "./inbox.js";
 import { invoke } from "./ipc.js";
-import { addMailKey } from "./mail-claude.js";
+import { initMailClaude, setMailKey } from "./mail-claude.js";
 import { addDraftSide, clearUndo, type DraftSide, refreshUndo } from "./mail-draft.js";
 import { mailAttachments } from "./mail-attach.js";
 import { recipientRows } from "./mail-recipients.js";
@@ -98,12 +98,11 @@ async function send() {
   }
 }
 
-// The fields as Claude Code reads and writes them (A-36, ts/mail-draft.ts). There is no thread, and the sender is the account that the screen chose.
+// The fields as Claude Code reads and writes them (A-36, ts/mail-draft.ts). The sender is the account that the screen chose.
 const side: DraftSide = {
   undoId: "new-mail-undo",
   rootId: "new-mail",
   isOpen: () => currentScreen() === "new-mail",
-  thread: async () => "新規作成です。読むスレッドはありません",
   read: () => ({
     to: recipients.mailboxes("to").join(", "),
     cc: recipients.mailboxes("cc").join(", "),
@@ -124,7 +123,8 @@ const side: DraftSide = {
 export function initMailCompose() {
   addDraftSide(side);
   // The right side holds one talk with Claude Code for each new mail.
-  addMailKey(() => (currentScreen() === "new-mail" ? `new:${openCount}` : null));
+  initMailClaude();
+  setMailKey(() => (currentScreen() === "new-mail" ? `new:${openCount}` : null));
   recipients.init();
   attachments = mailAttachments($("new-mail"), $("new-mail-attach"), $<HTMLButtonElement>("new-mail-attach-open"), "mail-compose");
   $("mail-compose").onclick = openCompose;

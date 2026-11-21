@@ -1,15 +1,15 @@
-// Handing the open mail, Slack thread or Todo to Orca (A-9): a pane on the right of the screen that shows, and the user decides.
+// Handing the open Slack thread or Todo to Orca (A-9): a pane on the right of the screen that shows, and the user decides.
 // Before a hand-over it is a form from the top down: the destination (the Orca to talk to, the project, and the worktree of a new session: one of the project's worktrees, its own folder first, or a new one made then, with its name, the ref it starts from and its branch), the card with the content (taken off with ×) and the field for the instruction, which fills the height that is left and has the arrow button "Orca に渡す" at its bottom right.
 // The instruction is handed over as it was written; the content of the card is summarised by Claude (`claude_summarize_handoff`) when the arrow is pressed, and the summary goes with the instruction.
 // After a hand-over it shows that session: its header and its terminal (A-12, orca-terminal.ts), which takes the keys as the terminal of the Orca screen does, until the pane is closed. The prompt is composed in Rust (`orca_handoff`).
-// A pane belongs to one screen (the host): the mail thread, the Slack thread's Orca tab or the Todo detail. What is kept is in memory only: the conversation of each item and the session it was handed to, and the destination and the project last chosen.
+// A pane belongs to one screen (the host): the Slack thread's Orca tab or the Todo detail. What is kept is in memory only: the conversation of each item and the session it was handed to, and the destination and the project last chosen.
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaRow } from "./bindings/OrcaRow";
 import type { OrcaWorktree } from "./bindings/OrcaWorktree";
 import { getClaude, showModelSlot } from "./claude.js";
 import { createComposer } from "./composer.js";
 import { composing, isMac, tag } from "./dom.js";
-import { CLOSE_SVG, MAIL_SVG, OPEN_SVG, ORCA_SVG, SLACK_SVG, TODO_SVG } from "./icons.js";
+import { CLOSE_SVG, OPEN_SVG, ORCA_SVG, SLACK_SVG, TODO_SVG } from "./icons.js";
 import { type HandoffContext, type HandoffDestination, invoke } from "./ipc.js";
 import { type Attachment, drawStrip, listenForFiles, readFiles, uploadAttachments } from "./orca-attach.js";
 import type { HandoffCard } from "./orca-handoff-cards.js";
@@ -19,7 +19,7 @@ import { hideTerminals, isShowing, releaseTerminal, showTerminals, type TermSour
 import { childrenFresh, isChildWorktree, readForChoice, readList } from "./formation-list.js";
 import { elapsed, heldOrca, noticeOf, openInOrca, readDestination, refreshOrca, STATUS_LABELS, streamsEnvironment, THIS_MACHINE, worktreeLabel } from "./orca.js";
 
-// The item a pane is for: a key that is the same while the same mail, thread or task is shown, and the content to hand over, built when the pane is opened.
+// The item a pane is for: a key that is the same while the same thread or task is shown, and the content to hand over, built when the pane is opened.
 export interface HandoffItem {
   key: string;
   card: () => HandoffCard | null;
@@ -98,7 +98,7 @@ let ticking = false;
 // While a session is shown, the list is read again this often (for its header).
 const POLL_MS = 10_000;
 const NEW_WORKTREE = "新規作成";
-const KIND_ICONS = { mail: MAIL_SVG, slack: SLACK_SVG, todo: TODO_SVG } as const;
+const KIND_ICONS = { slack: SLACK_SVG, todo: TODO_SVG } as const;
 // The number of the next pane, which names it as the owner of its terminal.
 let paneSeq = 0;
 
@@ -225,15 +225,6 @@ export class HandoffPane {
 
   private form() {
     return formOf(this.itemKey!);
-  }
-
-  // The header button: opens the pane for the item in view, or closes it.
-  toggle() {
-    this.sync();
-    if (this.itemKey === null) return;
-    this.open = !this.open;
-    this.lastRead = 0;
-    this.sync();
   }
 
   // Opens the pane for the item in view, unless it is open (a host whose button only opens it).

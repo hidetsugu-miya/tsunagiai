@@ -1958,8 +1958,8 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 .orca-browse-buttons .text-btn:disabled { opacity: .4; cursor: default; }
 .orca-dest-list .empty { margin: 0; padding: 4px 10px; color: #888; font-size: calc(12px * var(--fs)); }
 
-/* A-9: the pane that hands the open mail, Slack thread or Todo to Orca. The mail has it on the right of the screen (40% at first, a third to a half; the divider of ts/split.ts); the Todo has it under the comments of the open task; the Slack thread has it as the Orca tab of its right pane. */
-/* M-10, M-11: the mail screen is the column of the headers and the body at the left, and the right side (the Claude Code pane or the pane to Orca, switched by the two icons of its first row) at the right, from the top of the window to the bottom, so that the bottom of the reply field and of the band of a new mail is the bottom of the pane. The side is shown while a thread or a new mail is. */
+/* A-9: the pane that hands the open Slack thread or Todo to Orca. The Todo has it under the comments of the open task; the Slack thread has it as the Orca tab of its right pane. */
+/* M-11: the mail screen is the column of the headers and the body at the left, and the right side (the Claude Code pane, opened by the ✳ of its first row) at the right, from the top of the window to the bottom, so that the bottom of the band of a new mail is the bottom of the pane. The side is shown while a new mail is. */
 #mail-screen { flex: 1; min-width: 0; min-height: 0; display: flex; }
 #mail-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 #mail-area { flex: 1; min-height: 0; display: flex; }
@@ -1971,12 +1971,11 @@ body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabb
 #mail-tool-claude { color: var(--claude); }
 #mail-tools .icon-btn[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
 #mail-claude { flex: 1; min-height: 0; }
-#mail-claude .chat-head, #mail-handoff .ho-head { box-sizing: border-box; height: 48px; }
+#mail-claude .chat-head { box-sizing: border-box; height: 48px; }
 /* M-10: the pane is closed at first and shows the question, as the Todo's does (T-7); open, the terminal fills what is left of the pane's height. */
 #mail-claude-term { flex: 1; min-height: 0; }
 #mail-claude-ask { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; }
 #mail-claude-ask p { margin: 0; color: var(--ink-soft); }
-#mail-handoff { flex: 1; }
 .ho-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bar); }
 /* The mail's side is 40% wide at first, at least 400px; the Todo's right side (T-7) is 30% at first, its least, between 30% and 45%; the Slack tab keeps the width of the Claude pane, at least 400px. */
 #todo-side { flex: none; display: flex; flex-direction: column; min-width: 0; width: clamp(30%, var(--chat-w, 30%), 45%); }
