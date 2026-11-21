@@ -1526,7 +1526,7 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-tab-close svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 #orca-panes .orca-empty { margin: 0; padding: 48px 24px; }
 /* The terminal fills the pane. The box of each tab has a definite size (it is placed in the pane), so that the fit counts the rows that show and the bottom is not cut off. */
-#orca-panes .orca-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
+#orca-panes .orca-term { position: relative; flex: 1; min-height: 0; overflow: hidden; background: var(--term-bg); }
 /* The file pane (A-18) on the right of the work pane: the tree of the selected tab's worktree (`--files-w` is where the divider put it, 15% to 40% of the screen), and the editor of a file in the place of a terminal. */
 #orca-files { flex: none; width: clamp(15%, var(--files-w, 22%), 40%); min-width: 0; display: flex; flex-direction: column; background: var(--bar); }
 #orca-files-bar { flex: none; display: flex; align-items: center; min-height: var(--header-h); box-sizing: border-box; border-bottom: 1px solid var(--line); }
