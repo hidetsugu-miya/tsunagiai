@@ -53,8 +53,6 @@ import { copyText, setNavCount, show } from "./view.js";
 export const STATUS_LABELS: Record<OrcaStatus, string> = { question: "入力待ち", failed: "失敗", working: "作業中", monitoring: "監視中", interrupted: "中断", done: "完了", idle: "動いていない" };
 const ASK_SVG = svgOf('<path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>');
 const ACTIVITY_SVG = svgOf('<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>');
-const ROBOT_SVG = svgOf('<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>');
-const PLAY_SVG = svgOf('<polygon points="6 3 20 12 6 21 6 3"/>');
 const CLOSE_SVG = svgOf('<path d="M6 6l12 12M18 6L6 18"/>');
 export const THIS_MACHINE = "このマシン";
 const SHOWN_MS = 10_000;
@@ -231,13 +229,16 @@ interface Tab {
   status: OrcaStatus;
   label: string;
   title: string;
-  // The first line of the newer of a Claude session's prompt and last answer, which its row in the list shows in place of the title (the tab shows the title); null for the rest, and for a session whose newer message has no text.
+  // The first line of the newer of a Claude session's prompt and last answer, which the modal of A-40 shows in place of the title (the tab shows the title); null for the rest, and for a session whose newer message has no text.
   latest: string | null;
-  // How many subagents of a Claude session are at work, which its row in the list shows at its right end (the tab shows none); 0 for the rest.
+  // The first line of a Claude session's last prompt and of its last answer, which the lines 「あなた」 and 「AI」 of its row in the list show (the tab shows neither); null for the rest, and for a message that has no text (the row draws no line then).
+  prompt?: string | null;
+  answer?: string | null;
+  // How many subagents of a Claude session are at work, which the toggle under its row in the list counts (the tab shows none); 0 for the rest.
   subagents: number;
   // The subagents at work with their names and tasks, which the breakdown of its row in the list shows (the tab shows none); empty for the rest.
   agents: OrcaSubagent[];
-  // The command of the shell a Claude session is running (empty when Orca gave none), which its row in the list shows as a badge left of the subagents' (the tab shows none); null when it runs none, and for the rest.
+  // The command of the shell a Claude session is running (empty when Orca gave none), which the toggle under its row in the list counts and its breakdown shows (the tab shows none); null when it runs none, and for the rest.
   shell: string | null;
   // The Orca terminal's handle (a Claude session may have none: it shows no terminal and cannot be closed).
   handle: string | null;
@@ -307,7 +308,7 @@ function tabsOf(key: string): Tab[] {
   const tabs: Tab[] = [];
   for (const r of mix.rows) {
     if (r.projectKey !== key || r.paneKey === null || isChildSession(r)) continue;
-    tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: r.line || "（題名なし）", latest: r.latest, subagents: r.subagents, agents: r.subagentList ?? [], shell: r.shell ?? null, handle: r.handle, path: r.path, where: worktreeLabel(r), branch: rowBranch(r), environment: placeOf(r) });
+    tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: r.line || "（題名なし）", latest: r.latest, prompt: r.promptLine ?? null, answer: r.answerLine ?? null, subagents: r.subagents, agents: r.subagentList ?? [], shell: r.shell ?? null, handle: r.handle, path: r.path, where: worktreeLabel(r), branch: rowBranch(r), environment: placeOf(r) });
   }
   for (const t of mix.terminals) {
     if (t.projectKey !== key || isChildSession(t)) continue;
@@ -410,7 +411,7 @@ function environmentChip(environment: string) {
   return chip;
 }
 
-// The icon and the number of one kind of work in a session. The label comes from outside (the command): it is the title and the label, never markup.
+// The icon and the number of one kind of work: the mark of the formations on a project's row. The label comes from outside (the command): it is the title and the label, never markup.
 function countNode(className: string, icon: string, n: number, label: string) {
   const badge = tag("span", className);
   badge.title = label;
@@ -421,41 +422,58 @@ function countNode(className: string, icon: string, n: number, label: string) {
   return badge;
 }
 
-// A line of the breakdown of a session: the icon of its kind, then the name and the task of a subagent, or the command. Everything comes from outside, so it is text and never markup.
-function workNode(className: string, icon: string, text: string, task: string | null = null) {
+// The small tag at the start of a line of a session: 「あなた」, 「AI」, 「サブ」 or 「シェル」 (`kind` is the part of its class that gives the color).
+const tagNode = (kind: string, text: string) => tag("span", `orca-tag orca-tag-${kind}`, text);
+
+// A line of a session that begins with a tag and goes on as text. Everything comes from outside, so the text is text and never markup.
+function lineNode(className: string, tagged: HTMLElement, text: string) {
+  const line = tag("span", `orca-line ${className}`);
+  line.append(tagged, tag("span", "orca-line-text", text));
+  return line;
+}
+
+// A line of the breakdown of a session: the tag of its kind, then the name and the task of a subagent, or the command. Everything comes from outside, so it is text and never markup.
+function workNode(className: string, tagged: HTMLElement, text: string, task: string | null = null) {
   const line = tag("div", `orca-work ${className}`);
-  line.innerHTML = icon;
   const name = tag("span", "orca-work-name", text);
   name.title = task === null ? text : `${text}: ${task}`;
-  line.append(name);
+  line.append(tagged, name);
   if (task !== null) line.append(tag("span", "orca-work-task", task));
   return line;
 }
 
-// A session of the open project and, when it has work in it, the arrow at its left and the breakdown under it while the arrow is open.
+// The toggle under the row of a session that has work in it: the arrow, then the tag and the number of each kind of work (none for a kind that is 0). A session runs at most one command (`shell`), so its number is 1.
+function worksToggle(t: Tab, open: boolean) {
+  const toggle = tag("button", "orca-works-toggle");
+  toggle.type = "button";
+  toggle.dataset.key = `works:${t.id}`;
+  toggle.setAttribute("aria-expanded", String(open));
+  const arrow = tag("span", "orca-works-arrow");
+  arrow.innerHTML = CHEVRON_SVG;
+  toggle.append(arrow);
+  if (t.subagents > 0) toggle.append(tagNode("sub", "サブ"), tag("b", "orca-works-n", String(t.subagents)));
+  if (t.shell !== null) toggle.append(tagNode("shell", "シェル"), tag("b", "orca-works-n", "1"));
+  toggle.onclick = () => toggleWorks(t.id);
+  return toggle;
+}
+
+// A session of the open project and, when it has work in it, the toggle under its row and the breakdown under that while the toggle is open.
 function sessionWithWorks(t: Tab, key: string) {
   const wrap = tag("div", "orca-sess");
   wrap.append(sessionNode(t, key));
-  if (t.agents.length === 0 && t.shell === null) return wrap;
+  if (t.subagents === 0 && t.agents.length === 0 && t.shell === null) return wrap;
   const open = worksOpen.has(t.id);
-  const arrow = tag("button", "icon-btn orca-session-arrow");
-  arrow.type = "button";
-  arrow.dataset.key = `works:${t.id}`;
-  arrow.setAttribute("aria-expanded", String(open));
-  arrow.setAttribute("aria-label", open ? "作業の内訳を閉じる" : "作業の内訳を開く");
-  arrow.innerHTML = CHEVRON_SVG;
-  arrow.onclick = () => toggleWorks(t.id);
-  wrap.append(arrow);
+  wrap.append(worksToggle(t, open));
   if (open) {
     const list = tag("div", "orca-works");
-    list.append(...t.agents.map((a) => workNode("orca-work-agent", ROBOT_SVG, a.name === "" ? "サブエージェント" : a.name, a.task ?? null)));
-    if (t.shell !== null) list.append(workNode("orca-work-shell", PLAY_SVG, t.shell === "" ? "シェルを実行中" : t.shell));
+    list.append(...t.agents.map((a) => workNode("orca-work-agent", tagNode("sub", "サブ"), a.name === "" ? "サブエージェント" : a.name, a.task ?? null)));
+    if (t.shell !== null) list.append(workNode("orca-work-shell", tagNode("shell", "シェル"), t.shell === "" ? "シェルを実行中" : t.shell));
     wrap.append(list);
   }
   return wrap;
 }
 
-// A session of the open project: its status icon and the name of its worktree at the left, and at the right end an icon and a number for each kind of work in it (none for a kind that is 0). It is selected when it is the tab selected.
+// A session of the open project, in four lines (A-8): its status icon and the name of its worktree's branch, the title of its tab, then the tag 「あなた」 with its last prompt and the tag 「AI」 with its last answer (a line whose text is missing is not drawn; the tag of the answer has the color of a question while the session waits for an input). It is selected when it is the tab selected.
 function sessionNode(t: Tab, key: string) {
   const row = tag("button", "orca-session");
   row.type = "button";
@@ -463,14 +481,12 @@ function sessionNode(t: Tab, key: string) {
   // Not `data-tab`: that names a tab of the work pane, which the pane tree looks for with `closest`.
   row.dataset.session = t.id;
   row.setAttribute("aria-pressed", String(key === pickedProject() && t.id === selectedTab()));
-  row.append(statusIcon(t.status, t.label));
-  // The branch of the worktree the session works in, else the worktree's name (the `branch` of its tab); the title of the tab is the line of A-6.
-  row.append(tag("span", "orca-session-title", t.branch ?? t.where));
-  // The AI (the subagents) and the commands. A session runs at most one command (`shell`), so its number is 1.
-  const counts = tag("span", "orca-session-counts");
-  if (t.subagents > 0) counts.append(countNode("orca-session-subagents", ROBOT_SVG, t.subagents, `サブエージェント ${t.subagents} 件が作業中`));
-  if (t.shell !== null) counts.append(countNode("orca-session-shell", PLAY_SVG, 1, t.shell === "" ? "シェルを実行中" : `シェルを実行中: ${t.shell}`));
-  if (counts.children.length) row.append(counts);
+  // The branch of the worktree the session works in, else the worktree's name (the `branch` of its tab).
+  const head = tag("span", "orca-session-head");
+  head.append(statusIcon(t.status, t.label), tag("span", "orca-session-branch", t.branch ?? t.where));
+  row.append(head, tag("span", "orca-session-title", t.title));
+  if (t.prompt) row.append(lineNode("orca-session-prompt", tagNode("you", "あなた"), t.prompt));
+  if (t.answer) row.append(lineNode("orca-session-answer", tagNode(t.status === "question" ? "question" : "ai", "AI"), t.answer));
   row.onclick = () => selectSession(key, t.id);
   row.oncontextmenu = (e) => {
     e.preventDefault();
@@ -482,9 +498,8 @@ function sessionNode(t: Tab, key: string) {
   return row;
 }
 
-// A project: its status icon and its name, and at the right end the chip of its saved environment and the mark of the formations with the number of their worktrees. A project with sessions has the arrow at its left, and while it is open its sessions are under it, in the order of the tabs (`tabs`: its tabs other than files).
-function projectNode(key: string, name: string, status: OrcaStatus, environment: string | null, tabs: Tab[], onCursor: boolean, re: RegExp | null) {
-  const wrap = tag("div", "orca-proj");
+// A project: its name, and at the right end the chip of its saved environment and the mark of the formations with the number of their worktrees (it shows no status: the sessions under it do). A project with sessions has the arrow at its left, and while it is open its sessions are under it, in the order of the tabs (`tabs`: its tabs other than files).
+function projectNode(key: string, name: string, environment: string | null, tabs: Tab[], onCursor: boolean, re: RegExp | null) {  const wrap = tag("div", "orca-proj");
   const row = tag("button", "orca-project");
   row.type = "button";
   row.dataset.key = key;
@@ -492,7 +507,7 @@ function projectNode(key: string, name: string, status: OrcaStatus, environment:
   if (onCursor) row.dataset.cursor = "true";
   const label = tag("span", "orca-project-name");
   label.append(...nameNodes(name, re));
-  row.append(statusIcon(status), label);
+  row.append(label);
   if (environment !== null) row.append(environmentChip(environment));
   // The worktrees of the launched children of the formations, which the list draws no row for: the mark of a formation and their number, at the right end (none when there is none).
   const children = childFolderCount(key);
@@ -644,7 +659,7 @@ function cursorKey(rows = visibleRows(matcher())) {
 
 // `openTabs`: the tabs other than files of the open projects, found once for the drawing; the others are found here. A list with no running project says it has none only when no project is left out under the link either.
 function projectNodes(re: RegExp | null, rows: ReturnType<typeof visibleRows>, on: string | null, openTabs: Map<string, Tab[]>): HTMLElement[] {
-  const nodes = rows.map((r) => projectNode(r.key, r.name, r.status, placeOf(r), openTabs.get(r.key) ?? ownTabs(r.key), r.key === on, re));
+  const nodes = rows.map((r) => projectNode(r.key, r.name, placeOf(r), openTabs.get(r.key) ?? ownTabs(r.key), r.key === on, re));
   return nodes.length || stoppedCount() > 0 ? nodes : [emptyNode(needle() === "" ? "プロジェクトがありません" : "一致するプロジェクトがありません")];
 }
 
@@ -658,7 +673,7 @@ function drawStopped(openTabs: Map<string, Tab[]>) {
   list.hidden = rows.length === 0;
   const top = list.scrollTop;
   $("orca-stopped-bar").replaceChildren(...(count === 0 ? [] : [stoppedToggle(count)]));
-  list.replaceChildren(...rows.map((r) => projectNode(r.key, r.name, r.status, placeOf(r), openTabs.get(r.key) ?? ownTabs(r.key), false, null)));
+  list.replaceChildren(...rows.map((r) => projectNode(r.key, r.name, placeOf(r), openTabs.get(r.key) ?? ownTabs(r.key), false, null)));
   list.scrollTop = top;
 }
 
@@ -668,7 +683,7 @@ function drawFeed() {
   trackChildOnly();
   // The sessions under the open projects: what is drawn of them.
   const openTabs = new Map([...opened].map((k): [string, Tab[]] => [k, ownTabs(k)]));
-  const sessions = [...openTabs].map(([k, tabs]) => [k, tabs.map((t) => [t.id, t.status, t.label, t.title, t.where, t.branch, t.subagents, t.agents, t.shell, t.environment, worksOpen.has(t.id)])]);
+  const sessions = [...openTabs].map(([k, tabs]) => [k, tabs.map((t) => [t.id, t.status, t.label, t.title, t.prompt, t.answer, t.where, t.branch, t.subagents, t.agents, t.shell, t.environment, worksOpen.has(t.id)])]);
   // Only what is drawn: a project's time of activity moves with the work and would redraw the list (and restart the working mark) for nothing.
   const rowOf = (p: OrcaProject) => [p.key, p.name, p.status, p.sessions, placeOf(p), childFolderCount(p.key), childOnly.has(p.key)];
   // The rows of the projects, the search expression and the row the keys are on: found once for this drawing.
@@ -778,7 +793,7 @@ function treeOf(node: PaneNode, tabs: Tab[], focus: string | null, plusDisabled:
   const tab = mine.find((t) => t.id === selected?.id);
   const pane: PaneModel = {
     id: node.id,
-    key: JSON.stringify([mine.map(({ latest, subagents, agents, shell, ...t }) => t), node.selected, [...closing], mine.filter((t) => dirty.has(t.id)).map((t) => t.id)]),
+    key: JSON.stringify([mine.map(({ latest, prompt, answer, subagents, agents, shell, ...t }) => t), node.selected, [...closing], mine.filter((t) => dirty.has(t.id)).map((t) => t.id)]),
     tabs: () => mine.map((t) => tabNode(t, t.id === tab?.id)),
     focused: node.id === focus,
     empty: emptyText(tabs, tab),
