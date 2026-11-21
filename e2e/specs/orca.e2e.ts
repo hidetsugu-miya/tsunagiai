@@ -3,7 +3,7 @@ import type { OrcaFileText } from "../../ts/bindings/OrcaFileText";
 import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import type { PaneLayout } from "../../ts/bindings/PaneLayout";
 import type { PaneNode } from "../../ts/bindings/PaneNode";
-import { askScreen, boot, callsOf, chooseAppearance, chooseOption, chooseTheme, copiedTexts, count, fire, fontSettings, ghosttyImport, holds, huge, image, inbox, isoDate, logged, mock, note, onceId, orcaRow, orcaTerminal, orcaWorktree, PNG, rejects, release, rowOf as threadRowOf, sendStream, sendTerm, setClock, setDark, stubClipboard, terminalThemes, textsOf, threadDetail, timers, waitForCalls, waitForCount, CARD, CARDS } from "../support";
+import { askScreen, boot, callsOf, claudeReady, chooseAppearance, chooseOption, chooseTheme, copiedTexts, count, fire, fontSettings, ghosttyImport, holds, huge, image, inbox, isoDate, logged, mock, note, onceId, orcaRow, orcaTerminal, orcaWorktree, PNG, rejects, release, sendStream, sendTerm, setClock, slackLoad, setDark, stubClipboard, terminalThemes, textsOf, timers, todoData, waitForCalls, waitForCount, CARD, CARDS } from "../support";
 import { beside, claudeTab, filesToggle, onThisMachine, openOrca, orcaOverview, pickItem, project, sample, selectedTab, showAgain, streamList, studio, tabOf, tabTitles, worktrees } from "../orca-support";
 
 // example-app with a second worktree, so that the plus asks which one (A-16); example-api keeps its one.
@@ -37,8 +37,8 @@ const screenText = () => $(".orca-term .orca-term-box:not([hidden]) .xterm-rows"
 
 // Selects the project of `repo` in the list pane (the plus starts in the selected one).
 async function pickProject(repo: string) {
-  await $(`#orca-feed .orca-project[data-key="proj_${repo}"]`).click();
-  await expect($(`#orca-feed .orca-project[data-key="proj_${repo}"]`)).toHaveAttribute("aria-pressed", "true");
+  await $(`#orca-list .orca-project[data-key="proj_${repo}"]`).click();
+  await expect($(`#orca-list .orca-project[data-key="proj_${repo}"]`)).toHaveAttribute("aria-pressed", "true");
 }
 
 // The page's own press of the plus (the driver's click focuses the button after the page's handler ran, which no real press does). The press of an item of its menu is `pickItem` (`../orca-support`).
@@ -139,15 +139,16 @@ describe("orca", () => {
   it("has no footer, no label of the target and no menu of it at the bottom of the list pane, whatever the read says", async () => {
     await openOrca(orcaOverview(sample(), worktrees(), studio));
     const absent = () => browser.execute(() => ({ gone: ["orca-foot", "orca-status", "orca-target"].filter((id) => document.getElementById(id) !== null), last: document.getElementById("orca-list")!.lastElementChild!.id }));
-    expect(await absent()).toEqual({ gone: [], last: "orca-feed" });
+    // The last child is the region of the projects that are not running, pinned at the bottom (A-8): it is no footer, label or menu.
+    expect(await absent()).toEqual({ gone: [], last: "orca-stopped" });
     await mock("orca_overview", orcaOverview([], [], { state: "failed", message: "Orca is not running", ...studio }));
     await showAgain();
     await expect($("#orca-notice")).toHaveText("Studio を読み込めませんでした: Orca is not running");
-    expect(await absent()).toEqual({ gone: [], last: "orca-feed" });
+    expect(await absent()).toEqual({ gone: [], last: "orca-stopped" });
     await mock("orca_overview", orcaOverview([], [], { state: "missing" }));
     await showAgain();
     await expect($("#orca-notice")).toHaveText(expect.stringContaining("orca コマンドが見つかりません"));
-    expect(await absent()).toEqual({ gone: [], last: "orca-feed" });
+    expect(await absent()).toEqual({ gone: [], last: "orca-stopped" });
   });
 
   it("makes the header of the list, the bar of a pane and the bar of the file pane a place to drag the window by", async () => {
@@ -369,17 +370,16 @@ describe("orca", () => {
   });
 
   it("keeps the notice of a session that finished while another screen is shown, until the Orca screen shows it", async () => {
-    await openOrca(orcaOverview([working("example-app"), working("example-api")], worktrees()));
+    await openOrca(orcaOverview([working("example-app"), working("example-api")], worktrees()), { todoist_load: todoData(), slack_load: slackLoad, claude_status: claudeReady });
     await select("example-app");
-    await $("#nav-mail").click();
+    await $("#nav-todo").click();
     await expect($("#orca")).not.toBeDisplayed();
-    await waitForCount("#unread-threads li", 2);
-    await mock("thread", threadDetail("請求書の件", "本文", false));
-    await threadRowOf("read-threads", "Already read").$(".subject").click();
-    await expect($("#thread-subject")).toHaveText("請求書の件");
-    // The pane of the thread reads the list when it opens, and that read finds the selected session done.
+    await waitForCount("#todo-list li.task", 1);
+    await $("#todo-list li.task").click();
+    await expect($("#todo-back")).toBeDisplayed();
+    // The pane of the task reads the list when it opens, and that read finds the selected session done.
     const overview = await mock("orca_overview", orcaOverview([finished("example-app"), working("example-api")], worktrees()));
-    await $("#mail-tool-orca").click();
+    await $("#todo-orca-open").click();
     await waitForCalls(overview);
     await expectCount(1);
     await $("#nav-orca").click();
@@ -507,8 +507,9 @@ describe("orca", () => {
     await expect($(".orca-dest-pop")).not.toExist();
     expect(await callsOf(create)).toHaveLength(0);
     // Orca named neither its pane nor its terminal: nothing can be followed, and the plus starts another.
-    await expect($("#orca-started")).toHaveText("セッションを始めました。Orca の画面で開けます。");
+    await expect($(".toast")).toHaveText("セッションを始めました。Orca の画面で開けます。");
     await expect($(".orca-plus")).toBeEnabled();
+    await expect($(".toast .spin")).not.toExist();
     await plus("example-app", CLAUDE);
     expect(await waitForCalls(start, 2)).toEqual([
       { path: "/work/example-api", environment: null },
@@ -524,7 +525,7 @@ describe("orca", () => {
     expect(await waitForCalls(create)).toEqual([{ path: "/work/example-api", environment: "Studio" }]);
     await expect($(".orca-dest-pop")).not.toExist();
     expect(await callsOf(start)).toHaveLength(0);
-    await expect($("#orca-started")).toHaveText("セッションを始めました。Orca の画面で開けます。");
+    await expect($(".toast")).toHaveText("セッションを始めました。Orca の画面で開けます。");
   });
 
   it("asks which worktree when the project has several, narrowed to that project's, and starts in the one picked", async () => {
@@ -573,7 +574,7 @@ describe("orca", () => {
     await plus("example-app", CLAUDE);
     await waitForCalls(start);
     await expect($(CARD)).toHaveText("Worktree not found");
-    await expect($("#orca-started")).not.toBeDisplayed();
+    await expect($(".toast")).not.toBeDisplayed();
     await expect($(".orca-plus")).toBeEnabled();
     await expect($('#orca-feed .orca-project[data-key="proj_example-app"]')).toHaveAttribute("aria-pressed", "true");
     const create = await mock("orca_terminal_create", rejects("起動先の worktree が見つかりません。一覧を読み直してください"));
@@ -583,7 +584,7 @@ describe("orca", () => {
     // A text that differs makes a second card, put above the first.
     await expect($$(CARD)[0]).toHaveText("起動先の worktree が見つかりません。一覧を読み直してください");
     expect(await textsOf(CARD)).toEqual(["起動先の worktree が見つかりません。一覧を読み直してください", "Worktree not found"]);
-    await expect($("#orca-started")).not.toBeDisplayed();
+    await expect($(".toast")).not.toBeDisplayed();
     await expect($(".orca-plus")).toBeEnabled();
   });
 
@@ -613,8 +614,12 @@ describe("orca", () => {
     await mock("orca_overview", orcaOverview(sample(), worktrees()));
     await plus("example-api", CLAUDE);
     await waitForCalls(start);
-    await expect($("#orca-started")).toHaveText("セッションを始めました。一覧に現れるのを待っています…");
+    await expect($(".toast")).toHaveText("セッションを始めました。一覧に現れるのを待っています…");
+    await expect($(".toast .spin")).toBeDisplayed();
     await expect($(".orca-plus")).toBeDisabled();
+    // The note is at the bottom right and no timer hides it: it is still there after the 4 seconds of a toast.
+    await browser.pause(4500);
+    await expect($(".toast")).toBeDisplayed();
     // The project stays selected while the session is waited for.
     await expect($('#orca-feed .orca-project[data-key="proj_example-api"]')).toHaveAttribute("aria-pressed", "true");
     // The row appears in a later read: its project and tab are selected, and its terminal shows.
@@ -622,7 +627,7 @@ describe("orca", () => {
     await mock("orca_overview", orcaOverview([...sample(), startedRow()], worktrees()));
     await showAgain();
     expect((await waitForCalls(read))[0]).toEqual({ handle: "term_new" });
-    await expect($("#orca-started")).not.toBeDisplayed();
+    await expect($(".toast")).not.toBeDisplayed();
     await expect($('#orca-feed .orca-project[data-key="proj_example-api"]')).toHaveAttribute("aria-pressed", "true");
     await expect($('.orca-tabs [data-tab="claude:tab_new:leaf_1"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
     await expect($(".orca-plus")).toBeEnabled();
@@ -635,11 +640,11 @@ describe("orca", () => {
     await mock("orca_overview", orcaOverview(sample(), worktrees()));
     await plus("example-api", CLAUDE);
     await waitForCalls(start);
-    await expect($("#orca-started")).toHaveText("セッションを始めました。一覧に現れるのを待っています…");
+    await expect($(".toast")).toHaveText("セッションを始めました。一覧に現れるのを待っています…");
     await mock("orca_overview", orcaOverview([...sample(), startedRow()], worktrees()));
     await showAgain();
     await expect($('.orca-tabs [data-tab="claude:tab_new:leaf_1"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
-    await expect($("#orca-started")).not.toBeDisplayed();
+    await expect($(".toast")).not.toBeDisplayed();
   });
 
   it("follows the terminal it opened: waits for its tab, then selects it and mirrors it", async () => {
@@ -648,14 +653,14 @@ describe("orca", () => {
     await mock("orca_overview", orcaOverview(sample(), worktrees()));
     await plus("example-api", TERMINAL);
     expect(await waitForCalls(create)).toEqual([{ path: "/work/example-api", environment: null }]);
-    await expect($("#orca-started")).toHaveText("セッションを始めました。一覧に現れるのを待っています…");
+    await expect($(".toast")).toHaveText("セッションを始めました。一覧に現れるのを待っています…");
     await expect($(".orca-plus")).toBeDisabled();
     // The terminal appears in a later read: it is a plain terminal, so its tab is selected and its screen shows.
     const read = await mock("orca_terminal_read", ["$ pwd"]);
     await mock("orca_overview", orcaOverview(sample(), worktrees(), { terminals: [createdTerminal()] }));
     await showAgain();
     expect((await waitForCalls(read))[0]).toEqual({ handle: "term_new_sh" });
-    await expect($("#orca-started")).not.toBeDisplayed();
+    await expect($(".toast")).not.toBeDisplayed();
     await expect($('#orca-feed .orca-project[data-key="proj_example-api"]')).toHaveAttribute("aria-pressed", "true");
     await expect($('.orca-tabs [data-tab="orca:term_new_sh"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
     await expect($(".orca-plus")).toBeEnabled();
@@ -669,10 +674,10 @@ describe("orca", () => {
     const create = await mock("orca_terminal_create", created);
     await plus("example-api", TERMINAL);
     expect(await waitForCalls(create)).toEqual([{ path: "/work/example-api", environment: "Studio" }]);
-    await expect($("#orca-started")).toHaveText("セッションを始めました。一覧に現れるのを待っています…");
+    await expect($(".toast")).toHaveText("セッションを始めました。一覧に現れるのを待っています…");
     await sendStream(streamList(sample(), worktrees(), [createdTerminal()]));
     await expect($('.orca-tabs [data-tab="orca:term_new_sh"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
-    await expect($("#orca-started")).not.toBeDisplayed();
+    await expect($(".toast")).not.toBeDisplayed();
   });
 
   it("selects the terminal of a saved environment that the streamed list held before the reply came", async () => {
@@ -686,7 +691,7 @@ describe("orca", () => {
     await sendStream(streamList(sample(), worktrees(), [createdTerminal()]));
     await release(create, created);
     await expect($('.orca-tabs [data-tab="orca:term_new_sh"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
-    await expect($("#orca-started")).not.toBeDisplayed();
+    await expect($(".toast")).not.toBeDisplayed();
     await expect($(".orca-plus")).toBeEnabled();
   });
 
@@ -697,12 +702,27 @@ describe("orca", () => {
     const create = await mock("orca_terminal_create", created);
     await plus("example-api", TERMINAL);
     await waitForCalls(create);
-    await expect($("#orca-started")).toBeDisplayed();
+    await expect($(".toast")).toBeDisplayed();
     await expect($(".orca-plus")).toBeDisabled();
     const later = new Date(Date.now() + 31_000);
     await setClock(`${isoDate(later)}T${later.toTimeString().slice(0, 8)}`);
-    await expect($("#orca-started")).not.toBeDisplayed();
+    await expect($(".toast")).not.toBeDisplayed();
     await expect($(".orca-plus")).toBeEnabled();
+  });
+
+  it("keeps the note of the wait on another screen, and hides it when the wait ends there", async () => {
+    await openOrca(orcaOverview(sample(), worktrees(), studio));
+    await waitForCalls("orca_stream_open");
+    await sendStream(streamList(sample(), worktrees()));
+    const create = await mock("orca_terminal_create", created);
+    await plus("example-api", TERMINAL);
+    await waitForCalls(create);
+    await $("#nav-mail").click();
+    await expect($("#orca")).not.toBeDisplayed();
+    await expect($(".toast")).toHaveText("セッションを始めました。一覧に現れるのを待っています…");
+    const later = new Date(Date.now() + 31_000);
+    await setClock(`${isoDate(later)}T${later.toTimeString().slice(0, 8)}`);
+    await expect($(".toast")).not.toBeDisplayed();
   });
 
   it("drops the wait when the user selects another project", async () => {
@@ -711,10 +731,10 @@ describe("orca", () => {
     await mock("orca_overview", orcaOverview(sample(), worktrees()));
     await plus("example-api", CLAUDE);
     await waitForCalls(start);
-    await expect($("#orca-started")).toBeDisplayed();
+    await expect($(".toast")).toBeDisplayed();
     // Choosing a project drops the wait, and a row that appears later does not take the selection.
     await $('#orca-feed .orca-project[data-key="proj_example-app"]').click();
-    await expect($("#orca-started")).not.toBeDisplayed();
+    await expect($(".toast")).not.toBeDisplayed();
     await expect($(".orca-plus")).toBeEnabled();
     await mock("orca_overview", orcaOverview([...sample(), startedRow()], worktrees()));
     await showAgain();
@@ -731,7 +751,7 @@ describe("orca", () => {
     await $('#orca-feed .orca-project[data-key="proj_example-app"]').click();
     await release(create, created);
     await expect($(".orca-plus")).toBeEnabled();
-    await expect($("#orca-started")).not.toBeDisplayed();
+    await expect($(".toast")).not.toBeDisplayed();
     await mock("orca_overview", orcaOverview(sample(), worktrees(), { terminals: [createdTerminal()] }));
     await showAgain();
     await waitForCalls("orca_overview");
@@ -993,8 +1013,8 @@ describe("orca: projects", () => {
     orcaOverview(sample(), [...worktrees(), orcaWorktree("example-idle", "main")], {
       terminals: [orcaTerminal("example-app", "zsh")],
     });
-  const projectNames = () => textsOf("#orca-feed .orca-project-name");
-  const projectStatuses = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-project .orca-ic")].map((i) => i.dataset.status));
+  const projectNames = () => textsOf("#orca-list .orca-project-name");
+  const projectStatuses = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-list .orca-project .orca-ic")].map((i) => i.dataset.status));
 
   it("starts with the projects: a status icon and the name, and no number of sessions", async () => {
     await openOrca(withTerminals());
@@ -1018,15 +1038,15 @@ describe("orca: projects", () => {
   });
 
   // The link under the running projects (A-8): the projects whose icon is the gray dot, with no session and no terminal, are left out until it is pressed.
-  const stoppedLink = () => $("#orca-feed .orca-stopped-toggle");
-  const listed = () => browser.execute(() => [...document.querySelectorAll("#orca-feed .orca-project-name, #orca-feed .orca-stopped-toggle")].map((n) => n.textContent));
+  const stoppedLink = () => $("#orca-list .orca-stopped-toggle");
+  const listed = () => browser.execute(() => [...document.querySelectorAll("#orca-list .orca-project-name, #orca-list .orca-stopped-toggle")].map((n) => n.textContent));
 
   it("leaves out the projects that are not running, and draws under the running ones a link with their number", async () => {
     await openOrca(withTerminals());
     expect(await projectNames()).toEqual(["example-app", "example-web", "example-api", "example-lib"]);
     expect(await listed()).toEqual(["example-app", "example-web", "example-api", "example-lib", "起動していない 1 件"]);
     await expect(stoppedLink()).toHaveAttribute("aria-expanded", "false");
-    await expect($("#orca-feed .orca-project[data-key=\"proj_example-idle\"]")).not.toExist();
+    await expect($("#orca-list .orca-project[data-key=\"proj_example-idle\"]")).not.toExist();
   });
 
   it("opens the projects that are not running under the link, which then hides them, and keeps it through a read", async () => {
@@ -1042,6 +1062,57 @@ describe("orca: projects", () => {
     expect(await listed()).toEqual(["example-app", "example-web", "example-api", "example-lib", "起動していないものを隠す", "example-idle"]);
     await stoppedLink().click();
     expect(await listed()).toEqual(["example-app", "example-web", "example-api", "example-lib", "起動していない 1 件"]);
+  });
+
+  const boxes = () =>
+    browser.execute(() => {
+      const r = (id: string) => {
+        const { top, bottom, height } = document.getElementById(id)!.getBoundingClientRect();
+        return { top, bottom, height };
+      };
+      const region = document.getElementById("orca-stopped-feed")!;
+      return { list: r("orca-list"), feed: r("orca-feed"), bar: r("orca-stopped-bar"), stopped: r("orca-stopped"), region: r("orca-stopped-feed"), scrolls: region.scrollHeight > region.clientHeight };
+    });
+
+  it("fixes the link at the bottom of the list, under the running projects, and opens the others under it while the running ones stay in view (A-8)", async () => {
+    await openOrca(withTerminals());
+    const closed = await boxes();
+    expect(closed.stopped.bottom).toBeLessThanOrEqual(closed.list.bottom);
+    expect(closed.stopped.bottom).toBeGreaterThan(closed.list.bottom - 12);
+    expect(closed.bar.top).toBeGreaterThanOrEqual(closed.feed.bottom - 1);
+    await stoppedLink().click();
+    await expect($("#orca-stopped-feed")).toBeDisplayed();
+    const open = await boxes();
+    // The link stays at the bottom of the list, the opened projects are under it, and the running ones are still above.
+    expect(open.stopped.bottom).toBeGreaterThan(open.list.bottom - 12);
+    expect(open.bar.top).toBeGreaterThanOrEqual(open.feed.bottom - 1);
+    expect(open.region.top).toBeGreaterThanOrEqual(open.bar.bottom - 1);
+    expect(await projectNames()).toEqual(["example-app", "example-web", "example-api", "example-lib", "example-idle"]);
+    await expect(project("example-app")).toBeDisplayed();
+    expect(await count("#orca-feed .orca-project")).toBe(4);
+    expect(await count("#orca-stopped-feed .orca-project")).toBe(1);
+  });
+
+  it("limits the opened region to half the height of the list, and scrolls it by itself", async () => {
+    const idle = Array.from({ length: 40 }, (_, i) => orcaWorktree(`example-idle-${String(i).padStart(2, "0")}`, "main"));
+    await openOrca(orcaOverview(sample(), [...worktrees(), ...idle]));
+    await expect(stoppedLink()).toHaveText("起動していない 40 件");
+    await stoppedLink().click();
+    const open = await boxes();
+    expect(open.stopped.height).toBeLessThanOrEqual(open.list.height / 2 + 1);
+    expect(open.scrolls).toBe(true);
+    expect(open.feed.height).toBeGreaterThan(0);
+    // The scroll is the region's own: the running list does not move with it.
+    const moved = await browser.execute(() => {
+      const region = document.getElementById("orca-stopped-feed")!;
+      const feed = document.getElementById("orca-feed")!;
+      region.scrollTop = 120;
+      return { region: region.scrollTop, feed: feed.scrollTop };
+    });
+    expect(moved.region).toBeGreaterThan(0);
+    expect(moved.feed).toBe(0);
+    await stoppedLink().click();
+    await expect($("#orca-stopped-feed")).not.toBeDisplayed();
   });
 
   it("draws no link when every project is running, and only the link when none is", async () => {
@@ -1171,7 +1242,7 @@ describe("orca: projects", () => {
 
   it("says a project has no session, with the tab strip empty", async () => {
     await openOrca(withTerminals());
-    await $("#orca-feed .orca-stopped-toggle").click();
+    await $("#orca-list .orca-stopped-toggle").click();
     await project("example-idle").click();
     await expect($(".orca-empty")).toBeDisplayed();
     await expect($(".orca-empty")).toHaveText("セッションはありません");
@@ -3366,7 +3437,7 @@ describe("orca: search the list (A-19)", () => {
   // What the list draws while nothing is typed: example-idle is not running, so it is left out under the link (A-8).
   const RUNNING = ALL.slice(0, 4);
   const input = () => $("#orca-search-input");
-  const names = () => textsOf("#orca-feed .orca-project-name");
+  const names = () => textsOf("#orca-list .orca-project-name");
   const focusedId = () => browser.execute(() => document.activeElement?.id ?? "");
   // The name of each row and the letters of it in bold.
   const bolds = () =>
@@ -3436,7 +3507,7 @@ describe("orca: search the list (A-19)", () => {
 
   it("finds a project that is not running with no link drawn, and brings the list back as it was when the text is cleared", async () => {
     await openOrca(overview());
-    const link = $("#orca-feed .orca-stopped-toggle");
+    const link = $("#orca-list .orca-stopped-toggle");
     await expect(link).toHaveText("起動していない 1 件");
     await search("idle");
     expect(await names()).toEqual(["example-idle"]);
@@ -4054,7 +4125,7 @@ describe("orca: this machine and a saved environment in one list (A-33)", () => 
     // The streamed target says nothing of it: the list of this machine is read at once, and the tab is selected when it holds it.
     expect(await waitForCalls(destination)).toEqual([{ environment: null, force: false }]);
     await expect(selectedTab()).toHaveText(expect.stringContaining("New session"));
-    await expect($("#orca-started")).not.toBeDisplayed();
+    await expect($(".toast")).not.toBeDisplayed();
   });
 
   describe("while the target is streamed", () => {
@@ -4353,7 +4424,7 @@ describe("orca: add a project (A-38)", () => {
     await expect(pop()).not.toExist();
     expect((await waitForCalls(read))[0]).toMatchObject({ scope: "full" });
     // The new project has no session, so it is under the link (A-8).
-    await expect($("#orca-feed .orca-stopped-toggle")).toHaveText("起動していない 1 件");
+    await expect($("#orca-list .orca-stopped-toggle")).toHaveText("起動していない 1 件");
     await expect($(CARDS)).not.toExist();
   });
 

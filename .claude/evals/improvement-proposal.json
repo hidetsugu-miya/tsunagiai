@@ -1,0 +1,20 @@
+{
+  "skill_name": "improvement-proposal",
+  "evals": [
+    {
+      "id": 1,
+      "name": "ai-decided-harness-issue-gets-documentation",
+      "prompt": "あなたは improvement-proposal の実行で、手順 7 まで終えたリードです。`.claude/skills/improvement-proposal/SKILL.md` の手順 8 を読み、`.claude/evals/files/improvement-proposal/candidate-harness.md` の候補を、手順 8 の「AI が決める issue」として出してください。スカウトは起動せず、worktree も取らず、手順 8 だけを行ってください。GitHub には読み書きともに触れないでください。`gh issue create` や `gh issue comment` は実行せずに、打つはずのコマンド、題、ラベル、本文、コメントをそのまま書き出してください。`guard-public.sh text` はそのまま実行して構いません。",
+      "expected_output": "`.claude/skills/` と `.claude/evals/` だけを直す候補なので、`proposal`、1 つの `point:*`、`documentation` を付け、`adds:requirement` は付けない。本文に「AI が決めたこと」の節を置く。",
+      "files": [
+        ".claude/evals/files/improvement-proposal/candidate-harness.md"
+      ],
+      "assertions": [
+        "`gh issue create` が 1 件で、ラベルに `proposal`、`point:*` が 1 つ、`documentation` がある（直す場所が `.claude/skills/` と `.claude/evals/` だけなので `documentation` を付ける）",
+        "`adds:requirement` のラベルは無い",
+        "本文に節 `## AI が決めたこと` があり、`.claude/` だけの変更なので prototype の URL は求めていない",
+        "ポイントの理由を 1 行のコメントで書いている"
+      ]
+    }
+  ]
+}

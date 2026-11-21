@@ -6,7 +6,7 @@
 
 Reviewers (security, performance, code) find and rate findings, and edit nothing.
 release-verifier decides whether a finding is real and whether it stops the release, checks the CI and E2E records with `check-ci.sh` and `check-e2e.sh`, and writes the pass record of a reviewed HEAD.
-It reads the code for blocking findings, and for a Low only when its text suggests the definition of blocking. Other Lows pass through as report-only, and stay unfixed after the pass ("Fix blocking findings inside the review…" below).
+It reads the code for blocking findings, and for a Low only when its text suggests the definition of blocking. Other Lows pass through as report-only and stay unfixed on the branch after the pass, and release-verifier sorts each of them as `issue`, `drop` or `local` ("Fix blocking findings inside the review…" below).
 `range-check.sh` is the mechanical check of a fix that holds only the non-blocking findings of an already merged version: it does for that range what release-verifier did, with no launch, and writes the pass record when the check passes ("Fix only the non-blocking findings of a merged version…" below; at the owner's instruction, 2026-11-18; #932: the range check passed 15 times in 15, and never changed a result. It replaces the instruction of 2026-10-29, which had release-verifier do it).
 `pre-git.sh` is the mechanical gate: it checks the CI, E2E and pass records of HEAD, runs none of the checks itself, and never judges a finding.
 Without this split, the reviewers and the verifier both checked whether a finding was fixed, and the verifier read the code for every Low.
@@ -28,15 +28,17 @@ After `e2e:build`, `run-e2e.sh` runs `.claude/tools/run-ci.sh` (static checks an
 The CI runs beside E2E and not before it because it never failed in its 113 records since 2026-11-09, so waiting for it only added its time (median 24 seconds) to every HEAD. Measured on 2026-11-14 (#420), a run of E2E took 159 to 161 seconds alone and 159 to 160 seconds with clippy and `cargo test` beside it, with no failure and no `script_timeouts` in either.
 `release-verifier` checks the CI and E2E records of HEAD, so it is not launched on a HEAD whose CI or E2E failed. In the first round, the reviewers' replies and the CI or E2E failure go straight to the fix, and the release-verifier that follows the second round rates them.
 A failed CI or E2E is handled as a blocking finding of the first round: find the cause (the log of the failed gate in `.claude/ci/{HEAD SHA}.log`; `run-e2e.sh --only {spec}` runs a failed E2E spec alone, `e2e.md`), fix it, and put the fix into the diff of the second round with the other blocking fixes.
-When the reviewers had no blocking finding and E2E alone failed by chance, so that no code needs a fix, run `run-e2e.sh` again (it finds the passing CI record of HEAD and does not run CI again), and launch release-verifier when it passes. A code fix for an E2E-only failure is read in the second round.
+A failure that passes when run again (an E2E spec that passes alone with `run-e2e.sh --only` or in a second full run, or a CI check) is flaky: its cause is not in the diff under review. When the reviewers had no blocking finding and the failure was flaky, run `run-e2e.sh` again (it runs CI again only when HEAD has no passing CI record), and launch release-verifier when it passes; the rerun is not a round. A code fix for an E2E-only failure is read in the second round.
+A flaky failure is never left as chance (at the owner's instruction, 2026-11-21; #1212): the run that meets it files a `bug` issue through `issue-plan` for each spec, or each CI check, with the title 「flaky: {spec name}」 or 「flaky: {check name}」, the labels `importance:low` and `point:2` or `point:3`, no spec gate (`issues.md`), and in the body the failure (the test and its error), the path of its log, what was ruled out and the diagnostics; when that spec or check already has an open issue, the failure goes there as a comment. The fix step before the next Release PR takes it, never the run that filed it ("Turn the Lows of a merged pull request into one issue…" below).
 
 ```text
 Good: commit -> run-e2e.sh (background, with run-ci.sh beside wdio) and the reviewers together -> release-verifier
 Good: E2E fails in the first round -> no release-verifier -> fix with the reviewers' blocking findings -> run-e2e.sh and code-reviewer together -> release-verifier
-Good: E2E alone fails by chance and no code needs a fix -> run-e2e.sh --only passes -> run-e2e.sh again passes (CI is not run again) -> release-verifier
+Good: E2E alone fails and the spec passes with run-e2e.sh --only -> run-e2e.sh again passes (CI is not run again) -> release-verifier, and the flaky test is filed as an issue
 Bad:  run-ci.sh and then run-e2e.sh, one after the other, on the HEAD to be reviewed
 Bad:  launch release-verifier while run-e2e.sh is still running
 Bad:  launch release-verifier on a HEAD whose CI or E2E failed, only to rate the findings
+Bad:  a spec fails once and passes alone -> it is called chance, and no issue is filed
 ```
 
 ### In the first round, review the whole range to be pushed, with only the reviewers that are needed
@@ -121,25 +123,44 @@ The blocking ones are security Critical and High, performance High, and code rev
 When the first round fails, fix the blocking findings and, in the same fix, the non-blocking findings (Medium and Low) that serve the goal of the change, and send the fix to the next round (at the owner's instruction, 2026-11-12; #485. It replaces the instruction of 2026-10-29, "do not fix non-blocking findings during the review", which cost a second pass of the same files after the verdict).
 The second-round reviewers get the whole diff of that fix, the non-blocking fixes included.
 When a round passes, fix nothing more: push with the non-blocking findings (Medium and Low) that are left (at the owner's instruction, 2026-11-19; #1012. It replaces the part of the instructions of 2026-10-29 and of 2026-11-12, #485, that had them fixed after the pass and sent through `range-check.sh`: in the night runs of 2026-11-13 to 2026-11-19, 3 of 5 ran CI and E2E once more for a Low fix after the pass, which added 5.0 to 11.2 minutes, and the run that left its Low alone added none).
-A non-blocking finding that first appears in the second round or later is left the same way.
-List each finding that was not fixed (its ID, `path:line` and a one-line gist) in the completion report. Review findings stay local and go to no public place (`issues.md`, "Reach main only through a pull request with `Closes #n`"). Do not ask the owner.
+From the second round on, the reviewers look for no non-blocking finding: they report only the new blocking findings that the fixing diff created (`.claude/agents/`; at the owner's instruction, 2026-11-21; #1211. It replaces "a non-blocking finding that first appears in the second round or later is left the same way", under which such findings were reported and never used).
+When a round passes with non-blocking findings, release-verifier sorts each of them as `issue` (it disagrees with a requirement or with the owner's instruction, or it can become a bug) or `drop` (otherwise, such as taste, an optimization with no effect, or the form of a generated file), with a one-line reason (at the owner's instruction, 2026-11-21; #1211). A non-blocking finding of security-reviewer is never sorted `issue`: it is `local` (decided by the agent, 2026-11-21, at the owner's leave; #1211).
+List each finding that was not fixed (its ID, `path:line`, a one-line gist and its sorting) in the completion report. Review findings go to no public place before the merge (`issues.md`, "Reach main only through a pull request with `Closes #n`"); after it, the ones sorted `issue` go into one issue ("Turn the Lows of a merged pull request into one issue…" below). Do not ask the owner.
 Decline a finding that does not serve the goal in the first-round fix, and state it with the reason in the completion report: nothing outside the owner's goal is done (at the owner's instruction, 2026-11-03).
 When a finding has several ways to fix it, choose the recommended one and state it in the completion report.
 
 ```text
 Good: High and Low found in round 1 -> fix both in one commit -> round 2 reads the whole fix -> pass -> push
-Good: round 1 passes with a Low -> push, and list the Low in the completion report
-Good: round 2 finds a new Low -> pass -> push, and list the Low in the completion report
+Good: round 1 passes with a Low -> release-verifier sorts it -> push, and list the Low with its sorting in the completion report
 Bad:  round 1 fails with a High and a Low, and the Low is left unfixed
+Bad:  round 2 reports a new Low (from round 2 on, only the new blocking findings of the fixing diff are reported)
 Bad:  pass -> fix the Low -> run-e2e.sh again -> push
 Bad:  pass -> push with the Low left, and ask the owner whether to fix it
+```
+
+### Turn the Lows of a merged pull request into one issue, and fix them before the Release PR
+
+After the merge of a pull request whose review passed with non-blocking findings, the session that merged it makes one issue through `issue-plan` with the findings that release-verifier sorted `issue` (at the owner's instruction, 2026-11-21; #1211).
+Its title is 「PR #{n} のレビューで残った Low」, and its labels are `importance:low`, `point:2` (`point:3` when it holds more than three findings; never `point:5` or `point:8`, so that `issue-plan` step 3 never splits it), and `documentation` only when every finding is where `issue-plan` gives that label (documentation, `.claude/agents/`, `.claude/evals/`, `.claude/rules/` or `.claude/skills/`).
+Its body holds each finding with its ID, `path:line` and gist, and the reviewer's original text as data, inside a quote. Each path is relative to the repository root, and the body passes `guard-public.sh text` before `gh issue create` (`publishing.md`); when it refuses, no issue is made and the refusal is reported.
+A non-blocking finding of security-reviewer (`local`) never goes into the issue, because the repository is public (`publishing.md`, `issues.md`): it stays in the completion report only (ID, `path:line` and gist), and is fixed only on the owner's word (decided by the agent, 2026-11-21, at the owner's leave; #1211).
+When no finding is sorted `issue`, no issue is made. The issue needs no spec gate (`issues.md`, "Make an issue only once…").
+Before each Release PR, `implement` fixes up to three items in all of these issues, of the flaky issues ("Start E2E and the reviewers together…" above) and of the retrospective issues (「振り返り:」, #1213), on one branch, so that they go out in the same version (`.claude/skills/implement/SKILL.md`, step 6, which settles how they are counted and taken; at the owner's instruction, 2026-11-21; #1212, which replaces the five findings of #1211). A flaky issue filed in the same run waits for the next one. A finding whose fix needs a design decision is skipped and stays in its issue.
+Before #1211 the findings of a pass were kept only in the completion report, so none was fixed.
+
+```text
+Good: PR #1300 passes with R-2 sorted `issue` and P-1 sorted `drop` -> merge -> issue 「PR #1300 のレビューで残った Low」 with R-2 -> implement fixes R-2 before the Release PR
+Bad:  every finding is sorted `drop`, and an issue is made anyway
+Bad:  the findings go into an issue before the pull request has merged
+Bad:  a security Medium goes into the issue 「PR #1300 のレビューで残った Low」 (it is `local`: the completion report only)
+Bad:  implement takes three Lows while a flaky issue and a retrospective issue are open (with all three kinds open, it takes one of each)
 ```
 
 ### Fix only the non-blocking findings of a merged version with the range check
 
 A pull request that holds only fixes of non-blocking findings of an already merged version is not sent through the reviewers, and release-verifier is not launched.
-It is made on purpose, from the findings that earlier completion reports listed. A finding of the branch under review is not fixed this way ("Fix blocking findings inside the review…" above).
-Write the fixed findings in a file, one to a line, each line holding the `path` or `path:line` of the finding (for example `[L-1] ts/slack.ts:120 no empty reply`).
+Its normal route is step 6 of `implement`, which takes the findings from the issues of the section above. A branch of that step that also holds a flaky fix, a retrospective fix or any path outside the list goes through the first round instead, because such a fix may change the product or the harness (decided by the agent, 2026-11-21, at the owner's leave; #1212). A finding of the branch under review is not fixed this way ("Fix blocking findings inside the review…" above).
+Write the fixed findings in a file outside the tracked tree, one to a line (`tmp/` of the worktree, which is gitignored, because `range-check.sh` needs a clean tree), each line holding the `path` or `path:line` of the finding (for example `[L-1] ts/slack.ts:120 no empty reply`).
 A file that goes with the fix of a finding (a test, a spec, a requirement or a rule that describes the behavior) may be written as a line with the ID of the original finding (for example `[L-1] e2e/specs/inbox.e2e.ts test that goes with the fix of L-1`). A change that has nothing to do with a finding must not be written in the list.
 Commit the fix, run `run-e2e.sh` (the CI and E2E records of the new HEAD are needed), and run `range-check.sh origin/main {list file}` by the main checkout's path, from the worktree (`worktree.md`).
 The passed commit is `origin/main`, which needs no pass record because a commit of main passed this gate when it entered main.
@@ -150,7 +171,7 @@ At the owner's instruction (2026-10-29). Running a review for every small fix pr
 The check of the pass record (`pre-git.sh`) stays. The writers are release-verifier and `range-check.sh` alone, so that no other command can let a change through.
 
 ```text
-Good: the completion report of a merged version listed a Low -> a new branch fixes it, and commits -> run-e2e.sh -> `range-check.sh origin/main findings.txt` -> pass record -> push
+Good: issue #1305 「PR #1300 のレビューで残った Low」 holds a Low -> step 6 of implement fixes it on the new branch `fix/pre-release-20261125-1030`, and commits -> run-e2e.sh -> `range-check.sh origin/main tmp/review-lows.txt` -> pass record -> push
 Bad:  fix the Low of a merged version and run the performance and code reviews again
 Bad:  fix the Low of a merged version and launch release-verifier to check the range
 Bad:  fix a Low of the branch that just passed, and run `range-check.sh {passed HEAD} {list file}` (leave it, and list it in the completion report)

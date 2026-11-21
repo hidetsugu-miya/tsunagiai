@@ -44,7 +44,7 @@ static SAVING: Mutex<()> = Mutex::new(());
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "kebab-case")]
 pub enum SkillScreen {
-    /// The screen that pastes a mail into Slack (S-1, S-4).
+    /// The screen that pasted a mail into Slack (S-1, S-4, retired: no pane uses a skill of it, #1225).
     SlackPaste,
     /// The talk about a Slack thread (S-7).
     SlackThread,

@@ -96,14 +96,11 @@ import type { PickedDue } from "./bindings/PickedDue";
 import type { PendingImage } from "./bindings/PendingImage";
 import type { HeldThread } from "./bindings/HeldThread";
 import type { HiddenChannel } from "./bindings/HiddenChannel";
-import type { SlackAction } from "./bindings/SlackAction";
-import type { ComposeRead } from "./bindings/ComposeRead";
 import type { SlackLoad } from "./bindings/SlackLoad";
 import type { SlackThread } from "./bindings/SlackThread";
 import type { SocketStatus } from "./bindings/SocketStatus";
 import type { Summary } from "./bindings/Summary";
 import type { Sync } from "./bindings/Sync";
-import type { Target } from "./bindings/Target";
 import type { TerminalThemes } from "./bindings/TerminalThemes";
 import type { ThemeSelection } from "./bindings/ThemeSelection";
 import type { Timeline } from "./bindings/Timeline";
@@ -131,7 +128,6 @@ type Account = { account: string };
 // What Todoist says about an uploaded file (`file_name`, `file_url`, `file_type`, ...): it is handed back as the attachment of a comment, as it is.
 export type Upload = Record<string, unknown>;
 type Thread = { account: string; id: string };
-type Mail = { subject: string; from: string; date: string; body: string };
 
 export interface Commands {
   login: { args: { loginHint: string | null }; result: string };
@@ -247,20 +243,6 @@ export interface Commands {
   // J-1: asks the site who the credential of the form is (an empty token takes the stored one); saves nothing.
   jira_test: { args: { site: string; email: string; token: string }; result: JiraUser };
   slack_channels: { args: { teamId: string; refresh: boolean }; result: Channel[] };
-  slack_link: { args: { url: string }; result: Target };
-  // What a post of the mail starts out as (plain text); the user edits it on the compose screen.
-  slack_preview: { args: Mail; result: string };
-  // Posts `text` as it is (Rust escapes it for Slack and refuses a blank one or one past 10,000 characters). `written` true: the owner wrote the text in a card of "行うこと", and its `@here`, `@channel` and `@everyone` become mentions; false for the mail's content.
-  // The answer is the time (`ts`) of the posted message, which a later post gives as `threadTs` to continue its thread (empty when Slack's answer had none).
-  slack_post: {
-    args: { teamId: string; channel: string; threadTs: string | null; name: string; text: string; written: boolean };
-    result: string;
-  };
-  // The fields of the Slack compose screen that Claude Code reads (S-4, #734): `actions` are the cards of "行うこと" (the posted ones first), and the answer is the text of two JSON arrays, the cards with the numbers of their destinations and the destinations numbered from 1.
-  // Rust keeps the numbered destinations for the next write.
-  slack_compose_read: { args: { actions: SlackAction[] }; result: ComposeRead };
-  // The cards after a write of the field `actions` (the text of a JSON array, S-4): the posted ones as they were, and the ones to post as the write made them. A number that is outside its list, or any other fault, is a Japanese message. Nothing is posted or saved.
-  slack_compose_write: { args: { text: string; actions: SlackAction[] }; result: SlackAction[] };
   // The newest 10 unread rows of each joined channel (no direct messages) of every workspace, newest first: the unread messages (S-8) and the threads with unread replies (S-14, each with `unreadReplies`), and `watched`, the watched threads (S-13, each with `watch`, the newest activity first); `failed` are workspaces whose read failed (the messages their earlier reads kept are still listed),
   // `missing` the scopes a token lacks (users:read, files:read, channels:write, groups:write among them), `refreshSecs` the wait until the next read, `pendingChannels` the channels no read has reached yet,
   // `unreadTotal` the unread messages among all those held and the unread replies (the Slack button's badge), `unreadChannels` the channels with something unread, each with its number of unread messages, the newest one (`to`) that "既読にする" sets the position to, and its threads with unread replies. Messages are kept in memory only.
@@ -286,10 +268,10 @@ export interface Commands {
   slack_thread: { args: { teamId: string; channel: string; ts: string }; result: SlackThread };
   // The newest messages of a joined channel (S-20), oldest first, drawn as the list's rows (`unread` false); it changes no read position.
   slack_channel_history: { args: { teamId: string; channel: string }; result: TimelineMessage[] };
-  // Posts `text` to a channel of the side menu (S-21) under the user's own name (the checks and the errors of `slack_post`; the recent destinations are not touched).
+  // Posts `text` to a channel of the side menu (S-21) under the user's own name (Rust escapes it for Slack and refuses a blank one or one past 10,000 characters).
   // `markdown` true: `text` is the Markdown of the rich field, turned into Slack's mrkdwn in Rust before it is checked and sent; absent or false: plain text, as before.
   slack_channel_post: { args: { teamId: string; channel: string; text: string; markdown?: boolean }; result: boolean };
-  // Posts `text` as a reply in the thread (the checks and the errors of `slack_post`; the recent destinations are not touched). `markdown` as for `slack_channel_post`.
+  // Posts `text` as a reply in the thread (the same checks and errors). `markdown` as for `slack_channel_post`.
   slack_reply: { args: { teamId: string; channel: string; threadTs: string; text: string; markdown?: boolean }; result: boolean };
   // Adds (`add` true) or takes off (false) the user's reaction `name` (Slack's name of it: `tada`, `+1::skin-tone-2`, a custom emoji's name) on the message `ts` of `channel`, a channel, a DM or a group DM (S-25).
   // True when Slack changed it, false when it was so already (`already_reacted`, `no_reaction`).
@@ -323,9 +305,6 @@ export interface Commands {
   claude_todo_prompt_reset: { args: undefined; result: TodoPrompt };
   // A-9: Claude's summary of the content to hand over (the mail, the Slack thread or the Todo of the card), as points. `context` is quoted to Claude as data, never followed; the instruction the user wrote is not sent to Claude: Rust only checks it with the content against the limit of the prompt, before the call. The model and effort are those of `orcaHandoff`. Nothing is saved.
   claude_summarize_handoff: { args: { context: HandoffContext; instruction: string }; result: HandoffSummary };
-  // S-24: the history of the open channel as Claude Code reads it (the field `channel` of the target "slack-channel"): `teamId` and `channel` must be a connected workspace and a channel of its list (a refusal is a Japanese message), and `messages` are its recent messages as the screen draws them (`text` of `TimelineMessage`), oldest first.
-  // The answer names the channel by the workspace's name and the channel's name Rust holds, and encloses the messages as data between boundary lines. Nothing is sent or saved.
-  claude_channel_data: { args: { channel: { teamId: string; channel: string; messages: { name: string; ts: string; text: string }[] } }; result: string };
   // S-7: the open Slack thread as Claude Code reads it (the field `thread` of the target "slack-thread"): its messages as the screen shows them (`text` of `ThreadMessage`), with `truncated` (the read stopped before the end of the thread), enclosed as data between boundary lines. Nothing is sent or saved.
   claude_thread_data: { args: { thread: { name: string; ts: string; text: string }[]; truncated: boolean }; result: string };
   // The agents that run in the Orca in use and its worktrees. Never rejects for a read that failed: `state` says "missing" (no orca command) or "failed" (with `message`).
@@ -379,7 +358,7 @@ export interface Commands {
   orca_stream_viewport: { args: { environment: string | null; handle: string; viewport: OrcaViewport }; result: null };
   // A-12: types `text` into the terminal `handle` shown as it is (no Enter is added); the answer says whether Orca took it. `viewport` is the size the pane fits as the keys are typed (null for a terminal that is not shown), which the send claims.
   orca_stream_input: { args: { environment: string | null; handle: string; text: string; viewport: OrcaViewport | null }; result: null };
-  // A-36: starts Claude Code in a pseudo terminal for the pane `id` (one that `id` had is ended): its output and its end go to `channel` (a `ClaudeCodeEvent` at a time). `builtinTools` leaves Claude Code's own tools on, `permissionMode` is "manual" (it asks the owner for every tool that writes), "auto" (the calendar pane, #1074), "auto-slack-compose" (the Slack compose pane, #1144: Sonnet at the effort high, and it asks the owner before a post) or "auto-todo-draft" (the pane of a Todo's draft, #1148: Sonnet at the effort high); Rust refuses all three with `builtinTools` and for the orchestrator, `skill` is a saved skill it is given, `prompt` is its first instruction (1 to 20,000 characters, null for none; passed as `claude [prompt]`, and the orchestrator takes none from here). The orchestrator of a formation (A-37, the id `formation:{name}`) gets the projects saved with its formation as its first instruction, which Rust reads itself. The answer is the number of this start. A failure is the message the pane shows.
+  // A-36: starts Claude Code in a pseudo terminal for the pane `id` (one that `id` had is ended): its output and its end go to `channel` (a `ClaudeCodeEvent` at a time). `builtinTools` leaves Claude Code's own tools on, `permissionMode` is "manual" (it asks the owner for every tool that writes), "auto" (the calendar pane, #1074), "auto-todo-draft" (the pane of a Todo's draft, #1148: Sonnet at the effort high); Rust refuses all three with `builtinTools` and for the orchestrator, `skill` is a saved skill it is given, `prompt` is its first instruction (1 to 20,000 characters, null for none; passed as `claude [prompt]`, and the orchestrator takes none from here). The orchestrator of a formation (A-37, the id `formation:{name}`) gets the projects saved with its formation as its first instruction, which Rust reads itself. The answer is the number of this start. A failure is the message the pane shows.
   claude_code_start: { args: { id: string; viewport: OrcaViewport; builtinTools: boolean; permissionMode: ClaudeCodePermissionMode; skill: { name: string; screen: SkillScreen } | null; prompt: string | null; channel: unknown }; result: number };
   // A-36: types `text` into the pane `id` as it is (no Enter is added).
   claude_code_input: { args: { id: string; text: string }; result: null };
@@ -431,6 +410,8 @@ export interface Commands {
   markdown_patch: { args: { original: string; before: string; after: string }; result: MarkdownPatchResult };
   // A-18: the text of the file `relative` of the worktree, for the editor, with LF line ends (`crlf`: the file has CRLF) and the signature of what the disk holds. A binary file, one over 384 KiB and one that is not UTF-8 are errors.
   orca_file_read: { args: { path: string; relative: string; environment: string | null }; result: OrcaFileText };
+  // A-18: the image file `relative` of the worktree as a `data:` URI (png, jpg, jpeg, gif and webp by the extension; one over 3 MiB is made a smaller JPEG). A file with another extension, and one that cannot be made to fit, are errors.
+  orca_file_image: { args: { path: string; relative: string; environment: string | null }; result: string };
   // A-18: saves `content` over the file only if the disk still holds the text with `signature` (`crlf`: write CRLF). `state` says whether it was written (`saved`, with the new signature) or the disk had changed (`changed`, `missing`, `not-utf8`: nothing written).
   orca_file_write: { args: { path: string; relative: string; content: string; crlf: boolean; signature: string; environment: string | null }; result: OrcaSaved };
   // A-18: makes a file, or with `folder` a folder, named `name` in the folder `dir` of the worktree (the empty `dir` is its root), and answers its path from the worktree. A name that is not one name, and one that is taken, are errors; nothing is overwritten.

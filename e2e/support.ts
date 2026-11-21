@@ -501,7 +501,7 @@ export const pickFile = (name: string, content: string, size?: number) =>
 // ---- Slack and Claude ----
 
 export const workspace: Workspace = { teamId: "T1", team: "Example Team", user: "alice", url: "https://example-team.slack.com/" };
-export const slackLoad: SlackLoad = { workspaces: [workspace], recent: [] };
+export const slackLoad: SlackLoad = { workspaces: [workspace] };
 // A connection of Socket Mode (S-16) as `slack_socket_status` answers it; the workspace is `workspace`.
 export const socketStatus = (state: SocketState, teamId = workspace.teamId): SocketStatus => ({ teamId, state });
 
@@ -558,9 +558,6 @@ export const logLine = (time: string, level: LogEntry["level"], source: string, 
 
 // What `claude_todo_prompt` answers (the same as the base answer in e2e/fixtures.js): the default instructions, not edited.
 export const todoPrompt: TodoPrompt = { body: "Default body", defaultBody: "Default body", fixed: "Fixed part\nToday is {today}.\n{projects}", fixedAfter: "Fixed tail", edited: false };
-
-// What `slack_preview` answers for the thread of `threadDetail("First unread", "Hello from Alice", …)`: the post as it starts out in the compose screen.
-export const slackPreview = "*First unread*\nAlice <alice@example.com> ・ 2026/11/3 9:00\n\nHello from Alice";
 
 // What `slack_channels` answers: the channels of the workspace `workspace`.
 export const slackChannels: Channel[] = [{ id: "C0123ABCD", name: "general", private: false }];

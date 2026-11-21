@@ -45,6 +45,7 @@ import { openScratchpad } from "./orca-scratchpad.js";
 import { hideTerminals, initOrcaTerminal, type Placement, pruneTerminals, showTerminals, type TermSource } from "./orca-terminal.js";
 import { type Fields, registerDraftTarget } from "./screen-bridge.js";
 import { initSplit } from "./split.js";
+import { hideStay, showStay } from "./toast.js";
 import { logError, showFailure } from "./error-card.js";
 import { copyText, setNavCount, show } from "./view.js";
 
@@ -603,19 +604,20 @@ function nameNodes(name: string, re: RegExp | null): (string | HTMLElement)[] {
 // A project that is not running (A-8): the gray dot (nothing works, waits or has stopped there), and no session and no terminal. The selected project is never one, so the row the work pane shows stays in the list.
 const isNotRunning = (p: OrcaProject) => p.status === "idle" && p.sessions === 0 && p.key !== pickedProject();
 
-// The rows the list shows, the running ones first and then the ones that are not running: the whole list while a search text is typed (the rows whose name holds it), else the running ones, and the others only while the link is open.
+// The rows the list shows, the running ones first and then the ones that are not running: the whole list while a search text is typed (the rows whose name holds it), else the running ones alone (the others are in the region under the link, `stoppedRows`).
 function visibleRows(re: RegExp | null) {
   const rows = projectRows();
-  const running = rows.filter((r) => !isNotRunning(r));
-  const stopped = rows.filter((r) => isNotRunning(r));
-  if (re !== null) return [...running, ...stopped].filter((r) => re.test(r.name));
-  return stoppedOpen ? [...running, ...stopped] : running;
+  if (re !== null) return [...rows.filter((r) => !isNotRunning(r)), ...rows.filter(isNotRunning)].filter((r) => re.test(r.name));
+  return rows.filter((r) => !isNotRunning(r));
 }
+
+// The rows of the region at the bottom of the list: the projects that are not running, while the link is open (none while a search text is typed, which lists them in the list itself).
+const stoppedRows = () => (stoppedOpen && needle() === "" ? projectRows().filter(isNotRunning) : []);
 
 // How many projects are not running, which the link counts (none while a search text is typed, which has no link).
 const stoppedCount = () => (needle() === "" ? mix.projects.filter(isNotRunning).length : 0);
 
-// The link under the running projects (A-8): "› 起動していない N 件" while the others are closed, "起動していないものを隠す" while they are listed under it.
+// The link at the bottom of the list (A-8): "› 起動していない N 件" while the others are closed, "起動していないものを隠す" while they are listed under it.
 function stoppedToggle(count: number) {
   const button = tag("button", "orca-stopped-toggle");
   button.type = "button";
@@ -640,12 +642,24 @@ function cursorKey(rows = visibleRows(matcher())) {
   return cursor !== null && keys.includes(cursor) ? cursor : (keys[0] ?? null);
 }
 
-// `openTabs`: the tabs other than files of the open projects, found once for the drawing; the others are found here. The link goes after the last running project, and the ones that are not running, when it is open, follow it.
+// `openTabs`: the tabs other than files of the open projects, found once for the drawing; the others are found here. A list with no running project says it has none only when no project is left out under the link either.
 function projectNodes(re: RegExp | null, rows: ReturnType<typeof visibleRows>, on: string | null, openTabs: Map<string, Tab[]>): HTMLElement[] {
-  const node = (r: OrcaProject) => projectNode(r.key, r.name, r.status, placeOf(r), openTabs.get(r.key) ?? ownTabs(r.key), r.key === on, re);
+  const nodes = rows.map((r) => projectNode(r.key, r.name, r.status, placeOf(r), openTabs.get(r.key) ?? ownTabs(r.key), r.key === on, re));
+  return nodes.length || stoppedCount() > 0 ? nodes : [emptyNode(needle() === "" ? "プロジェクトがありません" : "一致するプロジェクトがありません")];
+}
+
+// The region at the bottom of the list (A-8): the link, and under it the projects that are not running while it is open. Its scroll position stays.
+function drawStopped(openTabs: Map<string, Tab[]>) {
   const count = stoppedCount();
-  const nodes = count === 0 ? rows.map(node) : [...rows.filter((r) => !isNotRunning(r)).map(node), stoppedToggle(count), ...rows.filter(isNotRunning).map(node)];
-  return nodes.length ? nodes : [emptyNode(needle() === "" ? "プロジェクトがありません" : "一致するプロジェクトがありません")];
+  const box = $("orca-stopped");
+  box.hidden = count === 0;
+  const list = $("orca-stopped-feed");
+  const rows = stoppedRows();
+  list.hidden = rows.length === 0;
+  const top = list.scrollTop;
+  $("orca-stopped-bar").replaceChildren(...(count === 0 ? [] : [stoppedToggle(count)]));
+  list.replaceChildren(...rows.map((r) => projectNode(r.key, r.name, r.status, placeOf(r), openTabs.get(r.key) ?? ownTabs(r.key), false, null)));
+  list.scrollTop = top;
 }
 
 // Draws the list where it is: the scroll position and the focused row stay, and nothing is drawn when nothing changed.
@@ -669,7 +683,8 @@ function drawFeed() {
   const focused = (document.activeElement as HTMLElement | null)?.dataset?.key;
   box.replaceChildren(...projectNodes(re, rows, on, openTabs));
   box.scrollTop = top;
-  if (focused) box.querySelector<HTMLElement>(`[data-key="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
+  drawStopped(openTabs);
+  if (focused) $("orca-list").querySelector<HTMLElement>(`[data-key="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
 }
 
 function tabNode(t: Tab, selected: boolean) {
@@ -783,7 +798,6 @@ function drawWork(tabs: Tab[]) {
   const plusDisabled = busy || startWaits() || projectKey === null || view === null || view.state === "missing";
   const empty: TreeModel = { kind: "pane", pane: { id: "", key: "", tabs: () => [], focused: false, empty: emptyText(tabs, undefined), terminal: false, editor: false, plusDisabled, filesShown: filesShown(), listOpen } };
   paneHosts = drawTree(layout?.root ? treeOf(layout.root, tabs, layout.focus, plusDisabled, (id) => tabOfId(tabs, id)) : empty);
-  drawStarted();
 }
 
 // Shows the terminal of the tab selected in each pane while the screen is shown: streamed from a saved environment or from this machine's paired Orca, else mirrored.
@@ -975,16 +989,11 @@ function openDiff(relative: string, commit: DiffCommit | null = null) {
   draw();
 }
 
-// The note of a start that was answered: it waits for the tab of the session, or (Orca named neither its pane nor its terminal) says it was started.
+// The note of a start that was answered, at the bottom right (toast.ts): it waits for the tab of the session, or (Orca named neither its pane nor its terminal) says it was started. `draw` shows it on every screen, so that it goes with the wait whichever screen is shown.
 function drawStarted() {
-  const box = $("orca-started");
-  box.hidden = started === null;
-  if (box.hidden) return;
-  const waiting = startWaits();
-  const key = String(waiting);
-  if (box.dataset.state === key) return;
-  box.dataset.state = key;
-  box.replaceChildren(...(waiting ? [tag("span", "spin"), tag("span", "sp", "セッションを始めました。一覧に現れるのを待っています…")] : [tag("span", "sp", "セッションを始めました。Orca の画面で開けます。")]));
+  if (started === null) hideStay();
+  else if (startWaits()) showStay("セッションを始めました。一覧に現れるのを待っています…");
+  else showStay("セッションを始めました。Orca の画面で開けます。", false);
 }
 
 // Takes a read as the one shown. A read that did not learn the target and the environments (a poll, or a failed `environment list`) leaves the ones held;
@@ -1111,6 +1120,7 @@ function syncPeek() {
 function draw() {
   syncServers(serverGone, worktreeGone);
   drawBadge();
+  drawStarted();
   // Before the terminals of the screen are shown, so that a terminal the project selected now owns is not held by the modal.
   syncPeek();
   if (!listShown()) return pauseLsp();

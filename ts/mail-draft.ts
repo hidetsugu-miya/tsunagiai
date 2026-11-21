@@ -1,21 +1,19 @@
-// The fields of the open reply (M-10) or of the new mail (M-11) that Claude Code reads and writes through tsunagiai-mcp (A-36): the target "mail-draft" of ts/screen-bridge.ts.
-// Its fields are `thread` (the open thread enclosed as data, only read), `to`, `cc` and `bcc` (addresses separated by commas), `subject` (only a new mail takes it) and `body` (the Markdown of a reply, the plain text of a new mail).
-// What Claude Code writes goes into the fields as it is, and 「元に戻す」 takes it back; nothing is sent or saved. Each side (the reply, the new mail) keeps what its fields held before each write, and the way back is shown only while the fields still hold what the newest write put there.
+// The fields of the new mail (M-11) that Claude Code reads and writes through tsunagiai-mcp (A-36): the target "mail-draft" of ts/screen-bridge.ts.
+// Its fields are `to`, `cc` and `bcc` (addresses separated by commas), `subject` and `body` (the plain text of the new mail).
+// What Claude Code writes goes into the fields as it is, and 「元に戻す」 takes it back; nothing is sent or saved. The side keeps what its fields held before each write, and the way back is shown only while the fields still hold what the newest write put there.
 import { $ } from "./dom.js";
 import { type Fields, registerDraftTarget } from "./screen-bridge.js";
 
 export const NAMES = ["to", "cc", "bcc", "subject", "body"] as const;
 export type Texts = Record<(typeof NAMES)[number], string>;
 
-// One of the two screens that hold the fields: the reply under the thread, and the screen of a new mail.
+// A screen that holds the fields: the screen of a new mail.
 export interface DraftSide {
   // The id of its button 「元に戻す」 and of the element that holds its fields (the clicks and the typing in it make the way back stale).
   undoId: string;
   rootId: string;
-  // Whether the fields are in view now (the reply: a thread is open; the new mail: its screen is shown).
+  // Whether the fields are in view now (the new mail: its screen is shown).
   isOpen(): boolean;
-  // The thread as Claude Code reads it, enclosed as data.
-  thread(): Promise<string>;
   // What the fields hold, as the owner sees them.
   read(): Texts;
   // Takes in what was typed in the address fields and not yet made a chip, so that it is read and replaced like the others.
@@ -70,8 +68,7 @@ const refusal = (error: string): never => {
 
 async function writeFields(fields: Fields) {
   const side = openSide();
-  if (!side) return refusal("返信も新規作成も開いていません");
-  if ("thread" in fields) return refusal("欄 thread は読むだけです");
+  if (!side) return refusal("新規作成が開いていません");
   if (side.busy()) return refusal("送信の最中のため、書けません");
   side.settle();
   const before = side.read();
@@ -98,12 +95,12 @@ async function undo(side: DraftSide) {
 export function addDraftSide(side: DraftSide) {
   if (sides.length === 0) {
     registerDraftTarget("mail-draft", {
-      names: ["thread", ...NAMES],
+      names: NAMES,
       isOpen: () => openSide() !== undefined,
       read: async () => {
         const open = openSide()!;
         open.settle();
-        return { thread: await open.thread(), ...open.read() };
+        return open.read();
       },
       write: writeFields,
     });

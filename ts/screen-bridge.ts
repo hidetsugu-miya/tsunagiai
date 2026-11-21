@@ -11,14 +11,12 @@ export type Fields = Record<string, string>;
 export interface DraftTarget {
   // The names of the fields a write may name; a read answers each of them (a field that is only read answers it too, and its write is refused by `write`).
   names: readonly string[];
-  // False while the screen is not shown: a read, a write and a post are refused then.
+  // False while the screen is not shown: a read and a write are refused then.
   isOpen(): boolean;
   // Every field the screen holds now, by name.
   read(): Fields | Promise<Fields>;
   // Puts the texts into the named fields, which are the screen's own fields only; it saves and sends nothing. A refusal is a thrown error with a Japanese message.
   write(fields: Fields): void | Promise<void>;
-  // Does what the screen's own "投稿" button does, and answers what happened as fields (`state`); a screen without it refuses a post. A refusal is a thrown error with a Japanese message.
-  post?(): Fields | Promise<Fields>;
 }
 
 const targets = new Map<string, DraftTarget>();
@@ -42,7 +40,6 @@ async function answerOf(ask: ScreenAsk): Promise<ScreenAnswer> {
   if (!target) return failed(`${ask.target} の画面はまだ使えません`);
   if (!target.isOpen()) return failed(`${ask.target} の画面が開いていません`);
   if (ask.op === "read") return { ok: true, fields: await target.read() };
-  if (ask.op === "post") return target.post ? { ok: true, fields: await target.post() } : failed(`${ask.target} の画面は投稿できません`);
   const unknown = Object.keys(ask.fields).filter((name) => !target.names.includes(name));
   if (unknown.length) return failed(`欄 ${unknown.join("、")} はありません（${target.names.join("、")}）`);
   await target.write(ask.fields);

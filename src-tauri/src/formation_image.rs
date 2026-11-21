@@ -19,7 +19,7 @@ use crate::formation_page::{locate, read_bounded};
 /// An image the screen gets, at most (bytes): a larger file is made smaller or refused.
 pub const IMAGE_LIMIT: usize = 3 * 1024 * 1024;
 /// A file that is read to be made smaller, at most (bytes).
-const FILE_LIMIT: u64 = 64 * 1024 * 1024;
+pub const FILE_LIMIT: u64 = 64 * 1024 * 1024;
 /// The widths a file over `IMAGE_LIMIT` is tried at, as a JPEG.
 const WIDTHS: [u32; 4] = [2400, 1600, 1200, 800];
 const JPEG_QUALITY: u8 = 85;

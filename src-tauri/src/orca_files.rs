@@ -16,7 +16,7 @@
 //! Files and folders are deleted for good, several at once (`orca_files_delete`, `files.delete` for each, which skips the Trash and makes a path that is not there no error): Rust refuses the root of the worktree and a path that is not inside it, drops an entry that is under a folder that is deleted too, and stops at the first that fails. It was read in the `app.asar` of Orca 1.4.258 and never run on a real Orca.
 //! A file or a folder is moved or renamed inside the worktree (`orca_file_move`, `files.rename`, which does not overwrite: a target that is there is refused): Rust refuses the root, a path that is not inside the worktree, a target that is the source and a target inside the source. `files.rename` makes no folder, so when it answers `ENOENT` and the source is there (`files.stat`) the missing folders of the target are made one by one (`files.createDir`, which makes one level) and the rename is tried once more. A change of the case of the name alone goes through a temporary name in the same folder (two `files.rename`), because a disk that ignores case would have Orca refuse the target as taken. It was read in the `app.asar` of Orca 1.4.258 and never run on a real Orca.
 //! The scratchpad of A-29 is a file in `.orca/scratchpad` of a worktree (`orca_scratchpad_create`): the same `files.createFile`, and a name that is taken is answered as the existing file, not as a failure.
-//! A file is also copied to this PC (`download`): `files.stat` gives its size, then `files.readChunk` is called until `eof` (and never past the size), or `files.readPreview` once on a host that lacks either, and the bytes go to a temporary file beside the destination, which is moved onto it when all have come. It was tried on Orca 1.4.254 on this machine (a chunk may be at most 512 KiB). The same read (`fetch_into`) gives the bytes to the preview server of A-31 (`orca_preview.rs`), through a `Sink`.
+//! A file is also copied to this PC (`download`): `files.stat` gives its size, then `files.readChunk` is called until `eof` (and never past the size), or `files.readPreview` once on a host that lacks either, and the bytes go to a temporary file beside the destination, which is moved onto it when all have come. It was tried on Orca 1.4.254 on this machine (a chunk may be at most 512 KiB). An image file (png, jpg, jpeg, gif or webp by the name) is read by the same `fetch_into` and answered as a `data:` URI for the picture of the editor (`orca_file_image`, `read_image`, prepared by `formation_image::prepare`, #1088). The same read (`fetch_into`) gives the bytes to the preview server of A-31 (`orca_preview.rs`), through a `Sink`.
 
 use std::{
     cmp::Ordering,
@@ -37,6 +37,7 @@ use ts_rs::TS;
 use crate::{
     accounts::write_atomic,
     auth::config_dir,
+    formation_image,
     orca::{
         forget_worktree_host, git_branch_of, listed_paths_of_project, remember_git_worktree,
         text_of, worktree_host, worktree_host_cached,
@@ -1407,6 +1408,49 @@ pub(crate) async fn download(
     done
 }
 
+// ---- the image ----
+
+/// The most bytes of an image file that is read to be shown (it is made smaller before it goes to the screen, `formation_image::prepare`).
+const IMAGE_READ_LIMIT: u64 = formation_image::FILE_LIMIT;
+
+/// The type of an image that the editor shows, by the extension of `relative` (any case): png, jpg, jpeg, gif and webp. An SVG is text and the editor opens it as text; any other file is no image.
+pub(crate) fn image_mime(relative: &str) -> Option<&'static str> {
+    formation_image::mime_of(relative).filter(|mime| *mime != "image/svg+xml")
+}
+
+/// The bytes of an image that are read, kept in memory up to `IMAGE_READ_LIMIT`.
+struct Gathered(Vec<u8>);
+
+impl Sink for Gathered {
+    async fn put(&mut self, bytes: Vec<u8>, total: u64) -> Result<(), String> {
+        if total > IMAGE_READ_LIMIT {
+            return Err(format!(
+                "画像が大きすぎます（{} MiB を超えています）",
+                IMAGE_READ_LIMIT / (1024 * 1024)
+            ));
+        }
+        // The whole size is known from the first piece: the room is made once, and never past the read limit.
+        if self.0.capacity() == 0 {
+            self.0.reserve_exact(total.min(IMAGE_READ_LIMIT) as usize);
+        }
+        self.0.extend_from_slice(&bytes);
+        Ok(())
+    }
+}
+
+/// The image `relative` of the worktree at `path` as a `data:` URI for the editor (A-18). It is read as a download reads it (`fetch_into`) and prepared as the images of a decision page are (`formation_image::prepare`: as it is up to 3 MiB, else a JPEG that fits, and a picture of too many pixels is refused). A file with no image extension is refused before anything is read.
+pub(crate) async fn read_image(
+    rpc: &mut impl Rpc,
+    path: &str,
+    relative: &str,
+) -> Result<String, String> {
+    let mime = image_mime(relative).ok_or("画像のファイルではありません")?;
+    let mut gathered = Gathered(Vec::new());
+    fetch_into(rpc, path, relative, &mut gathered).await?;
+    let image = on_disk(move || formation_image::prepare(gathered.0, mime)).await?;
+    Ok(formation_image::data_uri(image.mime, &image.bytes))
+}
+
 // ---- the branches ----
 
 /// The local branches of an answer of `git.localBranches` (`{current, branches, committedAt, worktreePaths}`) for the worktree at `path`: the current one first, then the newest commit first. `worktreePaths` names the worktree that has a branch checked out; one other than `path` makes the branch `in_use`.
@@ -2292,6 +2336,23 @@ pub async fn orca_file_read(
     let opened = async {
         let mut connection = Connection::open(environment.clone()).await?;
         read(&mut connection, &path, &relative).await
+    };
+    forgetting(opened.await, &path, environment.as_deref())
+}
+
+/// The image `relative` of the worktree at `path` as a `data:` URI, for the editor (A-18): only a file with the extension of an image (`image_mime`).
+#[tauri::command]
+pub async fn orca_file_image(
+    path: String,
+    relative: String,
+    environment: Option<String>,
+) -> Result<String, String> {
+    check_relative(&relative, false)?;
+    image_mime(&relative).ok_or("画像のファイルではありません")?;
+    cached_host_of(&path, environment.as_deref()).await?;
+    let opened = async {
+        let mut connection = Connection::open(environment.clone()).await?;
+        read_image(&mut connection, &path, &relative).await
     };
     forgetting(opened.await, &path, environment.as_deref())
 }
@@ -5675,6 +5736,79 @@ mod tests {
             )
         );
         assert_eq!(left_in(&dir), ["out.bin"]);
+    }
+
+    #[test]
+    fn an_image_is_decided_by_its_extension() {
+        for (name, mime) in [
+            ("a.png", "image/png"),
+            ("dir/b.PNG", "image/png"),
+            ("c.jpg", "image/jpeg"),
+            ("c.JPEG", "image/jpeg"),
+            ("d.gif", "image/gif"),
+            ("e.WebP", "image/webp"),
+        ] {
+            assert_eq!(image_mime(name), Some(mime), "{name}");
+        }
+        // an SVG is text (the editor opens it), and a name with no extension is no image
+        for name in ["a.svg", "a.txt", "a.png.bak", "png", "dir.png/a", "a."] {
+            assert_eq!(image_mime(name), None, "{name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_image_is_read_as_a_data_uri() {
+        let file = pattern(CHUNK + 10);
+        let mut orca = Remote::new(file.clone());
+        let uri = read_image(&mut orca, "/work/a", ".orca/drops/a.PNG")
+            .await
+            .unwrap();
+        assert_eq!(
+            uri,
+            format!("data:image/png;base64,{}", STANDARD.encode(&file))
+        );
+        let chunk = CHUNK as u64;
+        assert_eq!(orca.chunk_calls(), vec![(0, chunk), (chunk, chunk)]);
+        // a host with no `files.readChunk` gives the image by `files.readPreview`
+        let mut orca = Remote::new(pattern(5));
+        orca.has_chunks = false;
+        orca.preview = Some(json!({"content": STANDARD.encode(pattern(5)), "isBinary": true}));
+        let uri = read_image(&mut orca, "/work/a", "a.gif").await.unwrap();
+        assert_eq!(
+            uri,
+            format!("data:image/gif;base64,{}", STANDARD.encode(pattern(5)))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_file_that_is_no_image_is_not_read() {
+        let mut orca = Remote::new(pattern(5));
+        let message = read_image(&mut orca, "/work/a", "a.bin").await.unwrap_err();
+        assert_eq!(message, "画像のファイルではありません");
+        assert!(orca.calls.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_image_that_cannot_be_made_to_fit_or_is_too_large_to_read_is_refused() {
+        // over the size the screen gets, and no picture, so it cannot be made smaller
+        let mut orca = Remote::new(vec![7_u8; formation_image::IMAGE_LIMIT + 1]);
+        let message = read_image(&mut orca, "/work/a", "a.png").await.unwrap_err();
+        assert!(message.starts_with("画像が大きすぎます"), "{message}");
+        // a file over the limit of the read is refused at the first chunk, whatever it says it holds
+        let mut orca = Remote::new(pattern(5));
+        orca.stat = Some(Ok(json!({"size": IMAGE_READ_LIMIT + 1})));
+        let message = read_image(&mut orca, "/work/a", "a.png").await.unwrap_err();
+        assert!(message.starts_with("画像が大きすぎます"), "{message}");
+        // a failed read is the read's own error
+        let mut orca = Remote::new(pattern(5));
+        orca.stat = Some(Err((
+            "Orca がエラーを返しました（runtime_error）",
+            "ENOENT",
+        )));
+        assert_eq!(
+            read_image(&mut orca, "/work/a", "a.png").await.unwrap_err(),
+            NOT_FOUND
+        );
     }
 
     #[tokio::test]

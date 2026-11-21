@@ -270,6 +270,10 @@ pub fn run() {
                     if let Err(e) = formation::migrate_folder(&dir) {
                         gmail::log_failure("formation_migrate", "-", e);
                     }
+                    // The file of the recent destinations of the retired screen of S-1 (S-28).
+                    if let Err(e) = slack::remove_recent_file(&dir) {
+                        gmail::log_failure("slack_recent_remove", "-", e);
+                    }
                     // The socket through which `tsunagiai-mcp` reads and writes the fields of the screens (A-36, #731).
                     screen_bridge::start(app.handle().clone(), dir);
                 }
@@ -352,11 +356,6 @@ pub fn run() {
             slack::slack_add_workspace,
             slack::slack_remove_workspace,
             slack::slack_channels,
-            slack::slack_link,
-            slack::slack_preview,
-            slack::slack_post,
-            slack::slack_compose_read,
-            slack::slack_compose_write,
             slack::slack_timeline,
             slack::slack_mark_read,
             slack::slack_watch,
@@ -397,7 +396,6 @@ pub fn run() {
             claude::claude_model_settings,
             claude::claude_model_settings_save,
             claude::claude_summarize_handoff,
-            claude::claude_channel_data,
             claude::claude_thread_data,
             orca::orca_overview,
             orca::orca_destination,
@@ -428,6 +426,7 @@ pub fn run() {
             orca_files::orca_files_ignored,
             orca_files::orca_files_changes,
             orca_files::orca_file_read,
+            orca_files::orca_file_image,
             orca_files::orca_file_write,
             orca_files::orca_file_create,
             orca_files::orca_scratchpad_create,

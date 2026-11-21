@@ -1,11 +1,9 @@
-// The content a mail, a Slack thread or a Todo hands to Orca (A-9): a title, the line under it, and the text as plain text. Rust quotes it in the prompt (`orca_handoff`); nothing here is drawn as HTML.
+// The content a Slack thread or a Todo hands to Orca (A-9): a title, the line under it, and the text as plain text. Rust quotes it in the prompt (`orca_handoff`); nothing here is drawn as HTML.
 import type { Comment } from "./bindings/Comment";
 import type { HandoffKind } from "./bindings/HandoffKind";
-import type { MessageDetail } from "./bindings/MessageDetail";
 import type { TaskItem } from "./bindings/TaskItem";
 import type { ThreadMessage } from "./bindings/ThreadMessage";
 import { formatDetailDate } from "./format.js";
-import { mailText } from "./mail-text.js";
 import { slackMs } from "./slack-view.js";
 import { dueLabel } from "./todo-data.js";
 
@@ -18,13 +16,6 @@ export interface HandoffCard {
 }
 
 const chars = (text: string) => [...text].length;
-
-// The open thread, oldest message first, each with its sender and date (the text goes through the same path as the summary and S-1).
-export function mailCard(subject: string, messages: MessageDetail[]): HandoffCard {
-  const body = messages.map((m) => `差出人: ${m.from}\n日時: ${formatDetailDate(m.dateMs)}\n\n${mailText(m)}`).join("\n\n----\n\n");
-  const last = messages[messages.length - 1];
-  return { kind: "mail", title: subject || "(件名なし)", meta: `${last ? last.fromName || last.fromAddress : "不明"} ・ 本文 ${chars(body)} 字`, body };
-}
 
 // The thread as the screen shows it (and as S-7 gives it to Claude Code): the sender's name, the time and the text of each message.
 export function slackCard(channelName: string, messages: ThreadMessage[]): HandoffCard {

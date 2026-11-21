@@ -19,7 +19,6 @@ import { richNodes } from "./slack-rich.js";
 import { revealSlackList, seeThread } from "./slack-list.js";
 import { applyReactionChange, decorateAvatar, loadIcons, onReactionChange, reactionImages, reactionsNode, slackMs } from "./slack-view.js";
 import { type Fields, registerDraftTarget } from "./screen-bridge.js";
-import { followSlackBelow } from "./slack-claude.js";
 import { initSplit } from "./split.js";
 import { toast } from "./toast.js";
 import { HandoffPane } from "./orca-handoff.js";
@@ -546,6 +545,12 @@ function selectAssistant(tab: "claude" | "orca") {
   handoff.sync();
 }
 
+// Where the pane of the thread sits (S-7): on the right of the body's column, or, when that column would be under 600px with the pane at its start (30% of the screen), under it, with the divider lying down.
+// The width of a divider (`.split-bar`) is left out twice: the one of the list of channels and the one of the pane.
+const BODY_MIN = 600;
+const PANE_START = 0.3;
+const DIVIDER = 7;
+
 export function initSlackThread() {
   handoff = new HandoffPane({
     root: $("st-orca"),
@@ -608,9 +613,21 @@ export function initSlackThread() {
   }, true);
   // A third to a half of the screen's width; under the body (S-7) it is the thread's height, a third to a half, kept apart from the width.
   const replySplit = initSplit($("slack-thread"), $("reply-split"), { lying: { min: 1 / 3, max: 1 / 2 } });
-  followSlackBelow((below) => {
+  // The place follows the width of the screen and of the list of channels only, never the pane's own width, so that the two places cannot flip each other.
+  let below = false;
+  const layout = () => {
+    const width = $("slack-screen").getBoundingClientRect().width;
+    // The screen is not shown: its size is not known, and it is read again when it is.
+    if (width === 0) return;
+    const next = width * (1 - PANE_START) - $("slack-side").getBoundingClientRect().width - 2 * DIVIDER < BODY_MIN;
+    if (next === below) return;
+    below = next;
+    $("slack-screen").classList.toggle("below", below);
     replySplit.lie(below);
     $("reply-split").setAttribute("aria-label", below ? "Claude の高さ" : "Claude の幅");
-  });
+  };
+  const observer = new ResizeObserver(layout);
+  observer.observe($("slack-screen"));
+  observer.observe($("slack-side"));
   refreshSlackThread();
 }

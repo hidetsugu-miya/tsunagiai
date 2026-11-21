@@ -1391,7 +1391,7 @@ describe("orca: definition (A-34)", () => {
   async function openWithoutSession() {
     await openOrca(orcaOverview([], [orcaWorktree("example-app", "main")]), { orca_files_list: root(), orca_files_ignored: [], editor_settings: { autosaveMs: 100 }, ...timers({ orcaClock: 600000 }) });
     // example-app is not running (A-8), so the list keeps it under the link: open the link unless it is open already, because pressing it again closes it.
-    const link = $("#orca-feed .orca-stopped-toggle");
+    const link = $("#orca-list .orca-stopped-toggle");
     if ((await link.getAttribute("aria-expanded")) !== "true") await link.click();
     await project("example-app").click();
     await filesToggle().click();

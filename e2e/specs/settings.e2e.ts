@@ -892,11 +892,11 @@ describe("settings: Claude model and effort", () => {
     ["slackSummary", "Slack の要約", "Slack のメッセージから Todo を作るとき"],
     ["mailSummary", "メールの要約", "メール詳細の AI 要約"],
     ["promptChat", "プロンプトの会話", "Todo の要約プロンプトを Claude と編集するとき"],
-    ["proofread", "Slack に貼る文章の校正", "Slack に貼る画面の Claude のペイン"],
+    ["proofread", "Slack に貼る文章の校正", "どのペインも使っていません"],
     ["slackReply", "Slack のスレッドの相談", "スレッド詳細の Claude 欄"],
     ["orcaHandoff", "Orca に渡す要約", "Orca に渡すペインで、渡す内容を要約するとき"],
     ["todoChat", "Todo の相談", "Todo の Claude ペインで、タスクを頼むとき"],
-    ["slackChat", "Slack の相談", "Slack の一覧とチャンネルの Claude ペイン"],
+    ["slackChat", "Slack の相談", "どのペインも使っていません"],
   ];
   // The default effort of a purpose: medium, and high for the Slack thread conversation.
   const defaultEffort = (purpose: Purpose) => (purpose === "slackReply" ? "high" : "medium");
@@ -2289,7 +2289,7 @@ describe("settings: tabs", () => {
 
   it("keeps the heading and the tabs in view while a long card scrolls under them, and shows a card from its top when its tab is pressed again", async () => {
     const workspaces = Array.from({ length: 24 }, (_, i) => ({ teamId: `T${i}`, team: `Team ${i}`, user: "alice", url: `https://team-${i}.slack.com/` }));
-    await boot({ inbox: inbox(), slack_load: { workspaces, recent: [] }, slack_check: checked([]), claude_status: claudeMissing });
+    await boot({ inbox: inbox(), slack_load: { workspaces }, slack_check: checked([]), claude_status: claudeMissing });
     await $("#nav-settings").click();
     await openTab("slack");
     await waitForCount("#slack-workspaces .item", workspaces.length);
