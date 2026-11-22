@@ -500,6 +500,7 @@ pub fn run() {
             orca_theme::terminal_theme_set,
             orca_titles::orca_titles,
             orca_titles::orca_title_set,
+            orca_titles::orca_titles_forget,
             app_log::log_write,
             app_log::log_read,
             app_log::log_open_folder,

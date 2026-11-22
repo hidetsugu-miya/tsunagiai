@@ -1555,31 +1555,71 @@ describe("orca: projects", () => {
         expect(await callsOf(set)).toEqual([]);
       });
 
-      it("keeps the keys and the presses of the field from the row, and keeps the field through a read", async () => {
-        // The list is read again by the clock: leaving the screen would take the focus from the field, which cancels it.
-        await openOrca(read(), timers({ orcaClock: 1000 }));
+      it("keeps the keys and the presses of the field from the row", async () => {
+        await openOrca(read());
         await pencil("example-app");
         await browser.waitUntil(async () => (await fieldState()) !== null, { timeoutMsg: "the field did not open" });
         await $(field).click();
         await $(field).setValue("a b");
         expect(await pressedSessions()).toEqual([]);
-        // A read that changes the row (a new prompt) draws the list again: the field and what was typed stay.
-        await mock("orca_overview", orcaOverview([orcaRow("example-app", "feat/a", "Write the docs", { promptLine: "next" }), orcaRow("example-api", "main", "Fix the parser", { group: "waiting" })], worktrees()));
-        await browser.waitUntil(async () => (await count("#orca-feed .orca-session-prompt")) === 1, { timeoutMsg: "the row was not drawn again" });
         expect((await fieldState())?.value).toBe("a b");
       });
 
-      it("takes out the title of a session that the list, read well, no longer holds, and leaves the others", async () => {
-        const held = { [THIS]: { [key]: "Mine", "tab_gone:leaf_1": "Old" } };
-        await openOrca(read(), { orca_titles: held, orca_title_set: { [THIS]: { [key]: "Mine" } } });
-        expect(await waitForCalls("orca_title_set")).toEqual([{ target: THIS, key: "tab_gone:leaf_1", title: "" }]);
+      // The list is read again by the clock: leaving the screen would take the focus from the field, which cancels it.
+      it("moves the very field into the new row when the list is drawn again, with what was typed, its selection and its focus", async () => {
+        await openOrca(read(), timers({ orcaClock: 1000 }));
+        await pencil("example-app");
+        await browser.waitUntil(async () => (await fieldState()) !== null, { timeoutMsg: "the field did not open" });
+        await $(field).setValue("a b c");
+        // A mark on the element tells a new element from the same one.
+        await browser.execute((selector) => {
+          const input = document.querySelector<HTMLInputElement>(selector)!;
+          input.dataset.mark = "kept";
+          input.setSelectionRange(1, 3);
+        }, field);
+        const kept = () =>
+          browser.execute((selector) => {
+            const input = document.querySelector<HTMLInputElement>(selector);
+            return input === null ? null : { mark: input.dataset.mark ?? null, value: input.value, selected: [input.selectionStart, input.selectionEnd], focused: document.activeElement === input };
+          }, field);
+        const before = { mark: "kept", value: "a b c", selected: [1, 3], focused: true };
+        expect(await kept()).toEqual(before);
+        // A read that changes the row (a new prompt) draws the list again.
+        await mock("orca_overview", orcaOverview([orcaRow("example-app", "feat/a", "Write the docs", { promptLine: "next" }), orcaRow("example-api", "main", "Fix the parser", { group: "waiting" })], worktrees()));
+        await browser.waitUntil(async () => (await count("#orca-feed .orca-session-prompt")) === 1, { timeoutMsg: "the row was not drawn again" });
+        expect(await kept()).toEqual(before);
+        expect(await count("#orca-feed .orca-session-title-input")).toBe(1);
+        // The field still saves and cancels as before: Escape closes it with nothing saved.
+        await browser.keys("Escape");
+        await browser.waitUntil(async () => (await count(field)) === 0, { timeoutMsg: "Escape did not close the moved field" });
+        expect(await callsOf("orca_title_set")).toEqual([]);
+      });
+
+      it("takes out the titles of the sessions that the list, read well, no longer holds with one call for the place, and leaves the others", async () => {
+        const held = { [THIS]: { [key]: "Mine", "tab_gone:leaf_1": "Old", "tab_gone:leaf_2": "Older" } };
+        await openOrca(read(), { orca_titles: held, orca_titles_forget: { [THIS]: { [key]: "Mine" } } });
+        expect(await waitForCalls("orca_titles_forget")).toEqual([{ target: THIS, keys: ["tab_gone:leaf_1", "tab_gone:leaf_2"] }]);
+        expect(await callsOf("orca_title_set")).toEqual([]);
         expect(await titleText()).toEqual(["Mine"]);
+      });
+
+      it("does not send a taking out that failed again at the next read, and sends it again when the screen is shown again", async () => {
+        const held = { [THIS]: { [key]: "Mine", "tab_gone:leaf_1": "Old" } };
+        await openOrca(read(), { orca_titles: held, orca_titles_forget: rejects("disk full"), ...timers({ orcaClock: 1000 }) });
+        expect(await waitForCalls("orca_titles_forget")).toEqual([{ target: THIS, keys: ["tab_gone:leaf_1"] }]);
+        // Reads of the list go on (the clock, 1.2 periods of 1 second twice), and none sends it again.
+        await browser.pause(2400);
+        expect(await callsOf("orca_titles_forget")).toHaveLength(1);
+        expect(await titleText()).toEqual(["Mine"]);
+        await showAgain();
+        expect(await waitForCalls("orca_titles_forget", 2)).toHaveLength(2);
       });
 
       it("takes out no title while the read of the list failed", async () => {
         await openOrca(orcaOverview([], [], { state: "failed", message: "Orca is not running", environments: [] }), { orca_titles: { [THIS]: { [key]: "Mine" } } });
         await waitForCalls("orca_titles");
         await browser.pause(500);
+        expect(await callsOf("orca_titles_forget")).toEqual([]);
         expect(await callsOf("orca_title_set")).toEqual([]);
       });
     });

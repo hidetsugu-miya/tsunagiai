@@ -286,6 +286,8 @@ const computed = {
   ssh_hosts: () => [],
   // A-8: the titles as Rust answers a save of one title alone (the one saved, or none for an empty title); a spec that holds more mocks `orca_title_set`.
   orca_title_set: ({ target, key, title }) => (title.trim() === "" ? {} : { [target]: { [key]: title.trim() } }),
+  // A-8: the titles left once the keys are taken out, as Rust answers when it held no other title.
+  orca_titles_forget: () => ({}),
   orca_browse_dir: ({ path }) => {
     const resolvedPath = path.trim() === "" || path.trim() === "~" ? "/home/dev" : path;
     if (!(resolvedPath in browseTree)) throw "Orca のフォルダの一覧を読めません";

@@ -283,6 +283,9 @@ const titleTarget = (environment: string | null) => environment ?? THIS_MACHINE;
 const fixedTitle = (environment: string | null, key: string): string | undefined => titles[titleTarget(environment)]?.[key];
 // The session whose title is being typed in its row (A-8) and the text typed so far: a redraw of the list keeps the field.
 let editing: { id: string; value: string } | null = null;
+// The field of `editing`: a draw of the list moves this very element into the new row, so that the caret, the selection and the focus stay. `redrawing` is true while the list is being drawn: a blur then is the move and no cancel.
+let titleField: HTMLInputElement | null = null;
+let redrawing = false;
 
 const claudeTabId = (paneKey: string) => `claude:${paneKey}`;
 const plainTabId = (handle: string) => `orca:${handle}`;
@@ -510,7 +513,9 @@ function editButton(t: Tab) {
 
 // The field that the title of a row is typed in (A-8): Enter saves it (an empty text gives the automatic title back), Escape and the focus leaving cancel it. Its keys and presses do not reach the row (the selection, the menu of the peek).
 function titleInput(id: string, key: string, environment: string | null, value: string) {
+  if (titleField?.dataset.key === `title:${id}`) return titleField;
   const input = tag("input", "orca-session-title-input");
+  titleField = input;
   input.type = "text";
   input.value = value;
   input.dataset.key = `title:${id}`;
@@ -533,15 +538,16 @@ function titleInput(id: string, key: string, environment: string | null, value: 
     }
   };
   for (const type of ["keyup", "keypress", "click", "dblclick", "mousedown", "contextmenu"]) input.addEventListener(type, (e) => e.stopPropagation());
-  // A field that a redraw took out of the page is not a cancel: the redraw puts the field back.
+  // The move of the field by a draw of the list is not a cancel: the same element is put in the new row.
   input.onblur = () => {
-    if (!done && input.isConnected) stopEditing();
+    if (!done && !redrawing && input.isConnected) stopEditing();
   };
   return input;
 }
 
 function stopEditing() {
   editing = null;
+  titleField = null;
   draw();
 }
 
@@ -561,26 +567,32 @@ async function saveTitle(environment: string | null, key: string, title: string)
 
 // Whether the titles of sessions that a list read well no longer holds are being taken out.
 let forgettingTitles = false;
+// The titles (target and key) whose taking out failed: they are not sent again until the screen is shown again (`showOrca`), so a write that keeps failing is not made at every read of the list.
+const forgetFailed = new Set<string>();
 
 // A title of a session that the list of its place, read well, no longer holds is taken out (A-8). A list that failed or is not on the screen says nothing, so no title goes for it.
 async function forgetTitles() {
   if (forgettingTitles) return;
-  const gone: [string | null, string][] = [];
+  const gone = new Map<string | null, string[]>();
   for (const [target, keyed] of Object.entries(titles)) {
     const environment = target === THIS_MACHINE ? null : target;
     if (!listRead(environment)) continue;
     const live = new Set<string | null>([...mix.rows.filter((r) => placeOf(r) === environment).map((r) => r.paneKey), ...mix.terminals.filter((t) => placeOf(t) === environment).map((t) => t.handle)]);
-    for (const key of Object.keys(keyed)) if (!live.has(key)) gone.push([environment, key]);
+    const keys = Object.keys(keyed).filter((key) => !live.has(key) && !forgetFailed.has(`${target}\0${key}`));
+    if (keys.length > 0) gone.set(environment, keys);
   }
-  if (gone.length === 0) return;
+  if (gone.size === 0) return;
   forgettingTitles = true;
-  try {
-    for (const [environment, key] of gone) await setTitle(environment, key, "");
-  } catch (e) {
-    logError("orca", e);
-  } finally {
-    forgettingTitles = false;
+  // One call for each place, which reads and writes the file once for all its keys.
+  for (const [environment, keys] of gone) {
+    try {
+      titles = await invoke("orca_titles_forget", { target: titleTarget(environment), keys });
+    } catch (e) {
+      logError("orca", e);
+      for (const key of keys) forgetFailed.add(`${titleTarget(environment)}\0${key}`);
+    }
   }
+  forgettingTitles = false;
   draw();
 }
 
@@ -831,10 +843,19 @@ function drawFeed() {
   const box = feed();
   const top = box.scrollTop;
   const focused = (document.activeElement as HTMLElement | null)?.dataset?.key;
-  box.replaceChildren(...projectNodes(re, rows, on, openTabs));
-  box.scrollTop = top;
-  drawStopped(openTabs);
+  // The field of a title being typed is moved to its new row as it is (`titleInput`); what it selects is put back after the move.
+  const field = titleField?.isConnected ? titleField : null;
+  const selected = field === null ? null : { start: field.selectionStart, end: field.selectionEnd, direction: field.selectionDirection };
+  redrawing = true;
+  try {
+    box.replaceChildren(...projectNodes(re, rows, on, openTabs));
+    box.scrollTop = top;
+    drawStopped(openTabs);
+  } finally {
+    redrawing = false;
+  }
   if (focused) $("orca-list").querySelector<HTMLElement>(`[data-key="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
+  if (selected !== null && field?.isConnected) field.setSelectionRange(selected.start, selected.end, selected.direction ?? undefined);
 }
 
 function tabNode(t: Tab, selected: boolean) {
@@ -1517,6 +1538,7 @@ export function openInOrca(paneKey: string | null) {
 // The Orca screen is shown: what was read stays on screen while a new read is on its way.
 export function showOrca() {
   show("orca");
+  forgetFailed.clear();
   noticeKey = feedKey = "";
   draw();
   // The environments are read when the screen is shown, whatever read is on its way.

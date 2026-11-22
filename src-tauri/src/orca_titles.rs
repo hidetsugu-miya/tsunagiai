@@ -3,7 +3,7 @@
 //! The title of a session row comes from Claude Code (its name for the conversation, the first prompt) and changes by itself, and `orca terminal list` cannot say whether a title was typed by the owner or made by Claude.
 //! So the app keeps the typed ones: `orca-titles.json` in the app config directory, `{"{target}": {"{paneKey}": "title"}}`, written through `write_atomic` (a temporary file and a rename) by a call that reads the file again and writes all of it.
 //! The target is the string the screen names a place with: a saved environment's name, or `このマシン` (`THIS_MACHINE` of `ts/orca.ts`) for this machine.
-//! A title is one line of text from the owner: its control characters are replaced by spaces, its hidden characters are taken out, and it is cut to `LINE_LIMIT` characters (`orca::plain_line`). An empty one takes the key out, and the target with it when it holds no other.
+//! A title is one line of text from the owner: its control characters are replaced by spaces, its hidden characters are taken out, and it is cut to `LINE_LIMIT` characters (`orca::plain_line`). An empty one takes the key out, and the target with it when it holds no other; `orca_titles_forget` takes out the keys of several sessions with one write.
 //! A file that is missing, cannot be read or is not that shape holds no title, and the next call writes it again.
 
 use std::{
@@ -72,11 +72,31 @@ fn load(dir: &Path) -> Titles {
         .unwrap_or_default()
 }
 
+/// One write at a time reads the file again, changes it and writes all of it.
+static WRITING: Mutex<()> = Mutex::new(());
+
+/// Takes out the titles of `keys` under `target` with one read and one write of the file, and answers the titles saved. A key that has no title is left as it is, and the file is not written when none had one.
+fn forget(dir: &Path, target: &str, keys: &[String]) -> Result<Titles, String> {
+    check_name("接続先", target)?;
+    for key in keys {
+        check_name("キー", key)?;
+    }
+    let _one_at_a_time = WRITING.lock().unwrap_or_else(PoisonError::into_inner);
+    let before = load(dir);
+    let titles = keys.iter().fold(before.clone(), |titles, key| {
+        with_title(titles, target, key, "")
+    });
+    if titles != before {
+        let text = serde_json::to_string_pretty(&titles).map_err(|e| e.to_string())?;
+        write_atomic(dir, FILE, &text)?;
+    }
+    Ok(titles)
+}
+
 /// Sets (or, for an empty `title`, takes out) the title of `key` under `target`, and answers the titles saved. One write at a time reads the file again, changes it and writes all of it.
 fn set(dir: &Path, target: &str, key: &str, title: &str) -> Result<Titles, String> {
     check_name("接続先", target)?;
     check_name("キー", key)?;
-    static WRITING: Mutex<()> = Mutex::new(());
     let _one_at_a_time = WRITING.lock().unwrap_or_else(PoisonError::into_inner);
     let titles = with_title(load(dir), target, key, title);
     let text = serde_json::to_string_pretty(&titles).map_err(|e| e.to_string())?;
@@ -105,6 +125,23 @@ pub async fn orca_title_set(
     check_name("キー", &key)?;
     let dir = config_dir(&app)?;
     tokio::task::spawn_blocking(move || set(&dir, &target, &key, &title))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Takes out the titles of the sessions `keys` (their pane keys or handles) of `target` with one write, and answers every title saved (A-8): the screen sends the sessions that a list read well no longer holds. A blank `target` or key, one with a control character and one over 256 characters are refused (a Japanese message), and nothing is written.
+#[tauri::command]
+pub async fn orca_titles_forget(
+    app: AppHandle,
+    target: String,
+    keys: Vec<String>,
+) -> Result<Titles, String> {
+    check_name("接続先", &target)?;
+    for key in &keys {
+        check_name("キー", key)?;
+    }
+    let dir = config_dir(&app)?;
+    tokio::task::spawn_blocking(move || forget(&dir, &target, &keys))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -210,6 +247,42 @@ mod tests {
         let saved = set(&dir, "このマシン", "tab:1", "").unwrap();
         assert!(saved.is_empty());
         assert!(load(&dir).is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn several_keys_are_taken_out_with_one_write_and_the_others_stay() {
+        let dir = temp_dir("forget");
+        set(&dir, "このマシン", "tab:1", "a").unwrap();
+        set(&dir, "このマシン", "tab:2", "b").unwrap();
+        set(&dir, "このマシン", "tab:3", "c").unwrap();
+        set(&dir, "dev", "tab:1", "d").unwrap();
+        let keys = [
+            "tab:1".to_owned(),
+            "tab:3".to_owned(),
+            "tab:none".to_owned(),
+        ];
+        let saved = forget(&dir, "このマシン", &keys).unwrap();
+        assert_eq!(saved, load(&dir));
+        assert_eq!(saved["このマシン"].len(), 1);
+        assert_eq!(saved["このマシン"]["tab:2"], "b");
+        assert_eq!(saved["dev"]["tab:1"], "d");
+        // The last key takes the target with it.
+        let saved = forget(&dir, "dev", &["tab:1".to_owned()]).unwrap();
+        assert!(!saved.contains_key("dev"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn forgetting_keys_that_are_not_there_writes_nothing_and_a_refused_one_writes_nothing() {
+        let dir = temp_dir("forget-none");
+        assert!(forget(&dir, "a", &["k".to_owned()]).unwrap().is_empty());
+        assert!(!dir.join(FILE).exists());
+        let saved = set(&dir, "a", "k", "x").unwrap();
+        assert!(forget(&dir, "a", &[]).is_ok());
+        assert!(forget(&dir, "", &["k".to_owned()]).is_err());
+        assert!(forget(&dir, "a", &["k".to_owned(), "a\nb".to_owned()]).is_err());
+        assert_eq!(load(&dir), saved);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
