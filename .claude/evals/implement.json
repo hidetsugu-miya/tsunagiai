@@ -55,6 +55,20 @@
         "その spec が落ちたときは、その issue の担当に修正として返すと書く",
         "全件の `run-e2e.sh` をこの時点で回すコマンドは書いていない"
       ]
+    },
+    {
+      "id": 5,
+      "name": "flaky-fix-runs-no-load",
+      "prompt": "あなたは implement の実行の手順 6 にいるリードです。`.claude/skills/implement/SKILL.md` の手順 6.3 を読み、`.claude/evals/files/implement/flaky-item.md` の項目を直す `code-implementer` の起動の文（prompt）を書き出してください。起動はせず、コマンドも実行しないでください。",
+      "expected_output": "起動の文に、負荷をかける処理と全件の実行をせず、その spec だけを 1 回ずつ回すことが書かれている。",
+      "files": [
+        ".claude/evals/files/implement/flaky-item.md"
+      ],
+      "assertions": [
+        "起動の文に、PC に負荷をかける処理を動かさないことが書かれている",
+        "起動の文に、全件の実行をせず、`orca-files` の spec だけを 1 回ずつ回すことが書かれている",
+        "「Orders for the implementer」を `制約:` としてそのまま入れている"
+      ]
     }
   ]
 }
