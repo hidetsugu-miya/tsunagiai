@@ -1612,7 +1612,7 @@ describe("orca: projects", () => {
         await browser.pause(800);
         const shown = await callsOf("orca_titles_forget");
         expect(shown.length).toBeLessThanOrEqual(2);
-        expect(shown.every((call) => JSON.stringify(call) === JSON.stringify(sent))).toBe(true);
+        for (const call of shown) expect(call).toEqual(sent);
         // Reads of the list go on (the clock, 1.2 periods of 1 second twice), and none sends it again.
         await browser.pause(2400);
         expect(await callsOf("orca_titles_forget")).toHaveLength(shown.length);
