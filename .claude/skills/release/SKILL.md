@@ -19,7 +19,7 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
 
 Give each launch the absolute path of the main checkout.
 
-1. Launch `release-preparer`. Check its return, with `gh pr view {pr} --json state` for `merged`:
+1. Launch `release-preparer`. Check its return, with `gh pr view {pr} --json state` for `merged`. On `merged`, `merge-refused` and `blocked`, when `unphotographed` is not empty, file an issue with `issue-plan` for each screen in it (label `documentation`; `readme-product`), then:
    - `merged`: go on to 2.
    - `nothing-to-prepare`: stop.
    - `in-use`: another session has `release/next` and is preparing the Release PR. Tell the owner and stop.
