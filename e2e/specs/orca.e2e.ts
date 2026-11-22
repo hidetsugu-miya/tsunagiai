@@ -4107,6 +4107,20 @@ describe("orca: this machine and a saved environment in one list (A-33)", () => 
     await expectCount(1);
   });
 
+  it("marks the icon for a session of this machine that works, and counts it nowhere else (#1266)", async () => {
+    await openOrca(mixed({ local: beside([working("mac-1"), orcaRow("mac-2", "main", "Mac task", { group: "waiting" })], macTrees()) }));
+    await waitForCount("#orca-feed .orca-project", 4);
+    expect(await marked()).toBe(true);
+    await expectCount(0);
+    await expect($("#nav-orca")).toHaveAttribute("aria-label", "開発（作業中 1 件）");
+    await sendStream(streamList([working("studio-1"), finished("studio-2")], studioTrees()));
+    await expect($("#nav-orca")).toHaveAttribute("aria-label", "開発（作業中 2 件）");
+    await sendStream(streamList([finished("studio-1"), finished("studio-2")], studioTrees()));
+    await expect($("#nav-orca")).toHaveAttribute("aria-label", "開発（確認待ち 1 件、作業中 1 件）");
+    await expectCount(1);
+    expect(await marked()).toBe(true);
+  });
+
   it("starts Claude in a project of this machine and follows the session when the read of this machine holds it", async () => {
     await openOrca(mixed(), timers({ orcaClock: 60_000 }));
     await waitForCalls("orca_stream_open");
