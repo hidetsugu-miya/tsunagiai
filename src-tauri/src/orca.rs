@@ -1326,6 +1326,13 @@ fn close_plain_args(handle: &str, environment: Option<&str>) -> Vec<String> {
     )
 }
 
+/// Whether the CLI's output is the `tab_not_found` failure: Orca answers it as the `code`, and a saved server answers `runtime_error` with it as the `message`.
+fn is_tab_not_found(out: &str) -> bool {
+    is_error(out, "tab_not_found")
+        || serde_json::from_str::<Value>(out.trim())
+            .is_ok_and(|doc| doc["ok"] == false && doc["error"]["message"] == "tab_not_found")
+}
+
 /// What the answer of the close of a tab decides: it is done, or the terminal is closed again with no `--tab`.
 #[derive(Debug, PartialEq)]
 enum AfterTabClose {
@@ -1333,9 +1340,9 @@ enum AfterTabClose {
     CloseAgain,
 }
 
-/// Reads the answer of `orca terminal close --tab`: `terminal_handle_stale` is closed again with no `--tab`, and so is `tab_not_found`, which Orca 1.4.266 answers when the tab of a terminal that ended is closed (the close with no `--tab` closes that tab, or its pane). Any other failure is its message.
+/// Reads the answer of `orca terminal close --tab`: `terminal_handle_stale` is closed again with no `--tab`, and so is `tab_not_found`, which Orca 1.4.266 answers when the tab of a terminal that ended is closed (the close with no `--tab` closes that tab, or its pane), and a saved server answers it as the `message` of a `runtime_error` (`is_tab_not_found`). Any other failure is its message.
 fn after_tab_close(out: &str) -> Result<AfterTabClose, String> {
-    if is_stale(out) || is_error(out, "tab_not_found") {
+    if is_stale(out) || is_tab_not_found(out) {
         return Ok(AfterTabClose::CloseAgain);
     }
     parse_output(out).map(|_| AfterTabClose::Done)
@@ -1343,7 +1350,7 @@ fn after_tab_close(out: &str) -> Result<AfterTabClose, String> {
 
 /// Reads the answer of the close with no `--tab`: `tab_not_found` says the tab is gone already, which is what the close wanted; any other failure is its message.
 fn after_plain_close(out: &str) -> Result<(), String> {
-    if is_error(out, "tab_not_found") {
+    if is_tab_not_found(out) {
         return Ok(());
     }
     parse_output(out).map(|_| ())
@@ -5936,13 +5943,26 @@ mod tests {
         // Orca 1.4.266 answers `tab_not_found` to the close with `--tab` of a terminal that ended; the close with no `--tab` closes its tab (or its pane).
         let missing = r#"{"ok": false, "error": {"code": "tab_not_found", "message": "no tab"}}"#;
         assert_eq!(after_tab_close(missing), Ok(AfterTabClose::CloseAgain));
-        // The message is Orca's own text: only the code decides.
+        // A saved server answers `runtime_error` with `tab_not_found` as the message.
         assert_eq!(
             after_tab_close(
                 r#"{"ok": false, "error": {"code": "runtime_error", "message": "tab_not_found"}}"#
             ),
-            Err("tab_not_found".to_owned())
+            Ok(AfterTabClose::CloseAgain)
         );
+        // Only the whole message counts, and only on a failure.
+        assert_eq!(
+            after_tab_close(
+                r#"{"ok": false, "error": {"code": "runtime_error", "message": "tab_not_found: x"}}"#
+            ),
+            Err("tab_not_found: x".to_owned())
+        );
+        assert!(is_tab_not_found(missing));
+        assert!(!is_tab_not_found(
+            r#"{"ok": true, "error": {"message": "tab_not_found"}}"#
+        ));
+        assert!(!is_tab_not_found(""));
+        assert!(!is_tab_not_found("not json"));
         assert!(is_error(missing, "tab_not_found"));
         assert!(!is_error(missing, "terminal_handle_stale"));
         assert!(!is_error("", "tab_not_found"));
@@ -5963,6 +5983,13 @@ mod tests {
         assert_eq!(
             after_plain_close(
                 r#"{"ok": false, "error": {"code": "tab_not_found", "message": "no tab"}}"#
+            ),
+            Ok(())
+        );
+        // A saved server answers `runtime_error` with `tab_not_found` as the message.
+        assert_eq!(
+            after_plain_close(
+                r#"{"ok": false, "error": {"code": "runtime_error", "message": "tab_not_found"}}"#
             ),
             Ok(())
         );
