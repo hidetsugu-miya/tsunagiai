@@ -70,8 +70,8 @@ Pass these to every `code-implementer` launch as `制約:`, word for word (at th
 - `review.md` is the only route to stop a review for the owner.
 - A force push or a history rewrite of a pushed branch: ask first.
 - A product decision that an issue does not settle: step 3.2 stops that issue, not the whole run.
-- A `release` run that fails for a cause other than the runner or the network: no force, no bypass of the ruleset, no tag by hand over a failed check; tell the owner the cause (`release` skill, Procedure B).
-- A merge of the Release PR that is refused: no `--admin`, no bypass of the ruleset; tell the owner the reason (`release` skill, Procedure A).
+- A `release` run that fails for a cause other than the runner or the network: no force, no bypass of the ruleset, no tag by hand over a failed check; tell the owner the cause (`release` skill, step 2 of the lead).
+- A merge of the Release PR that is refused: no `--admin`, no bypass of the ruleset; tell the owner the reason (`release` skill, step 1 of the lead).
 - Wait for a background command and a subagent by their completion notification, never by a scheduled wake-up (`ScheduleWakeup`). If a wake-up was scheduled anyway, cancel it before the report of step 9, so that it does not run another turn after the work is done.
 
 Do not widen the run: a request that arrives during it becomes an issue through `issue-plan`.
