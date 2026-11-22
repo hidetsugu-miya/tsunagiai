@@ -76,7 +76,7 @@ const STEP_BRANCHES: &str = "branch の確認";
 const STEP_TERMINAL: &str = "ターミナルの作成";
 const STEP_RECORD: &str = "記録の書き込み";
 const STEP_PLUGIN: &str = "プラグインの書き出し";
-const STEP_HOOK: &str = "メッセージを記録するフックの書き出し";
+const STEP_SETTINGS: &str = "子の設定の書き出し";
 const STEP_IDLE: &str = "子のエージェントの立ち上がり待ち";
 const STEP_SEND: &str = "最初の指示の送信";
 const STEP_DISPATCH: &str = "子の Dispatch の作成";
@@ -185,7 +185,7 @@ pub fn migrate_legacy(config: &Path) -> Result<(), String> {
 
 // ---- the record ----
 
-/// The agent that runs a child: Claude Code (the default) or Codex (A-41). SendMessage reaches only a Claude Code, so a Codex child hands its result over in a file (`formation_claude.md`).
+/// The agent that runs a child: Claude Code (the default) or Codex (A-41). A Codex child hands its result over in a file (`formation_claude.md`).
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -353,11 +353,11 @@ pub(crate) fn update(
 pub struct PlannedChild {
     /// The name the child will be launched with.
     pub name: String,
-    /// The environment of the repository: `local`, the PC this orchestrator runs on. Another environment is refused: SendMessage reaches only a child on the same PC.
+    /// The environment of the repository: `local`, the PC this orchestrator runs on. Another environment is refused: a child is launched on the PC of its orchestrator only.
     pub environment: String,
     /// The repository: its name in `orca repo list` of that environment.
     pub repo: String,
-    /// The agent the child will run: `claude` (the default) or `codex`. A Codex child cannot be reached by SendMessage: its result goes in a file.
+    /// The agent the child will run: `claude` (the default) or `codex`. A Codex child hands its result over in a file.
     #[serde(default)]
     pub agent: FormationAgent,
 }
@@ -485,7 +485,7 @@ fn check_created_branch(requested: &str, created: &str) -> Result<(), String> {
     ))
 }
 
-/// A child's name must reach one session with SendMessage: it is not the name of a formation (the name of its orchestrator's session) and not the name of a child of another formation. A child of `formation` itself of that name is the one `plan` replaces and `launch` takes over, so it is not a conflict here.
+/// A child's name must name one session: it is not the name of a formation (the name of its orchestrator's session) and not the name of a child of another formation. A child of `formation` itself of that name is the one `plan` replaces and `launch` takes over, so it is not a conflict here.
 fn check_child_name(config: &Path, formation: &str, name: &str) -> Result<(), String> {
     check_name(name)?;
     migrate_legacy(config)?;
@@ -513,7 +513,7 @@ fn name_conflict(
         .find(|(_, children)| children.iter().any(|c| c.name == name))
     {
         return Err(format!(
-            "「{name}」はフォーメーション「{owner}」の子の名前です。SendMessage の宛先が決まらなくなるので、別の名前にしてください"
+            "「{name}」はフォーメーション「{owner}」の子の名前です。名前が重なって、どの子か決まらなくなるので、別の名前にしてください"
         ));
     }
     Ok(())
@@ -719,12 +719,12 @@ pub(crate) fn orchestrator_home(config: &Path, formation: &str) -> (String, Opti
     )
 }
 
-/// A formation belongs to one PC: a project of another environment is refused, because a Claude Code reaches another by `SendMessage` only on the same PC, so the orchestrator and its children must be there together.
+/// A formation belongs to one PC: a project of another environment is refused, because its children are launched on the PC of its orchestrator only (`check_children_here`).
 fn check_one_environment(projects: &[FormationProject]) -> Result<(), String> {
     let environment = formation_environment(projects);
     match projects.iter().find(|p| p.environment != environment) {
         Some(other) => Err(format!(
-            "フォーメーションは一つの PC に属します。環境「{environment}」と環境「{}」にまたがるプロジェクトは入れられません（リーダーと子が別の PC にいると、SendMessage が届かないためです）",
+            "フォーメーションは一つの PC に属します。環境「{environment}」と環境「{}」にまたがるプロジェクトは入れられません（子は、リーダーと同じ PC にだけ置けるためです）",
             other.environment
         )),
         None => Ok(()),
@@ -1132,30 +1132,37 @@ fn all_terminals_args(environment: &str) -> Vec<String> {
     on(orca::args_of(&["terminal", "list", "--json"]), environment)
 }
 
-/// Writes the hook of a Claude Code child that records its SendMessage calls (`formation_message`, #1084) in the folder of its formation, for the `tsunagiai-mcp` that runs this launch, and answers its path. A Codex child has no SendMessage and no hook.
-fn write_child_hook(config: &Path, formation: &str, name: &str) -> Result<PathBuf, String> {
-    let mcp =
-        std::env::current_exe().map_err(|e| format!("tsunagiai-mcp の場所が分かりません: {e}"))?;
+/// The file of a Claude Code child's `--settings` in the folder of its formation.
+fn child_settings_file(name: &str) -> String {
+    format!("settings-{name}.json")
+}
+
+/// The settings that a Claude Code child's `--settings` takes: the `permissions` for the Figma server of its plugin (`formation_assets::figma_permissions`, A-41, #1162), because the child runs in the auto mode. No hook records its messages: they are read from the Run of Orca (#1238).
+fn child_settings() -> String {
+    serde_json::to_string_pretty(
+        &json!({"permissions": crate::formation_assets::figma_permissions()}),
+    )
+    .unwrap_or_default()
+}
+
+/// Writes the settings of a Claude Code child in the folder of its formation and answers its path. A Codex child has none.
+fn write_child_settings(config: &Path, formation: &str, name: &str) -> Result<PathBuf, String> {
     let folder = dir(config, formation);
-    let file = crate::formation_message::child_hook_file(name);
-    accounts::write_atomic(
-        &folder,
-        &file,
-        &crate::formation_message::hook_settings(&mcp, formation, Some(name)),
-    )?;
+    let file = child_settings_file(name);
+    accounts::write_atomic(&folder, &file, &child_settings())?;
     Ok(folder.join(file))
 }
 
 /// The command of a Codex child's terminal (A-41): its sandbox lets it write in the worktree, and it never stops to ask (no `-n`: its title is the name that Orca gives the terminal, and no plugin: it reads the prompt alone).
 const CODEX_COMMAND: &str = "codex --sandbox workspace-write --ask-for-approval never";
 
-/// The command of the child's terminal: for Claude Code, Claude Code in auto mode at the effort `medium` (#911) under its name (`claude -n`, which is also the address of `SendMessage`), with the plugin of A-41 (`--plugin-dir`, in single quotes: the path of the config folder may hold a space) and the hook that records its SendMessage calls (`--settings {hook}`, #1084). The name was checked, so the rest of the command line holds nothing a shell would read.
-fn child_command(agent: FormationAgent, name: &str, plugin_dir: &Path, hook: &Path) -> String {
+/// The command of the child's terminal: for Claude Code, Claude Code in auto mode at the effort `medium` (#911) under its name (`claude -n`), with the plugin of A-41 (`--plugin-dir`, in single quotes: the path of the config folder may hold a space) and its settings (`--settings {settings}`, the Figma permissions, #1162). The name was checked, so the rest of the command line holds nothing a shell would read.
+fn child_command(agent: FormationAgent, name: &str, plugin_dir: &Path, settings: &Path) -> String {
     match agent {
         FormationAgent::Claude => format!(
             "claude -n {name} --permission-mode auto --effort medium --plugin-dir {} --settings {}",
             crate::claude_code::sh_quote(&plugin_dir.to_string_lossy()),
-            crate::claude_code::sh_quote(&hook.to_string_lossy())
+            crate::claude_code::sh_quote(&settings.to_string_lossy())
         ),
         FormationAgent::Codex => CODEX_COMMAND.to_owned(),
     }
@@ -1167,7 +1174,7 @@ fn terminal_create_args(
     agent: FormationAgent,
     name: &str,
     plugin_dir: &Path,
-    hook: &Path,
+    settings: &Path,
     environment: &str,
 ) -> Vec<String> {
     let mut args = orca::args_of(&["terminal", "create", "--worktree"]);
@@ -1176,7 +1183,7 @@ fn terminal_create_args(
         "--title".into(),
         name.into(),
         "--command".into(),
-        child_command(agent, name, plugin_dir, hook),
+        child_command(agent, name, plugin_dir, settings),
         "--json".into(),
     ]);
     on(args, environment)
@@ -1346,7 +1353,15 @@ fn ensure_run(
     Ok(id)
 }
 
-/// Makes the task and the Dispatch of a launched child in the Run of its formation, keeps the Dispatch's id in `formation.json`, and answers the preamble. The terminal `handle` is the child's own.
+/// What the Dispatch of a launched child gives: the id of the Run and of the Dispatch (the addresses `run:{id}` and `dispatch:{id}` that the leader and the child use for each other, #1238) and the preamble of the Dispatch.
+#[derive(Debug)]
+struct Dispatched {
+    run_id: String,
+    dispatch_id: String,
+    preamble: String,
+}
+
+/// Makes the task and the Dispatch of a launched child in the Run of its formation, keeps the Dispatch's id in `formation.json`, and answers the ids and the preamble. The terminal `handle` is the child's own.
 fn dispatch_child(
     config: &Path,
     formation: &str,
@@ -1354,7 +1369,7 @@ fn dispatch_child(
     handle: &str,
     environment: &str,
     write: &dyn Fn(&[String]) -> Result<Value, String>,
-) -> Result<String, String> {
+) -> Result<Dispatched, String> {
     let run_id = ensure_run(config, formation, environment, write)?;
     let task_id = orca_id_of(
         &write(&task_create_args(&run_id, formation, name, environment))?,
@@ -1370,7 +1385,11 @@ fn dispatch_child(
     update_meta(config, formation, |meta| {
         meta.dispatches.insert(name.to_owned(), dispatch_id.clone());
     })?;
-    Ok(preamble)
+    Ok(Dispatched {
+        run_id,
+        dispatch_id,
+        preamble,
+    })
 }
 
 /// The Dispatch of the child `name` that `formation.json` holds, if it has one (a child launched before the Run was introduced has none, and neither does one whose file cannot be read).
@@ -1788,13 +1807,13 @@ pub(crate) fn now_ms() -> u64 {
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
-/// A child is launched on the PC of its orchestrator and nowhere else: the orchestrator reaches a child by SendMessage, which reaches only a Claude Code on the same PC. For `tsunagiai-mcp` of a PC that is `local`; another environment is refused with nothing planned, launched or written. The tools that only read take any environment.
+/// A child is launched on the PC of its orchestrator and nowhere else (a Dispatch to a terminal of a saved environment is not made yet, #1236). For `tsunagiai-mcp` of a PC that is `local`; another environment is refused with nothing planned, launched or written. The tools that only read take any environment.
 fn check_children_here(environment: &str) -> Result<(), String> {
     if environment == LOCAL {
         return Ok(());
     }
     Err(format!(
-        "環境「{environment}」には子を置けません。SendMessage は同じ PC の中でしか届かないので、子はリーダーと同じ PC の環境「{LOCAL}」にだけ置けます。他の環境は、formation_environments などで読むだけにしてください"
+        "環境「{environment}」には子を置けません。別の PC の子の起動には、まだ対応していません。子はリーダーと同じ PC の環境「{LOCAL}」にだけ置けます。他の環境は、formation_environments などで読むだけにしてください"
     ))
 }
 
@@ -2004,11 +2023,12 @@ pub fn launch(
     }
     let agent = agent_for(agent, &record, name);
     // The plugin of A-41 is written (replaced as a whole) before anything is made, so that a failure leaves no worktree. A Codex child has none: it reads the prompt alone.
-    let (plugin_dir, hook) = match agent {
+    let (plugin_dir, settings) = match agent {
         FormationAgent::Claude => (
             crate::formation_assets::write_plugin(config)
                 .map_err(|e| Refusal::failed(STEP_PLUGIN, e))?,
-            write_child_hook(config, formation, name).map_err(|e| Refusal::failed(STEP_HOOK, e))?,
+            write_child_settings(config, formation, name)
+                .map_err(|e| Refusal::failed(STEP_SETTINGS, e))?,
         ),
         FormationAgent::Codex => (PathBuf::new(), PathBuf::new()),
     };
@@ -2054,7 +2074,7 @@ pub fn launch(
         agent,
         name,
         &plugin_dir,
-        &hook,
+        &settings,
         environment,
     ))
     .map_err(|e| kept(STEP_TERMINAL, e))?;
@@ -2083,14 +2103,14 @@ pub fn launch(
     let recorded = |step: &'static str, e: String| {
         kept(step, e).saying("子は記録に入っているので、formation_close で片付けられます")
     }; // The child is a Dispatch of the formation's Run (#1237): the preamble of the Dispatch goes in front of the first instruction.
-    let preamble = dispatch_child(config, formation, name, &handle, environment, &|args| {
+    let dispatched = dispatch_child(config, formation, name, &handle, environment, &|args| {
         orca::write(args)
     })
     .map_err(|e| recorded(STEP_DISPATCH, e))?;
-    let preamble = if preamble.is_empty() {
-        preamble
+    let preamble = if dispatched.preamble.is_empty() {
+        dispatched.preamble
     } else {
-        check_prompt(&preamble).map_err(|e| recorded(STEP_DISPATCH, e))?
+        check_prompt(&dispatched.preamble).map_err(|e| recorded(STEP_DISPATCH, e))?
     };
     let prompt = first_instruction(&preamble, &prompt);
     let idle = orca::call(&terminal_wait_args(&handle, environment), IDLE_WAIT_RUN)
@@ -2115,6 +2135,8 @@ pub fn launch(
         "paneKey": pane_key,
         "created": created,
         "closedShells": closed,
+        "runId": dispatched.run_id,
+        "dispatchId": dispatched.dispatch_id,
     }))
 }
 
@@ -4389,7 +4411,7 @@ pub(crate) fn environment_gone_now(environment: &str) -> bool {
     environment_gone(&orca_read, environment)
 }
 
-/// A formation's name must not be one of the existing formations, and not the name of a child of any formation: a child's name is the address of its SendMessage, and a formation's name is the session name of its orchestrator.
+/// A formation's name must not be one of the existing formations, and not the name of a child of any formation: a child's name is the name of its session, and a formation's name is the session name of its orchestrator.
 fn check_formation_name(
     name: &str,
     formations: &[String],
@@ -4403,7 +4425,7 @@ fn check_formation_name(
         .find(|(_, children)| children.iter().any(|c| c.name == name))
     {
         return Err(format!(
-            "「{name}」はフォーメーション「{owner}」の子の名前です。SendMessage の宛先が決まらなくなるので、別の名前にしてください"
+            "「{name}」はフォーメーション「{owner}」の子の名前です。名前が重なって、どの子か決まらなくなるので、別の名前にしてください"
         ));
     }
     Ok(())
@@ -5986,7 +6008,7 @@ mod tests {
                 FormationAgent::Claude,
                 "web-2",
                 Path::new("/c/formation-plugin"),
-                Path::new("/c/formations/f/message-hook-web-2.json"),
+                Path::new("/c/formations/f/settings-web-2.json"),
                 "local"
             ),
             [
@@ -5997,7 +6019,7 @@ mod tests {
                 "--title",
                 "web-2",
                 "--command",
-                "claude -n web-2 --permission-mode auto --effort medium --plugin-dir '/c/formation-plugin' --settings '/c/formations/f/message-hook-web-2.json'",
+                "claude -n web-2 --permission-mode auto --effort medium --plugin-dir '/c/formation-plugin' --settings '/c/formations/f/settings-web-2.json'",
                 "--json",
                 "--environment=local"
             ]
@@ -6068,24 +6090,20 @@ mod tests {
     }
 
     #[test]
-    fn the_hook_of_a_child_is_written_in_the_folder_of_its_formation_for_that_child() {
+    fn the_settings_of_a_child_are_written_in_the_folder_of_its_formation_for_that_child() {
         let config = std::env::temp_dir().join(format!(
-            "tsunagiai-child-hook-{}-{}",
+            "tsunagiai-child-settings-{}-{}",
             std::process::id(),
             now_ms()
         ));
-        let path = write_child_hook(&config, "api-work", "web-2").unwrap();
+        let path = write_child_settings(&config, "api-work", "web-2").unwrap();
+        assert_eq!(path, dir(&config, "api-work").join("settings-web-2.json"));
+        // Only the permissions for the Figma server: no hook records the messages (#1238).
+        let settings: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
-            path,
-            dir(&config, "api-work").join("message-hook-web-2.json")
-        );
-        let hook: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        let command = hook["hooks"]["PostToolUse"][0]["hooks"][0]["command"]
-            .as_str()
-            .unwrap();
-        assert!(
-            command.ends_with(" --formation-message api-work --from web-2"),
-            "{command}"
+            settings,
+            json!({"permissions": crate::formation_assets::figma_permissions()})
         );
         std::fs::remove_dir_all(&config).unwrap();
     }
@@ -6093,8 +6111,8 @@ mod tests {
     #[test]
     fn a_codex_child_is_started_with_its_sandbox_and_no_plugin_or_name_flag() {
         let plugin = Path::new("/c/formation-plugin");
-        let hook = Path::new("/c/formations/f/message-hook-web-2.json");
-        let command = child_command(FormationAgent::Codex, "web-2", plugin, hook);
+        let settings = Path::new("/c/formations/f/settings-web-2.json");
+        let command = child_command(FormationAgent::Codex, "web-2", plugin, settings);
         assert_eq!(
             command,
             "codex --sandbox workspace-write --ask-for-approval never"
@@ -6109,7 +6127,7 @@ mod tests {
             FormationAgent::Codex,
             "web-2",
             plugin,
-            hook,
+            settings,
             "local",
         );
         // Its title is the child's name, and its command is the one above.
@@ -6178,26 +6196,26 @@ mod tests {
     }
 
     #[test]
-    fn the_command_of_a_child_passes_the_plugin_folder_and_the_hook_as_quoted_words() {
-        let hook = Path::new("/c/formations/f/message-hook-web-2.json");
+    fn the_command_of_a_child_passes_the_plugin_folder_and_the_settings_as_quoted_words() {
+        let settings = Path::new("/c/formations/f/settings-web-2.json");
         assert_eq!(
             child_command(
                 FormationAgent::Claude,
                 "web-2",
                 Path::new("/c/formation-plugin"),
-                hook
+                settings
             ),
-            "claude -n web-2 --permission-mode auto --effort medium --plugin-dir '/c/formation-plugin' --settings '/c/formations/f/message-hook-web-2.json'"
+            "claude -n web-2 --permission-mode auto --effort medium --plugin-dir '/c/formation-plugin' --settings '/c/formations/f/settings-web-2.json'"
         );
         // A folder with a space or a quote stays one word.
         assert!(child_command(
             FormationAgent::Claude,
             "web-2",
             Path::new("/c/it's here/formation-plugin"),
-            Path::new("/c/it's here/hook.json")
+            Path::new("/c/it's here/settings.json")
         )
         .ends_with(
-            r"--plugin-dir '/c/it'\''s here/formation-plugin' --settings '/c/it'\''s here/hook.json'"
+            r"--plugin-dir '/c/it'\''s here/formation-plugin' --settings '/c/it'\''s here/settings.json'"
         ));
     }
 
@@ -6213,7 +6231,7 @@ mod tests {
                 FormationAgent::Claude,
                 "web-2",
                 Path::new("/c/formation-plugin"),
-                Path::new("/c/hook.json"),
+                Path::new("/c/settings.json"),
                 environment,
             ),
             terminal_wait_args("term_1", environment),
@@ -7189,8 +7207,13 @@ mod tests {
         std::fs::create_dir_all(dir(&config, F)).unwrap();
         let orca = Calls::new();
         let write = |args: &[String]| orchestration_orca(&orca, args);
-        let preamble = dispatch_child(&config, F, "a", "term_a", LOCAL, &write).unwrap();
-        assert_eq!(preamble, "check with orca orchestration check");
+        let dispatched = dispatch_child(&config, F, "a", "term_a", LOCAL, &write).unwrap();
+        assert_eq!(dispatched.preamble, "check with orca orchestration check");
+        // The leader's addresses: the Run and the child's Dispatch.
+        assert_eq!(
+            (dispatched.run_id.as_str(), dispatched.dispatch_id.as_str()),
+            ("run_1", "ctx_1")
+        );
         dispatch_child(&config, F, "b", "term_b", LOCAL, &write).unwrap();
         // One Run for both; a task and a Dispatch for each.
         assert_eq!(
@@ -12979,7 +13002,7 @@ mod tests {
         assert_eq!(check_children_here(LOCAL), Ok(()));
         let err = check_children_here("mac-studio").unwrap_err();
         assert!(
-            err.contains("環境「mac-studio」") && err.contains("SendMessage"),
+            err.contains("環境「mac-studio」") && err.contains("まだ対応していません"),
             "{err}"
         );
         // Nothing is read or written: the refusal is first, and the record stays as it was.
@@ -12996,7 +13019,7 @@ mod tests {
             ],
         )
         .unwrap_err();
-        assert!(err.error.contains("SendMessage"), "{}", err.error);
+        assert!(err.error.contains("まだ対応していません"), "{}", err.error);
         assert!(!dir(&config, "alpha").exists());
         let err = launch(
             &config,
@@ -13009,7 +13032,7 @@ mod tests {
             "go",
         )
         .unwrap_err();
-        assert!(err.error.contains("SendMessage"), "{}", err.error);
+        assert!(err.error.contains("まだ対応していません"), "{}", err.error);
         assert!(!dir(&config, "alpha").exists());
     }
 

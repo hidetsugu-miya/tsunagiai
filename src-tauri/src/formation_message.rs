@@ -1,7 +1,5 @@
 //! A-37 (#1084): the messages between the leader and its children, kept for the flow pane.
-//! The leader and a child tell each other by SendMessage. Claude Code runs a `PostToolUse` hook after each call of that tool (measured on 2.1.329: the hook gets `tool_name`, `tool_input.to` and `.message`, and `tool_response.success`), and the hook is `tsunagiai-mcp --formation-message {formation} [--from {child}]`, which reads that input on its standard input and appends one line to `formations/{formation}/messages.jsonl`.
-//! The leader's hook is in `message-hook.json` of its folder (`claude --settings`), a child's in `message-hook-{child}.json` of the same folder; both are written by the app's own code at each start, so the leader cannot keep a hook of its own there.
-//! The messages of Orca's orchestration (#1237) are written there too: the Run of a formation holds what its children and its leader send each other (`orchestration send`, `reply`), and `sync_orchestration` reads the Run's messages (`orchestration inbox`) and appends the ones it has not taken in, the same way (the screen's read of a formation of this Mac runs it).
+//! The leader and a child tell each other with Orca's orchestration (#1238): the Run of a formation holds what its children and its leader send each other (`orchestration send`), and `sync_orchestration` reads the Run's messages (`orchestration inbox`) and appends the ones it has not taken in to `formations/{formation}/messages.jsonl`. The screen's read of a formation of this Mac runs it, and so does the read of a PC's server.
 //! A line holds who sent it (`from`), to whom (`to`), when (`atMs`) and the first line of the text (`line`, at most `LINE_CHARS` characters). The rest of the text is not kept: it comes from outside and is data.
 
 use std::{
@@ -11,13 +9,14 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+#[cfg(test)]
+use serde_json::json;
+use serde_json::Value;
 #[cfg(test)]
 use ts_rs::TS;
 
 use crate::{
     auth::config_dir,
-    claude_code::sh_quote,
     formation::{self, Child, OrchestrationState, LOCAL},
     formation_server::Client,
     orca,
@@ -31,11 +30,6 @@ const LINE_CHARS: usize = 200;
 const READ_RECORDS: usize = 500;
 /// How much of the end of the file a read looks at: a record is at most a few hundred bytes, so this holds more than `READ_RECORDS` of them.
 const READ_BYTES: u64 = 512 * 1024;
-/// How much of the hook's input is read: the message is in it whole, and only its first line is kept.
-const HOOK_INPUT_BYTES: u64 = 8 * 1024 * 1024;
-const MESSAGE_TOOL: &str = "SendMessage";
-const FLAG: &str = "--formation-message";
-const FROM_FLAG: &str = "--from";
 
 /// One message between the leader and a child, as the record holds it and the screen reads it.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -72,99 +66,6 @@ pub fn first_line(text: &str) -> String {
     let mut cut: String = line.chars().take(LINE_CHARS).collect();
     cut.push('…');
     cut
-}
-
-/// The settings that `claude --settings` takes to run the hook: after each SendMessage, `mcp --formation-message {formation}` (and `--from {child}` for a child, whose messages go to the leader). A child's settings also hold the permissions for the Figma server of its plugin (`formation_assets::figma_permissions`). A name has passed `check_name`, so it is a word of its own in the shell.
-pub fn hook_settings(mcp: &Path, formation: &str, from: Option<&str>) -> String {
-    let mut command = format!("{} {FLAG} {formation}", sh_quote(&mcp.to_string_lossy()));
-    if let Some(child) = from {
-        command.push_str(&format!(" {FROM_FLAG} {child}"));
-    }
-    let mut settings = json!({
-        "hooks": {"PostToolUse": [{
-            "matcher": MESSAGE_TOOL,
-            "hooks": [{"type": "command", "command": command, "timeout": 10}]
-        }]}
-    });
-    // A child runs in the auto mode and reads Figma through the plugin's server: its settings allow that server's read tools and deny its write tools (A-41, #1162).
-    if from.is_some() {
-        settings["permissions"] = crate::formation_assets::figma_permissions();
-    }
-    serde_json::to_string_pretty(&settings).unwrap_or_default()
-}
-
-/// The file of the leader's hook in the folder of its formation.
-pub const LEADER_HOOK_FILE: &str = "message-hook.json";
-
-/// The file of a child's hook in the folder of its formation.
-pub fn child_hook_file(child: &str) -> String {
-    format!("message-hook-{child}.json")
-}
-
-/// The arguments of the hook: the formation and, for a child, its name.
-#[derive(Debug, PartialEq)]
-pub struct HookArgs {
-    pub formation: String,
-    pub from: Option<String>,
-}
-
-/// `--formation-message {formation}` and, optionally, `--from {child}`: none when the first is not there. A flag with no value, or a name that is not one, is an error.
-pub fn hook_args(args: impl IntoIterator<Item = String>) -> Result<Option<HookArgs>, String> {
-    let args: Vec<String> = args.into_iter().collect();
-    let value_after = |flag: &str| -> Result<Option<String>, String> {
-        let Some(at) = args.iter().position(|arg| arg == flag) else {
-            return Ok(None);
-        };
-        let value = args
-            .get(at + 1)
-            .ok_or_else(|| format!("{flag} には名前が要ります"))?;
-        formation::check_name(value)?;
-        Ok(Some(value.clone()))
-    };
-    let Some(formation) = value_after(FLAG)? else {
-        return Ok(None);
-    };
-    Ok(Some(HookArgs {
-        formation,
-        from: value_after(FROM_FLAG)?,
-    }))
-}
-
-/// The message that a hook's input records, or none when the call is not one to record: another tool, a call that was not delivered (`tool_response.success` is `false`), one with no text (a subscription to a child's idle), or one that is not between the leader and a child of this formation. The leader's messages go to one of `children`, a child's to the leader (the formation's name). An input that is not JSON is an error.
-pub fn message_of_hook(
-    args: &HookArgs,
-    children: &[String],
-    input: &str,
-    at_ms: u64,
-) -> Result<Option<FormationMessage>, String> {
-    let input: Value =
-        serde_json::from_str(input).map_err(|e| format!("フックの入力を読めません: {e}"))?;
-    if input["tool_name"].as_str() != Some(MESSAGE_TOOL)
-        || input["tool_response"]["success"] == Value::Bool(false)
-    {
-        return Ok(None);
-    }
-    let (Some(to), Some(text)) = (
-        input["tool_input"]["to"].as_str(),
-        input["tool_input"]["message"].as_str(),
-    ) else {
-        return Ok(None);
-    };
-    let (from, to) = match &args.from {
-        Some(child) if to == args.formation => (child.as_str(), to),
-        None if children.iter().any(|name| name == to) => (args.formation.as_str(), to),
-        _ => return Ok(None),
-    };
-    let line = first_line(text);
-    if line.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(FormationMessage {
-        from: from.to_owned(),
-        to: to.to_owned(),
-        at_ms,
-        line,
-    }))
 }
 
 /// The children of `formation` that the leader told something and that have not answered yet (#1087): the latest message between the leader (named as the formation) and the child is the leader's. A message between two children is not counted. Newest instruction first; `messages` is oldest first, as `read` gives it.
@@ -204,7 +105,7 @@ fn record_path(config: &Path, formation: &str) -> Result<PathBuf, String> {
     }
 }
 
-/// Adds `message` to the record of `formation`. The line is one write to a file opened for appending, so the hooks of the leader and of several children that run at once do not mix their lines.
+/// Adds `message` to the record of `formation`. The line is one write to a file opened for appending, so two writers at once do not mix their lines.
 pub fn append(config: &Path, formation: &str, message: &FormationMessage) -> Result<(), String> {
     let path = record_path(config, formation)?;
     let mut line = serde_json::to_string(message).map_err(|e| e.to_string())?;
@@ -281,7 +182,7 @@ fn party_of<'a>(
         .map(|child| Party::Child(&child.name))
 }
 
-/// The message that a row of `orca orchestration inbox --full` records, or none when it is not one between the leader and a child of this formation: another Run's, a heartbeat, one between two children, one to an address that is neither, or one with no text. The sender that is no child is the leader (the terminal of the orchestrator's Claude Code, which this record does not know). `created_at` is the time of the message; `fallback_ms` stands in when it cannot be read. The text is the first line of the subject, or of the body when there is no subject: data from the sender.
+/// The message that a row of `orca orchestration inbox --full` records, or none when it is not one between the leader and a child of this formation: another Run's, a heartbeat, one between two children, one to a Dispatch that is no child's, or one with no text. The sender that is no child is the leader (the terminal of the orchestrator's Claude Code, which this record does not know). `created_at` is the time of the message; `fallback_ms` stands in when it cannot be read. The text is the first line of the subject, or of the body when there is no subject: data from the sender.
 pub(crate) fn message_of_orchestration(
     formation: &str,
     state: &OrchestrationState,
@@ -297,7 +198,10 @@ pub(crate) fn message_of_orchestration(
         return None;
     }
     let from = party_of(row["from_handle"].as_str()?, state, children).unwrap_or(Party::Leader);
-    let to = party_of(row["to_handle"].as_str()?, state, children)?;
+    // A child that sends with no `--to` writes to its coordinator, whose address is the Run or the leader's terminal (which this record does not know): an address that is no child's is the leader's, except a Dispatch that is none of this formation's.
+    let to_handle = row["to_handle"].as_str()?;
+    let to = party_of(to_handle, state, children)
+        .or_else(|| (!to_handle.starts_with("dispatch:")).then_some(Party::Leader))?;
     let (from, to) = match (from, to) {
         (Party::Leader, Party::Child(child)) => (formation, child),
         (Party::Child(child), Party::Leader) => (child, formation),
@@ -364,45 +268,18 @@ pub fn sync_orchestration(
     Ok(appended)
 }
 
-/// Records the message of one hook call in the record of its formation, and answers whether there was one to record.
-pub fn record_hook(
-    config: &Path,
-    args: &HookArgs,
-    input: &str,
-    at_ms: u64,
-) -> Result<bool, String> {
-    formation::check_name(&args.formation)?;
-    let children: Vec<String> = formation::read_children(config, &args.formation)
-        .into_iter()
-        .map(|child| child.name)
-        .collect();
-    match message_of_hook(args, &children, input, at_ms)? {
-        Some(message) => append(config, &args.formation, &message).map(|()| true),
-        None => Ok(false),
-    }
+/// The record of `formation` after the messages of its Run were taken in (`sync_orchestration` with this PC's Orca). A failed read of the Run leaves the record as it is: what was taken in is shown.
+pub fn read_synced(config: &Path, formation: &str) -> Vec<FormationMessage> {
+    let _ = sync_orchestration(
+        config,
+        formation,
+        &formation::orca_read,
+        formation::now_ms(),
+    );
+    read(config, formation)
 }
 
-/// Runs the hook for `tsunagiai-mcp`: reads the input of Claude Code on the standard input, records its message and answers the exit code. A failure is a line on stderr and exit 1, which Claude Code shows as a notice and goes on: the hook never stops a call.
-pub fn run_hook(args: &HookArgs) -> i32 {
-    let mut input = String::new();
-    let done = std::io::stdin()
-        .take(HOOK_INPUT_BYTES)
-        .read_to_string(&mut input)
-        .map_err(|e| format!("フックの入力を読めません: {e}"))
-        .and_then(|_| {
-            let config = crate::identity::config_dir()?;
-            record_hook(&config, args, &input, formation::now_ms())
-        });
-    match done {
-        Ok(_) => 0,
-        Err(e) => {
-            eprintln!("{e}");
-            1
-        }
-    }
-}
-
-/// The messages of `formation` for the screen: read here for a formation of this Mac, and from the server of its PC for a formation of a saved environment, where its leader and children ran the hook. A formation whose orchestrator was never started on its PC has none.
+/// The messages of `formation` for the screen: read here for a formation of this Mac, and from the server of its PC for a formation of a saved environment, where its Run is. A formation whose orchestrator was never started on its PC has none.
 fn messages_for_screen(
     config: &Path,
     formation: &str,
@@ -411,14 +288,7 @@ fn messages_for_screen(
     formation::check_name(formation)?;
     let (environment, started) = formation::formation_home(config, formation);
     if environment == LOCAL {
-        // A failed read of the Run leaves the record as it is: what was taken in is shown.
-        let _ = sync_orchestration(
-            config,
-            formation,
-            &formation::orca_read,
-            formation::now_ms(),
-        );
-        return Ok(read(config, formation));
+        return Ok(read_synced(config, formation));
     }
     if !started {
         return Ok(Vec::new());
@@ -475,25 +345,8 @@ mod tests {
         std::fs::canonicalize(dir).unwrap()
     }
 
-    fn args(from: Option<&str>) -> HookArgs {
-        HookArgs {
-            formation: "api-work".to_owned(),
-            from: from.map(str::to_owned),
-        }
-    }
-
     fn names(of: &[&str]) -> Vec<String> {
         of.iter().map(|n| (*n).to_owned()).collect()
-    }
-
-    fn input(to: &str, message: &str) -> String {
-        json!({
-            "hook_event_name": "PostToolUse",
-            "tool_name": "SendMessage",
-            "tool_input": {"to": to, "summary": "s", "message": message, "type": "message"},
-            "tool_response": {"success": true, "message": "sent"}
-        })
-        .to_string()
     }
 
     fn message(from: &str, to: &str, at_ms: u64, line: &str) -> FormationMessage {
@@ -521,146 +374,6 @@ mod tests {
         let cut = first_line(&"あ".repeat(LINE_CHARS + 1));
         assert_eq!(cut.chars().count(), LINE_CHARS + 1);
         assert!(cut.starts_with(&exact) && cut.ends_with('…'));
-    }
-
-    #[test]
-    fn the_leader_sends_to_a_child_and_the_child_to_the_leader() {
-        let children = names(&["req", "impl"]);
-        assert_eq!(
-            message_of_hook(&args(None), &children, &input("req", "ANSWER x\nbody"), 7).unwrap(),
-            Some(message("api-work", "req", 7, "ANSWER x"))
-        );
-        assert_eq!(
-            message_of_hook(
-                &args(Some("req")),
-                &children,
-                &input("api-work", "DONE x: y\nmore"),
-                8
-            )
-            .unwrap(),
-            Some(message("req", "api-work", 8, "DONE x: y"))
-        );
-    }
-
-    #[test]
-    fn a_call_that_is_not_between_the_leader_and_its_children_is_not_recorded() {
-        let children = names(&["req"]);
-        // The leader to something that is not a child of the formation.
-        assert_eq!(
-            message_of_hook(&args(None), &children, &input("other", "x"), 1).unwrap(),
-            None
-        );
-        // A child to something that is not the leader.
-        assert_eq!(
-            message_of_hook(&args(Some("req")), &children, &input("impl", "x"), 1).unwrap(),
-            None
-        );
-        // A child to itself or the leader to the leader is no message of the flow either.
-        assert_eq!(
-            message_of_hook(&args(None), &children, &input("api-work", "x"), 1).unwrap(),
-            None
-        );
-    }
-
-    #[test]
-    fn a_call_that_was_not_delivered_or_has_no_text_or_is_another_tool_is_not_recorded() {
-        let children = names(&["req"]);
-        let call = |value: Value| message_of_hook(&args(None), &children, &value.to_string(), 1);
-        let ok = || {
-            json!({
-                "tool_name": "SendMessage",
-                "tool_input": {"to": "req", "message": "x"},
-                "tool_response": {"success": true}
-            })
-        };
-        assert!(call(ok()).unwrap().is_some());
-        let mut failed = ok();
-        failed["tool_response"]["success"] = json!(false);
-        assert_eq!(call(failed).unwrap(), None);
-        let mut other = ok();
-        other["tool_name"] = json!("Bash");
-        assert_eq!(call(other).unwrap(), None);
-        // A subscription to the idle of a child has no message.
-        let mut idle = ok();
-        idle["tool_input"] = json!({"to": "req", "notify_when_idle": true, "content": ""});
-        assert_eq!(call(idle).unwrap(), None);
-        // A message that is not text, or whose text is blank.
-        let mut object = ok();
-        object["tool_input"]["message"] = json!({"type": "shutdown_request"});
-        assert_eq!(call(object).unwrap(), None);
-        let mut blank = ok();
-        blank["tool_input"]["message"] = json!(" \n ");
-        assert_eq!(call(blank).unwrap(), None);
-        // A response with no `success` is taken as delivered.
-        let mut bare = ok();
-        bare["tool_response"] = json!({});
-        assert!(call(bare).unwrap().is_some());
-    }
-
-    #[test]
-    fn an_input_that_is_not_json_is_an_error() {
-        assert!(message_of_hook(&args(None), &[], "not json", 1).is_err());
-    }
-
-    #[test]
-    fn the_hook_arguments_name_the_formation_and_the_child() {
-        let a = |list: &[&str]| hook_args(list.iter().map(|s| (*s).to_owned()));
-        assert_eq!(
-            a(&["--formation-message", "api-work"]),
-            Ok(Some(HookArgs {
-                formation: "api-work".into(),
-                from: None
-            }))
-        );
-        assert_eq!(
-            a(&["--formation-message", "api-work", "--from", "req"]),
-            Ok(Some(HookArgs {
-                formation: "api-work".into(),
-                from: Some("req".into())
-            }))
-        );
-        assert_eq!(a(&[]), Ok(None));
-        assert_eq!(a(&["--from", "req"]), Ok(None));
-        for bad in [
-            &["--formation-message"][..],
-            &["--formation-message", "../x"],
-            &["--formation-message", "a", "--from"],
-            &["--formation-message", "a", "--from", "B"],
-        ] {
-            assert!(a(bad).is_err(), "{bad:?}");
-        }
-    }
-
-    #[test]
-    fn the_hook_settings_run_this_program_after_a_send_message() {
-        let leader: Value =
-            serde_json::from_str(&hook_settings(Path::new("/a b/mcp"), "api-work", None)).unwrap();
-        let hook = &leader["hooks"]["PostToolUse"][0];
-        assert_eq!(hook["matcher"], "SendMessage");
-        assert_eq!(hook["hooks"][0]["type"], "command");
-        assert_eq!(
-            hook["hooks"][0]["command"],
-            "'/a b/mcp' --formation-message api-work"
-        );
-        let child: Value =
-            serde_json::from_str(&hook_settings(Path::new("/m/mcp"), "api-work", Some("req")))
-                .unwrap();
-        assert_eq!(
-            child["hooks"]["PostToolUse"][0]["hooks"][0]["command"],
-            "'/m/mcp' --formation-message api-work --from req"
-        );
-        // Only a child reads Figma, so only its settings carry the permissions for it.
-        assert!(leader.get("permissions").is_none());
-        assert_eq!(
-            child["permissions"],
-            crate::formation_assets::figma_permissions()
-        );
-    }
-
-    #[test]
-    fn the_hook_files_are_named_by_the_leader_and_by_each_child() {
-        assert_eq!(LEADER_HOOK_FILE, "message-hook.json");
-        assert_eq!(child_hook_file("req"), "message-hook-req.json");
     }
 
     #[test]
@@ -741,46 +454,6 @@ mod tests {
         let config = temp_dir("name");
         assert!(append(&config, "../x", &message("a", "b", 1, "c")).is_err());
         assert!(read(&config, "../x").is_empty());
-        std::fs::remove_dir_all(&config).unwrap();
-    }
-
-    #[test]
-    fn a_hook_call_is_recorded_against_the_children_of_the_record() {
-        let config = temp_dir("hook");
-        let dir = formation::dir(&config, "api-work");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join(formation::CHILDREN_FILE),
-            json!({"children": [{"name": "req", "repo": "r"}]}).to_string(),
-        )
-        .unwrap();
-        assert!(record_hook(&config, &args(None), &input("req", "ANSWER x"), 5).unwrap());
-        assert!(record_hook(
-            &config,
-            &args(Some("req")),
-            &input("api-work", "DONE x: y"),
-            6
-        )
-        .unwrap());
-        // To a name that is not a child, nothing is written.
-        assert!(!record_hook(&config, &args(None), &input("zzz", "x"), 7).unwrap());
-        assert_eq!(
-            read(&config, "api-work"),
-            [
-                message("api-work", "req", 5, "ANSWER x"),
-                message("req", "api-work", 6, "DONE x: y")
-            ]
-        );
-        assert!(record_hook(
-            &config,
-            &HookArgs {
-                formation: "../x".into(),
-                from: None
-            },
-            &input("req", "x"),
-            1
-        )
-        .is_err());
         std::fs::remove_dir_all(&config).unwrap();
     }
 
@@ -903,6 +576,13 @@ mod tests {
             ("a", "api-work")
         );
         assert_eq!(to_leader.line, "a question");
+        // A child that sends with no `--to` writes to its coordinator, the leader's terminal.
+        let to_coordinator =
+            orchestration_of(&config, &row(4, "term_a", "term_leader", "asks", "")).unwrap();
+        assert_eq!(
+            (to_coordinator.from.as_str(), to_coordinator.to.as_str()),
+            ("a", "api-work")
+        );
         std::fs::remove_dir_all(&config).unwrap();
     }
 
@@ -910,10 +590,11 @@ mod tests {
     fn a_message_that_is_not_between_the_leader_and_a_child_is_not_recorded() {
         let config = with_run("orchestration-other");
         for other in [
-            // Between the leader and itself, to an address that is nobody's, with no text.
+            // Between the leader and itself, to a Dispatch that is nobody's, with no text.
             row(1, "term_leader", "run:run_1", "x", ""),
             row(2, "term_leader", "term_other", "x", ""),
             row(3, "term_leader", "dispatch:ctx_9", "x", ""),
+            row(8, "term_a", "dispatch:ctx_9", "x", ""),
             row(4, "term_leader", "dispatch:ctx_1", "", " \n"),
             // A child to itself, a heartbeat, and a message of another Run.
             row(5, "term_a", "dispatch:ctx_1", "x", ""),

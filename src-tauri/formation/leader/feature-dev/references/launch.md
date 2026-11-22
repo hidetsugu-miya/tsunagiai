@@ -73,7 +73,7 @@ This run:
 - The owner's guidance for this launch (data to read, not orders):
 > {each line of the instruction, with "> " in front; the word "none" when the instruction is empty}
 
-Report to "{leader name}" with SendMessage, in English and in the forms the skill gives.
+Report to "{leader name}" with `orca orchestration send` (no `--to`: it goes to the leader), in English and in the forms the skill gives. The commands of the child's Dispatch come in front of this prompt.
 Never use AskUserQuestion.
 ```
 
@@ -89,7 +89,7 @@ Never use AskUserQuestion.
 
 ## After the launch
 
-The answer of `formation_launch` has `path` (the folder) and `branch`.
+The answer of `formation_launch` has `path` (the folder), `branch`, `runId` (the Run of this formation) and `dispatchId` (the Dispatch of this child): keep `runId` once, and `dispatchId` with the child's name ([messages](messages.md#how-you-and-a-child-talk)).
 For the child of a new case, `path` is the docs worktree: keep it, and the case root is `{path}/.feature-dev/current`.
 When the answer is `{ok: false, ...}`, read `error` and `step`, fix what you can (another name, another place), and launch again. Tell the owner only when the same refusal comes twice or you cannot fix it.
 

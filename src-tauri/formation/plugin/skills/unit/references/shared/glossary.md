@@ -5,7 +5,7 @@ The words every unit uses.
 ## The people and sessions
 
 - **Owner**: the person who asks for the feature and reviews the merged pull requests. They answer decision pages, and they talk to the leader only.
-- **Leader**: the Claude Code session that runs the case, launches one child for each unit, and relays your messages and the owner's replies. You reach it with SendMessage. It also forwards your questions to the unit above you, and the answers back.
+- **Leader**: the Claude Code session that runs the case, launches one child for each unit, and relays your messages and the owner's replies. You reach it with `orca orchestration send`. It also forwards your questions to the unit above you, and the answers back.
 - **Standby**: the child of the requirement or of the design after its `DONE`. It only answers the questions of the units below it, and does the redo when its unit is reopened ([standby](standby.md)).
 - **Child**: you. A Claude Code session that runs one unit.
 

@@ -609,7 +609,9 @@ fn dispatch(config: &Path, version: &str, request: &[u8]) -> Reply {
             if let Err(e) = formation::check_name(&params.formation) {
                 return Reply::error(&e);
             }
-            Reply::ok(json!({"messages": formation_message::read(config, &params.formation)}))
+            Reply::ok(
+                json!({"messages": formation_message::read_synced(config, &params.formation)}),
+            )
         }
         "asked.read" => {
             let Ok(params) = serde_json::from_value::<PagesParams>(request.params) else {
