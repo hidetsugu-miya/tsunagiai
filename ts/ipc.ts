@@ -100,6 +100,7 @@ import type { SlackLoad } from "./bindings/SlackLoad";
 import type { SlackThread } from "./bindings/SlackThread";
 import type { SocketStatus } from "./bindings/SocketStatus";
 import type { Summary } from "./bindings/Summary";
+import type { TaskHit } from "./bindings/TaskHit";
 import type { Sync } from "./bindings/Sync";
 import type { TerminalThemes } from "./bindings/TerminalThemes";
 import type { ThemeSelection } from "./bindings/ThemeSelection";
@@ -178,6 +179,8 @@ export interface Commands {
   todoist_connected: { args: undefined; result: boolean };
   todoist_save_token: { args: { token: string }; result: null };
   todoist_disconnect: { args: undefined; result: null };
+  // T-9: the open tasks whose name, description or labels hold every word of `query`, in the order of the last load, with where the words hit; asks Todoist nothing. Empty for a query with no word.
+  todoist_search: { args: { query: string }; result: TaskHit[] };
   todoist_add: { args: { text: string; projectId?: string | null; today: boolean }; result: boolean | null };
   todoist_add_subtask: { args: { parentId: string; content: string }; result: boolean | null };
   todoist_task_from_mail: { args: Account & { threadId: string; subject: string }; result: boolean | null };

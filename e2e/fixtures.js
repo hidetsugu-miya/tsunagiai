@@ -53,6 +53,8 @@ const answers = {
   todoist_connected: false,
   todoist_comments: [],
   todoist_picked_due: null,
+  // T-9: a search finds nothing; a spec that types in the search field mocks `todoist_search` with the hits it should read.
+  todoist_search: [],
   // N-1: no Notion workspace connected; a spec that connects or unlinks one mocks `notion_accounts` with the list it should read next, and `notion_connect` or `notion_disconnect`.
   notion_accounts: [],
   slack_load: { workspaces: [] },

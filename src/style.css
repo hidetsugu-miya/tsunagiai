@@ -467,6 +467,15 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 #todo-body > header { padding-top: 0; padding-bottom: 0; }
 #todo-body > header .icon-btn:hover:not(:disabled) { background: var(--hover); }
 /* T-1: "編集" is a text button in the header band: as high as the header buttons (--header-btn), with the pencil of the same icon size. */
+/* T-9: the search field right of the title, as high as the header buttons; the title takes the width the field leaves. */
+#todo-search { flex: 0 1 260px; display: flex; align-items: center; gap: 6px; min-width: 120px; height: var(--header-btn); box-sizing: border-box; padding: 0 4px 0 12px; border: 1px solid var(--chip-line); border-radius: calc(var(--header-btn) / 2); background: var(--surface); color: var(--muted); }
+#todo-search:focus-within { border-color: var(--accent); }
+#todo-search svg { flex: none; width: 14px; height: 14px; }
+#todo-search input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; outline: 0; background: transparent; font: inherit; font-size: calc(13px * var(--fs)); color: inherit; }
+#todo-body > header #todo-search .icon-btn { flex: none; width: 24px; height: 24px; color: var(--ink-soft); }
+#todo-body > header #todo-search .icon-btn svg { width: 13px; height: 13px; }
+/* T-9: the words a search hit, in the rows of its results. */
+#todo-list mark { background: transparent; color: var(--accent); font-weight: bold; }
 #todo-more { flex: none; display: inline-flex; align-items: center; gap: 4px; height: var(--header-btn); padding: 0 10px 0 8px; border-radius: calc(var(--header-btn) / 2); background: transparent; border-color: transparent; color: var(--ink-soft); }
 #todo-more svg { width: var(--header-ic); height: var(--header-ic); flex: none; }
 #todo-more:hover:not(:disabled), #todo-more[aria-expanded="true"] { background: var(--hover); }

@@ -53,6 +53,7 @@ import type { SocketState } from "../ts/bindings/SocketState";
 import type { SocketStatus } from "../ts/bindings/SocketStatus";
 import type { Span } from "../ts/bindings/Span";
 import type { Summary } from "../ts/bindings/Summary";
+import type { TaskHit } from "../ts/bindings/TaskHit";
 import type { TaskItem } from "../ts/bindings/TaskItem";
 import type { TerminalTheme } from "../ts/bindings/TerminalTheme";
 import type { TerminalThemes } from "../ts/bindings/TerminalThemes";
@@ -416,6 +417,16 @@ export const task = (id: string, content: string, projectId: string, bucket: "ov
   parent: null,
   url: `https://app.todoist.com/app/task/${id}`,
   labels: [],
+});
+
+// What `todoist_search` answers for `t` (T-9): `parts` says where the words hit; none hit anywhere by default.
+export const taskHit = (t: TaskItem, projectName: string, parts: Partial<Pick<TaskHit, "name" | "description" | "labels">> = {}): TaskHit => ({
+  task: t,
+  project: projectName,
+  name: [],
+  description: [],
+  labels: t.labels.map(() => []),
+  ...parts,
 });
 
 // Makes the page's clock read `at` (a local `YYYY-MM-DDTHH:MM:SS`) from now on, and keep running from there; another call sets it again.

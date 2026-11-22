@@ -1,6 +1,8 @@
 // The Todo screen's side list of projects and the task list: rows, the grip that moves a task to a project or under another task, the drag of a project, and the name edited in place.
 import type { MailRef } from "./bindings/MailRef";
+import type { HitSpan } from "./bindings/HitSpan";
 import type { ProjectItem } from "./bindings/ProjectItem";
+import type { TaskHit } from "./bindings/TaskHit";
 import type { TaskItem } from "./bindings/TaskItem";
 import { $, composing, tag } from "./dom.js";
 import { confirmDelete } from "./hint.js";
@@ -12,7 +14,8 @@ import { setScreen } from "./nav.js";
 import { openThread } from "./thread.js";
 import { updateAddMode } from "./todo-add.js";
 import { openDuePop, openProjectMenu } from "./todo-detail.js";
-import { accountSet, canMoveUnder, dueLabel, editingField, inboxOf, isDueToday, linkedMail, moveTargets, PRIORITY_COLORS, projectName, projectOf, setTodoCount, subRows, TODO_GROUPS, todoState, viewProjectId, viewTasks } from "./todo-data.js";
+import { accountSet, canMoveUnder, dueLabel, editingField, inboxOf, isDueToday, linkedMail, moveTargets, PRIORITY_COLORS, projectName, projectOf, searching, setTodoCount, subRows, TODO_GROUPS, todoState, viewProjectId, viewTasks } from "./todo-data.js";
+import { clearSearch } from "./todo-search.js";
 import { archiveProject, deleteProject, moveProject, moveTask, moveUnder, saveTask, setTaskDone } from "./todo-write.js";
 import { renderTodo, todoMode } from "./todo.js";
 import { showFailure } from "./error-card.js";
@@ -31,6 +34,8 @@ function projectButton(view: string, icon: string, name: string, count: number) 
   b.onclick = () => {
     todoState.view = view;
     todoState.open = null;
+    // Picking a list leaves the search (T-9).
+    clearSearch();
     renderTodo();
   };
   return b;
@@ -210,23 +215,46 @@ function taskRows(t: TaskItem, showProject: boolean, accounts: Set<string | unde
   return open ? [li, ...subs.flatMap((s) => taskRows(s, showProject, accounts, [...under, t.id]))] : [li];
 }
 
-// A chip of the third line of a row: the icon and the text.
-function metaChip(cls: string, icon: string, text: string) {
+// A chip of the third line of a row: the icon and the text (or the nodes of a text with hits, `marked`).
+function metaChip(cls: string, icon: string, text: string | Node[]) {
   const chip = tag("span", cls);
   chip.innerHTML = icon;
-  chip.append(text);
+  chip.append(...(typeof text === "string" ? [text] : text));
   return chip;
 }
 
-// The first line of a description that is not empty, for the second line of a row.
-function firstLine(description: string) {
-  for (const line of description.split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed) return trimmed;
+// `text` as nodes, the stretches `spans` (UTF-16 ranges in order and apart from each other, as Rust gives them, T-9) in `mark`.
+function marked(text: string, spans: HitSpan[] = []): Node[] {
+  const nodes: Node[] = [];
+  let at = 0;
+  for (const { start, end } of spans) {
+    if (start > at) nodes.push(document.createTextNode(text.slice(at, start)));
+    nodes.push(tag("mark", "", text.slice(start, end)));
+    at = end;
   }
+  if (at < text.length || nodes.length === 0) nodes.push(document.createTextNode(text.slice(at)));
+  return nodes;
 }
 
-function taskRow(t: TaskItem, showProject: boolean, accounts: Set<string | undefined>) {
+// The line of a description for the second line of a row, with the hits (`spans`, offsets in the whole description) that fall in it: the first line that is not empty,
+// or, in a search, the first line a hit is in, so that the row shows why it was found.
+function descLine(description: string, spans: HitSpan[]) {
+  let first: { text: string; spans: HitSpan[] } | undefined;
+  let at = 0;
+  for (const line of description.split("\n")) {
+    const start = at + line.length - line.trimStart().length;
+    at += line.length + 1;
+    const text = line.trim();
+    if (!text) continue;
+    const inLine = spans.filter((s) => s.start >= start && s.end <= start + text.length).map((s) => ({ start: s.start - start, end: s.end - start }));
+    if (inLine.length) return { text, spans: inLine };
+    first ??= { text, spans: [] };
+  }
+  return first;
+}
+
+// `hit` is the result of a search for `t` (T-9): the words it hit are marked.
+function taskRow(t: TaskItem, showProject: boolean, accounts: Set<string | undefined>, hit?: TaskHit) {
   const mail = linkedMail(t, accounts);
   const li = tag("li", "task tall");
   li.dataset.id = t.id;
@@ -245,18 +273,23 @@ function taskRow(t: TaskItem, showProject: boolean, accounts: Set<string | undef
   };
   const line = tag("div", "t");
   if (mail) line.insertAdjacentHTML("beforeend", MAIL_SVG);
-  const name = tag("span", "tname", t.content);
+  const name = tag("span", "tname");
+  name.append(...marked(t.content, hit?.name));
   line.append(name);
   const body = tag("div", "body");
   body.append(line);
   li.append(box, body, gripOf(li, t));
   // The second line: the first line of the description, underlined when it is an address (it is not a link; the row opens the task).
-  const first = firstLine(t.description);
-  if (first) li.append(tag("div", `desc${/^https?:\/\//.test(first) ? " url" : ""}`, first));
+  const first = descLine(t.description, hit?.description ?? []);
+  if (first) {
+    const desc = tag("div", `desc${/^https?:\/\//.test(first.text) ? " url" : ""}`);
+    desc.append(...marked(first.text, first.spans));
+    li.append(desc);
+  }
   // The third line: the due moment, labels, subtask count and, where a subtask belongs (in the "today" list; in a project it is nested under its parent), its parent; at the right end the project.
   const chips = tag("span", "chips");
   if (t.due) chips.append(metaChip(`due${t.bucket === "overdue" ? " over" : ""}`, DATE_SVG, dueLabel(t.due)));
-  for (const label of t.labels) chips.append(metaChip("label", TAG_SVG, label));
+  for (const [i, label] of t.labels.entries()) chips.append(metaChip("label", TAG_SVG, marked(label, hit?.labels[i])));
   if (t.subTotal) chips.append(metaChip("subcount", SUB_SVG, `${t.subDone}/${t.subTotal}`));
   if (t.parent && showProject) chips.append(tag("span", "parent", t.parent.content));
   if (chips.childElementCount || showProject) {
@@ -433,13 +466,24 @@ function editRowName(name: HTMLElement, t: TaskItem) {
   input.select();
 }
 
+// The results of a search (T-9) in place of the list: the count, then a row for each task of every project, in the form of the "today" list (the project at the right end), the words hit marked.
+// A row is drawn from the task as it is now, so a change made on the screen shows before the search is made again.
+function renderResults() {
+  $("todo-add").hidden = true;
+  const accounts = accountSet();
+  const list = tag("ul");
+  list.append(...todoState.hits.map((h) => taskRow(todoState.taskById.get(h.task.id) ?? h.task, true, accounts, h)));
+  $("todo-list").replaceChildren(tag("div", "group", `全プロジェクトで ${todoState.hits.length} 件`), ...(todoState.hits.length ? [list] : []));
+}
+
 export function renderList() {
   todoState.descEdit = null;
   todoMode("list");
   const view = todoState.view;
+  $("todo-title").textContent = view === "today" ? "今日" : view === "inbox" ? "インボックス" : projectOf(view)!.name;
+  if (searching()) return renderResults();
   const showProject = view === "today";
   const tasks = viewTasks(view);
-  $("todo-title").textContent = view === "today" ? "今日" : view === "inbox" ? "インボックス" : projectOf(view)!.name;
   updateAddMode();
   const accounts = accountSet();
   const parts: HTMLElement[] = [];
