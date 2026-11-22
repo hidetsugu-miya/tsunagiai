@@ -43,11 +43,17 @@ async fn blocking_read(account: &str) -> Result<Option<String>, String> {
 }
 
 /// Deletes the refresh token of `account`, off the async workers as `blocking_read` does.
-async fn blocking_delete(account: &str) -> Result<(), String> {
-    let account = account.to_owned();
-    tokio::task::spawn_blocking(move || keychain::delete(KEYRING_SERVICE, &account))
+/// A failure is logged and not returned: an item of the old service that this app does not own refuses the delete,
+/// and that must not stop a login that has to be done again or the removal of the account.
+async fn blocking_delete(account: &str) {
+    let owned = account.to_owned();
+    let deleted = tokio::task::spawn_blocking(move || keychain::delete(KEYRING_SERVICE, &owned))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+        .and_then(|r| r);
+    if let Err(e) = deleted {
+        eprintln!("tsunagiai: delete_token account={account} status=- error={e}");
+    }
 }
 
 #[derive(Deserialize)]
@@ -150,7 +156,7 @@ impl Auth {
             }
             None => {
                 self.access.lock().unwrap().remove(account);
-                blocking_delete(account).await?;
+                blocking_delete(account).await;
                 Ok(None)
             }
         }
@@ -172,7 +178,7 @@ impl Auth {
                 eprintln!("tsunagiai: revoke account={account} status=- error={e}");
             }
         }
-        blocking_delete(account).await?;
+        blocking_delete(account).await;
         self.access.lock().unwrap().remove(account);
         // Under the cache lock, so a save that began before cannot write this account's data back after the delete.
         disk_cache::exclusive(|| {
