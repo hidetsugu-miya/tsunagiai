@@ -1289,14 +1289,14 @@ fn worker_stop_args(dispatch_id: &str, environment: &str) -> Vec<String> {
     )
 }
 
-/// The messages of a Run, whole (`--full`: the concise view has neither the time nor the sequence).
-pub(crate) fn inbox_args(run_id: &str, environment: &str) -> Vec<String> {
+/// The newest `limit` messages of a Run, whole (`--full`: the concise view has neither the time nor the sequence). Orca answers the newest first (its inbox is `ORDER BY sequence DESC LIMIT n`, read in the code of Orca 1.4.269), and a heartbeat is a row too.
+pub(crate) fn inbox_args(run_id: &str, limit: usize, environment: &str) -> Vec<String> {
     on(
         vec![
             "orchestration".into(),
             "inbox".into(),
             format!("--run={run_id}"),
-            "--limit=200".into(),
+            format!("--limit={limit}"),
             "--full".into(),
             "--json".into(),
         ],
@@ -1321,6 +1321,11 @@ fn dispatch_of(result: &Value) -> Result<(String, String), String> {
     check_orca_id(id)?;
     let preamble = result["preamble"].as_str().unwrap_or_default().trim();
     Ok((id.to_owned(), preamble.to_owned()))
+}
+
+/// Whether a child of `agent` is a Dispatch of the Run and talks with `orchestration send` and `check`: a Claude Code child does, and a Codex child hands its result over in files (`formation_claude.md`).
+fn talks_by_messages(agent: FormationAgent) -> bool {
+    agent != FormationAgent::Codex
 }
 
 /// The first instruction of a child with the preamble of its Dispatch before it, when there is one.
@@ -2102,17 +2107,25 @@ pub fn launch(
     })?;
     let recorded = |step: &'static str, e: String| {
         kept(step, e).saying("子は記録に入っているので、formation_close で片付けられます")
-    }; // The child is a Dispatch of the formation's Run (#1237): the preamble of the Dispatch goes in front of the first instruction.
-    let dispatched = dispatch_child(config, formation, name, &handle, environment, &|args| {
-        orca::write(args)
-    })
-    .map_err(|e| recorded(STEP_DISPATCH, e))?;
-    let preamble = if dispatched.preamble.is_empty() {
-        dispatched.preamble
+    }; // A Claude Code child is a Dispatch of the formation's Run (#1237): the preamble of the Dispatch goes in front of the first instruction. A Codex child reports by files and is no Dispatch, so that no preamble tells it to talk with orchestration.
+    let dispatched = if talks_by_messages(agent) {
+        Some(
+            dispatch_child(config, formation, name, &handle, environment, &|args| {
+                orca::write(args)
+            })
+            .map_err(|e| recorded(STEP_DISPATCH, e))?,
+        )
     } else {
-        check_prompt(&dispatched.preamble).map_err(|e| recorded(STEP_DISPATCH, e))?
+        None
     };
-    let prompt = first_instruction(&preamble, &prompt);
+    let prompt = match &dispatched {
+        Some(dispatched) if !dispatched.preamble.is_empty() => {
+            let preamble =
+                check_prompt(&dispatched.preamble).map_err(|e| recorded(STEP_DISPATCH, e))?;
+            first_instruction(&preamble, &prompt)
+        }
+        _ => prompt,
+    };
     let idle = orca::call(&terminal_wait_args(&handle, environment), IDLE_WAIT_RUN)
         .map_err(orca::message_of)
         .and_then(|result| {
@@ -2135,8 +2148,8 @@ pub fn launch(
         "paneKey": pane_key,
         "created": created,
         "closedShells": closed,
-        "runId": dispatched.run_id,
-        "dispatchId": dispatched.dispatch_id,
+        "runId": dispatched.as_ref().map(|d| d.run_id.as_str()),
+        "dispatchId": dispatched.as_ref().map(|d| d.dispatch_id.as_str()),
     }))
 }
 
@@ -7293,6 +7306,20 @@ mod tests {
         assert_eq!(meta.run_id.as_deref(), Some("run_1"));
         assert!(meta.dispatches.is_empty());
         std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn only_a_claude_code_child_is_a_dispatch_that_talks_by_messages() {
+        assert!(talks_by_messages(FormationAgent::Claude));
+        assert!(!talks_by_messages(FormationAgent::Codex));
+    }
+
+    #[test]
+    fn the_inbox_asks_for_the_newest_rows_of_the_run() {
+        let args = inbox_args("run_1", 50, LOCAL);
+        assert!(args.contains(&"--limit=50".to_owned()));
+        assert!(args.contains(&"--run=run_1".to_owned()));
+        assert!(args.contains(&"--full".to_owned()));
     }
 
     #[test]

@@ -419,9 +419,9 @@ export const task = (id: string, content: string, projectId: string, bucket: "ov
   labels: [],
 });
 
-// What `todoist_search` answers for `t` (T-9): `parts` says where the words hit; none hit anywhere by default.
+// What `todoist_search` answers for `t` (T-9): `parts` says where the words hit; none hit anywhere by default. Only the ID of the task goes; the screen has the task.
 export const taskHit = (t: TaskItem, projectName: string, parts: Partial<Pick<TaskHit, "name" | "description" | "labels">> = {}): TaskHit => ({
-  task: t,
+  taskId: t.id,
   project: projectName,
   name: [],
   description: [],

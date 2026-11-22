@@ -14,6 +14,7 @@ Every message you send to a child is in English. Only the owner's own words that
 
 You and the children talk with Orca's orchestration: the Run of this formation is you, and each child is a Dispatch of it.
 `formation_launch` answers `runId` and `dispatchId`: keep them, as [launch](launch.md#after-the-launch) says.
+When you started again, read `runId` and `dispatches` (the Dispatch of each child by its name) from `formation.json` in your folder, and run `orca orchestration run-use --id {runId} --json` once before the first send or wait: the Run is bound to the terminal that made it, and this takes it over for yours.
 
 Send a message to a child:
 

@@ -467,13 +467,18 @@ function editRowName(name: HTMLElement, t: TaskItem) {
 }
 
 // The results of a search (T-9) in place of the list: the count, then a row for each task of every project, in the form of the "today" list (the project at the right end), the words hit marked.
-// A row is drawn from the task as it is now, so a change made on the screen shows before the search is made again.
+// A row is drawn from the task as it is now, so a change made on the screen shows before the search is made again;
+// a task that is no longer there (completed or deleted here) has no row, and is not counted.
 function renderResults() {
   $("todo-add").hidden = true;
   const accounts = accountSet();
   const list = tag("ul");
-  list.append(...todoState.hits.map((h) => taskRow(todoState.taskById.get(h.task.id) ?? h.task, true, accounts, h)));
-  $("todo-list").replaceChildren(tag("div", "group", `全プロジェクトで ${todoState.hits.length} 件`), ...(todoState.hits.length ? [list] : []));
+  const rows = todoState.hits.flatMap((h) => {
+    const t = todoState.taskById.get(h.taskId);
+    return t ? [taskRow(t, true, accounts, h)] : [];
+  });
+  list.append(...rows);
+  $("todo-list").replaceChildren(tag("div", "group", `全プロジェクトで ${rows.length} 件`), ...(rows.length ? [list] : []));
 }
 
 export function renderList() {

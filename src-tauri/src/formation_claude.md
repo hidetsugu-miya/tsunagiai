@@ -59,7 +59,7 @@
 - 調べるだけ、読むだけのチームメイトは、worktree を作らず既存のフォルダで起動してかまいません。
 - 子の名前は、英小文字、数字、ハイフンだけで付けます。
 - 子は、既定では Claude Code です。`agent` に `codex` を渡すと、Codex の子を起動します。
-- Codex の子には、メッセージを送りません。結果はファイルで受け取ります。
+- Codex の子には、メッセージを送りません。Dispatch も作らず、Orca の説明も付きません。`formation_launch` の答えの `runId` と `dispatchId` は `null` です。結果はファイルで受け取ります。
 - Codex の子の最初の指示には、結果を書くファイルの絶対パスを書きます。
 - 結果を書き終えたら、最後に空のファイル `{そのパス}.done` を作ることも書きます。
 - あなたは、その `.done` ファイルができるのを待ちます。Monitor か、時間を区切った Bash の until ループを使います。
@@ -71,6 +71,7 @@
 
 - リーダーと子は、Orca の orchestration で連絡し合います。このフォーメーションの Run と、子ごとの Dispatch が宛先です。
 - Run の id と子の Dispatch の id は、`formation_launch` の答えの `runId` と `dispatchId` にあります。控えておきます。
+- 起動し直したときは、このフォルダの `formation.json` を読みます。`runId` が Run の id で、`dispatches` が子の名前ごとの Dispatch の id です。子に送る前と、子を待つ前に、`orca orchestration run-use --id {runId} --json` を一度走らせて、この端末でその Run を引き継ぎます。
 - 子への指示は `orca orchestration send --run {runId} --to dispatch:{dispatchId}` で送ります。`--subject` が最初の行、`--body-file -` が残りの行です。
 - 子の返事は、`orca orchestration check --run {runId} --wait --timeout-ms 540000 --json` で受け取ります。バックグラウンドで走らせて終わりを待ち、読んだら走らせ直します。同時に二つは走らせません。
 - 子には、最初の指示の前に Orca の説明が付きます。子はそれに従って送り、受け取ります。

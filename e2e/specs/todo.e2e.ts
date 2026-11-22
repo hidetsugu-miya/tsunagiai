@@ -3781,14 +3781,62 @@ describe("todo: search (T-9)", () => {
     await expect($("#todo-add")).toBeDisplayed();
   });
 
-  it("shows a card for a failed search and leaves the list as it was", async () => {
-    await openSearch();
-    const search = await mock("todoist_search", rejects("検索できません"));
-    await $(input).setValue("report");
-    await waitForCalls(search);
+  it("shows a card for a failed search and keeps the results of the last answer", async () => {
+    const hits = await openSearch();
+    const search = await searchFor("report", hits);
+    await waitForCount("#todo-list li.task", 2);
+    await mock(search, rejects("検索できません"));
+    await $(input).addValue("s");
     await expect($(CARD)).toHaveText(expect.stringContaining("検索できません"));
-    await expect($("#todo-list")).toHaveText(expect.stringContaining("Write report"));
-    await expect($("#todo-list .group")).toHaveText("今日");
+    await expect($("#todo-list .group")).toHaveText("全プロジェクトで 2 件");
+    await waitForCount("#todo-list li.task", 2);
+  });
+
+  it("draws the new tasks in the results when the search made again after a load fails", async () => {
+    const hits = await openSearch();
+    const search = await searchFor("report", hits);
+    await waitForCount("#todo-list li.task", 2);
+    // What Todoist has after the completion: k1 is gone, and k5 has another name.
+    const after = todoData();
+    after.tasks.push(task("k5", "Pay fee (renamed)", "p4", "none"));
+    after.tasks = after.tasks.filter((t) => t.id !== "k1");
+    await mock("todoist_set_done", true);
+    await mock("todoist_load", after);
+    await mock(search, rejects("検索できません"));
+    await $("#todo-list li.task:first-child .check").click();
+    await expect($(CARD)).toHaveText(expect.stringContaining("検索できません"));
+    await browser.waitUntil(async () => JSON.stringify(await textsOf("#todo-list li.task .tname")) === JSON.stringify(["Pay fee (renamed)"]), { timeoutMsg: "the results did not follow the load" });
+  });
+
+  it("takes a task completed or deleted here out of the results and the count at once", async () => {
+    const hits = await openSearch();
+    await searchFor("report", hits);
+    await waitForCount("#todo-list li.task", 2);
+    const after = todoData();
+    after.tasks.push(task("k5", "Pay report fee", "p4", "none"));
+    after.tasks = after.tasks.filter((t) => t.id !== "k1");
+    await mock("todoist_set_done", true);
+    await mock("todoist_load", after);
+    await $("#todo-list li.task:first-child .check").click();
+    await waitForCount("#todo-list li.task", 1);
+    await expect($("#todo-list .group")).toHaveText("全プロジェクトで 1 件");
+    expect(await textsOf("#todo-list li.task .tname")).toEqual(["Pay report fee"]);
+    expect(await callsOf("todoist_set_done")).toHaveLength(1);
+  });
+
+  it("searches once for a run of typing, with the text it ended on", async () => {
+    const hits = await openSearch();
+    const search = await mock("todoist_search", hits);
+    // Three input events in one turn of the page: no pause between them.
+    await browser.execute((sel) => {
+      const field = document.querySelector<HTMLInputElement>(sel)!;
+      for (const text of ["r", "re", "rep"]) {
+        field.value = text;
+        field.dispatchEvent(new Event("input"));
+      }
+    }, input);
+    await waitForCount("#todo-list li.task", 2);
+    expect(await callsOf(search)).toEqual([{ query: "rep" }]);
   });
 
   it("is not shown under the token form", async () => {

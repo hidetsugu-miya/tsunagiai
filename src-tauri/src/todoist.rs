@@ -1270,20 +1270,20 @@ pub struct HitSpan {
     end: u32,
 }
 
-/// A task a search found, with where the words hit (T-9), to color them.
+/// A task a search found, with where the words hit (T-9), to color them. The screen has the task itself (`taskById`), so only its ID goes.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
 pub struct TaskHit {
-    task: TaskItem,
+    task_id: String,
     /// The name of the project the task is in; empty when the project is not known.
     project: String,
-    /// The hits in `task.content`, in order and apart from each other.
+    /// The hits in the task's name, in order and apart from each other.
     name: Vec<HitSpan>,
-    /// The hits in `task.description`.
+    /// The hits in the task's description.
     description: Vec<HitSpan>,
-    /// The hits in each of `task.labels`, one list for each label, in the same order.
+    /// The hits in each of the task's labels, one list for each label, in the same order.
     labels: Vec<Vec<HitSpan>>,
 }
 
@@ -1372,7 +1372,7 @@ fn search_todo(todo: &Todo, query: &str) -> Vec<TaskHit> {
             }
             let mut spans = spans.into_iter().map(merge_spans);
             Some(TaskHit {
-                task: t.clone(),
+                task_id: t.id.clone(),
                 project: projects
                     .get(t.project_id.as_str())
                     .map(|name| (*name).to_owned())
@@ -1398,6 +1398,9 @@ pub struct TodoistState {
     sync: tokio::sync::Mutex<SyncData>,
     /// The last saved or read cache, so an offline spell reads the file once. Touched only while `token` is locked, in order with a save and a disconnect.
     cache: Mutex<Option<CacheFile>>,
+    /// What the last online load built, for `todoist_search`, so a search never waits for the lock of `sync` that a load holds across the network.
+    /// Set and cleared while `sync` is held, so it follows `sync`. `None` until a load, and after a disconnect.
+    snapshot: Mutex<Option<Arc<Todo>>>,
 }
 
 impl TodoistState {
@@ -1720,6 +1723,8 @@ pub async fn todoist_load(
         Local::now().date_naive(),
         &Local,
     );
+    // `sync` is still held, so a disconnect cannot clear the snapshot before this sets it.
+    *state.snapshot.lock().unwrap() = Some(Arc::new(todo.clone()));
     // The token lock is held through the write: a disconnect in between would otherwise leave the cache behind.
     let current = state.token.lock().await;
     // Another token than the fetch used (disconnected, or connected again meanwhile): this content is not that connection's.
@@ -1768,7 +1773,7 @@ pub async fn todoist_cached(app: AppHandle) -> Result<Option<Todo>, String> {
     }))
 }
 
-/// Searches the active tasks the last `todoist_load` left in memory for the words of `query` (T-9); asks Todoist nothing. Empty until a load, and for a query with no word.
+/// Searches the active tasks the last online `todoist_load` left in memory for the words of `query` (T-9); asks Todoist nothing and never waits for a load. Empty until a load, and for a query with no word.
 #[tauri::command]
 pub async fn todoist_search(
     state: State<'_, TodoistState>,
@@ -1777,19 +1782,8 @@ pub async fn todoist_search(
     if query.trim().is_empty() {
         return Ok(Vec::new());
     }
-    let todo = {
-        let sync = state.sync.lock().await;
-        let done = Arc::clone(&state.done.lock().unwrap());
-        build_todo(
-            sync.projects.clone(),
-            sync.labels.clone(),
-            sync.tasks.clone(),
-            &done,
-            Local::now().date_naive(),
-            &Local,
-        )
-    };
-    Ok(search_todo(&todo, &query))
+    let todo = state.snapshot.lock().unwrap().clone();
+    Ok(todo.map_or_else(Vec::new, |todo| search_todo(&todo, &query)))
 }
 
 /// Whether a token is stored. Asks Todoist nothing, so a settings screen can show it at once.
@@ -1852,7 +1846,10 @@ pub async fn todoist_disconnect(
     *state.cache.lock().unwrap() = None;
     // `sync` is never waited for while `token` is held: a load holds the one and wants the other.
     drop(cached);
-    *state.sync.lock().await = SyncData::default();
+    let mut sync = state.sync.lock().await;
+    *sync = SyncData::default();
+    *state.snapshot.lock().unwrap() = None;
+    drop(sync);
     cleared.map_err(|e| log_failure("todoist_disconnect", TOKEN_USER, e))
 }
 
@@ -5104,7 +5101,7 @@ mod tests {
             task(json!({"id": "d", "content": "unrelated", "description": "none"})),
         ]);
         let hits = search_todo(&todo, "invoice");
-        let ids: Vec<_> = hits.iter().map(|h| h.task.id.as_str()).collect();
+        let ids: Vec<_> = hits.iter().map(|h| h.task_id.as_str()).collect();
         assert_eq!(ids, ["a", "b", "c"]);
         assert_eq!(hits[0].name, [span(8, 15)]);
         assert_eq!(hits[0].description, []);
@@ -5138,7 +5135,7 @@ mod tests {
         for query in ["請求書 田中", "田中　請求書"] {
             let ids: Vec<_> = search_todo(&todo, query)
                 .into_iter()
-                .map(|h| h.task.id)
+                .map(|h| h.task_id)
                 .collect();
             assert_eq!(ids, ["a", "c"], "{query}");
         }
@@ -5159,7 +5156,7 @@ mod tests {
         let todo = search_todo_of(vec![task(json!({"id": "a", "content": "😀 abc ABC"}))]);
         let hit = &search_todo(&todo, "abc")[0];
         assert_eq!(hit.name, [span(3, 6), span(7, 10)]);
-        let units: Vec<u16> = hit.task.content.encode_utf16().collect();
+        let units: Vec<u16> = todo.tasks[0].content.encode_utf16().collect();
         assert_eq!(String::from_utf16(&units[3..6]).unwrap(), "abc");
     }
 
@@ -5172,7 +5169,7 @@ mod tests {
     }
 
     #[test]
-    fn a_subtask_row_is_found_with_its_parent_and_a_completed_one_is_not() {
+    fn a_subtask_row_is_found_and_a_completed_one_is_not() {
         let todo = {
             let parent = task(json!({"id": "p", "content": "引っ越し"}));
             let sub = task(json!({"id": "s", "parent_id": "p", "content": "電気の手続き"}));
@@ -5188,10 +5185,6 @@ mod tests {
         };
         let hits = search_todo(&todo, "手続き");
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].task.id, "s");
-        assert_eq!(
-            hits[0].task.parent.as_ref().map(|p| p.id.as_str()),
-            Some("p")
-        );
+        assert_eq!(hits[0].task_id, "s");
     }
 }

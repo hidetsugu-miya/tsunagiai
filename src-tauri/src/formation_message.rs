@@ -6,6 +6,8 @@ use std::{
     collections::HashMap,
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
+    sync::Mutex,
+    time::{Duration, Instant},
 };
 
 use serde::{Deserialize, Serialize};
@@ -229,6 +231,38 @@ pub(crate) fn message_of_orchestration(
 
 /// The lock file that keeps two syncs of one formation from taking in the same messages.
 const SYNC_LOCK: &str = "messages.jsonl.lock";
+/// How many of the newest rows of the Run the first read asks Orca for.
+const INBOX_LIMIT: usize = 50;
+/// A read whose rows all lie after the last one taken in may have left some out, so it asks again with this many times the limit, up to `INBOX_LIMIT_MAX`.
+const INBOX_WIDEN: usize = 4;
+/// The most rows one sync asks for. A Run that gained more than this since the last read loses its oldest rows.
+const INBOX_LIMIT_MAX: usize = 800;
+/// A formation's Run is read from Orca at most this often by the screen's reads (`read_synced`): what `messages.jsonl` holds is shown in between.
+const SYNC_EVERY: Duration = Duration::from_secs(10);
+
+/// Whether the answer of `orchestration inbox --limit {limit}` may have left out rows after `taken`, the last sequence taken in. Orca answers the newest rows first and answers all of the Run's rows when it gives fewer than the limit, so a full answer whose oldest row lies after `taken + 1` may be cut in the middle of the new ones (a sequence is shared by every Run, so a gap alone proves nothing).
+fn window_missed(answer: &Value, limit: usize, taken: u64) -> bool {
+    let rows = answer["messages"].as_array().map_or(&[][..], Vec::as_slice);
+    rows.len() >= limit
+        && rows
+            .iter()
+            .filter_map(|row| row["sequence"].as_u64())
+            .min()
+            .is_some_and(|oldest| oldest > taken + 1)
+}
+
+/// The formations whose Run was read within `SYNC_EVERY`, by the folder of the config and the name of the formation.
+static SYNCED: Mutex<Vec<(String, Instant)>> = Mutex::new(Vec::new());
+
+/// Whether `key` is due for a read at `now`: it is when it was not read within `SYNC_EVERY`, and then it is marked read. The entries that have run out are dropped, so a formation that is gone leaves nothing.
+fn sync_due(synced: &mut Vec<(String, Instant)>, key: &str, now: Instant) -> bool {
+    synced.retain(|(_, at)| now.saturating_duration_since(*at) < SYNC_EVERY);
+    if synced.iter().any(|(read, _)| read == key) {
+        return false;
+    }
+    synced.push((key.to_owned(), now));
+    true
+}
 
 /// Takes the messages of the formation's Run that `messages.jsonl` has not taken in (`read` runs `orca orchestration inbox` of this Mac), appends the ones that are between the leader and a child, oldest first, and keeps the sequence of the last one it saw, so that no message is taken twice. A formation with no Run has nothing to take. Answers how many lines it appended.
 pub fn sync_orchestration(
@@ -245,7 +279,14 @@ pub fn sync_orchestration(
     let Some(state) = formation::orchestration_state(config, formation) else {
         return Ok(0);
     };
-    let answer = read(&formation::inbox_args(&state.run_id, LOCAL))?;
+    let mut limit = INBOX_LIMIT;
+    let answer = loop {
+        let answer = read(&formation::inbox_args(&state.run_id, limit, LOCAL))?;
+        if limit >= INBOX_LIMIT_MAX || !window_missed(&answer, limit, state.sequence) {
+            break answer;
+        }
+        limit = (limit * INBOX_WIDEN).min(INBOX_LIMIT_MAX);
+    };
     let mut rows: Vec<&Value> = answer["messages"]
         .as_array()
         .into_iter()
@@ -268,14 +309,22 @@ pub fn sync_orchestration(
     Ok(appended)
 }
 
-/// The record of `formation` after the messages of its Run were taken in (`sync_orchestration` with this PC's Orca). A failed read of the Run leaves the record as it is: what was taken in is shown.
+/// The record of `formation` after the messages of its Run were taken in (`sync_orchestration` with this PC's Orca), at most once in `SYNC_EVERY` for each formation: the screen reads every few seconds, and each sync runs a process of Orca. A failed read of the Run leaves the record as it is: what was taken in is shown.
 pub fn read_synced(config: &Path, formation: &str) -> Vec<FormationMessage> {
-    let _ = sync_orchestration(
-        config,
-        formation,
-        &formation::orca_read,
-        formation::now_ms(),
+    let key = format!("{}\0{formation}", config.display());
+    let due = sync_due(
+        &mut SYNCED.lock().unwrap_or_else(|e| e.into_inner()),
+        &key,
+        Instant::now(),
     );
+    if due {
+        let _ = sync_orchestration(
+            config,
+            formation,
+            &formation::orca_read,
+            formation::now_ms(),
+        );
+    }
     read(config, formation)
 }
 
@@ -624,7 +673,10 @@ mod tests {
             Ok(inbox.clone())
         };
         assert_eq!(sync_orchestration(&config, "api-work", &read, 5), Ok(2));
-        assert_eq!(asked.borrow()[0], formation::inbox_args("run_1", LOCAL));
+        assert_eq!(
+            asked.borrow()[0],
+            formation::inbox_args("run_1", INBOX_LIMIT, LOCAL)
+        );
         let lines: Vec<(String, String, String)> = super::read(&config, "api-work")
             .into_iter()
             .map(|m| (m.from, m.to, m.line))
@@ -672,5 +724,60 @@ mod tests {
         );
         assert!(super::read(&config, "api-work").is_empty());
         std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_full_answer_that_starts_after_the_last_one_taken_in_is_read_again_wider() {
+        let rows = |sequences: &[u64]| json!({"messages": sequences.iter().map(|n| json!({"sequence": n})).collect::<Vec<_>>()});
+        // Full, and its oldest row is after the next one: rows may be left out.
+        assert!(window_missed(&rows(&[9, 8, 7]), 3, 5));
+        // Full, but it reaches the last one taken in, or the very next row.
+        assert!(!window_missed(&rows(&[9, 8, 5]), 3, 5));
+        assert!(!window_missed(&rows(&[9, 8, 6]), 3, 5));
+        // Not full: Orca gave every row of the Run.
+        assert!(!window_missed(&rows(&[9, 8]), 3, 0));
+        assert!(!window_missed(&json!({}), 3, 0));
+    }
+
+    #[test]
+    fn a_sync_widens_its_read_until_it_reaches_the_rows_it_has_taken() {
+        let config = with_run("orchestration-widen");
+        let all: Vec<Value> = (1..=120)
+            .map(|n| row(n, "term_a", "run:run_1", &format!("m{n}"), ""))
+            .collect();
+        let asked = std::cell::RefCell::new(Vec::new());
+        let read = |args: &[String]| {
+            let limit: usize = args
+                .iter()
+                .find_map(|a| a.strip_prefix("--limit="))
+                .unwrap()
+                .parse()
+                .unwrap();
+            asked.borrow_mut().push(limit);
+            // Orca answers the newest rows first.
+            Ok(json!({"messages": all.iter().rev().take(limit).cloned().collect::<Vec<_>>()}))
+        };
+        assert_eq!(sync_orchestration(&config, "api-work", &read, 5), Ok(120));
+        assert_eq!(*asked.borrow(), [50, 200]);
+        // Nothing new: one read of the first size is enough.
+        asked.borrow_mut().clear();
+        assert_eq!(sync_orchestration(&config, "api-work", &read, 5), Ok(0));
+        assert_eq!(*asked.borrow(), [50]);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_formation_is_read_from_orca_at_most_once_in_ten_seconds() {
+        let start = Instant::now();
+        let mut synced = Vec::new();
+        assert!(sync_due(&mut synced, "a", start));
+        assert!(!sync_due(&mut synced, "a", start + Duration::from_secs(9)));
+        // Another formation has its own turn.
+        assert!(sync_due(&mut synced, "b", start + Duration::from_secs(9)));
+        assert!(sync_due(&mut synced, "a", start + Duration::from_secs(10)));
+        // A read that is due drops what has run out.
+        assert_eq!(synced.len(), 2);
+        assert!(sync_due(&mut synced, "c", start + Duration::from_secs(60)));
+        assert_eq!(synced.len(), 1);
     }
 }

@@ -1071,13 +1071,25 @@ fn screen_of_push(
         .unwrap_or_else(|| Err(REFUSED_PUSH.to_owned()))
 }
 
-/// What the app answers a push of the language servers (#1242: `lsp.settings`, `lsp.server_save` and `lsp.server_delete`) that came through the connection of `environment`: `None` when it is another request, else the settings of the project as saved, or the reason it is refused. The environment is the connection's, never a value of the request, and `lsp.ssh_host_set` is not a request that is taken (a Host of `~/.ssh/config` is of this PC, and the owner chooses it on the screen).
+/// The project keys of the repositories in Orca's list of the saved environment `environment` (read just now): what a save or a delete of the language servers must name.
+fn listed_projects(environment: &str) -> Result<Vec<String>, String> {
+    let ps = orca::call(&orca::ps_args(Some(environment)), orca::READ_TIMEOUT)
+        .map_err(orca::message_of)?;
+    Ok(orca::worktrees_of(&ps)
+        .into_iter()
+        .map(|worktree| worktree.project_key)
+        .filter(|key| !key.is_empty())
+        .collect())
+}
+
+/// What the app answers a push of the language servers (#1242: `lsp.settings`, `lsp.server_save` and `lsp.server_delete`) that came through the connection of `environment`: `None` when it is another request, else the settings of the project as saved, or the reason it is refused. The environment is the connection's, never a value of the request, and `lsp.ssh_host_set` is not a request that is taken (a Host of `~/.ssh/config` is of this PC, and the owner chooses it on the screen). A save and a delete are done only for a project of Orca's list of that environment, which `listed` reads (the list is asked only for them).
 fn lsp_answer(
     config: &Path,
     environment: &str,
     request: &PushRequest,
+    listed: impl FnOnce() -> Result<Vec<String>, String>,
 ) -> Option<Result<Value, String>> {
-    Some(lsp_plugin::LspPush::of(request)?.and_then(|push| push.run(config, environment)))
+    Some(lsp_plugin::LspPush::of(request)?.and_then(|push| push.run(config, environment, listed)))
 }
 
 /// What the app does with a push of `environment`: a request of the language servers is done with the settings of that environment and answered with the settings as saved (`lsp_answer`), the request to open a preview is given to the screen of the development screen (`preview-open`), which answers it (with no value: `preview.open` gives none back), and every other push is refused.
@@ -1086,10 +1098,14 @@ fn push_handler(app: tauri::AppHandle, config: PathBuf, environment: String) -> 
         let (app, config, environment) = (app.clone(), config.clone(), environment.clone());
         Box::pin(async move {
             if lsp_plugin::LspPush::of(&request).is_some() {
-                return orca::blocking(move || lsp_answer(&config, &environment, &request))
-                    .await?
-                    .unwrap_or_else(|| Err(REFUSED_PUSH.to_owned()))
-                    .map(Some);
+                return orca::blocking(move || {
+                    lsp_answer(&config, &environment, &request, || {
+                        listed_projects(&environment)
+                    })
+                })
+                .await?
+                .unwrap_or_else(|| Err(REFUSED_PUSH.to_owned()))
+                .map(Some);
             }
             let fields = screen_of_push(&request, &environment)?;
             crate::screen_bridge::write_screen(&app, orca_preview::OPEN_TARGET, fields)
@@ -2913,8 +2929,9 @@ mod tests {
             method: method.to_owned(),
             params,
         };
+        let listed = || Ok(vec!["repo-1".to_owned()]);
         let answer = |environment: &str, request: &PushRequest| {
-            lsp_answer(&config, environment, request).unwrap()
+            lsp_answer(&config, environment, request, listed).unwrap()
         };
         // Nothing saved: no server.
         let read = push("lsp.settings", serde_json::json!({"project": "repo-1"}));
@@ -2962,14 +2979,25 @@ mod tests {
             &push(
                 "lsp.ssh_host_set",
                 serde_json::json!({"project": "repo-1", "sshHost": "h"})
-            )
+            ),
+            listed
         )
         .is_none());
         assert_eq!(
             answer("pc-a", &push("lsp.settings", Value::Null)),
             Err("依頼を読めませんでした".to_owned())
         );
-        assert!(lsp_answer(&config, "pc-a", &push("preview.open", Value::Null)).is_none());
+        assert!(lsp_answer(&config, "pc-a", &push("preview.open", Value::Null), listed).is_none());
+        // A save for a project that Orca's list of the environment lacks is refused, and nothing is written.
+        let elsewhere = || Ok(vec!["repo-2".to_owned()]);
+        assert_eq!(
+            lsp_answer(&config, "pc-a", &save, elsewhere).unwrap(),
+            Err("プロジェクトが Orca の一覧に見つかりません".to_owned())
+        );
+        assert_eq!(
+            answer("pc-a", &read).unwrap()["servers"],
+            serde_json::json!([])
+        );
         std::fs::remove_dir_all(config).unwrap();
     }
 

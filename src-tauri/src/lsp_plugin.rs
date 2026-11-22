@@ -49,6 +49,8 @@ pub const SETTINGS_METHOD: &str = "lsp.settings";
 pub const SAVE_METHOD: &str = "lsp.server_save";
 pub const DELETE_METHOD: &str = "lsp.server_delete";
 const UNREADABLE_REQUEST: &str = "依頼を読めませんでした";
+/// The reason a save or a delete is refused for a project that Orca's list of the environment does not hold (the project is the PC's word, so it is not quoted).
+const UNLISTED_PROJECT: &str = "プロジェクトが Orca の一覧に見つかりません";
 
 #[derive(Serialize, Deserialize)]
 struct ProjectParams {
@@ -153,8 +155,18 @@ impl LspPush {
         }
     }
 
-    /// Does it for the project of the saved environment `environment` (the one of the connection) with the functions of `lsp.rs` that the app's own save uses, so every check of a save applies, and answers the settings as saved.
-    pub fn run(self, config: &Path, environment: &str) -> Result<Value, String> {
+    /// Does it for the project of the saved environment `environment` (the one of the connection) with the functions of `lsp.rs` that the app's own save uses, so every check of a save applies, and answers the settings as saved. A save and a delete are done only for a project that `listed` (the project keys of Orca's list of that environment, asked only for them) holds, and nothing is written for another.
+    pub fn run(
+        self,
+        config: &Path,
+        environment: &str,
+        listed: impl FnOnce() -> Result<Vec<String>, String>,
+    ) -> Result<Value, String> {
+        if let Self::Save { project, .. } | Self::Delete { project, .. } = &self {
+            if !listed()?.contains(project) {
+                return Err(UNLISTED_PROJECT.to_owned());
+            }
+        }
         let environment = Some(environment);
         let saved = match self {
             Self::Settings { project } => lsp::read_settings(config, environment, &project),
@@ -336,14 +348,47 @@ mod tests {
     }
 
     #[test]
+    fn a_save_and_a_delete_are_refused_for_a_project_that_the_list_lacks_and_a_read_asks_nothing() {
+        let config = temp_dir("unlisted");
+        let elsewhere = || Ok(vec!["repo-2".to_owned()]);
+        let refused = Err("プロジェクトが Orca の一覧に見つかりません".to_owned());
+        for request in [
+            save_push("repo-1", server("rust")).unwrap(),
+            delete_push("repo-1", "rust").unwrap(),
+        ] {
+            let push = LspPush::of(&request).unwrap().unwrap();
+            assert_eq!(push.run(&config, "pc-a", elsewhere), refused);
+        }
+        // A list that cannot be read refuses with its own reason, and nothing is written.
+        let unread = || Err("Orca が答えません".to_owned());
+        let save = LspPush::of(&save_push("repo-1", server("rust")).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            save.run(&config, "pc-a", unread),
+            Err("Orca が答えません".to_owned())
+        );
+        // A read does not ask the list at all.
+        let read = LspPush::of(&settings_push("repo-1").unwrap())
+            .unwrap()
+            .unwrap();
+        let saved = read
+            .run(&config, "pc-a", || panic!("a read asks no list"))
+            .unwrap();
+        assert_eq!(saved["servers"], serde_json::json!([]));
+        std::fs::remove_dir_all(config).unwrap();
+    }
+
+    #[test]
     fn a_push_works_on_the_environment_it_is_given_and_ignores_one_in_its_params() {
         let config = temp_dir("run");
+        let listed = || Ok(vec!["repo-1".to_owned()]);
         let mut request = save_push("repo-1", server("rust")).unwrap();
         request.params["environment"] = serde_json::json!("another-pc");
         let saved = LspPush::of(&request)
             .unwrap()
             .unwrap()
-            .run(&config, "pc-a")
+            .run(&config, "pc-a", listed)
             .unwrap();
         assert_eq!(saved["environment"], "pc-a");
         assert_eq!(saved["project"], "repo-1");
@@ -351,13 +396,13 @@ mod tests {
         let read = LspPush::of(&settings_push("repo-1").unwrap())
             .unwrap()
             .unwrap();
-        assert_eq!(read.run(&config, "pc-a").unwrap(), saved);
+        assert_eq!(read.run(&config, "pc-a", listed).unwrap(), saved);
         // Another environment has nothing saved, and this machine's settings are untouched.
         let other = LspPush::of(&settings_push("repo-1").unwrap())
             .unwrap()
             .unwrap();
         assert_eq!(
-            other.run(&config, "pc-b").unwrap()["servers"],
+            other.run(&config, "pc-b", listed).unwrap()["servers"],
             serde_json::json!([])
         );
         assert_eq!(
@@ -368,13 +413,13 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(
-            deleted.run(&config, "pc-a").unwrap()["servers"],
+            deleted.run(&config, "pc-a", listed).unwrap()["servers"],
             serde_json::json!([])
         );
         let missing = LspPush::of(&delete_push("repo-1", "rust").unwrap())
             .unwrap()
             .unwrap();
-        assert!(missing.run(&config, "pc-a").is_err());
+        assert!(missing.run(&config, "pc-a", listed).is_err());
         std::fs::remove_dir_all(config).unwrap();
     }
 }
