@@ -107,8 +107,14 @@ pub struct OrcaRow {
     pub branch: String,
     /// The one line of the row: the first line of the conversation's name, else of the prompt, the task, or the title of the pane's terminal; only what the owner or Claude wrote, never a message of the harness, data or the output of a process.
     pub line: String,
-    /// The first line of the newer of the agent's prompt and its last answer (`latest_of`), which the list shows in place of the line; `None` when the newer one has no text, or is data, the output of a process or a message of the harness (the list then shows the line).
+    /// The first line of the newer of the agent's prompt and its last answer (the one `answer_is_newer` picks), which the list shows in place of the line; `None` when the newer one has no text, or is data, the output of a process or a message of the harness (the list then shows the line).
     pub latest: Option<String>,
+    /// The first line of the agent's last prompt (`prompt`), read as `first_text_line` says; `None` when it has no text, or is data, the output of a process or a message of the harness. It is the prompt whether or not the answer is newer.
+    #[cfg_attr(test, ts(optional = nullable))]
+    pub prompt_line: Option<String>,
+    /// The first line of the agent's last answer (`lastAssistantMessage`), read as `first_text_line` says; `None` when it has no text, or is data, the output of a process or a message of the harness. It is the answer whether or not the prompt is newer.
+    #[cfg_attr(test, ts(optional = nullable))]
+    pub answer_line: Option<String>,
     /// How many of the agent's subagents are at work (A-8); 0 when it has none.
     pub subagents: u32,
     /// The subagents at work, each with its name and what it does (A-8), in the order Orca lists them; `None` when none works (`subagents` is their number).
@@ -595,16 +601,6 @@ fn answer_is_newer(agent: &Value) -> bool {
     main["state"] == "done" && ended > 0 && ended >= ms_of(agent, "stateStartedAt")
 }
 
-/// The first line of the newer of the agent's prompt and last answer (`answer_is_newer`), read as `first_text_line` says. The older message is never taken in its place: it is not the latest.
-fn latest_of(agent: &Value) -> Option<String> {
-    let key = if answer_is_newer(agent) {
-        "lastAssistantMessage"
-    } else {
-        "prompt"
-    };
-    text_of(agent, key).and_then(first_text_line)
-}
-
 /// The status an Orca state word stands for; a word not known yet is `unknown`. `done` and `active` are both the green dot.
 fn status_of(state: &str, unknown: OrcaStatus) -> OrcaStatus {
     match state {
@@ -750,6 +746,14 @@ pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
             let pane_key = text_of(agent, "paneKey");
             let terminal = pane_key.and_then(|pane| handles.iter().find(|(key, ..)| key == pane));
             let handle = terminal.map(|(_, handle, _)| (*handle).to_owned());
+            let prompt_line = text_of(agent, "prompt").and_then(first_text_line);
+            let answer_line = text_of(agent, "lastAssistantMessage").and_then(first_text_line);
+            // The newer of the two; the older one is never taken in its place, because it is not the latest.
+            let latest = if answer_is_newer(agent) {
+                answer_line.clone()
+            } else {
+                prompt_line.clone()
+            };
             rows.push((
                 updated,
                 OrcaRow {
@@ -759,7 +763,9 @@ pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
                         .unwrap_or_default()
                         .to_owned(),
                     line: line_of(agent, terminal.and_then(|(_, _, title)| *title)),
-                    latest: latest_of(agent),
+                    latest,
+                    prompt_line,
+                    answer_line,
                     subagents: u32::try_from(subagents.len()).unwrap_or(u32::MAX),
                     subagent_list: (!subagents.is_empty()).then_some(subagents),
                     shell: running_shell(agent),
@@ -2678,6 +2684,8 @@ mod tests {
                 branch: "feat/a".into(),
                 line: "Write the docs".into(),
                 latest: Some("Write the docs".into()),
+                prompt_line: Some("Write the docs".into()),
+                answer_line: None,
                 subagents: 0,
                 subagent_list: None,
                 shell: None,
@@ -3385,6 +3393,57 @@ mod tests {
     }
 
     #[test]
+    fn the_prompt_and_the_answer_are_two_lines_whichever_is_newer() {
+        let lines = |state: &str, prompt: Value, answer: Value| {
+            let mut a = agent("tabA:leaf1", state);
+            a["prompt"] = prompt;
+            a["lastAssistantMessage"] = answer;
+            let row = rows_of(&ps(&[a]), &terminals()).remove(0);
+            (row.prompt_line, row.answer_line)
+        };
+        let some = |p: &str, a: &str| (Some(p.to_owned()), Some(a.to_owned()));
+        // Both are given at once, in a turn in progress and in a finished one.
+        assert_eq!(
+            lines(
+                "working",
+                json!("Question\nmore"),
+                json!("<c>\n  Answer\nmore")
+            ),
+            some("Question", "Answer")
+        );
+        assert_eq!(
+            lines("done", json!("Question"), json!("Answer")),
+            some("Question", "Answer")
+        );
+        // Each is read as `first_text_line` says: a message of the harness, data and the output of a process are no line, and the other is kept.
+        assert_eq!(
+            lines(
+                "done",
+                json!("<event kind=\"repl-eval\">\nx\n</event>"),
+                json!("{\"a\":1}")
+            ),
+            (None, None)
+        );
+        assert_eq!(
+            lines("done", json!("[stderr] x"), json!("Answer")),
+            (None, Some("Answer".to_owned()))
+        );
+        assert_eq!(
+            lines("working", json!("Question"), json!("  ")),
+            (Some("Question".to_owned()), None)
+        );
+        assert_eq!(lines("working", Value::Null, Value::Null), (None, None));
+        // Each is cut to the limit.
+        let (prompt, answer) = lines(
+            "done",
+            json!("あ".repeat(LINE_LIMIT + 50)),
+            json!("い".repeat(LINE_LIMIT + 50)),
+        );
+        assert_eq!(prompt.unwrap().chars().count(), LINE_LIMIT);
+        assert_eq!(answer.unwrap().chars().count(), LINE_LIMIT);
+    }
+
+    #[test]
     fn the_latest_message_of_an_agent_that_has_no_prompt_is_its_answer_and_the_other_way_round() {
         let mut a = agent("tabA:leaf1", "done");
         a["lastAssistantMessage"] = json!("Answer");
@@ -3518,6 +3577,8 @@ mod tests {
                 branch: String::new(),
                 line: String::new(),
                 latest: None,
+                prompt_line: None,
+                answer_line: None,
                 subagents: 0,
                 subagent_list: None,
                 shell: None,

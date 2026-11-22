@@ -4255,7 +4255,7 @@ describe("orchestration mode: the children's worktrees in the projects", () => {
   const overview = (rows = [ownRow(), childRow()], worktrees = trees()) => orcaOverview(rows, worktrees, { terminals: [childTerminal()] });
   const withChild = () => formationList([formationEntry("formation", { children: [listedChild("child-a", "working", { repo: "api", branch: "child-a", path: CHILD_PATH })], counts: { planned: 0, waiting: 0, working: 1, done: 0 } })]);
   // The row of a session is the branch of its worktree (A-8).
-  const sessionNames = () => textsOf("#orca-feed .orca-session .orca-session-title");
+  const sessionNames = () => textsOf("#orca-feed .orca-session .orca-session-branch");
   // The marks of the formations on the rows of the projects, by their `aria-label`: the number of the children's worktrees is in the mark, and the row draws no text of the formation's name.
   const formationMarks = () => browser.execute(() => [...document.querySelectorAll("#orca-feed .orca-project .orca-project-formation")].map((e) => e.getAttribute("aria-label")));
   // The project row has no count of its sessions (#1033): the counts are on the session rows. The number of the mark is another thing.

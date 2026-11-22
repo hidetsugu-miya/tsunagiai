@@ -41,6 +41,34 @@
         "3 回続けて通ったことを、修正が通る条件として扱う",
         "`run-e2e.sh --only orca-files` をさらに回すコマンドを書いていない（5 回目まで回そうとしない）"
       ]
+    },
+    {
+      "id": 4,
+      "name": "added-spec-passes-alone-before-return",
+      "prompt": "あなたは implement の実行の手順 3 で、実装の担当の返りを受け取るリードです。`.claude/skills/implement/SKILL.md` の手順 3 を読み、`.claude/evals/files/implement/spec-return.md` の返りを、受け取ってから issue の commit までに何をするかを決めてください。この記録が、あなたの持つ実行の文脈です。コマンドは実行せず、打つはずのコマンドを書き出してください。",
+      "expected_output": "担当は新しい spec を足したので、commit の前にリードが `run-e2e.sh --only slack-list` でその spec を単独で通す。落ちたらその issue の担当に修正を返す。全件の `run-e2e.sh` はここでは回さない。",
+      "files": [
+        ".claude/evals/files/implement/spec-return.md"
+      ],
+      "assertions": [
+        "commit の前に、リード自身が `run-e2e.sh --only slack-list` を打つと書き、担当にその実行を頼んでいない",
+        "その spec が落ちたときは、その issue の担当に修正として返すと書く",
+        "全件の `run-e2e.sh` をこの時点で回すコマンドは書いていない"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "flaky-fix-runs-no-load",
+      "prompt": "あなたは implement の実行の手順 6 にいるリードです。`.claude/skills/implement/SKILL.md` の手順 6.3 を読み、`.claude/evals/files/implement/flaky-item.md` の項目を直す `code-implementer` の起動の文（prompt）を書き出してください。起動はせず、コマンドも実行しないでください。",
+      "expected_output": "起動の文に、負荷をかける処理と全件の実行をせず、その spec だけを 1 回ずつ回すことが書かれている。",
+      "files": [
+        ".claude/evals/files/implement/flaky-item.md"
+      ],
+      "assertions": [
+        "起動の文に、PC に負荷をかける処理を動かさないことが書かれている",
+        "起動の文に、全件の実行をせず、`orca-files` の spec だけを 1 回ずつ回すことが書かれている",
+        "「Orders for the implementer」を `制約:` としてそのまま入れている"
+      ]
     }
   ]
 }
