@@ -15,6 +15,19 @@
         "再実行のあと、release-watcher をもう一度起動する",
         "手でタグを打たず、`--admin` も使わない"
       ]
+    },
+    {
+      "id": 2,
+      "name": "lead-files-an-issue-for-an-unphotographed-screen",
+      "prompt": "あなたは implement の実行の手順 7 に来たリードで、release-preparer を起動したところです。`.claude/skills/release/SKILL.md` を読み、release-preparer が `.claude/evals/files/release/preparer-return.md` の JSON を返したときに、リードがすることを決めてください。コマンドは実行せず、打つはずのコマンドや呼ぶスキルを順に書いてください。GitHub には読み書きともに触れないでください。",
+      "expected_output": "`merged` を確かめたあと、`unphotographed` の「Slack 一覧」について、リードが `issue-plan` で issue を立て（label `documentation`）、そのあと release-watcher を起動する。",
+      "files": [
+        ".claude/evals/files/release/preparer-return.md"
+      ],
+      "assertions": [
+        "`unphotographed` の「Slack 一覧」について、リード自身が `issue-plan` で issue を立てると書いている（label `documentation`）",
+        "issue を立てたあとで release-watcher を起動すると書いている"
+      ]
     }
   ]
 }
