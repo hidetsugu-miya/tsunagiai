@@ -25,6 +25,7 @@ pub mod images;
 pub mod jira;
 mod keychain;
 pub mod lsp;
+pub mod lsp_plugin;
 pub mod mail_address;
 pub mod mail_attach;
 pub mod mail_send;
@@ -324,6 +325,7 @@ pub fn run() {
             image_senders::remember_image_sender,
             todoist::todoist_load,
             todoist::todoist_cached,
+            todoist::todoist_search,
             todoist::todoist_connected,
             todoist::todoist_save_token,
             todoist::todoist_disconnect,
@@ -456,7 +458,7 @@ pub fn run() {
             lsp::detect::lsp_detect,
             lsp::detect::lsp_language_looks,
             lsp::lsp_server_for,
-            lsp::lsp_claude_request,
+            lsp::lsp_claude_start,
             lsp::server::lsp_start,
             lsp::server::lsp_stop,
             lsp::server::lsp_restart,

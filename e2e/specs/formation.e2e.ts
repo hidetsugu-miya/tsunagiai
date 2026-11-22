@@ -1828,7 +1828,7 @@ describe("orchestration mode: the dialog that makes a formation", () => {
 
   it("shows the refusal of projects of two environments on a card, and makes no formation", async () => {
     await ask();
-    const reason = "フォーメーションは一つの PC に属します。環境「local」と環境「dev-server」にまたがるプロジェクトは入れられません（リーダーと子が別の PC にいると、SendMessage が届かないためです）";
+    const reason = "フォーメーションは一つの PC に属します。環境「local」と環境「dev-server」にまたがるプロジェクトは入れられません（子は、リーダーと同じ PC にだけ置けるためです）";
     const create = await mock("formation_create", rejects(reason));
     await browser.keys("mail-api");
     await pick(0);
@@ -2024,7 +2024,7 @@ describe("orchestration mode: the dialog that makes a formation", () => {
 
   it("does not ask for a consent when the projects are of two environments, and leaves the refusal to Rust", async () => {
     await ask({ formation_consents: [] });
-    const reason = "フォーメーションは一つの PC に属します。環境「local」と環境「dev-server」にまたがるプロジェクトは入れられません（リーダーと子が別の PC にいると、SendMessage が届かないためです）";
+    const reason = "フォーメーションは一つの PC に属します。環境「local」と環境「dev-server」にまたがるプロジェクトは入れられません（子は、リーダーと同じ PC にだけ置けるためです）";
     const create = await mock("formation_create", rejects(reason));
     await browser.keys("mail-api");
     await pick(0);

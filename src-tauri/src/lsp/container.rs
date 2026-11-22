@@ -213,9 +213,22 @@ mod tests {
 
     // ---- the whole start ----
 
+    /// Saves the one ruby-lsp that these tests start the container of (a repository with nothing saved has no server, #1243).
+    fn save_ruby(dir: &std::path::Path) {
+        set_settings(
+            dir,
+            LspRepoSettings {
+                servers: vec![LspServerSettings::ruby_lsp()],
+                ..LspRepoSettings::unset(None, "repo-1")
+            },
+        )
+        .unwrap();
+    }
+
     #[test]
     fn it_reads_the_way_and_then_starts_the_service_in_the_worktree_on_this_machine() {
         let dir = temp_dir("local");
+        save_ruby(&dir);
         let config = compose_config();
         let mut read = Vec::new();
         let mut upped = Vec::new();
@@ -355,6 +368,7 @@ mod tests {
     #[test]
     fn a_worktree_with_no_compose_service_starts_nothing() {
         let dir = temp_dir("none");
+        save_ruby(&dir);
         let mut runs = 0;
         let err = start_container(
             &dir,
@@ -382,6 +396,7 @@ mod tests {
     #[test]
     fn a_failed_start_and_a_run_that_cannot_be_made_are_told() {
         let dir = temp_dir("failed");
+        save_ruby(&dir);
         let config = compose_config();
         let read = |_: &Route, _: &str, command: &str, _: usize| -> Result<Ran, String> {
             Ok(if command.contains("docker compose config") {

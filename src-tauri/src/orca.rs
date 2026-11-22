@@ -1384,12 +1384,39 @@ fn launch_args(path: &str, command: &str, environment: Option<&str>) -> Vec<Stri
     with_environment(args, environment)
 }
 
-/// Where the plugin of A-45 is, for the command of a launch.
+/// The plugin that a launch gives `claude` (`--plugin-dir`): each has its own tools of `tsunagiai-mcp`, and no launch has both.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum PluginKind {
+    /// `preview_open` (A-45): every launch but the one of the language servers.
+    Preview,
+    /// The tools that set up the language servers of a project (A-34, #1242): the launch of 「Claude に頼む」.
+    Lsp,
+}
+
+impl PluginKind {
+    /// The argument of `tsunagiai-mcp` that writes the plugin on the PC it runs on and prints its folder.
+    fn flag(self) -> &'static str {
+        match self {
+            Self::Preview => crate::preview_plugin::FLAG,
+            Self::Lsp => crate::lsp_plugin::FLAG,
+        }
+    }
+
+    /// Writes the plugin in `config` of this machine for the `tsunagiai-mcp` at `mcp`, and answers its folder. The Lsp plugin of this machine has the tools that read and write this machine's settings (`--lsp-local`).
+    fn write_here(self, config: &Path, mcp: &Path) -> Result<std::path::PathBuf, String> {
+        match self {
+            Self::Preview => crate::preview_plugin::write_plugin(config, mcp),
+            Self::Lsp => crate::lsp_plugin::write_plugin(config, mcp, true),
+        }
+    }
+}
+
+/// Where the plugin is, for the command of a launch.
 enum PluginAt<'a> {
     /// In this machine's config folder, which the app wrote.
     Here(&'a Path),
-    /// In the config folder of the PC of a saved environment, which `tsunagiai-mcp --preview-plugin` of that PC writes when the command runs.
-    OnServer,
+    /// In the config folder of the PC of a saved environment, which `tsunagiai-mcp` of that PC writes when the command runs, with the flag of the kind (`PluginKind::flag`).
+    OnServer(PluginKind),
 }
 
 /// The script's first words: the first prompt is read from the file `f` that the app put in the worktree (`orca_attach::drop_prompt`), and the file is deleted at once. `set --` leaves `claude` the words `-- {prompt}` (after a `--`, so that the text is never read as an option), or nothing when there is no file or it is empty.
@@ -1407,9 +1434,9 @@ fn command_word(text: &str) -> Result<String, String> {
     Ok(crate::claude_code::sh_quote(text))
 }
 
-/// The command that is typed into the shell of the new terminal: `claude` with the plugin of A-45 (`--plugin-dir`) and, when there is one, the first instruction (`claude [prompt]`). The command line holds fixed words and paths only; the first instruction is in the file `prompt_file` of the PC that `claude` runs on, which the command reads and deletes (`PROMPT_WORDS`), so no shell reads it, whatever the login shell is (fish reads a backslash inside single quotes as an escape), and no limit of the length of a line holds it (a hand-over may be 100,000 characters).
+/// The command that is typed into the shell of the new terminal: `claude` with the plugin of `plugin` (`--plugin-dir`; the plugin of A-45, or the one of the language servers, #1242) and, when there is one, the first instruction (`claude [prompt]`). The command line holds fixed words and paths only; the first instruction is in the file `prompt_file` of the PC that `claude` runs on, which the command reads and deletes (`PROMPT_WORDS`), so no shell reads it, whatever the login shell is (fish reads a backslash inside single quotes as an escape), and no limit of the length of a line holds it (a hand-over may be 100,000 characters).
 /// With no instruction on this machine the command is `claude --plugin-dir '{folder}'`, the folder's path in single quotes because it holds a space (`Application Support`). In every other case it is `sh -c '{script}' sh {file}` (on this machine with the folder after the file), as the orchestrator's is (`formation::orchestrator_command`): the script has no single quote and no backslash.
-/// On a saved environment's PC the command begins with `exec` and the script asks the `remote/tsunagiai-mcp` that the app put there (A-37) for the plugin's folder (`</dev/null`: a program of an older version that serves in place of printing would wait for the terminal's input), and starts `claude` with it; a PC without that program, or whose program cannot write the folder, starts `claude` with no plugin, as it did before the plugin.
+/// On a saved environment's PC the command begins with `exec` and the script asks the `remote/tsunagiai-mcp` that the app put there (A-37) for the plugin's folder (`--preview-plugin`, or `--lsp-plugin`) (`</dev/null`: a program of an older version that serves in place of printing would wait for the terminal's input), and starts `claude` with it; a PC without that program, or whose program cannot write the folder, starts `claude` with no plugin, as it did before the plugin.
 fn claude_command(plugin: PluginAt<'_>, prompt_file: Option<&str>) -> Result<String, String> {
     let file = prompt_file.map(command_word).transpose()?;
     match plugin {
@@ -1426,9 +1453,9 @@ fn claude_command(plugin: PluginAt<'_>, prompt_file: Option<&str>) -> Result<Str
                 crate::claude_code::sh_quote(&script)
             ))
         }
-        PluginAt::OnServer => {
+        PluginAt::OnServer(kind) => {
             let program = crate::formation_remote::program_path();
-            let flag = crate::preview_plugin::FLAG;
+            let flag = kind.flag();
             let script = format!(
                 "f=\"$1\"; {PROMPT_WORDS}; m=\"{program}\"; d=; [ ! -x \"$m\" ] || d=$(\"$m\" {flag} 2>/dev/null </dev/null); if [ -n \"$d\" ]; then exec claude --plugin-dir \"$d\" \"$@\"; else exec claude \"$@\"; fi"
             );
@@ -1441,21 +1468,19 @@ fn claude_command(plugin: PluginAt<'_>, prompt_file: Option<&str>) -> Result<Str
     }
 }
 
-/// The command of a launch for `environment` in the worktree at `path`: for this machine the plugin is written here first (the `tsunagiai-mcp` next to the app, `claude_code::checked_mcp_binary`), and a first prompt is put in a file of the worktree (`orca_attach::drop_prompt`), where it is read and deleted by the command. A failure of either is the error of the launch, before any terminal is made. Call it in a thread of `blocking`.
+/// The command of a launch of the plugin `kind` for `environment` in the worktree at `path`: for this machine the plugin is written here first (the `tsunagiai-mcp` next to the app, `claude_code::checked_mcp_binary`), and a first prompt is put in a file of the worktree (`orca_attach::drop_prompt`), where it is read and deleted by the command. A failure of either is the error of the launch, before any terminal is made. Call it in a thread of `blocking`.
 fn launch_command(
     path: &str,
     prompt: Option<&str>,
     environment: Option<&str>,
+    kind: PluginKind,
 ) -> Result<String, String> {
     let plugin_dir = match environment {
         Some(_) => None,
         None => {
             let exe = std::env::current_exe().map_err(|e| e.to_string())?;
             let mcp = crate::claude_code::checked_mcp_binary(&exe)?;
-            Some(crate::preview_plugin::write_plugin(
-                &crate::identity::config_dir()?,
-                &mcp,
-            )?)
+            Some(kind.write_here(&crate::identity::config_dir()?, &mcp)?)
         }
     };
     let prompt_file =
@@ -1473,7 +1498,7 @@ fn launch_command(
     claude_command(
         plugin_dir
             .as_deref()
-            .map_or(PluginAt::OnServer, PluginAt::Here),
+            .map_or(PluginAt::OnServer(kind), PluginAt::Here),
         prompt_file.as_deref(),
     )
 }
@@ -1880,11 +1905,12 @@ fn read_lines(handle: &str, environment: Option<&str>) -> Result<Vec<String>, St
     }
 }
 
-/// Starts Claude in the worktree at `path`, with `prompt` as its first prompt when there is one (A-9; the Orca screen starts it with none). The prompt goes in a file of the worktree that the command reads and deletes (`launch_command`), never into the command line.
+/// Starts Claude in the worktree at `path`, with `prompt` as its first prompt when there is one (A-9; the Orca screen starts it with none), and the plugin `kind`. The prompt goes in a file of the worktree that the command reads and deletes (`launch_command`), never into the command line.
 fn launch(
     path: &str,
     prompt: Option<&str>,
     environment: Option<&str>,
+    kind: PluginKind,
 ) -> Result<OrcaStarted, String> {
     if let Some(text) = prompt {
         check_text(text)?;
@@ -1895,8 +1921,30 @@ fn launch(
     } else {
         check_start(path, environment)?;
     }
-    let command = launch_command(path, prompt, environment)?;
+    let command = launch_command(path, prompt, environment, kind)?;
     write(&launch_args(path, &command, environment)).map(|result| launched_of(&result))
+}
+
+/// Starts the Claude Code that sets up the language servers (A-34, #1242) in the worktree at `path`, with `prompt` as its first prompt and the plugin of the language servers in place of the plugin of A-45: the tools of that plugin are the only ones of `tsunagiai-mcp` it has. Call it in a thread of `blocking`.
+pub(crate) fn launch_lsp(
+    path: &str,
+    prompt: &str,
+    environment: Option<&str>,
+) -> Result<OrcaStarted, String> {
+    launch(path, Some(prompt), environment, PluginKind::Lsp)
+}
+
+/// Whether the terminal `handle` (a Claude session's or a plain one) is in the list of its target read just now. A list that cannot be read, or a handle that is none, is no: the caller then starts afresh, and that start says why it cannot.
+pub(crate) fn terminal_listed(handle: &str, environment: Option<&str>) -> bool {
+    if check_handle(handle).is_err() || check_listed(environment).is_err() {
+        return false;
+    }
+    let (ps, terminals) = read_lists(environment, true);
+    let (Ok(ps), Ok(terminals)) = (ps, terminals) else {
+        return false;
+    };
+    let rows = rows_of(&ps, &terminals);
+    check_terminal(&rows, &plain_terminals_of(&ps, &terminals, &rows), handle).is_ok()
 }
 
 /// Asks `ask` to add the folder as a Git repository, and, only when the answer says it is not one, asks once more with `--kind=folder`. Any other failure is Orca's own message and is not asked again.
@@ -2248,7 +2296,7 @@ fn handoff(
 ) -> Result<OrcaStarted, String> {
     let text = compose(&handoff_instruction(instruction, files)?, summary, context)?;
     let OrcaDestination::New { path } = destination;
-    launch(path, Some(&text), environment)
+    launch(path, Some(&text), environment, PluginKind::Preview)
 }
 
 /// Closes the tab of an Orca terminal; `ptyKilled` is not looked at. When the close of the tab answers `terminal_handle_stale` (which Orca also answers for a terminal that runs) or `tab_not_found` (which it answers for a terminal that ended), the terminal is closed again with no `--tab`, once; any failure of that, `terminal_handle_stale` too, is an error, and the tab stays, except `tab_not_found`: the tab is gone.
@@ -2419,7 +2467,7 @@ pub async fn orca_send(
 /// Starts Claude in the worktree at `path` with no first prompt (the plus of the work pane, A-16). The answer is the session as Orca's reply names it.
 #[tauri::command]
 pub async fn orca_start(path: String, environment: Option<String>) -> Result<OrcaStarted, String> {
-    blocking(move || launch(&path, None, environment.as_deref())).await?
+    blocking(move || launch(&path, None, environment.as_deref(), PluginKind::Preview)).await?
 }
 
 /// Opens a plain terminal in the worktree at `path` (the plus of the work pane, A-16). The answer is the terminal as Orca's reply names it (its `handle`; no pane key).
@@ -5070,7 +5118,7 @@ mod tests {
                 "{bad:?}"
             );
             assert!(
-                claude_command(PluginAt::OnServer, Some(bad)).is_err(),
+                claude_command(PluginAt::OnServer(PluginKind::Preview), Some(bad)).is_err(),
                 "{bad:?}"
             );
         }
@@ -5079,7 +5127,7 @@ mod tests {
     #[test]
     fn the_command_of_a_saved_environment_asks_its_own_program_for_the_plugin_and_has_no_quote_inside_its_script(
     ) {
-        let command = claude_command(PluginAt::OnServer, None).unwrap();
+        let command = claude_command(PluginAt::OnServer(PluginKind::Preview), None).unwrap();
         let script = script_of(&command, "exec sh -c '", "' sh");
         assert!(!script.contains('\'') && !script.contains('\\'), "{script}");
         assert!(
@@ -5094,11 +5142,50 @@ mod tests {
             "{script}"
         );
         // The file of the prompt follows the script as its argument, and no text of a prompt is in the line.
-        let with_file = claude_command(PluginAt::OnServer, Some(FILE)).unwrap();
+        let with_file =
+            claude_command(PluginAt::OnServer(PluginKind::Preview), Some(FILE)).unwrap();
         assert_eq!(
             with_file,
             format!("{command} '/w/example app/.orca/drops/prompt-0123.txt'")
         );
+    }
+
+    #[test]
+    fn the_command_of_the_language_servers_asks_the_program_for_its_own_plugin() {
+        let command = claude_command(PluginAt::OnServer(PluginKind::Lsp), None).unwrap();
+        let script = script_of(&command, "exec sh -c '", "' sh");
+        assert!(
+            script.contains("\"$m\" --lsp-plugin 2>/dev/null </dev/null"),
+            "{script}"
+        );
+        assert!(!script.contains("--preview-plugin"), "{script}");
+        // Only the flag differs from the command of the other plugin.
+        let preview = claude_command(PluginAt::OnServer(PluginKind::Preview), None).unwrap();
+        assert_eq!(command.replace("--lsp-plugin", "--preview-plugin"), preview);
+    }
+
+    #[test]
+    fn each_kind_of_plugin_has_its_flag_and_writes_its_own_folder_here() {
+        assert_eq!(PluginKind::Preview.flag(), "--preview-plugin");
+        assert_eq!(PluginKind::Lsp.flag(), "--lsp-plugin");
+        let config = std::env::temp_dir().join(format!(
+            "tsunagiai-orca-kind-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&config);
+        let mcp = Path::new("/Applications/tsunagiai.app/Contents/MacOS/tsunagiai-mcp");
+        let preview = PluginKind::Preview.write_here(&config, mcp).unwrap();
+        let lsp = PluginKind::Lsp.write_here(&config, mcp).unwrap();
+        assert_eq!(preview, config.join("preview-plugin"));
+        assert_eq!(lsp, config.join("lsp-plugin"));
+        // On this machine the language servers' tools read and write this machine's settings.
+        let json = std::fs::read_to_string(lsp.join(".mcp.json")).unwrap();
+        assert!(json.contains("--lsp-local"), "{json}");
+        assert!(!std::fs::read_to_string(preview.join(".mcp.json"))
+            .unwrap()
+            .contains("--lsp"));
+        std::fs::remove_dir_all(&config).unwrap();
     }
 
     /// A temporary home that holds a fake `claude` (it prints each of its arguments and a NUL), the program of `remote/` when `server` is given, and a prompt file under a folder with a blank and a quote in its name when `prompt` is given.
@@ -5250,7 +5337,7 @@ mod tests {
             assert_eq!(
                 words_of(
                     shell,
-                    &claude_command(PluginAt::OnServer, Some(&file)).unwrap(),
+                    &claude_command(PluginAt::OnServer(PluginKind::Preview), Some(&file)).unwrap(),
                     &place
                 ),
                 ["--plugin-dir", dir, "--", NASTY],
@@ -5259,7 +5346,7 @@ mod tests {
             assert_eq!(
                 words_of(
                     shell,
-                    &claude_command(PluginAt::OnServer, None).unwrap(),
+                    &claude_command(PluginAt::OnServer(PluginKind::Preview), None).unwrap(),
                     &place
                 ),
                 ["--plugin-dir", dir],
@@ -5279,7 +5366,7 @@ mod tests {
             assert_eq!(
                 words_of(
                     shell,
-                    &claude_command(PluginAt::OnServer, Some(&file)).unwrap(),
+                    &claude_command(PluginAt::OnServer(PluginKind::Preview), Some(&file)).unwrap(),
                     &missing
                 ),
                 ["--", NASTY],
@@ -5287,7 +5374,7 @@ mod tests {
             );
             assert!(words_of(
                 shell,
-                &claude_command(PluginAt::OnServer, None).unwrap(),
+                &claude_command(PluginAt::OnServer(PluginKind::Preview), None).unwrap(),
                 &missing
             )
             .is_empty());
@@ -5298,7 +5385,7 @@ mod tests {
             assert_eq!(
                 words_of(
                     shell,
-                    &claude_command(PluginAt::OnServer, Some(&file)).unwrap(),
+                    &claude_command(PluginAt::OnServer(PluginKind::Preview), Some(&file)).unwrap(),
                     &fails
                 ),
                 ["--", "go"],
@@ -5310,7 +5397,7 @@ mod tests {
             assert!(
                 words_of(
                     shell,
-                    &claude_command(PluginAt::OnServer, None).unwrap(),
+                    &claude_command(PluginAt::OnServer(PluginKind::Preview), None).unwrap(),
                     &serves
                 )
                 .is_empty(),

@@ -53,6 +53,8 @@ const answers = {
   todoist_connected: false,
   todoist_comments: [],
   todoist_picked_due: null,
+  // T-9: a search finds nothing; a spec that types in the search field mocks `todoist_search` with the hits it should read.
+  todoist_search: [],
   // N-1: no Notion workspace connected; a spec that connects or unlinks one mocks `notion_accounts` with the list it should read next, and `notion_connect` or `notion_disconnect`.
   notion_accounts: [],
   slack_load: { workspaces: [] },
@@ -199,12 +201,12 @@ const answers = {
   lsp_stop: null,
   lsp_restart: { state: "indexing" },
   lsp_container_start: null,
-  // The key of the server that takes Ruby (its language), of a repository with nothing saved.
-  lsp_server_for: "ruby",
+  // The key of the server that takes a language: none, as a repository with nothing saved has no server (a spec that checks a definition gives its own).
+  lsp_server_for: null,
   // A-34: the languages found in a worktree: none (a spec that checks the finding gives its own).
   lsp_detect: [],
-  // A-34, A-36: the first instruction of the Claude Code pane that sets up the language servers.
-  lsp_claude_request: "> 環境: local\nこのプロジェクトの言語サーバーを設定してください。\n",
+  // A-34: the Claude tab that the language server part starts in the work pane (a spec that checks the start gives its own).
+  lsp_claude_start: { paneKey: "tab_lsp:leaf_1", handle: "term_lsp" },
   // How the card of a language server draws a language (A-34), as `lsp_language_looks` answers it: the six of the table with their titles and icons, and one that has neither.
   lsp_language_looks: [
     { language: "go", title: "Go", icon: "go" },
@@ -276,8 +278,8 @@ const computed = {
     }
     return { weekdays: [0, 1, 2, 3, 4, 5, 6].map((i) => (firstDay + i) % 7), days };
   },
-  // A-34: the settings of a repository that has none saved (the one server, ruby-lsp, of the language ruby), and the save, which answers what it was given (the texts trimmed by Rust are given trimmed here).
-  lsp_settings: ({ environment, project }) => ({ environment, project, sshHost: null, servers: [{ language: "ruby", name: "ruby-lsp", autoStart: true, command: null, mount: null, service: null }] }),
+  // A-34: the settings of a repository that has none saved (no server), and the save, which answers what it was given (the texts trimmed by Rust are given trimmed here).
+  lsp_settings: ({ environment, project }) => ({ environment, project, sshHost: null, servers: [] }),
   lsp_settings_set: ({ settings }) => settings,
   ssh_hosts: () => [],
   orca_browse_dir: ({ path }) => {

@@ -100,6 +100,7 @@ import type { SlackLoad } from "./bindings/SlackLoad";
 import type { SlackThread } from "./bindings/SlackThread";
 import type { SocketStatus } from "./bindings/SocketStatus";
 import type { Summary } from "./bindings/Summary";
+import type { TaskHit } from "./bindings/TaskHit";
 import type { Sync } from "./bindings/Sync";
 import type { TerminalThemes } from "./bindings/TerminalThemes";
 import type { ThemeSelection } from "./bindings/ThemeSelection";
@@ -178,6 +179,8 @@ export interface Commands {
   todoist_connected: { args: undefined; result: boolean };
   todoist_save_token: { args: { token: string }; result: null };
   todoist_disconnect: { args: undefined; result: null };
+  // T-9: the open tasks whose name, description or labels hold every word of `query`, in the order of the last load, with where the words hit; asks Todoist nothing. Empty for a query with no word.
+  todoist_search: { args: { query: string }; result: TaskHit[] };
   todoist_add: { args: { text: string; projectId?: string | null; today: boolean }; result: boolean | null };
   todoist_add_subtask: { args: { parentId: string; content: string }; result: boolean | null };
   todoist_task_from_mail: { args: Account & { threadId: string; subject: string }; result: boolean | null };
@@ -370,7 +373,7 @@ export interface Commands {
   screen_bridge_answer: { args: { id: number; answer: ScreenAnswer }; result: null };
   // A-37: the children of the formation `name`, in the order of `formations/{name}/children.json`, each joined to its agent of the `orca worktree ps` of its environment (a planned one has no state yet, a launched one that left the list is done with no handle). A failure carries the message.
   formation_children: { args: { name: string }; result: FormationChild[] };
-  // A-37 (#1084): the messages that the leader of the formation `name` and its children sent each other by SendMessage, oldest first, the last 500 at most: who sent it (`from`), to whom (`to`), when (`atMs`, epoch milliseconds) and the first line of the text (`line`, data from the sender, at most 200 characters). A formation of a saved environment is read from its PC. One that has none yet answers an empty list.
+  // A-37 (#1084): the messages that the leader of the formation `name` and its children sent each other with Orca's orchestration, oldest first, the last 500 at most: who sent it (`from`), to whom (`to`), when (`atMs`, epoch milliseconds) and the first line of the text (`line`, data from the sender, at most 200 characters). A formation of a saved environment is read from its PC. One that has none yet answers an empty list.
   formation_messages: { args: { name: string }; result: FormationMessage[] };
   formation_instructed: { args: { name: string }; result: string[] };
   // A-41: the decision page that waits on the child `child` of the formation `name` (the child's `pendingPage` is set), checked again and with its evidence resolved now: a formation of a saved environment has its PC's server do it. A failure carries the message: the violations of the page, one on each line, or why it could not be read.
@@ -424,13 +427,13 @@ export interface Commands {
   ssh_hosts: { args: undefined; result: string[] };
   // A-34: how the card of a language server draws each language of A-21 (`plaintext` too, each once, sorted): its title (`Ruby`, `TypeScript`; any other is its name) and its icon of src/vendor/jetbrains-icons/, none for a language that has none.
   lsp_language_looks: { args: undefined; result: LspLanguageLook[] };
-  // A-34: the settings of the repository of the project `project` of `environment` (null: this machine) for the language servers: the saved ones, else the unset ones (one server, ruby-lsp, of the language `ruby`, with `autoStart` true and nothing replaced). A repository has one server for each language.
+  // A-34: the settings of the repository of the project `project` of `environment` (null: this machine) for the language servers: the saved ones, else the unset ones (no server and no ssh Host). A repository has one server for each language.
   lsp_settings: { args: { environment: string | null; project: string }; result: LspRepoSettings };
   // A-34: saves the settings of a repository and answers them as saved (texts trimmed, an empty one not set). Settings that are the unset ones take the entry away. A host that is not a Host name for ssh, a path of the mount that is not absolute, a text with a control character, a server name over 64 characters (an empty one is saved as the name of the app's table for the language, else the language), a language that is not one of A-21 and a language that two servers have are errors.
   lsp_settings_set: { args: { settings: LspRepoSettings }; result: LspRepoSettings };
+  // A-34, A-36: starts a tab of Claude Code in the work pane for `worktree` of the project `project` of `environment` (null: this machine), with the plugin `lsp` and the first instruction that sets up the language servers (`language`: only that one, null for every language of it), and answers the tab (`OrcaStarted`). The worktree is checked against Orca's list, and a saved environment that the app keeps no connection of pushes to is refused; the same request again answers the tab that is open already. A value that is refused is an error in Japanese.
+  lsp_claude_start: { args: { environment: string | null; project: string; worktree: string; language: string | null }; result: OrcaStarted };
   // A-34: the key of the server of the project `project` of `environment` that takes `language` (a language of A-21), which is the language itself, null when the repository has no server of it. The key is what every command below takes as `server`.
-  // A-34, A-36: the first instruction of the Claude Code pane that sets up the language servers of `worktree` (`language`: only that one, null for every language of it): the values in a quote as data, the ssh Host saved for the repository, the worktree checked against Orca's list. A value that is refused is an error in Japanese.
-  lsp_claude_request: { args: { environment: string | null; project: string; worktree: string; language: string | null }; result: string };
   lsp_server_for: { args: { environment: string | null; project: string; language: string }; result: string | null };
   // A-34: the languages that `worktree` of the project `project` of `environment` (null: this machine) has, each with the server of the app's table (name, command, where it runs, mount, and whether it was `found`, is `missing` or its container is down), read from the worktree just now (a saved environment's through the ssh Host of its settings; in the service of compose that mounts the worktree, when there is one). A language that the worktree does not show is not answered.
   lsp_detect: { args: { environment: string | null; project: string; worktree: string }; result: LspFound[] };

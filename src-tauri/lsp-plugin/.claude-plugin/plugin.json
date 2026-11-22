@@ -1,0 +1,4 @@
+{
+  "name": "lsp",
+  "description": "Teaches Claude Code to read and set the language servers of a project of the development screen of the app (the tools lsp_settings, lsp_server_save and lsp_server_delete of tsunagiai-mcp)."
+}
