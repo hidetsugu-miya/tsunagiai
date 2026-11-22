@@ -16,6 +16,7 @@ import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaProject } from "./bindings/OrcaProject";
 import type { OrcaRow } from "./bindings/OrcaRow";
 import type { OrcaSubagent } from "./bindings/OrcaSubagent";
+import type { OrcaStarted } from "./bindings/OrcaStarted";
 import type { OrcaStatus } from "./bindings/OrcaStatus";
 import type { OrcaStreamEvent } from "./bindings/OrcaStreamEvent";
 import type { OrcaTerminal } from "./bindings/OrcaTerminal";
@@ -1123,7 +1124,7 @@ function serverGone(environment: string | null, path: string) {
 // Whether the list of `environment` is on the screen and was read well.
 const listRead = (environment: string | null) => (environment === view?.target ? view?.state === "ready" : environment === null && here?.state === "ready");
 
-// Whether Orca's list, read well, has not the worktree at `path` of `environment` any more (A-34: the pane of Claude Code of the language servers closes by this alone, and not with the last tab of the worktree). A list that is not on the screen or not read well does not say it.
+// Whether Orca's list, read well, has not the worktree at `path` of `environment` any more (A-34). A list that is not on the screen or not read well does not say it.
 function worktreeGone(environment: string | null, path: string) {
   return listRead(environment) && !mix.worktrees.some((w) => w.path === path && placeOf(w) === environment);
 }
@@ -1139,7 +1140,7 @@ function syncPeek() {
 }
 
 function draw() {
-  syncServers(serverGone, worktreeGone);
+  syncServers(serverGone);
   drawBadge();
   drawStarted();
   // Before the terminals of the screen are shown, so that a terminal the project selected now owns is not held by the modal.
@@ -1632,6 +1633,13 @@ async function start(kind: StartKind, worktree: OrcaWorktree) {
   }
 }
 
+// A-34: the Claude tab that the language server part started in the worktree of `target` (or found again, which Rust answers when the tab of that worktree and language is still listed) is followed as the plus follows its start: once the list holds it, it is selected. The list is read at once, so a new tab appears and an old one is selected again.
+function followLsp(launched: OrcaStarted, target: string | null) {
+  started = { kind: "claude", paneKey: launched.paneKey, handle: launched.handle, target, until: Date.now() + START_WAIT_MS };
+  claimStarted();
+  reread(target);
+}
+
 // The button of the file pane (A-18) is in the top row of the pane while it is shown, and at the right end of the tab strip of the corner pane while it is hidden.
 // The pressed button is hidden by the draw, so the focus goes on to the button that is shown now.
 function toggleFilesAndDraw() {
@@ -1765,7 +1773,7 @@ export function initOrca() {
   initSplit($("orca"), $("orca-split"), { side: "left", min: 0.15, max: 0.5, initial: 0.19, property: "--list-w" });
   initSplit($("orca"), $("orca-files-split"), { side: "right", min: 0.15, max: 0.4, initial: 0.22, property: "--files-w" });
   initOrcaEditor({ changed: draw, error: (e) => showFailure("orca", e), definition: askDefinition, serve: (target, project, path, server) => void ensureServer({ target, project, path }, server), mayAsk });
-  initLsp({ changed: ({ target, project }) => resolveServers(target, project) });
+  initLsp({ changed: ({ target, project }) => resolveServers(target, project), started: followLsp });
   initDefinition({ open: openPlace });
   initOrcaDatabase({ table: openDatabaseTable, query: openDatabaseQuery, gone: (id) => {
       if (closeConnectionTabs(id)) draw();

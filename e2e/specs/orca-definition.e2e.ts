@@ -7,9 +7,10 @@ import type { LspServerSettings } from "../../ts/bindings/LspServerSettings";
 import type { LspStatus } from "../../ts/bindings/LspStatus";
 import type { OrcaDir } from "../../ts/bindings/OrcaDir";
 import type { OrcaFileText } from "../../ts/bindings/OrcaFileText";
+import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import type { PaneLayout } from "../../ts/bindings/PaneLayout";
 import type { PaneNode } from "../../ts/bindings/PaneNode";
-import { callsOf, count, emitEvent, holds, mock, onceId, orcaWorktree, rejects, release, textsOf, timers, waitForCalls, waitForCount } from "../support";
+import { callsOf, count, emitEvent, holds, mock, onceId, orcaRow, orcaWorktree, rejects, release, textsOf, timers, waitForCalls, waitForCount } from "../support";
 import { claudeTab, filesToggle, openOrca, orcaOverview, project, sample, selectedTab, showAgain, studio, tabOf, tabTitles, worktrees } from "../orca-support";
 
 // A-34: the definition tab under the pane of the editor, and the editor's Command and right button. Rust asks the language server, reads the name under the mouse and decides how each place is drawn (unit tests); here the screen is checked: what it asks of Rust for a press, how it splits the work pane, and how it draws the answers and opens them. The language server in the file pane is checked below too: its state and settings, and when it is started and stopped.
@@ -855,113 +856,62 @@ describe("orca: definition (A-34)", () => {
     await expect(stateText("python")).toHaveText("索引中");
   });
 
-  // ---- Claude Code sets the servers up (A-34, A-36, #976) ----
+  // ---- Claude Code sets the servers up (A-34, #976, #1247) ----
 
-  const askText = "> 環境: local\n> プロジェクト: proj_example-app\nサーバーを調べて設定してください。\n";
+  const selectedId = () => browser.execute(() => document.querySelector('.orca-tabs [role="tab"][aria-selected="true"]')?.closest("[data-tab]")?.getAttribute("data-tab") ?? null);
   const askArgs = (language: string | null) => ({ environment: null, project: repo, worktree, language });
-  const paneOf = () => $("#orca-lsp-claude");
+  // What `lsp_claude_start` answers for a tab started in example-app, and the row that Orca's list holds for it afterwards.
+  const startedTab: OrcaStarted = { paneKey: "tab_lsp:leaf_1", handle: "term_lsp" };
+  const startedRow = () => orcaRow("example-app", "feat/a", "言語サーバーを設定する", { paneKey: "tab_lsp:leaf_1", handle: "term_lsp" });
+  const listWithStarted = () => orcaOverview([...sample(), startedRow()], worktrees());
 
-  it("has the ✦ of Claude in the heading, which opens the pane of Claude Code under the cards with the instruction of Rust (A-34, A-36)", async () => {
+  it("has the ✦ of Claude in the heading, which starts a Claude tab in the work pane and follows it, with no pane in the file pane (A-34)", async () => {
     await showServer();
     await expect($("#orca-lsp-ask")).toHaveAttribute("aria-label", "Claude に設定を頼む");
-    await expect(paneOf()).not.toBeDisplayed();
-    expect(await callsOf("claude_code_start")).toEqual([]);
-    const ask = await mock("lsp_claude_request", askText);
+    await expect($("#orca-lsp-claude")).not.toExist();
+    const ask = await mock("lsp_claude_start", startedTab);
+    await mock("orca_overview", listWithStarted());
     await $("#orca-lsp-ask").click();
     expect(await waitForCalls(ask)).toEqual([askArgs(null)]);
-    await expect(paneOf()).toBeDisplayed();
-    await expect($("#orca-lsp-claude-term.claude-code-pane")).toBeDisplayed();
-    const [start] = await waitForCalls("claude_code_start");
-    expect(start).toMatchObject({ id: "lsp-claude", builtinTools: true, permissionMode: "manual", skill: null, prompt: askText });
-    // Under the cards, inside the language server part.
-    expect(await browser.execute(() => document.getElementById("orca-lsp-cards")!.nextElementSibling?.id)).toBe("orca-lsp-claude");
+    await expect(tabOf("claude:tab_lsp:leaf_1").$('[role="tab"]')).toHaveAttribute("aria-selected", "true");
+    // The terminal of the tab is the one of Orca: this part starts no terminal of its own, and saves no settings.
+    expect(await callsOf("claude_code_start")).toEqual([]);
     expect(await callsOf("lsp_settings_set")).toEqual([]);
   });
 
-  it("asks for the language of a card that has no server found with 「Claude に頼む」 (A-34, A-36)", async () => {
+  it("asks for the language of a card that has no server found with 「Claude に頼む」 (A-34)", async () => {
     await showServer(composeLaunch(), rubyOnly(), status("running"), 600000, [foundOf("rust", { name: "rust-analyzer", command: null, state: "missing" })]);
-    const ask = await mock("lsp_claude_request", askText);
+    const ask = await mock("lsp_claude_start", startedTab);
+    await mock("orca_overview", listWithStarted());
     await card("rust").$(".orca-lsp-ask").click();
     expect(await waitForCalls(ask)).toEqual([askArgs("rust")]);
-    await expect(paneOf()).toBeDisplayed();
-    expect((await waitForCalls("claude_code_start"))[0]).toMatchObject({ id: "lsp-claude", prompt: askText });
+    await expect(tabOf("claude:tab_lsp:leaf_1").$('[role="tab"]')).toHaveAttribute("aria-selected", "true");
   });
 
-  it("shows why the instruction was refused, in the line of the card or under the heading, and opens no pane (A-34, A-36)", async () => {
-    await showServer(composeLaunch(), rubyOnly(), status("running"), 600000, [foundOf("rust", { name: "rust-analyzer", command: null, state: "missing" })]);
-    await mock("lsp_claude_request", rejects("worktree のパスが正しくありません"));
-    await card("rust").$(".orca-lsp-ask").click();
-    await expect(noteOf("rust")).toHaveText("worktree のパスが正しくありません");
-    await $("#orca-lsp-ask").click();
-    await expect($("#orca-lsp-error")).toHaveText("worktree のパスが正しくありません");
-    await expect(paneOf()).not.toBeDisplayed();
-    expect(await callsOf("claude_code_start")).toEqual([]);
-  });
-
-  it("closes the process with the cross of the pane, and a second press starts another (A-36)", async () => {
+  it("selects the tab again when Rust answers the one that is still open, and opens no second one (A-34)", async () => {
     await showServer();
-    await mock("lsp_claude_request", askText);
-    await $("#orca-lsp-ask").click();
-    await waitForCalls("claude_code_start");
-    const close = await mock("claude_code_close", null);
-    await $("#orca-lsp-claude-close").click();
-    expect(await waitForCalls(close)).toEqual([{ id: "lsp-claude", launch: 1 }]);
-    await expect(paneOf()).not.toBeDisplayed();
-    await $("#orca-lsp-ask").click();
-    await waitForCalls("claude_code_start", 2);
-    await expect(paneOf()).toBeDisplayed();
-  });
-
-  it("leaves the same request as it is, and closes the pane for a new one of another language (A-36)", async () => {
-    await showServer(composeLaunch(), rubyOnly(), status("running"), 600000, [foundOf("rust", { name: "rust-analyzer", command: null, state: "missing" })]);
-    await mock("lsp_claude_request", askText);
-    await $("#orca-lsp-ask").click();
-    await waitForCalls("claude_code_start");
-    await $("#orca-lsp-ask").click();
-    await browser.pause(300);
-    expect(await callsOf("claude_code_start")).toHaveLength(1);
-    const close = await mock("claude_code_close", null);
-    await card("rust").$(".orca-lsp-ask").click();
-    expect(await waitForCalls(close)).toEqual([{ id: "lsp-claude", launch: 1 }]);
-    expect(await waitForCalls("claude_code_start", 2)).toHaveLength(2);
-    expect((await callsOf("lsp_claude_request")).map((c) => (c as { language: string | null }).language)).toEqual([null, "rust"]);
-  });
-
-  it("hides the pane with the part, leaves the process running, and shows the same pane again (A-36)", async () => {
-    await showServer();
-    await mock("lsp_claude_request", askText);
-    await $("#orca-lsp-ask").click();
-    await waitForCalls("claude_code_start");
-    const close = await mock("claude_code_close", null);
     await mode("ファイル").click();
-    await expect(paneOf()).not.toBeDisplayed();
-    await expect($("#orca-lsp-claude-term .orca-term-box")).not.toExist();
+    await openFileWith("a.rb", text(source));
+    await expect(tabOf(claude).$('[role="tab"]')).toHaveAttribute("aria-selected", "false");
     await mode("言語サーバー").click();
-    await expect(paneOf()).toBeDisplayed();
-    await expect($("#orca-lsp-claude-term .orca-term-box")).toExist();
-    expect(await callsOf("claude_code_start")).toHaveLength(1);
-    expect(await callsOf(close)).toEqual([]);
+    const ask = await mock("lsp_claude_start", { paneKey: "tab_example-app:leaf_1", handle: "term_example-app" } satisfies OrcaStarted);
+    await $("#orca-lsp-ask").click();
+    await waitForCalls(ask);
+    await expect(tabOf(claude).$('[role="tab"]')).toHaveAttribute("aria-selected", "true");
+    expect(await count(".orca-tabs [data-tab^='claude:']")).toBe(1);
   });
 
-  it("keeps the pane of Claude Code while Orca's list has the worktree with no tab of it open, and closes it when the list has not (A-34, #976)", async () => {
-    await openWithoutSession();
-    await mock("lsp_settings", rubyOnly());
-    await mock("lsp_launches", launchesOf(composeLaunch(), 1));
-    await mock("lsp_status", status("running"));
-    await mock("lsp_detect", []);
-    await mode("言語サーバー").click();
-    await waitForCalls("lsp_launches");
-    await mock("lsp_claude_request", askText);
+  it("shows why Rust refused, in the line of the card or under the heading, and starts and selects no tab (A-34)", async () => {
+    await showServer(composeLaunch(), rubyOnly(), status("running"), 600000, [foundOf("rust", { name: "rust-analyzer", command: null, state: "missing" })]);
+    const before = await selectedId();
+    await mock("lsp_claude_start", rejects("この環境の Claude Code には、まだ接続していません"));
+    await card("rust").$(".orca-lsp-ask").click();
+    await expect(noteOf("rust")).toHaveText("この環境の Claude Code には、まだ接続していません");
     await $("#orca-lsp-ask").click();
-    await waitForCalls("claude_code_start");
-    const close = await mock("claude_code_close", null);
-    await showAgain();
-    await expect(paneOf()).toBeDisplayed();
-    await browser.pause(300);
-    expect(await callsOf(close)).toEqual([]);
-    await mock("orca_overview", orcaOverview([], [orcaWorktree("example-api", "main")]));
-    await showAgain();
-    expect(await waitForCalls(close)).toEqual([{ id: "lsp-claude", launch: 1 }]);
+    await expect($("#orca-lsp-error")).toHaveText("この環境の Claude Code には、まだ接続していません");
+    await expect(selectedTab()).toBeDisplayed();
+    expect(await selectedId()).toBe(before);
+    expect(await callsOf("claude_code_start")).toEqual([]);
   });
 
   it("draws no card of JavaScript while the repository has a server of TypeScript, which takes its files (A-34, #976)", async () => {

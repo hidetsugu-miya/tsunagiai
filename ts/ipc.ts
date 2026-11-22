@@ -433,7 +433,7 @@ export interface Commands {
   lsp_settings_set: { args: { settings: LspRepoSettings }; result: LspRepoSettings };
   // A-34: the key of the server of the project `project` of `environment` that takes `language` (a language of A-21), which is the language itself, null when the repository has no server of it. The key is what every command below takes as `server`.
   // A-34, A-36: the first instruction of the Claude Code pane that sets up the language servers of `worktree` (`language`: only that one, null for every language of it): the values in a quote as data, the ssh Host saved for the repository, the worktree checked against Orca's list. A value that is refused is an error in Japanese.
-  lsp_claude_request: { args: { environment: string | null; project: string; worktree: string; language: string | null }; result: string };
+  lsp_claude_start: { args: { environment: string | null; project: string; worktree: string; language: string | null }; result: OrcaStarted };
   lsp_server_for: { args: { environment: string | null; project: string; language: string }; result: string | null };
   // A-34: the languages that `worktree` of the project `project` of `environment` (null: this machine) has, each with the server of the app's table (name, command, where it runs, mount, and whether it was `found`, is `missing` or its container is down), read from the worktree just now (a saved environment's through the ssh Host of its settings; in the service of compose that mounts the worktree, when there is one). A language that the worktree does not show is not answered.
   lsp_detect: { args: { environment: string | null; project: string; worktree: string }; result: LspFound[] };
