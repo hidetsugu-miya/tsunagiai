@@ -12,9 +12,17 @@ export type OrcaRow = { group: OrcaGroup, repo: string, branch: string,
  */
 line: string, 
 /**
- * The first line of the newer of the agent's prompt and its last answer (`latest_of`), which the list shows in place of the line; `None` when the newer one has no text, or is data, the output of a process or a message of the harness (the list then shows the line).
+ * The first line of the newer of the agent's prompt and its last answer (the one `answer_is_newer` picks), which the list shows in place of the line; `None` when the newer one has no text, or is data, the output of a process or a message of the harness (the list then shows the line).
  */
 latest: string | null, 
+/**
+ * The first line of the agent's last prompt (`prompt`), read as `first_text_line` says; `None` when it has no text, or is data, the output of a process or a message of the harness. It is the prompt whether or not the answer is newer.
+ */
+promptLine?: string | null, 
+/**
+ * The first line of the agent's last answer (`lastAssistantMessage`), read as `first_text_line` says; `None` when it has no text, or is data, the output of a process or a message of the harness. It is the answer whether or not the prompt is newer.
+ */
+answerLine?: string | null, 
 /**
  * How many of the agent's subagents are at work (A-8); 0 when it has none.
  */
