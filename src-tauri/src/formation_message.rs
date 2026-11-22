@@ -1,6 +1,7 @@
 //! A-37 (#1084): the messages between the leader and its children, kept for the flow pane.
 //! The leader and a child tell each other by SendMessage. Claude Code runs a `PostToolUse` hook after each call of that tool (measured on 2.1.329: the hook gets `tool_name`, `tool_input.to` and `.message`, and `tool_response.success`), and the hook is `tsunagiai-mcp --formation-message {formation} [--from {child}]`, which reads that input on its standard input and appends one line to `formations/{formation}/messages.jsonl`.
 //! The leader's hook is in `message-hook.json` of its folder (`claude --settings`), a child's in `message-hook-{child}.json` of the same folder; both are written by the app's own code at each start, so the leader cannot keep a hook of its own there.
+//! The messages of Orca's orchestration (#1237) are written there too: the Run of a formation holds what its children and its leader send each other (`orchestration send`, `reply`), and `sync_orchestration` reads the Run's messages (`orchestration inbox`) and appends the ones it has not taken in, the same way (the screen's read of a formation of this Mac runs it).
 //! A line holds who sent it (`from`), to whom (`to`), when (`atMs`) and the first line of the text (`line`, at most `LINE_CHARS` characters). The rest of the text is not kept: it comes from outside and is data.
 
 use std::{
@@ -17,7 +18,7 @@ use ts_rs::TS;
 use crate::{
     auth::config_dir,
     claude_code::sh_quote,
-    formation::{self, LOCAL},
+    formation::{self, Child, OrchestrationState, LOCAL},
     formation_server::Client,
     orca,
 };
@@ -252,6 +253,117 @@ pub fn read(config: &Path, formation: &str) -> Vec<FormationMessage> {
     messages
 }
 
+/// One end of an orchestration message: the leader of the formation, or one of its children.
+enum Party<'a> {
+    Leader,
+    Child(&'a str),
+}
+
+/// Who an address of an orchestration message is: `run:{id}` of the formation's Run is its leader, `dispatch:{id}` and a terminal handle are the child whose Dispatch or terminal it is. Any other address is none.
+fn party_of<'a>(
+    address: &str,
+    state: &'a OrchestrationState,
+    children: &'a [Child],
+) -> Option<Party<'a>> {
+    if address.strip_prefix("run:") == Some(state.run_id.as_str()) {
+        return Some(Party::Leader);
+    }
+    if let Some(dispatch) = address.strip_prefix("dispatch:") {
+        return state
+            .dispatches
+            .iter()
+            .find(|(_, id)| id.as_str() == dispatch)
+            .map(|(name, _)| Party::Child(name));
+    }
+    children
+        .iter()
+        .find(|child| child.launch.as_ref().is_some_and(|l| l.handle == address))
+        .map(|child| Party::Child(&child.name))
+}
+
+/// The message that a row of `orca orchestration inbox --full` records, or none when it is not one between the leader and a child of this formation: another Run's, a heartbeat, one between two children, one to an address that is neither, or one with no text. The sender that is no child is the leader (the terminal of the orchestrator's Claude Code, which this record does not know). `created_at` is the time of the message; `fallback_ms` stands in when it cannot be read. The text is the first line of the subject, or of the body when there is no subject: data from the sender.
+pub(crate) fn message_of_orchestration(
+    formation: &str,
+    state: &OrchestrationState,
+    children: &[Child],
+    row: &Value,
+    fallback_ms: u64,
+) -> Option<FormationMessage> {
+    if row["run_id"]
+        .as_str()
+        .is_some_and(|run| run != state.run_id)
+        || row["type"] == "heartbeat"
+    {
+        return None;
+    }
+    let from = party_of(row["from_handle"].as_str()?, state, children).unwrap_or(Party::Leader);
+    let to = party_of(row["to_handle"].as_str()?, state, children)?;
+    let (from, to) = match (from, to) {
+        (Party::Leader, Party::Child(child)) => (formation, child),
+        (Party::Child(child), Party::Leader) => (child, formation),
+        _ => return None,
+    };
+    let text = |key: &str| first_line(row[key].as_str().unwrap_or_default());
+    let line = Some(text("subject"))
+        .filter(|line| !line.is_empty())
+        .unwrap_or_else(|| text("body"));
+    if line.is_empty() {
+        return None;
+    }
+    let at_ms = row["created_at"]
+        .as_str()
+        .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok())
+        .and_then(|time| u64::try_from(time.timestamp_millis()).ok())
+        .unwrap_or(fallback_ms);
+    Some(FormationMessage {
+        from: from.to_owned(),
+        to: to.to_owned(),
+        at_ms,
+        line,
+    })
+}
+
+/// The lock file that keeps two syncs of one formation from taking in the same messages.
+const SYNC_LOCK: &str = "messages.jsonl.lock";
+
+/// Takes the messages of the formation's Run that `messages.jsonl` has not taken in (`read` runs `orca orchestration inbox` of this Mac), appends the ones that are between the leader and a child, oldest first, and keeps the sequence of the last one it saw, so that no message is taken twice. A formation with no Run has nothing to take. Answers how many lines it appended.
+pub fn sync_orchestration(
+    config: &Path,
+    formation: &str,
+    read: &dyn Fn(&[String]) -> Result<Value, String>,
+    now_ms: u64,
+) -> Result<usize, String> {
+    formation::check_name(formation)?;
+    if formation::orchestration_state(config, formation).is_none() {
+        return Ok(0);
+    }
+    let _held = formation::lock_file(config, formation, SYNC_LOCK)?;
+    let Some(state) = formation::orchestration_state(config, formation) else {
+        return Ok(0);
+    };
+    let answer = read(&formation::inbox_args(&state.run_id, LOCAL))?;
+    let mut rows: Vec<&Value> = answer["messages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|row| row["sequence"].as_u64().is_some_and(|n| n > state.sequence))
+        .collect();
+    rows.sort_by_key(|row| row["sequence"].as_u64());
+    let Some(last) = rows.last().and_then(|row| row["sequence"].as_u64()) else {
+        return Ok(0);
+    };
+    let children = formation::read_children(config, formation);
+    let mut appended = 0;
+    for row in rows {
+        if let Some(message) = message_of_orchestration(formation, &state, &children, row, now_ms) {
+            append(config, formation, &message)?;
+            appended += 1;
+        }
+    }
+    formation::set_messages_sequence(config, formation, last)?;
+    Ok(appended)
+}
+
 /// Records the message of one hook call in the record of its formation, and answers whether there was one to record.
 pub fn record_hook(
     config: &Path,
@@ -299,6 +411,13 @@ fn messages_for_screen(
     formation::check_name(formation)?;
     let (environment, started) = formation::formation_home(config, formation);
     if environment == LOCAL {
+        // A failed read of the Run leaves the record as it is: what was taken in is shown.
+        let _ = sync_orchestration(
+            config,
+            formation,
+            &formation::orca_read,
+            formation::now_ms(),
+        );
         return Ok(read(config, formation));
     }
     if !started {
@@ -713,5 +832,164 @@ mod tests {
         assert_eq!(instructed(&record, "api-work"), Vec::<String>::new());
         let mixed = [record, vec![message("api-work", "a", 5, "go")]].concat();
         assert_eq!(instructed(&mixed, "api-work"), names(&["a"]));
+    }
+
+    // ---- the messages of Orca's orchestration (#1237) ----
+
+    /// A formation `api-work` with the Run `run_1` and a child `a` (terminal `term_a`, Dispatch `ctx_1`).
+    fn with_run(name: &str) -> PathBuf {
+        let config = temp_dir(name);
+        let folder = formation::dir(&config, "api-work");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(
+            folder.join("formation.json"),
+            r#"{"runId": "run_1", "dispatches": {"a": "ctx_1"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            folder.join("children.json"),
+            r#"{"children": [{"name": "a", "repo": "r", "path": "/w/a", "branch": "b", "handle": "term_a", "paneKey": "t:l", "launchedAt": 1}]}"#,
+        )
+        .unwrap();
+        config
+    }
+
+    fn row(sequence: u64, from: &str, to: &str, subject: &str, body: &str) -> Value {
+        json!({
+            "id": format!("msg_{sequence}"), "run_id": "run_1", "from_handle": from, "to_handle": to,
+            "subject": subject, "body": body, "type": "status", "sequence": sequence,
+            "created_at": "2026-11-22T02:25:16Z",
+        })
+    }
+
+    fn orchestration_of(config: &Path, row: &Value) -> Option<FormationMessage> {
+        let state = formation::orchestration_state(config, "api-work").unwrap();
+        let children = formation::read_children(config, "api-work");
+        message_of_orchestration("api-work", &state, &children, row, 7)
+    }
+
+    #[test]
+    fn a_message_of_the_run_between_the_leader_and_a_child_is_a_message_of_the_record() {
+        let config = with_run("orchestration-message");
+        // The leader (a terminal that is no child's) to the Dispatch, and to the terminal of the child.
+        let to_child = orchestration_of(
+            &config,
+            &row(1, "term_leader", "dispatch:ctx_1", "do it", "long text"),
+        )
+        .unwrap();
+        assert_eq!(
+            to_child,
+            FormationMessage {
+                from: "api-work".into(),
+                to: "a".into(),
+                at_ms: 1_795_314_316_000,
+                line: "do it".into()
+            }
+        );
+        let to_terminal =
+            orchestration_of(&config, &row(2, "term_leader", "term_a", "again", "")).unwrap();
+        assert_eq!(
+            (to_terminal.from.as_str(), to_terminal.to.as_str()),
+            ("api-work", "a")
+        );
+        // The child to the Run.
+        let to_leader = orchestration_of(
+            &config,
+            &row(3, "term_a", "run:run_1", "", "a question\nmore"),
+        )
+        .unwrap();
+        assert_eq!(
+            (to_leader.from.as_str(), to_leader.to.as_str()),
+            ("a", "api-work")
+        );
+        assert_eq!(to_leader.line, "a question");
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_message_that_is_not_between_the_leader_and_a_child_is_not_recorded() {
+        let config = with_run("orchestration-other");
+        for other in [
+            // Between the leader and itself, to an address that is nobody's, with no text.
+            row(1, "term_leader", "run:run_1", "x", ""),
+            row(2, "term_leader", "term_other", "x", ""),
+            row(3, "term_leader", "dispatch:ctx_9", "x", ""),
+            row(4, "term_leader", "dispatch:ctx_1", "", " \n"),
+            // A child to itself, a heartbeat, and a message of another Run.
+            row(5, "term_a", "dispatch:ctx_1", "x", ""),
+            json!({"run_id": "run_1", "from_handle": "term_a", "to_handle": "run:run_1", "subject": "x", "type": "heartbeat"}),
+            json!({"run_id": "run_2", "from_handle": "term_a", "to_handle": "run:run_1", "subject": "x", "type": "status"}),
+        ] {
+            assert_eq!(orchestration_of(&config, &other), None, "{other}");
+        }
+        // A time that cannot be read is the time the caller gives.
+        let mut late = row(6, "term_a", "run:run_1", "x", "");
+        late["created_at"] = json!("yesterday");
+        assert_eq!(orchestration_of(&config, &late).unwrap().at_ms, 7);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_messages_of_the_run_are_taken_in_once_and_in_order() {
+        let config = with_run("orchestration-sync");
+        let inbox = json!({"messages": [
+            row(3, "term_a", "run:run_1", "the answer", ""),
+            row(1, "term_leader", "dispatch:ctx_1", "the order", ""),
+            row(2, "term_a", "term_a", "nobody's", ""),
+        ]});
+        let asked = std::cell::RefCell::new(Vec::new());
+        let read = |args: &[String]| {
+            asked.borrow_mut().push(args.to_vec());
+            Ok(inbox.clone())
+        };
+        assert_eq!(sync_orchestration(&config, "api-work", &read, 5), Ok(2));
+        assert_eq!(asked.borrow()[0], formation::inbox_args("run_1", LOCAL));
+        let lines: Vec<(String, String, String)> = super::read(&config, "api-work")
+            .into_iter()
+            .map(|m| (m.from, m.to, m.line))
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                ("api-work".into(), "a".into(), "the order".into()),
+                ("a".into(), "api-work".into(), "the answer".into()),
+            ]
+        );
+        // The same inbox again adds nothing; a new message is added.
+        assert_eq!(sync_orchestration(&config, "api-work", &read, 5), Ok(0));
+        let more = json!({"messages": [
+            row(3, "term_a", "run:run_1", "the answer", ""),
+            row(4, "term_leader", "dispatch:ctx_1", "next", ""),
+        ]});
+        let read_more = |_: &[String]| Ok(more.clone());
+        assert_eq!(
+            sync_orchestration(&config, "api-work", &read_more, 5),
+            Ok(1)
+        );
+        assert_eq!(super::read(&config, "api-work").len(), 3);
+        assert_eq!(
+            formation::orchestration_state(&config, "api-work")
+                .unwrap()
+                .sequence,
+            4
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_formation_with_no_run_and_a_read_that_fails_take_in_nothing() {
+        let config = temp_dir("orchestration-none");
+        std::fs::create_dir_all(formation::dir(&config, "api-work")).unwrap();
+        let never = |_: &[String]| -> Result<Value, String> { panic!("no Run, no read") };
+        assert_eq!(sync_orchestration(&config, "api-work", &never, 5), Ok(0));
+        std::fs::remove_dir_all(&config).unwrap();
+        let config = with_run("orchestration-fails");
+        let down = |_: &[String]| -> Result<Value, String> { Err("orca is down".into()) };
+        assert_eq!(
+            sync_orchestration(&config, "api-work", &down, 5),
+            Err("orca is down".into())
+        );
+        assert!(super::read(&config, "api-work").is_empty());
+        std::fs::remove_dir_all(&config).unwrap();
     }
 }

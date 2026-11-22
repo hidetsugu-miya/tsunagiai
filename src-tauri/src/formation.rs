@@ -79,9 +79,12 @@ const STEP_PLUGIN: &str = "プラグインの書き出し";
 const STEP_HOOK: &str = "メッセージを記録するフックの書き出し";
 const STEP_IDLE: &str = "子のエージェントの立ち上がり待ち";
 const STEP_SEND: &str = "最初の指示の送信";
+const STEP_DISPATCH: &str = "子の Dispatch の作成";
 const STEP_GIT: &str = "git での確認";
 const STEP_REMOVE: &str = "worktree の削除";
 const STEP_STOP: &str = "ターミナルを閉じる";
+/// The file that carries the lock between processes while a formation's Run is made, so that children launched side by side share one Run.
+const RUN_LOCK: &str = "run.lock";
 const STEP_WORKTREE_BASE: &str = "worktree の場所の設定";
 const STEP_EXCLUDE: &str = "git の追跡外の設定";
 pub(crate) const STEP_LISTED: &str = "worktree の一覧の読み取り";
@@ -618,7 +621,47 @@ struct Meta {
     /// The handle of the terminal of the orchestrator in the Orca of a saved environment (`start_orchestrator_with`): only a formation of a saved environment has one. A file written before it was kept has none. A formation that has none never had its orchestrator started on its PC, so that PC has no record of it and the screen's polls do not ask.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     orchestrator_terminal: Option<String>,
+    /// The Run of Orca's orchestration that holds the children of this formation as Dispatches (#1237): made at the first launch, in the Orca of this Mac (`ensure_run`). A formation with none has launched no child since the Run was introduced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    run_id: Option<String>,
+    /// The Dispatch of each launched child (the child's name and the Dispatch's id), so that a stop and a close fence it (`stop_dispatch`). It is here and not in `Launch`, so that the record of the children stays as it was. A child that was launched before the Run was introduced has none.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    dispatches: BTreeMap<String, String>,
+    /// The `sequence` of the last message of the Run that `messages.jsonl` took in (`formation_message::sync_orchestration`): the ones after it are new.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    messages_sequence: u64,
     // A file of v0.82.x also has `pcRepoPath`, the folder of the first project's repository: it is not read any more (the record of the PC is read from the server of that PC), and the next write of the file leaves it out.
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+/// What `formation.json` knows of the orchestration of Orca for the record of the messages (`formation_message`): the Run, the Dispatch of each child by its name, and the sequence of the last message taken in.
+pub(crate) struct OrchestrationState {
+    pub run_id: String,
+    pub dispatches: BTreeMap<String, String>,
+    pub sequence: u64,
+}
+
+/// The Run of `formation` with its Dispatches, or none when it has no Run (no child was launched into it, or the file cannot be read) or the Run's id is not one Orca gives.
+pub(crate) fn orchestration_state(config: &Path, formation: &str) -> Option<OrchestrationState> {
+    let meta = read_meta(config, formation).ok()?;
+    let run_id = meta.run_id.filter(|id| check_orca_id(id).is_ok())?;
+    Some(OrchestrationState {
+        run_id,
+        dispatches: meta.dispatches,
+        sequence: meta.messages_sequence,
+    })
+}
+
+/// Keeps the sequence of the last message that `messages.jsonl` took in.
+pub(crate) fn set_messages_sequence(
+    config: &Path,
+    formation: &str,
+    sequence: u64,
+) -> Result<(), String> {
+    update_meta(config, formation, |meta| meta.messages_sequence = sequence)
 }
 
 /// The file of `formation`: a missing one is none, but one that is there and cannot be read is an error, so that the orchestrator does not start as if the formation had no project.
@@ -1166,6 +1209,213 @@ fn terminal_send_args(handle: &str, prompt: &str, environment: &str) -> Vec<Stri
     on(args, environment)
 }
 
+// ---- the Run and the Dispatches of Orca's orchestration (#1237) ----
+// A formation has one Run, and each child is a Dispatch of it: the terminal is made as before (`terminal create`), and `orchestration dispatch --to {handle}` assigns it a task. Every value joined to its flag (`--spec=...`), so that a text that looks like an option stays one argument.
+
+/// Whether `id` is an id that Orca's orchestration gave (`run_...`, `task_...`, `ctx_...`): a letter or a digit first, then letters, digits, `_` and `-`, at most 64. The ids come back from the CLI and are kept in files the orchestrator can write, so they are checked again before they go into an argument.
+fn check_orca_id(id: &str) -> Result<(), String> {
+    if id.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && id.len() <= 64
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "Orca の orchestration の id が正しくありません: {id}"
+        ))
+    }
+}
+
+fn run_create_args(formation: &str, environment: &str) -> Vec<String> {
+    on(
+        vec![
+            "orchestration".into(),
+            "run-create".into(),
+            format!("--objective=formation {formation}"),
+            "--json".into(),
+        ],
+        environment,
+    )
+}
+
+fn task_create_args(run_id: &str, formation: &str, name: &str, environment: &str) -> Vec<String> {
+    on(
+        vec![
+            "orchestration".into(),
+            "task-create".into(),
+            format!("--run={run_id}"),
+            format!("--task-title={name}"),
+            format!("--spec=the child {name} of the formation {formation}"),
+            "--json".into(),
+        ],
+        environment,
+    )
+}
+
+/// The Dispatch of a task to the child's terminal. There is no `--inject`: the terminal is not typed into, and `--return-preamble` gives the text that tells the child how to use the orchestration, which the first instruction carries.
+fn dispatch_args(run_id: &str, task_id: &str, handle: &str, environment: &str) -> Vec<String> {
+    on(
+        vec![
+            "orchestration".into(),
+            "dispatch".into(),
+            format!("--run={run_id}"),
+            format!("--task={task_id}"),
+            format!("--to={handle}"),
+            "--return-preamble".into(),
+            "--json".into(),
+        ],
+        environment,
+    )
+}
+
+fn worker_stop_args(dispatch_id: &str, environment: &str) -> Vec<String> {
+    on(
+        vec![
+            "orchestration".into(),
+            "worker-stop".into(),
+            format!("--dispatch={dispatch_id}"),
+            "--json".into(),
+        ],
+        environment,
+    )
+}
+
+/// The messages of a Run, whole (`--full`: the concise view has neither the time nor the sequence).
+pub(crate) fn inbox_args(run_id: &str, environment: &str) -> Vec<String> {
+    on(
+        vec![
+            "orchestration".into(),
+            "inbox".into(),
+            format!("--run={run_id}"),
+            "--limit=200".into(),
+            "--full".into(),
+            "--json".into(),
+        ],
+        environment,
+    )
+}
+
+/// The id that `run-create` and `task-create` answer (`runId`, `taskId`; the whole record of `--full` has `task.id`), checked.
+fn orca_id_of(result: &Value, key: &str, whole: &str) -> Result<String, String> {
+    let id = orca::text_of(result, key)
+        .or_else(|| result[whole]["id"].as_str())
+        .ok_or_else(|| format!("Orca の答えに {key} がありません"))?;
+    check_orca_id(id)?;
+    Ok(id.to_owned())
+}
+
+/// The id of the Dispatch and the preamble of `orchestration dispatch --return-preamble` (its `result`: `dispatch.id` and `preamble`). The preamble is Orca's text for the child.
+fn dispatch_of(result: &Value) -> Result<(String, String), String> {
+    let id = result["dispatch"]["id"]
+        .as_str()
+        .ok_or("Orca の答えに dispatch.id がありません")?;
+    check_orca_id(id)?;
+    let preamble = result["preamble"].as_str().unwrap_or_default().trim();
+    Ok((id.to_owned(), preamble.to_owned()))
+}
+
+/// The first instruction of a child with the preamble of its Dispatch before it, when there is one.
+fn first_instruction(preamble: &str, prompt: &str) -> String {
+    if preamble.is_empty() {
+        prompt.to_owned()
+    } else {
+        format!("{preamble}\n\n{prompt}")
+    }
+}
+
+/// The Run of `formation`: the one `formation.json` holds, else a new one (`run-create`), kept there. The Run binds itself to the terminal of the process that makes it, which is the orchestrator's (the `tsunagiai-mcp` of its Claude Code). Children launched side by side share one Run: the lock of the file `RUN_LOCK` is held while it is read and made.
+fn ensure_run(
+    config: &Path,
+    formation: &str,
+    environment: &str,
+    write: &dyn Fn(&[String]) -> Result<Value, String>,
+) -> Result<String, String> {
+    let _held = lock_file(config, formation, RUN_LOCK)?;
+    if let Some(id) = read_meta(config, formation)?.run_id {
+        check_orca_id(&id)?;
+        return Ok(id);
+    }
+    let id = orca_id_of(
+        &write(&run_create_args(formation, environment))?,
+        "runId",
+        "run",
+    )?;
+    update_meta(config, formation, |meta| meta.run_id = Some(id.clone()))?;
+    Ok(id)
+}
+
+/// Makes the task and the Dispatch of a launched child in the Run of its formation, keeps the Dispatch's id in `formation.json`, and answers the preamble. The terminal `handle` is the child's own.
+fn dispatch_child(
+    config: &Path,
+    formation: &str,
+    name: &str,
+    handle: &str,
+    environment: &str,
+    write: &dyn Fn(&[String]) -> Result<Value, String>,
+) -> Result<String, String> {
+    let run_id = ensure_run(config, formation, environment, write)?;
+    let task_id = orca_id_of(
+        &write(&task_create_args(&run_id, formation, name, environment))?,
+        "taskId",
+        "task",
+    )?;
+    let (dispatch_id, preamble) = dispatch_of(&write(&dispatch_args(
+        &run_id,
+        &task_id,
+        handle,
+        environment,
+    ))?)?;
+    update_meta(config, formation, |meta| {
+        meta.dispatches.insert(name.to_owned(), dispatch_id.clone());
+    })?;
+    Ok(preamble)
+}
+
+/// The Dispatch of the child `name` that `formation.json` holds, if it has one (a child launched before the Run was introduced has none, and neither does one whose file cannot be read).
+fn dispatch_id_of(config: &Path, formation: &str, name: &str) -> Option<String> {
+    read_meta(config, formation)
+        .ok()?
+        .dispatches
+        .get(name)
+        .filter(|id| check_orca_id(id).is_ok())
+        .cloned()
+}
+
+/// Fences the Dispatch of the child `name` before its terminal is closed (`worker-stop`: it closes no unsupervised terminal, which stays the close's own work). `None` when the child has no Dispatch; else whether Orca did it. A failure stops nothing: the terminal is closed all the same.
+fn stop_dispatch(
+    config: &Path,
+    formation: &str,
+    name: &str,
+    environment: &str,
+    write: &dyn Fn(&[String]) -> Result<Value, String>,
+) -> Option<bool> {
+    let id = dispatch_id_of(config, formation, name)?;
+    Some(write(&worker_stop_args(&id, environment)).is_ok())
+}
+
+/// After a close: when the child had a Dispatch (`fenced` is `Some`), says in `done` whether it was fenced (`dispatchStopped`) and takes it out of `formation.json`.
+fn finish_dispatch(
+    config: &Path,
+    formation: &str,
+    name: &str,
+    fenced: Option<bool>,
+    done: &mut Value,
+) {
+    if let Some(stopped) = fenced {
+        done["dispatchStopped"] = json!(stopped);
+        forget_dispatch(config, formation, name);
+    }
+}
+
+/// Takes the Dispatch of a child that was closed out of `formation.json`. A formation whose file is gone is left alone.
+fn forget_dispatch(config: &Path, formation: &str, name: &str) {
+    let _ = update_meta(config, formation, |meta| {
+        meta.dispatches.remove(name);
+    });
+}
+
 /// The shell sentence that starts an orchestrator on its PC: it begins with `exec`, so the `sh` takes the place of the login shell it is typed into and the terminal ends with the process that runs in it (a sentence typed without it leaves the login shell, and the terminal, listed after Claude Code has ended; measured on Orca, #943). In it the `remote/tsunagiai-mcp` that the app put there (`formation_remote::program_path`) first runs `--serve --bind {host}`, which starts the server of A-37 unless it runs (a failure is not shown and does not stop the orchestrator), and then takes the place of the `sh` with `--formation-start {name}` and one `--project {repo}` for each of `repos` (it writes the orchestrator's files on that PC and starts Claude Code with the projects as its first instruction, so nothing is typed into the terminal afterwards). It is typed into the login shell of the terminal, whichever shell that is: the `sh -c` has its script in one single quote with none inside, and the repositories follow it as the arguments `"$@"` of that script, each in single quotes of its own (`claude_code::sh_quote`, a quote closed, escaped and opened again). sh, bash and zsh read that the same way, and fish reads it the same way too while the name holds no `\`, because fish treats a `\` inside single quotes as an escape; so a name with a `\` is refused. A PC without the program prints `MCP_NOT_PLACED` and opens a shell in its place (`exec "${SHELL:-/bin/sh}"`), so the terminal stays and the owner can read the words (an `exit` would close the terminal with them). The name must pass `check_name`, so it holds no character a shell reads, `host` must be an IP address (it is put in the sentence as the address prints), and the repositories must pass what `first_prompt` checks (`local_first_prompt`), so that a name `tsunagiai-mcp` would refuse is refused here, where the app can say it.
 fn orchestrator_command(name: &str, repos: &[String], host: &str) -> Result<String, String> {
     check_name(name)?;
@@ -1344,7 +1594,7 @@ pub fn answer(done: Result<Value, Refusal>) -> String {
 
 // ---- the tools ----
 
-fn orca_read(args: &[String]) -> Result<Value, String> {
+pub(crate) fn orca_read(args: &[String]) -> Result<Value, String> {
     orca::call(args, orca::READ_TIMEOUT).map_err(orca::message_of)
 }
 
@@ -1832,7 +2082,17 @@ pub fn launch(
     })?;
     let recorded = |step: &'static str, e: String| {
         kept(step, e).saying("子は記録に入っているので、formation_close で片付けられます")
+    }; // The child is a Dispatch of the formation's Run (#1237): the preamble of the Dispatch goes in front of the first instruction.
+    let preamble = dispatch_child(config, formation, name, &handle, environment, &|args| {
+        orca::write(args)
+    })
+    .map_err(|e| recorded(STEP_DISPATCH, e))?;
+    let preamble = if preamble.is_empty() {
+        preamble
+    } else {
+        check_prompt(&preamble).map_err(|e| recorded(STEP_DISPATCH, e))?
     };
+    let prompt = first_instruction(&preamble, &prompt);
     let idle = orca::call(&terminal_wait_args(&handle, environment), IDLE_WAIT_RUN)
         .map_err(orca::message_of)
         .and_then(|result| {
@@ -2486,9 +2746,14 @@ fn stop_with(
             "「{name}」のターミナルが、Orca の一覧でその子のものと確かめられないので、何も閉じていません。すでに閉じてあるか、Orca の一覧を読めませんでした"
         )));
     }
+    let dispatch = stop_dispatch(config, formation, name, &environment, write);
     write(&terminal_close_args(&launch.handle, &environment))
         .map_err(|e| Refusal::failed(STEP_STOP, e).saying("何も閉じていません"))?;
-    Ok(json!({ "name": name, "path": launch.path, "terminalClosed": true }))
+    let mut done = json!({ "name": name, "path": launch.path, "terminalClosed": true });
+    if let Some(stopped) = dispatch {
+        done["dispatchStopped"] = json!(stopped);
+    }
+    Ok(done)
 }
 
 /// What `inspect_child` found a child to need, with nothing done yet.
@@ -2733,14 +2998,19 @@ fn close_with(
             environment,
             terminal,
         } => {
+            let fenced = terminal
+                .then(|| stop_dispatch(config, formation, name, &environment, write))
+                .flatten();
             let terminal = terminal.then(|| write(&terminal_close_args(&handle, &environment)));
             dropped().map_err(|e| Refusal::from(e).saying("記録から外せませんでした"))?;
-            Ok(json!({
+            let mut done = json!({
                 "name": name,
                 "path": path,
                 "worktreeGone": true,
                 "terminalClosed": terminal.is_some_and(|t| t.is_ok()),
-            }))
+            });
+            finish_dispatch(config, formation, name, fenced, &mut done);
+            Ok(done)
         }
         Closing::Detach {
             handle,
@@ -2748,13 +3018,18 @@ fn close_with(
             terminal,
         } => {
             // The owner may have closed the tab already: the entry is dropped all the same.
+            let fenced = terminal
+                .then(|| stop_dispatch(config, formation, name, &environment, write))
+                .flatten();
             let terminal = terminal.then(|| write(&terminal_close_args(&handle, &environment)));
             dropped().map_err(|e| Refusal::from(e).saying("記録から外せませんでした"))?;
-            Ok(json!({
+            let mut done = json!({
                 "name": name,
                 "folderKept": true,
                 "terminalClosed": terminal.is_some_and(|t| t.is_ok()),
-            }))
+            });
+            finish_dispatch(config, formation, name, fenced, &mut done);
+            Ok(done)
         }
         Closing::Remove {
             path,
@@ -2772,6 +3047,7 @@ fn close_with(
                 .with("child", holder));
             }
             // The owner may have closed the tab already: the worktree is removed all the same.
+            let fenced = stop_dispatch(config, formation, name, &environment, write);
             let terminal = write(&terminal_close_args(&handle, &environment));
             let removed = write(&worktree_rm_args(
                 &path,
@@ -2788,6 +3064,7 @@ fn close_with(
                 "path": path,
                 "terminalClosed": terminal.is_ok(),
             });
+            finish_dispatch(config, formation, name, fenced, &mut done);
             if let Some(branch) = preserved_branch(&removed) {
                 done["preservedBranch"] = json!(branch);
             }
@@ -4165,6 +4442,7 @@ fn create_with(
         projects,
         created_at: Some(created_at),
         orchestrator_terminal: None,
+        ..Meta::default()
     };
     let written = serde_json::to_string_pretty(&meta)
         .map_err(|e| e.to_string())
@@ -6888,6 +7166,224 @@ mod tests {
         assert_eq!(rows, [true, false]);
         // A planned child is drawn as before.
         assert!(child_row(&planned("p", "x"), LOCAL, None).created);
+    }
+
+    /// A stand-in Orca for the orchestration: it records the calls, and answers as `orca orchestration` does (the `result` of its JSON).
+    fn orchestration_orca(calls: &Calls, args: &[String]) -> Result<Value, String> {
+        calls.run(args)?;
+        Ok(match args[1].as_str() {
+            "run-create" => json!({"runId": "run_1"}),
+            "task-create" => json!({"taskId": "task_1", "status": "ready"}),
+            "dispatch" => json!({
+                "dispatch": {"id": "ctx_1", "status": "dispatched"},
+                "injected": false,
+                "preamble": "check with orca orchestration check"
+            }),
+            _ => json!({}),
+        })
+    }
+
+    #[test]
+    fn the_children_of_a_formation_are_dispatches_of_one_run() {
+        let config = temp_dir("dispatch");
+        std::fs::create_dir_all(dir(&config, F)).unwrap();
+        let orca = Calls::new();
+        let write = |args: &[String]| orchestration_orca(&orca, args);
+        let preamble = dispatch_child(&config, F, "a", "term_a", LOCAL, &write).unwrap();
+        assert_eq!(preamble, "check with orca orchestration check");
+        dispatch_child(&config, F, "b", "term_b", LOCAL, &write).unwrap();
+        // One Run for both; a task and a Dispatch for each.
+        assert_eq!(
+            orca.names(),
+            [
+                "orchestration run-create",
+                "orchestration task-create",
+                "orchestration dispatch",
+                "orchestration task-create",
+                "orchestration dispatch",
+            ]
+        );
+        let calls = orca.0.borrow();
+        assert_eq!(calls[0], run_create_args(F, LOCAL));
+        assert_eq!(calls[1], task_create_args("run_1", F, "a", LOCAL));
+        // The Dispatch is to the child's own terminal, takes no `--inject` and asks for the preamble.
+        assert_eq!(calls[2], dispatch_args("run_1", "task_1", "term_a", LOCAL));
+        assert!(calls[2].contains(&"--return-preamble".to_owned()));
+        assert!(!calls[2].contains(&"--inject".to_owned()));
+        assert!(calls[2].contains(&"--environment=local".to_owned()));
+        let meta = read_meta(&config, F).unwrap();
+        assert_eq!(meta.run_id.as_deref(), Some("run_1"));
+        assert_eq!(meta.dispatches["a"], "ctx_1");
+        assert_eq!(meta.dispatches["b"], "ctx_1");
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn an_id_that_orca_gave_is_checked_before_it_is_kept_or_used() {
+        assert!(check_orca_id("ctx_a216846d92ef").is_ok());
+        for bad in ["", "a b", "--run=x", "-x", "ctx/1", &"x".repeat(65)] {
+            assert!(check_orca_id(bad).is_err(), "{bad}");
+        }
+        let config = temp_dir("dispatch-bad-id");
+        std::fs::create_dir_all(dir(&config, F)).unwrap();
+        let err = ensure_run(&config, F, LOCAL, &|_| Ok(json!({"runId": "run 1"}))).unwrap_err();
+        assert!(err.contains("id が正しくありません"));
+        assert_eq!(read_meta(&config, F).unwrap().run_id, None);
+        let err = ensure_run(&config, F, LOCAL, &|_| Ok(json!({}))).unwrap_err();
+        assert!(err.contains("runId"));
+        assert!(dispatch_of(&json!({"dispatch": {}})).is_err());
+        assert!(dispatch_of(&json!({"dispatch": {"id": "ctx 1"}})).is_err());
+        // No preamble is no text, not an error.
+        assert_eq!(
+            dispatch_of(&json!({"dispatch": {"id": "ctx_1"}})).unwrap(),
+            ("ctx_1".to_owned(), String::new())
+        );
+        // The full record of `--full` is read too.
+        assert_eq!(
+            orca_id_of(&json!({"task": {"id": "task_9"}}), "taskId", "task").unwrap(),
+            "task_9"
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_failure_of_the_run_or_the_dispatch_keeps_nothing_it_did_not_make() {
+        let config = temp_dir("dispatch-fails");
+        std::fs::create_dir_all(dir(&config, F)).unwrap();
+        let err = dispatch_child(&config, F, "a", "term_a", LOCAL, &|_| {
+            Err("orca is down".into())
+        })
+        .unwrap_err();
+        assert_eq!(err, "orca is down");
+        let orca = Calls::new();
+        let fail_dispatch = |args: &[String]| {
+            if args[1] == "dispatch" {
+                orca.run(args)?;
+                Err("not accepted".to_owned())
+            } else {
+                orchestration_orca(&orca, args)
+            }
+        };
+        assert!(dispatch_child(&config, F, "a", "term_a", LOCAL, &fail_dispatch).is_err());
+        // The Run was made and is kept for the next child; the child has no Dispatch.
+        let meta = read_meta(&config, F).unwrap();
+        assert_eq!(meta.run_id.as_deref(), Some("run_1"));
+        assert!(meta.dispatches.is_empty());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_preamble_goes_before_the_first_instruction() {
+        assert_eq!(first_instruction("", "do it"), "do it");
+        assert_eq!(
+            first_instruction("use check", "do it"),
+            "use check\n\ndo it"
+        );
+    }
+
+    #[test]
+    fn a_stopped_child_has_its_dispatch_fenced_before_its_terminal_is_closed() {
+        let config = temp_dir("stop-dispatch");
+        let there = temp_dir("stop-dispatch-there");
+        std::fs::create_dir_all(&there).unwrap();
+        let path = there.to_string_lossy().into_owned();
+        recorded(&config, &path, "term_a", "me/a");
+        update_meta(&config, F, |m| {
+            m.dispatches.insert("a".into(), "ctx_1".into());
+        })
+        .unwrap();
+        let listed = json!({"worktrees": [{"path": path, "isMainWorktree": false, "agents": [{"paneKey": "tab-a:leaf"}]}]});
+        let orca = Calls::new();
+        let done = stop_with(&config, F, "a", &|_| Ok(listed.clone()), &|args| {
+            orca.run(args)
+        })
+        .unwrap();
+        assert_eq!(done["dispatchStopped"], true);
+        assert_eq!(
+            orca.names(),
+            ["orchestration worker-stop", "terminal close"]
+        );
+        assert_eq!(orca.0.borrow()[0], worker_stop_args("ctx_1", LOCAL));
+        // The child stays in the record, and so does its Dispatch.
+        assert_eq!(read_meta(&config, F).unwrap().dispatches["a"], "ctx_1");
+        // A worker-stop that fails does not keep the terminal open.
+        let orca = Calls::new();
+        let done = stop_with(&config, F, "a", &|_| Ok(listed.clone()), &|args| {
+            orca.run(args)?;
+            if args[1] == "worker-stop" {
+                Err("fenced already".into())
+            } else {
+                Ok(json!({}))
+            }
+        })
+        .unwrap();
+        assert_eq!(done["terminalClosed"], true);
+        assert_eq!(done["dispatchStopped"], false);
+        std::fs::remove_dir_all(&config).unwrap();
+        std::fs::remove_dir_all(&there).unwrap();
+    }
+
+    #[test]
+    fn a_closed_child_has_its_dispatch_fenced_and_forgotten() {
+        let config = temp_dir("close-dispatch");
+        let there = temp_dir("close-dispatch-there");
+        std::fs::create_dir_all(&there).unwrap();
+        let path = there.to_string_lossy().into_owned();
+        let listed = json!({"worktrees": [{"path": path, "isMainWorktree": false, "agents": [{"paneKey": "tab-a:leaf"}]}]});
+        recorded_in_folder(&config, &path, "term_a");
+        update_meta(&config, F, |m| {
+            m.dispatches.insert("a".into(), "ctx_1".into());
+            m.dispatches.insert("other".into(), "ctx_2".into());
+        })
+        .unwrap();
+        let orca = Calls::new();
+        let done = close_with(
+            &config,
+            F,
+            "a",
+            None,
+            &|_| Ok(listed.clone()),
+            &|args| orca.run(args),
+            &no_remote_git,
+        )
+        .unwrap();
+        assert_eq!(done["dispatchStopped"], true);
+        assert_eq!(
+            orca.names(),
+            ["orchestration worker-stop", "terminal close"]
+        );
+        let meta = read_meta(&config, F).unwrap();
+        assert_eq!(meta.dispatches.keys().collect::<Vec<_>>(), ["other"]);
+        // A child with no Dispatch (launched before the Run) closes as it did, and the answer has no key for it.
+        recorded_in_folder(&config, &path, "term_a");
+        let orca = Calls::new();
+        let done = close_with(
+            &config,
+            F,
+            "a",
+            None,
+            &|_| Ok(listed.clone()),
+            &|args| orca.run(args),
+            &no_remote_git,
+        )
+        .unwrap();
+        assert!(done.get("dispatchStopped").is_none());
+        assert_eq!(orca.names(), ["terminal close"]);
+        std::fs::remove_dir_all(&config).unwrap();
+        std::fs::remove_dir_all(&there).unwrap();
+    }
+
+    #[test]
+    fn a_dispatch_in_a_record_that_is_no_orca_id_is_not_used() {
+        let config = temp_dir("dispatch-record");
+        std::fs::create_dir_all(dir(&config, F)).unwrap();
+        update_meta(&config, F, |m| {
+            m.dispatches.insert("a".into(), "--all".into());
+        })
+        .unwrap();
+        assert_eq!(dispatch_id_of(&config, F, "a"), None);
+        assert_eq!(dispatch_id_of(&config, F, "nobody"), None);
+        std::fs::remove_dir_all(&config).unwrap();
     }
 
     #[test]
