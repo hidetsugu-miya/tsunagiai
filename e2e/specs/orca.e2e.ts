@@ -1484,12 +1484,18 @@ describe("orca: projects", () => {
         expect(look).toEqual({ overflow: "ellipsis", clipped: true, within: true });
       });
 
-      it("shows the pencil while the focus is in the row, and draws no text of help", async () => {
+      // :hover and :focus never match in the E2E window (the window is hidden): the hidden state is the computed style, and the rule that shows the pencil is read from the stylesheet to say that the pointer or the focus in the row lifts it.
+      it("hides the pencil until the pointer or the focus is in the row, and draws no text of help", async () => {
         await openOrca(read());
-        const visibility = () => browser.execute((tab) => getComputedStyle(document.querySelector(`#orca-feed .orca-session[data-session="${tab}"] .orca-session-edit`)!).visibility, claudeTab("example-app"));
-        expect(await visibility()).toBe("hidden");
-        await browser.execute((tab) => document.querySelector<HTMLElement>(`#orca-feed .orca-session[data-session="${tab}"]`)!.focus(), claudeTab("example-app"));
-        expect(await visibility()).toBe("visible");
+        expect(await browser.execute((tab) => getComputedStyle(document.querySelector(`#orca-feed .orca-session[data-session="${tab}"] .orca-session-edit`)!).visibility, claudeTab("example-app"))).toBe("hidden");
+        const showing = await browser.execute(() => {
+          for (const sheet of document.styleSheets)
+            for (const rule of sheet.cssRules)
+              if (rule instanceof CSSStyleRule && rule.selectorText.includes(".orca-session-edit") && rule.style.visibility === "visible") return rule.selectorText;
+          return null;
+        });
+        expect(showing).toContain(".orca-session:hover");
+        expect(showing).toContain(".orca-session:focus-within");
         expect(await browser.execute(() => [document.querySelector("#orca-feed .orca-session-edit")!.getAttribute("aria-label"), document.querySelector("#orca-feed .orca-session-edit")!.hasAttribute("title")])).toEqual(["題名を変える", false]);
       });
 
@@ -1550,7 +1556,8 @@ describe("orca: projects", () => {
       });
 
       it("keeps the keys and the presses of the field from the row, and keeps the field through a read", async () => {
-        await openOrca(read());
+        // The list is read again by the clock: leaving the screen would take the focus from the field, which cancels it.
+        await openOrca(read(), timers({ orcaClock: 1000 }));
         await pencil("example-app");
         await browser.waitUntil(async () => (await fieldState()) !== null, { timeoutMsg: "the field did not open" });
         await $(field).click();
@@ -1558,7 +1565,6 @@ describe("orca: projects", () => {
         expect(await pressedSessions()).toEqual([]);
         // A read that changes the row (a new prompt) draws the list again: the field and what was typed stay.
         await mock("orca_overview", orcaOverview([orcaRow("example-app", "feat/a", "Write the docs", { promptLine: "next" }), orcaRow("example-api", "main", "Fix the parser", { group: "waiting" })], worktrees()));
-        await showAgain();
         await browser.waitUntil(async () => (await count("#orca-feed .orca-session-prompt")) === 1, { timeoutMsg: "the row was not drawn again" });
         expect((await fieldState())?.value).toBe("a b");
       });
