@@ -199,8 +199,8 @@ const answers = {
   lsp_stop: null,
   lsp_restart: { state: "indexing" },
   lsp_container_start: null,
-  // The key of the server that takes Ruby (its language), of a repository with nothing saved.
-  lsp_server_for: "ruby",
+  // The key of the server that takes a language: none, as a repository with nothing saved has no server (a spec that checks a definition gives its own).
+  lsp_server_for: null,
   // A-34: the languages found in a worktree: none (a spec that checks the finding gives its own).
   lsp_detect: [],
   // A-34, A-36: the first instruction of the Claude Code pane that sets up the language servers.
@@ -276,8 +276,8 @@ const computed = {
     }
     return { weekdays: [0, 1, 2, 3, 4, 5, 6].map((i) => (firstDay + i) % 7), days };
   },
-  // A-34: the settings of a repository that has none saved (the one server, ruby-lsp, of the language ruby), and the save, which answers what it was given (the texts trimmed by Rust are given trimmed here).
-  lsp_settings: ({ environment, project }) => ({ environment, project, sshHost: null, servers: [{ language: "ruby", name: "ruby-lsp", autoStart: true, command: null, mount: null, service: null }] }),
+  // A-34: the settings of a repository that has none saved (no server), and the save, which answers what it was given (the texts trimmed by Rust are given trimmed here).
+  lsp_settings: ({ environment, project }) => ({ environment, project, sshHost: null, servers: [] }),
   lsp_settings_set: ({ settings }) => settings,
   ssh_hosts: () => [],
   orca_browse_dir: ({ path }) => {

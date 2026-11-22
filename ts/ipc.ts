@@ -424,7 +424,7 @@ export interface Commands {
   ssh_hosts: { args: undefined; result: string[] };
   // A-34: how the card of a language server draws each language of A-21 (`plaintext` too, each once, sorted): its title (`Ruby`, `TypeScript`; any other is its name) and its icon of src/vendor/jetbrains-icons/, none for a language that has none.
   lsp_language_looks: { args: undefined; result: LspLanguageLook[] };
-  // A-34: the settings of the repository of the project `project` of `environment` (null: this machine) for the language servers: the saved ones, else the unset ones (one server, ruby-lsp, of the language `ruby`, with `autoStart` true and nothing replaced). A repository has one server for each language.
+  // A-34: the settings of the repository of the project `project` of `environment` (null: this machine) for the language servers: the saved ones, else the unset ones (no server and no ssh Host). A repository has one server for each language.
   lsp_settings: { args: { environment: string | null; project: string }; result: LspRepoSettings };
   // A-34: saves the settings of a repository and answers them as saved (texts trimmed, an empty one not set). Settings that are the unset ones take the entry away. A host that is not a Host name for ssh, a path of the mount that is not absolute, a text with a control character, a server name over 64 characters (an empty one is saved as the name of the app's table for the language, else the language), a language that is not one of A-21 and a language that two servers have are errors.
   lsp_settings_set: { args: { settings: LspRepoSettings }; result: LspRepoSettings };

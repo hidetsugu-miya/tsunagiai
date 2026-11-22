@@ -1014,7 +1014,7 @@ impl Tsunagiai {
     }
 
     #[tool(
-        description = "Read the language servers of a project of the Orca screen (A-34): {environment, project, sshHost, servers: [{language, name, autoStart, command, mount, service}]}: one server for each language. A project with nothing saved has ruby-lsp, which takes ruby and starts by itself. command, mount and service are left out when the app decides them. Not offered to the orchestrator.",
+        description = "Read the language servers of a project of the Orca screen (A-34): {environment, project, sshHost, servers: [{language, name, autoStart, command, mount, service}]}: one server for each language. A project with nothing saved has no server (servers is empty). command, mount and service are left out when the app decides them. Not offered to the orchestrator.",
         annotations(read_only_hint = true)
     )]
     async fn lsp_settings(&self, Parameters(a): Parameters<LspRepoArgs>) -> Result<String, String> {
@@ -1028,7 +1028,7 @@ impl Tsunagiai {
     }
 
     #[tool(
-        description = "Save the language server of one language of a project of the Orca screen (A-34): the server of the same language is replaced as a whole (a setting left out is not kept), else this one is added after the others. language is a language name of the Orca editor's colors (A-21: ruby, typescript, javascript, python, go, rust and the like), and a project has one server for each language. name is what the screen shows (left out: the name of the app's table for the language). command is a shell statement that /bin/sh -c runs in the worktree of the project (inside the compose service when the server runs in one), and must speak LSP on its standard input and output; the app runs it as written when a file of the languages is opened. A project with nothing saved has ruby-lsp, which takes ruby: to use another server for ruby, save a server of ruby, which replaces it. Leave command out to run the server that the app finds for the language in the place the worktree runs in (a service of compose that mounts it, else the host). Answers the settings of the project as saved, as lsp_settings does.",
+        description = "Save the language server of one language of a project of the Orca screen (A-34): the server of the same language is replaced as a whole (a setting left out is not kept), else this one is added after the others. language is a language name of the Orca editor's colors (A-21: ruby, typescript, javascript, python, go, rust and the like), and a project has one server for each language. name is what the screen shows (left out: the name of the app's table for the language). command is a shell statement that /bin/sh -c runs in the worktree of the project (inside the compose service when the server runs in one), and must speak LSP on its standard input and output; the app runs it as written when a file of the languages is opened. A project with nothing saved has no server, so a server of a language is added. Leave command out to run the server that the app finds for the language in the place the worktree runs in (a service of compose that mounts it, else the host). Answers the settings of the project as saved, as lsp_settings does.",
         annotations(destructive_hint = true)
     )]
     async fn lsp_server_save(
@@ -1733,6 +1733,11 @@ mod tests {
         };
         for must in ["A-21", "/bin/sh -c"] {
             assert!(text("lsp_server_save").contains(must), "{must}");
+        }
+        // A project with nothing saved has no server (#1243), and no tool says it has ruby-lsp.
+        assert!(text("lsp_settings").contains("nothing saved has no server"));
+        for tool in ["lsp_settings", "lsp_server_save"] {
+            assert!(!text(tool).contains("has ruby-lsp"), "{tool}");
         }
     }
 

@@ -38,7 +38,7 @@ const FILE: &str = "lsp-settings.json";
 const VERSION: u32 = 3;
 /// The longest name of a server (the name the screen shows), in characters.
 const MAX_NAME: usize = 64;
-/// The language whose servers have the automatic way of ruby-lsp, and the name of the server that a repository with nothing saved has.
+/// The language whose servers have the automatic way of ruby-lsp, and the name of the server that a file of version 1 held.
 const RUBY: &str = "ruby";
 const TYPESCRIPT: &str = "typescript";
 const JAVASCRIPT: &str = "javascript";
@@ -131,7 +131,7 @@ pub struct LspServerSettings {
 }
 
 impl LspServerSettings {
-    /// The server that a repository with nothing saved has, and that a file of version 1 held: ruby-lsp, which takes `ruby` and starts by itself, with nothing replaced.
+    /// The server that a file of version 1 held: ruby-lsp, which takes `ruby` and starts by itself, with nothing replaced.
     fn ruby_lsp() -> Self {
         Self {
             language: RUBY.to_owned(),
@@ -164,13 +164,13 @@ pub struct LspRepoSettings {
 }
 
 impl LspRepoSettings {
-    /// What a repository with nothing saved has: ruby-lsp, which starts by itself, and nothing is replaced.
+    /// What a repository with nothing saved has: no server and no ssh Host (#1243; ruby-lsp was the server of such a repository before).
     fn unset(environment: Option<&str>, project: &str) -> Self {
         Self {
             environment: environment.map(str::to_owned),
             project: project.to_owned(),
             ssh_host: None,
-            servers: vec![LspServerSettings::ruby_lsp()],
+            servers: vec![],
         }
     }
 
@@ -975,7 +975,7 @@ pub async fn lsp_settings(
         .map_err(|e| e.to_string())?
 }
 
-/// Saves the settings of a repository (A-34) and answers them as saved. Settings that are the unset ones (ruby-lsp alone, as nothing saved has it) take the entry away.
+/// Saves the settings of a repository (A-34) and answers them as saved. Settings that are the unset ones (no server and no ssh Host, as nothing saved has) take the entry away.
 #[tauri::command]
 pub async fn lsp_settings_set(
     app: AppHandle,
@@ -1559,8 +1559,8 @@ mod tests {
         assert_eq!(languages_taken("javascript"), ["javascript"]);
         assert_eq!(languages_taken("ruby"), ["ruby"]);
         assert_eq!(server_for(&repo, ""), None);
-        // A repository with nothing saved has ruby-lsp for ruby.
-        assert_eq!(server_for(&settings(), "ruby").as_deref(), Some("ruby"));
+        // A repository with nothing saved has no server (#1243).
+        assert_eq!(server_for(&settings(), "ruby"), None);
         assert_eq!(server_for(&settings(), "typescript"), None);
     }
 
@@ -1854,21 +1854,12 @@ mod tests {
     }
 
     #[test]
-    fn nothing_saved_gives_the_unset_settings_with_ruby_lsp_and_a_save_is_read_back() {
+    fn nothing_saved_gives_the_unset_settings_with_no_server_and_a_save_is_read_back() {
         let dir = temp_dir("roundtrip");
         let unset = settings_of(&dir, None, "r1").unwrap();
         assert_eq!(unset, LspRepoSettings::unset(None, "r1"));
-        assert_eq!(
-            unset.servers,
-            vec![LspServerSettings {
-                language: "ruby".into(),
-                name: "ruby-lsp".into(),
-                auto_start: true,
-                command: None,
-                mount: None,
-                service: None,
-            }]
-        );
+        assert_eq!(unset.servers, vec![]);
+        assert_eq!(unset.ssh_host, None);
         let saved = set_settings(
             &dir,
             LspRepoSettings {
@@ -1973,9 +1964,13 @@ mod tests {
                 ..LspRepoSettings::unset(Some("srv"), "r1")
             }
         );
+        // An entry of version 1 that was all default is still the one ruby-lsp: it was saved, so it is not the unset settings.
         assert_eq!(
             settings_of(&dir, None, "r2").unwrap(),
-            LspRepoSettings::unset(None, "r2")
+            LspRepoSettings {
+                servers: vec![server()],
+                ..LspRepoSettings::unset(None, "r2")
+            }
         );
         // Nothing is written by a read, and the next save writes every repository as version 3.
         assert_eq!(read_file(&dir)["version"], 1);
@@ -2070,18 +2065,21 @@ mod tests {
     }
 
     #[test]
-    fn a_repository_may_have_no_server_and_that_is_kept() {
+    fn a_repository_with_no_server_is_kept_only_for_its_ssh_host() {
         let dir = temp_dir("none");
         let saved = set_settings(
             &dir,
             LspRepoSettings {
-                servers: vec![],
+                ssh_host: Some("dev".into()),
                 ..settings()
             },
         )
         .unwrap();
         assert_eq!(saved.servers, vec![]);
-        assert_eq!(settings_of(&dir, None, "repo-1").unwrap().servers, vec![]);
+        assert_eq!(settings_of(&dir, None, "repo-1").unwrap(), saved);
+        // With no ssh Host either, it is the unset settings, and the entry goes.
+        set_settings(&dir, settings()).unwrap();
+        assert_eq!(read_file(&dir)["repositories"], json!([]));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -2301,20 +2299,14 @@ mod tests {
     ) {
         let dir = temp_dir("tool-save");
         let added = save_server(&dir, None, "repo-1", typescript()).unwrap();
-        assert_eq!(
-            added.servers,
-            vec![LspServerSettings::ruby_lsp(), typescript()]
-        );
+        assert_eq!(added.servers, vec![typescript()]);
         assert_eq!(read_settings(&dir, None, "repo-1").unwrap(), added);
         let changed = LspServerSettings {
             command: Some("tsserver".into()),
             ..typescript()
         };
         let replaced = save_server(&dir, None, "repo-1", changed.clone()).unwrap();
-        assert_eq!(
-            replaced.servers,
-            vec![LspServerSettings::ruby_lsp(), changed]
-        );
+        assert_eq!(replaced.servers, vec![changed]);
         // A name left out is the name of the table, and a padded one is trimmed.
         let padded = LspServerSettings {
             name: " ".into(),
@@ -2323,13 +2315,10 @@ mod tests {
         let again = save_server(&dir, None, "repo-1", padded).unwrap();
         assert_eq!(
             again.servers,
-            vec![
-                LspServerSettings::ruby_lsp(),
-                LspServerSettings {
-                    name: "typescript-language-server".into(),
-                    ..typescript()
-                }
-            ]
+            vec![LspServerSettings {
+                name: "typescript-language-server".into(),
+                ..typescript()
+            }]
         );
         // The other repositories are as they were.
         assert_eq!(
@@ -2381,13 +2370,14 @@ mod tests {
     #[test]
     fn a_server_is_deleted_by_its_language_and_a_language_that_is_not_there_is_an_error() {
         let dir = temp_dir("tool-delete");
+        save_server(&dir, None, "repo-1", LspServerSettings::ruby_lsp()).unwrap();
         save_server(&dir, None, "repo-1", typescript()).unwrap();
         let left = delete_server(&dir, None, "repo-1", " typescript ").unwrap();
         assert_eq!(left.servers, vec![LspServerSettings::ruby_lsp()]);
         assert!(delete_server(&dir, None, "repo-1", "typescript").is_err());
         assert!(delete_server(&dir, None, "repo-1", "").is_err());
         assert!(delete_server(&dir, None, "repo-1", "cobol-2000").is_err());
-        // The unset settings hold ruby-lsp, which can be deleted; none is kept as none.
+        // A saved ruby-lsp can be deleted; none is kept as none.
         let none = delete_server(&dir, None, "repo-1", "ruby").unwrap();
         assert_eq!(none.servers, vec![]);
         assert_eq!(read_settings(&dir, None, "repo-1").unwrap().servers, vec![]);
@@ -2406,10 +2396,7 @@ mod tests {
         save_server(&dir, Some("srv"), "repo-1", typescript()).unwrap();
         let set = set_ssh_host(&dir, Some("srv"), "repo-1", Some(" dev ".into())).unwrap();
         assert_eq!(set.ssh_host.as_deref(), Some("dev"));
-        assert_eq!(
-            set.servers,
-            vec![LspServerSettings::ruby_lsp(), typescript()]
-        );
+        assert_eq!(set.servers, vec![typescript()]);
         for bad in ["-oProxyCommand=x", "a b", "a\nb"] {
             assert!(
                 set_ssh_host(&dir, Some("srv"), "repo-1", Some(bad.into())).is_err(),
@@ -2673,6 +2660,7 @@ mod tests {
         let dir = temp_dir("launch-ssh");
         let env_settings = LspRepoSettings {
             ssh_host: Some("dev".into()),
+            servers: vec![server()],
             ..LspRepoSettings::unset(Some("srv"), "repo-1")
         };
         set_settings(&dir, env_settings).unwrap();
@@ -2685,6 +2673,14 @@ mod tests {
         assert_eq!(got.method, LspMethod::None);
         assert_eq!(routes, vec![Route::Ssh { host: "dev".into() }; 2]);
         // Without the host nothing is run.
+        set_settings(
+            &dir,
+            LspRepoSettings {
+                servers: vec![server()],
+                ..LspRepoSettings::unset(Some("other"), "repo-1")
+            },
+        )
+        .unwrap();
         let mut runs = 0;
         let err = launch_for(&dir, Some("other"), "repo-1", WT, "ruby", |_, _, _, _| {
             runs += 1;
@@ -2712,6 +2708,14 @@ mod tests {
     #[test]
     fn launch_for_falls_back_to_the_host_when_only_the_gemfile_lock_has_ruby_lsp() {
         let dir = temp_dir("launch-host");
+        set_settings(
+            &dir,
+            LspRepoSettings {
+                servers: vec![server()],
+                ..settings()
+            },
+        )
+        .unwrap();
         let got = launch_for(&dir, None, "repo-1", WT, "ruby", |_, _, command, _| {
             Ok(if command.contains("Gemfile.lock") {
                 ran(0, LOCK, "")
