@@ -46,6 +46,7 @@ pub mod orca_panes;
 pub mod orca_preview;
 pub mod orca_stream;
 pub mod orca_theme;
+pub mod orca_titles;
 pub mod preview_plugin;
 pub mod screen_bridge;
 pub mod side_menu;
@@ -497,6 +498,9 @@ pub fn run() {
             ghostty::ghostty_import,
             orca_theme::terminal_themes,
             orca_theme::terminal_theme_set,
+            orca_titles::orca_titles,
+            orca_titles::orca_title_set,
+            orca_titles::orca_titles_forget,
             app_log::log_write,
             app_log::log_read,
             app_log::log_open_folder,

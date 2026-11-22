@@ -1396,7 +1396,7 @@ describe("orca: projects", () => {
         await openOrca(read({ promptLine: prompt, answerLine: answer }));
         await project("example-api").click();
         expect(await shape("example-app")).toEqual({
-          parts: ["orca-session-head", "orca-session-title", "orca-line", "orca-line"],
+          parts: ["orca-session-head", "orca-line", "orca-line"],
           branch: "feat/a",
           icon: true,
           title: "Write the docs",
@@ -1408,9 +1408,9 @@ describe("orca: projects", () => {
       it("leaves out a line whose text is none or empty, with its tag", async () => {
         await openOrca(read({}, { promptLine: "", answerLine: answer }));
         await project("example-api").click();
-        expect((await shape("example-app")).parts).toEqual(["orca-session-head", "orca-session-title"]);
+        expect((await shape("example-app")).parts).toEqual(["orca-session-head"]);
         const api = await shape("example-api");
-        expect(api.parts).toEqual(["orca-session-head", "orca-session-title", "orca-line"]);
+        expect(api.parts).toEqual(["orca-session-head", "orca-line"]);
         expect([api.prompt, api.answer?.[2]]).toEqual([null, answer]);
       });
 
@@ -1442,6 +1442,191 @@ describe("orca: projects", () => {
         await openOrca(read({}));
         expect(await count("#orca-feed .orca-project .orca-ic")).toBe(0);
         expect(await count("#orca-feed .orca-session .orca-ic")).toBe(1);
+      });
+    });
+
+    describe("the title of a session row (A-8)", () => {
+      const THIS = "このマシン";
+      const read = () => orcaOverview([orcaRow("example-app", "feat/a", "Write the docs"), orcaRow("example-api", "main", "Fix the parser", { group: "waiting" })], worktrees());
+      const key = "tab_example-app:leaf_1";
+      const row = () => sessionOf(claudeTab("example-app"));
+      const titleText = () => textsOf(`#orca-feed .orca-session[data-session="${claudeTab("example-app")}"] .orca-session-title`);
+      const field = ".orca-session-title-input";
+      // The page's own press of the pencil: it shows while the pointer is on the row, which the driver's pointer does not keep.
+      const pencil = (repo: string) =>
+        browser.execute((tab) => document.querySelector<HTMLElement>(`#orca-feed .orca-session[data-session="${tab}"] .orca-session-edit`)!.click(), claudeTab(repo));
+      const fieldState = () =>
+        browser.execute((selector) => {
+          const input = document.querySelector<HTMLInputElement>(selector);
+          return input === null ? null : { value: input.value, selected: [input.selectionStart, input.selectionEnd], focused: document.activeElement === input };
+        }, field);
+
+      it("draws the title in the first line, right of the branch, and no second line of it", async () => {
+        await openOrca(read());
+        const look = await browser.execute((tab) => {
+          const session = document.querySelector(`#orca-feed .orca-session[data-session="${tab}"]`)!;
+          const head = session.querySelector(".orca-session-head")!;
+          const r = (e: Element) => e.getBoundingClientRect();
+          const branch = r(head.querySelector(".orca-session-branch")!);
+          const title = r(head.querySelector(".orca-session-title")!);
+          return { rowParts: [...session.children].map((c) => c.className.split(" ")[0]), headParts: [...head.children].map((c) => c.className.split(" ")[0]), title: head.querySelector(".orca-session-title")!.textContent, sameLine: Math.abs(branch.top - title.top) < 8, right: title.left >= branch.right, pins: head.querySelectorAll(".orca-session-pin").length };
+        }, claudeTab("example-app"));
+        expect(look).toEqual({ rowParts: ["orca-session-head"], headParts: ["orca-ic", "orca-session-branch", "orca-session-title", "orca-session-edit"], title: "Write the docs", sameLine: true, right: true, pins: 0 });
+      });
+
+      it("cuts a long title with an ellipsis inside the first line", async () => {
+        await openOrca(orcaOverview([orcaRow("example-app", "feat/a", "長い題名".repeat(40))], worktrees()));
+        const look = await browser.execute(() => {
+          const title = document.querySelector<HTMLElement>("#orca-feed .orca-session-title")!;
+          const style = getComputedStyle(title);
+          return { overflow: style.textOverflow, clipped: title.scrollWidth > title.clientWidth, within: title.getBoundingClientRect().right <= document.querySelector("#orca-feed .orca-session")!.getBoundingClientRect().right };
+        });
+        expect(look).toEqual({ overflow: "ellipsis", clipped: true, within: true });
+      });
+
+      // :hover and :focus never match in the E2E window (the window is hidden): the hidden state is the computed style, and the rule that shows the pencil is read from the stylesheet to say that the pointer or the focus in the row lifts it.
+      it("hides the pencil until the pointer or the focus is in the row, and draws no text of help", async () => {
+        await openOrca(read());
+        expect(await browser.execute((tab) => getComputedStyle(document.querySelector(`#orca-feed .orca-session[data-session="${tab}"] .orca-session-edit`)!).visibility, claudeTab("example-app"))).toBe("hidden");
+        const showing = await browser.execute(() => {
+          for (const sheet of document.styleSheets)
+            for (const rule of sheet.cssRules)
+              if (rule instanceof CSSStyleRule && rule.selectorText.includes(".orca-session-edit") && rule.style.visibility === "visible") return rule.selectorText;
+          return null;
+        });
+        expect(showing).toContain(".orca-session:hover");
+        expect(showing).toContain(".orca-session:focus-within");
+        expect(await browser.execute(() => [document.querySelector("#orca-feed .orca-session-edit")!.getAttribute("aria-label"), document.querySelector("#orca-feed .orca-session-edit")!.hasAttribute("title")])).toEqual(["題名を変える", false]);
+      });
+
+      it("turns the title into a field with the title in it, selected, and saves it with Enter: it is fixed, with a pin, in the row and the tab", async () => {
+        await openOrca(read());
+        const set = await mock("orca_title_set", { [THIS]: { [key]: "My title" } });
+        await pencil("example-app");
+        await browser.waitUntil(async () => (await fieldState()) !== null, { timeoutMsg: "the field did not open" });
+        expect(await fieldState()).toEqual({ value: "Write the docs", selected: [0, "Write the docs".length], focused: true });
+        // The pencil and the field do not select the session.
+        expect(await pressedSessions()).toEqual([]);
+        await $(field).setValue("My title");
+        await browser.keys("Enter");
+        expect(await waitForCalls(set)).toEqual([{ target: THIS, key, title: "My title" }]);
+        await browser.waitUntil(async () => (await count(field)) === 0, { timeoutMsg: "the field did not close" });
+        expect(await titleText()).toEqual(["My title"]);
+        expect(await textsOf("#orca-feed .orca-session-pin")).toEqual(["📌"]);
+        await row().click();
+        expect(await tabTitles()).toEqual(["My title"]);
+      });
+
+      it("draws a title that was fixed before, with a pin, in the row and the tab, in place of the automatic one", async () => {
+        await openOrca(read(), { orca_titles: { [THIS]: { [key]: "Mine" } } });
+        expect(await titleText()).toEqual(["Mine"]);
+        expect(await count("#orca-feed .orca-session-pin")).toBe(1);
+        await row().click();
+        expect(await tabTitles()).toEqual(["Mine"]);
+      });
+
+      it("gives the automatic title back, and takes the pin off, when an empty text is saved", async () => {
+        await openOrca(read(), { orca_titles: { [THIS]: { [key]: "Mine" } } });
+        const set = await mock("orca_title_set", {});
+        await pencil("example-app");
+        await browser.waitUntil(async () => (await fieldState()) !== null, { timeoutMsg: "the field did not open" });
+        expect((await fieldState())?.value).toBe("Mine");
+        await $(field).setValue("");
+        await browser.keys("Enter");
+        expect(await waitForCalls(set)).toEqual([{ target: THIS, key, title: "" }]);
+        await browser.waitUntil(async () => (await titleText())[0] === "Write the docs", { timeoutMsg: "the automatic title did not come back" });
+        expect(await count("#orca-feed .orca-session-pin")).toBe(0);
+      });
+
+      it("cancels with Escape and when the focus leaves the field, and saves nothing", async () => {
+        await openOrca(read());
+        const set = await mock("orca_title_set", {});
+        await pencil("example-app");
+        await browser.waitUntil(async () => (await fieldState()) !== null, { timeoutMsg: "the field did not open" });
+        await $(field).setValue("Typed");
+        await browser.keys("Escape");
+        await browser.waitUntil(async () => (await count(field)) === 0, { timeoutMsg: "Escape did not close the field" });
+        expect(await titleText()).toEqual(["Write the docs"]);
+        await pencil("example-app");
+        await browser.waitUntil(async () => (await fieldState()) !== null, { timeoutMsg: "the field did not open again" });
+        await browser.execute((selector) => document.querySelector<HTMLInputElement>(selector)!.blur(), field);
+        await browser.waitUntil(async () => (await count(field)) === 0, { timeoutMsg: "the focus leaving did not close the field" });
+        expect(await titleText()).toEqual(["Write the docs"]);
+        expect(await callsOf(set)).toEqual([]);
+      });
+
+      it("keeps the keys and the presses of the field from the row", async () => {
+        await openOrca(read());
+        await pencil("example-app");
+        await browser.waitUntil(async () => (await fieldState()) !== null, { timeoutMsg: "the field did not open" });
+        await $(field).click();
+        await $(field).setValue("a b");
+        expect(await pressedSessions()).toEqual([]);
+        expect((await fieldState())?.value).toBe("a b");
+      });
+
+      // The list is read again by the clock: leaving the screen would take the focus from the field, which cancels it.
+      it("moves the very field into the new row when the list is drawn again, with what was typed, its selection and its focus", async () => {
+        await openOrca(read(), timers({ orcaClock: 1000 }));
+        await pencil("example-app");
+        await browser.waitUntil(async () => (await fieldState()) !== null, { timeoutMsg: "the field did not open" });
+        await $(field).setValue("a b c");
+        // A mark on the element tells a new element from the same one.
+        await browser.execute((selector) => {
+          const input = document.querySelector<HTMLInputElement>(selector)!;
+          input.dataset.mark = "kept";
+          input.setSelectionRange(1, 3);
+        }, field);
+        const kept = () =>
+          browser.execute((selector) => {
+            const input = document.querySelector<HTMLInputElement>(selector);
+            return input === null ? null : { mark: input.dataset.mark ?? null, value: input.value, selected: [input.selectionStart, input.selectionEnd], focused: document.activeElement === input };
+          }, field);
+        const before = { mark: "kept", value: "a b c", selected: [1, 3], focused: true };
+        expect(await kept()).toEqual(before);
+        // A read that changes the row (a new prompt) draws the list again.
+        await mock("orca_overview", orcaOverview([orcaRow("example-app", "feat/a", "Write the docs", { promptLine: "next" }), orcaRow("example-api", "main", "Fix the parser", { group: "waiting" })], worktrees()));
+        await browser.waitUntil(async () => (await count("#orca-feed .orca-session-prompt")) === 1, { timeoutMsg: "the row was not drawn again" });
+        expect(await kept()).toEqual(before);
+        expect(await count("#orca-feed .orca-session-title-input")).toBe(1);
+        // The field still saves and cancels as before: Escape closes it with nothing saved.
+        await browser.keys("Escape");
+        await browser.waitUntil(async () => (await count(field)) === 0, { timeoutMsg: "Escape did not close the moved field" });
+        expect(await callsOf("orca_title_set")).toEqual([]);
+      });
+
+      it("takes out the titles of the sessions that the list, read well, no longer holds with one call for the place, and leaves the others", async () => {
+        const held = { [THIS]: { [key]: "Mine", "tab_gone:leaf_1": "Old", "tab_gone:leaf_2": "Older" } };
+        await openOrca(read(), { orca_titles: held, orca_titles_forget: { [THIS]: { [key]: "Mine" } } });
+        expect(await waitForCalls("orca_titles_forget")).toEqual([{ target: THIS, keys: ["tab_gone:leaf_1", "tab_gone:leaf_2"] }]);
+        expect(await callsOf("orca_title_set")).toEqual([]);
+        expect(await titleText()).toEqual(["Mine"]);
+      });
+
+      // The app starts and `openOrca` shows the screen: the taking out is tried at the start and again when the screen is shown (which clears what failed), so the calls up to then are one or two; what the test holds is that the clock's reads add none and that showing the screen again does.
+      it("does not send a taking out that failed again at the next read, and sends it again when the screen is shown again", async () => {
+        const held = { [THIS]: { [key]: "Mine", "tab_gone:leaf_1": "Old" } };
+        const sent = { target: THIS, keys: ["tab_gone:leaf_1"] };
+        await openOrca(read(), { orca_titles: held, orca_titles_forget: rejects("disk full"), ...timers({ orcaClock: 1000 }) });
+        await waitForCalls("orca_titles_forget");
+        await browser.pause(800);
+        const shown = await callsOf("orca_titles_forget");
+        expect(shown.length).toBeLessThanOrEqual(2);
+        for (const call of shown) expect(call).toEqual(sent);
+        // Reads of the list go on (the clock, 1.2 periods of 1 second twice), and none sends it again.
+        await browser.pause(2400);
+        expect(await callsOf("orca_titles_forget")).toHaveLength(shown.length);
+        expect(await titleText()).toEqual(["Mine"]);
+        await showAgain();
+        expect(await waitForCalls("orca_titles_forget", shown.length + 1)).toHaveLength(shown.length + 1);
+      });
+
+      it("takes out no title while the read of the list failed", async () => {
+        await openOrca(orcaOverview([], [], { state: "failed", message: "Orca is not running", environments: [] }), { orca_titles: { [THIS]: { [key]: "Mine" } } });
+        await waitForCalls("orca_titles");
+        await browser.pause(500);
+        expect(await callsOf("orca_titles_forget")).toEqual([]);
+        expect(await callsOf("orca_title_set")).toEqual([]);
       });
     });
 

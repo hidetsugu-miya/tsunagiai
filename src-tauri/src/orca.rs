@@ -41,7 +41,7 @@ pub(crate) const TEXT_LIMIT: usize = 100_000;
 /// Characters of the folder path of a project to add (macOS's `PATH_MAX` is 1024 bytes; a saved environment's server may allow more).
 const PROJECT_PATH_LIMIT: usize = 4096;
 /// Characters of the line a row shows; the screen cuts it with an ellipsis, this only keeps a long message from crossing the IPC.
-const LINE_LIMIT: usize = 200;
+pub(crate) const LINE_LIMIT: usize = 200;
 /// How many characters of a line are read for its tags, so that a line of thousands of `<` costs no more than this; the line is cut to `LINE_LIMIT` afterwards.
 const LINE_READ_LIMIT: usize = LINE_LIMIT * 20;
 const SETTINGS_FILE: &str = "orca-settings.json";
@@ -652,7 +652,7 @@ fn project_key_of(worktree: &Value) -> Option<String> {
 }
 
 /// The first line of a text from outside that has text, its control characters replaced by spaces, its hidden characters (zero-width, bidirectional formatting and tag ones, `orca_handoff::without_hidden`) taken out and cut to `LINE_LIMIT` characters: it is shown as text, never as markup.
-fn plain_line(text: &str) -> String {
+pub(crate) fn plain_line(text: &str) -> String {
     let spaced: String = first_line(text)
         .unwrap_or_default()
         .chars()
