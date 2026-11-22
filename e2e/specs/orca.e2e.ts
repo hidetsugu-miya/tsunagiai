@@ -1603,16 +1603,22 @@ describe("orca: projects", () => {
         expect(await titleText()).toEqual(["Mine"]);
       });
 
+      // The app starts and `openOrca` shows the screen: the taking out is tried at the start and again when the screen is shown (which clears what failed), so the calls up to then are one or two; what the test holds is that the clock's reads add none and that showing the screen again does.
       it("does not send a taking out that failed again at the next read, and sends it again when the screen is shown again", async () => {
         const held = { [THIS]: { [key]: "Mine", "tab_gone:leaf_1": "Old" } };
+        const sent = { target: THIS, keys: ["tab_gone:leaf_1"] };
         await openOrca(read(), { orca_titles: held, orca_titles_forget: rejects("disk full"), ...timers({ orcaClock: 1000 }) });
-        expect(await waitForCalls("orca_titles_forget")).toEqual([{ target: THIS, keys: ["tab_gone:leaf_1"] }]);
+        await waitForCalls("orca_titles_forget");
+        await browser.pause(800);
+        const shown = await callsOf("orca_titles_forget");
+        expect(shown.length).toBeLessThanOrEqual(2);
+        expect(shown.every((call) => JSON.stringify(call) === JSON.stringify(sent))).toBe(true);
         // Reads of the list go on (the clock, 1.2 periods of 1 second twice), and none sends it again.
         await browser.pause(2400);
-        expect(await callsOf("orca_titles_forget")).toHaveLength(1);
+        expect(await callsOf("orca_titles_forget")).toHaveLength(shown.length);
         expect(await titleText()).toEqual(["Mine"]);
         await showAgain();
-        expect(await waitForCalls("orca_titles_forget", 2)).toHaveLength(2);
+        expect(await waitForCalls("orca_titles_forget", shown.length + 1)).toHaveLength(shown.length + 1);
       });
 
       it("takes out no title while the read of the list failed", async () => {
