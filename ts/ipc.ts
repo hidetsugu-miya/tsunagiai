@@ -477,6 +477,12 @@ export interface Commands {
   orca_remote_branches: { args: { path: string; repo: string; query: string; environment: string | null }; result: OrcaRemoteBranch[] };
   // A-25: remembers that the remote branch `name` (as Orca names it) was picked in the list of branches of the project `repo` (`OrcaProject.key`) of `environment`, so that `orca_remote_branches` answers it first to an empty `query` (at most 5 for each project of each Orca).
   orca_branch_used: { args: { repo: string; name: string; environment: string | null }; result: null };
+  // A-8: the titles the owner gave to sessions, by target (a saved environment's name, or "このマシン" for this machine) and pane key.
+  orca_titles: { args: undefined; result: Record<string, Record<string, string>> };
+  // A-8: gives the session `key` of `target` the title `title` (one line, cut by Rust), or takes its title out when `title` is empty; answers every title saved.
+  orca_title_set: { args: { target: string; key: string; title: string }; result: Record<string, Record<string, string>> };
+  // A-8: takes out the titles of the sessions `keys` of `target` with one write (the sessions that a list read well no longer holds); answers every title saved.
+  orca_titles_forget: { args: { target: string; keys: string[] }; result: Record<string, Record<string, string>> };
   // A-25: switches the worktree at `path` to the local branch `name`, or to the remote one (`kind` "remote", `name` like `origin/feature/a`). Orca's refusal is the error's message; a `warning` comes with a switch that worked.
   orca_switch_branch: { args: { path: string; kind: "local" | "remote"; name: string; environment: string | null }; result: OrcaBranchSwitched };
   // A-44: stages (`orca_files_stage`), unstages (`orca_files_unstage`) or puts back as HEAD has them (`orca_files_revert`, which deletes a file that HEAD lacks, for good) the changes of `paths` (files and folders from the worktree; a folder is the changes under it). A path outside the worktree and the root are refused; Orca's refusal is the error's message.
