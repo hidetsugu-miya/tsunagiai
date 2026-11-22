@@ -1071,13 +1071,15 @@ fn screen_of_push(
         .unwrap_or_else(|| Err(REFUSED_PUSH.to_owned()))
 }
 
-/// What the app does with a push of `environment`: the request to open a preview is given to the screen of the development screen (`preview-open`), which answers it, and every other push is refused.
+/// What the app does with a push of `environment`: the request to open a preview is given to the screen of the development screen (`preview-open`), which answers it (with no value: `preview.open` gives none back), and every other push is refused.
 fn push_handler(app: tauri::AppHandle, environment: String) -> PushHandler {
     Arc::new(move |request| {
         let (app, environment) = (app.clone(), environment.clone());
         Box::pin(async move {
             let fields = screen_of_push(&request, &environment)?;
-            crate::screen_bridge::write_screen(&app, orca_preview::OPEN_TARGET, fields).await
+            crate::screen_bridge::write_screen(&app, orca_preview::OPEN_TARGET, fields)
+                .await
+                .map(|()| None)
         })
     })
 }
@@ -2725,7 +2727,7 @@ mod tests {
         let until = Instant::now() + Duration::from_secs(5);
         loop {
             match hub.push(push_request(method)).await {
-                Ok(()) => return,
+                Ok(_) => return,
                 Err(e) if Instant::now() > until => panic!("not delivered: {e}"),
                 Err(_) => tokio::time::sleep(Duration::from_millis(20)).await,
             }
@@ -2736,7 +2738,7 @@ mod tests {
         let seen = seen.clone();
         Arc::new(move |request| {
             seen.lock().unwrap().push(request);
-            Box::pin(async { Ok(()) })
+            Box::pin(async { Ok(None) })
         })
     }
 
@@ -2888,7 +2890,7 @@ mod tests {
     #[test]
     fn the_task_of_an_environment_can_be_spawned() {
         fn is_send<T: Send>(_: &T) {}
-        let handler: PushHandler = Arc::new(|_| Box::pin(async { Ok(()) }));
+        let handler: PushHandler = Arc::new(|_| Box::pin(async { Ok(None) }));
         is_send(&keep_pushes(
             PathBuf::new(),
             "pc".to_owned(),

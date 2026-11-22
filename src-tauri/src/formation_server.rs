@@ -84,6 +84,8 @@ const PUSH_ACK_TIMEOUT: Duration = Duration::from_millis(300);
 const PUSH_WAIT: Duration = Duration::from_secs(15);
 /// The pushes that wait for the connection at once.
 const PUSH_QUEUE: usize = 8;
+/// The most bytes of the value a handler gives back for one push; more is answered as a refusal, so that the answer (and the daemon's reply to the `tsunagiai-mcp`) stays under `MAX_PAYLOAD`.
+const MAX_RESULT: usize = MAX_PAYLOAD - 1024;
 const NOT_CONNECTED: &str = "アプリがつながっていません";
 
 const REMOTE_DIR: &str = "remote";
@@ -694,7 +696,7 @@ pub struct PushRequest {
 /// One push on its way to the app, and where the answer of the app goes.
 struct Delivery {
     request: PushRequest,
-    done: oneshot::Sender<Result<(), String>>,
+    done: oneshot::Sender<Result<Option<Value>, String>>,
 }
 
 /// The daemon's end of the pushes: the one connection of the app that is open now (the newest `subscribe` replaces the one before it, which is closed).
@@ -714,8 +716,8 @@ impl Hub {
         receiver
     }
 
-    /// Pushes `request` to the app and waits for its answer: Ok when the app's handler took it, the handler's reason when it refused, and an error when no app is connected or the push did not reach it.
-    pub async fn push(&self, request: PushRequest) -> Result<(), String> {
+    /// Pushes `request` to the app and waits for its answer: Ok when the app's handler took it (with the value it gave back, if any), the handler's reason when it refused, and an error when no app is connected or the push did not reach it.
+    pub async fn push(&self, request: PushRequest) -> Result<Option<Value>, String> {
         let sender = self
             .app
             .lock()
@@ -737,12 +739,12 @@ impl Hub {
     }
 }
 
-/// One push on the connection and the app's answer to it. The outer error is a connection that failed (it ends); the inner one is the app's handler refusing the request.
+/// One push on the connection and the app's answer to it (the value the handler gave back is the `result` of the answer). The outer error is a connection that failed (it ends); the inner one is the app's handler refusing the request.
 async fn deliver<S>(
     socket: &mut WebSocketStream<S>,
     channel: &mut Channel,
     request: &PushRequest,
-) -> Result<Result<(), String>, String>
+) -> Result<Result<Option<Value>, String>, String>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
@@ -760,7 +762,7 @@ where
         .and_then(|plain| serde_json::from_slice::<Value>(&plain).ok())
         .ok_or(BROKEN)?;
     Ok(match answer["ack"].as_bool() {
-        Some(true) => Ok(()),
+        Some(true) => Ok(answer.get("result").filter(|v| !v.is_null()).cloned()),
         Some(false) => Err(answer["error"]
             .as_str()
             .unwrap_or("アプリが断りました")
@@ -808,7 +810,7 @@ pub fn push_socket(config: &Path) -> PathBuf {
     remote_dir(config).join(PUSH_SOCKET_FILE)
 }
 
-/// One request from a `tsunagiai-mcp` of this PC: the whole of it is one `PushRequest` in JSON, and the daemon answers `{"ok": true}` or `{"ok": false, "error": …}` and closes.
+/// One request from a `tsunagiai-mcp` of this PC: the whole of it is one `PushRequest` in JSON, and the daemon answers `{"ok": true}` (with the app's `"result"` when the handler gave one) or `{"ok": false, "error": …}` and closes.
 #[cfg(unix)]
 async fn local_handle(mut stream: tokio::net::UnixStream, hub: &Hub) -> Option<()> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -831,7 +833,8 @@ async fn local_handle(mut stream: tokio::net::UnixStream, hub: &Hub) -> Option<(
         }
     };
     let reply = match pushed {
-        Ok(()) => json!({"ok": true}),
+        Ok(None) => json!({"ok": true}),
+        Ok(Some(result)) => json!({"ok": true, "result": result}),
         Err(error) => json!({"ok": false, "error": error}),
     };
     stream
@@ -875,9 +878,17 @@ fn serve_local(_: &Path, _: Arc<Hub>) -> Result<tokio::task::JoinHandle<()>, Str
     Err("unix のみ対応しています".to_owned())
 }
 
-/// What a `tsunagiai-mcp` of the PC calls to ask something of the app: the daemon pushes `request` to the app that is connected and gives its answer. An error when no daemon runs, no app is connected or the app refused.
-#[cfg(unix)]
+/// What a `tsunagiai-mcp` of the PC calls to ask something of the app and not read a value from it: `push_to_daemon_result` with the value dropped.
 pub async fn push_to_daemon(config: &Path, request: &PushRequest) -> Result<(), String> {
+    push_to_daemon_result(config, request).await.map(|_| ())
+}
+
+/// What a `tsunagiai-mcp` of the PC calls to ask something of the app: the daemon pushes `request` to the app that is connected and gives its answer, with the value that the app's handler gave back, if any. An error when no daemon runs, no app is connected or the app refused.
+#[cfg(unix)]
+pub async fn push_to_daemon_result(
+    config: &Path,
+    request: &PushRequest,
+) -> Result<Option<Value>, String> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let send = serde_json::to_vec(request).map_err(|e| e.to_string())?;
     timeout(PUSH_WAIT + HANDSHAKE_DEADLINE, async {
@@ -895,7 +906,7 @@ pub async fn push_to_daemon(config: &Path, request: &PushRequest) -> Result<(), 
         let reply: Value = serde_json::from_slice(&text)
             .map_err(|_| "サーバーの答えの形式が正しくありません".to_owned())?;
         if reply["ok"] == true {
-            Ok(())
+            Ok(reply.get("result").filter(|v| !v.is_null()).cloned())
         } else {
             Err(reply["error"]
                 .as_str()
@@ -908,7 +919,7 @@ pub async fn push_to_daemon(config: &Path, request: &PushRequest) -> Result<(), 
 }
 
 #[cfg(not(unix))]
-pub async fn push_to_daemon(_: &Path, _: &PushRequest) -> Result<(), String> {
+pub async fn push_to_daemon_result(_: &Path, _: &PushRequest) -> Result<Option<Value>, String> {
     Err("unix のみ対応しています".to_owned())
 }
 
@@ -1306,9 +1317,11 @@ impl Client {
     }
 }
 
-/// What the app does with one push: Ok when it took the request, the reason when it refuses it (the daemon passes the reason to whoever asked).
+/// What the app does with one push: Ok when it took the request, with a value for whoever asked if it has one (the request that wants none gives `None`), the reason when it refuses it (the daemon passes the value or the reason to whoever asked).
 pub type PushHandler = Arc<
-    dyn Fn(PushRequest) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> + Send + Sync,
+    dyn Fn(PushRequest) -> Pin<Box<dyn Future<Output = Result<Option<Value>, String>> + Send>>
+        + Send
+        + Sync,
 >;
 
 /// The app's end of a connection of pushes.
@@ -1340,7 +1353,11 @@ impl Pushes {
                 return BAD.to_owned();
             };
             let answer = match handler(request).await {
-                Ok(()) => json!({"ack": true}),
+                Ok(Some(result)) if result.to_string().len() > MAX_RESULT => {
+                    json!({"ack": false, "error": "答えが大きすぎます"})
+                }
+                Ok(Some(result)) => json!({"ack": true, "result": result}),
+                Ok(None) => json!({"ack": true}),
                 Err(error) => json!({"ack": false, "error": error}),
             };
             let sent = match serde_json::to_vec(&answer) {
@@ -2916,7 +2933,7 @@ mod tests {
         let seen = seen.clone();
         Arc::new(move |request| {
             seen.lock().unwrap().push(request);
-            Box::pin(async move { refuse.map_or(Ok(()), |reason| Err(reason.to_owned())) })
+            Box::pin(async move { refuse.map_or(Ok(None), |reason| Err(reason.to_owned())) })
         })
     }
 
@@ -2947,6 +2964,42 @@ mod tests {
         assert_eq!(seen.lock().unwrap().len(), 3);
         // The server still answers the calls of other connections.
         assert_eq!(served.client().await.version().await.unwrap(), "9.9.9");
+        served.task.abort();
+        std::fs::remove_dir_all(&served.config).unwrap();
+    }
+
+    /// A handler that answers every request with `result`.
+    fn answering(result: Value) -> PushHandler {
+        Arc::new(move |_| {
+            let result = result.clone();
+            Box::pin(async move { Ok(Some(result)) })
+        })
+    }
+
+    #[tokio::test]
+    async fn the_value_that_the_app_gives_back_reaches_the_one_who_pushed() {
+        let served = served("net-push-result").await;
+        let _app = subscribed(&served, answering(json!({"servers": ["ruby-lsp"]}))).await;
+        assert_eq!(
+            served.hub.push(request("lsp.settings")).await,
+            Ok(Some(json!({"servers": ["ruby-lsp"]})))
+        );
+        // A value that is too big is a refusal, and the connection goes on.
+        let big = answering(json!("x".repeat(MAX_RESULT)));
+        let _bigger = subscribed(&served, big).await;
+        assert_eq!(
+            served.hub.push(request("lsp.settings")).await,
+            Err("答えが大きすぎます".to_owned())
+        );
+        served.task.abort();
+        std::fs::remove_dir_all(&served.config).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_request_that_gives_no_value_comes_back_with_none() {
+        let served = served("net-push-none").await;
+        let _app = subscribed(&served, recording(&Arc::new(Mutex::new(Vec::new())), None)).await;
+        assert_eq!(served.hub.push(request("preview.open")).await, Ok(None));
         served.task.abort();
         std::fs::remove_dir_all(&served.config).unwrap();
     }
@@ -3102,10 +3155,29 @@ mod tests {
             .unwrap();
         let handler = recording(&seen, None);
         let app = tokio::spawn(async move { pushes.run(&handler).await });
+        assert_eq!(
+            push_to_daemon_result(&config, &request("preview.open")).await,
+            Ok(None)
+        );
         push_to_daemon(&config, &request("preview.open"))
             .await
             .unwrap();
-        assert_eq!(*seen.lock().unwrap(), [request("preview.open")]);
+        assert_eq!(seen.lock().unwrap().len(), 2);
+        // The value the app's handler gives back comes through the socket of the daemon.
+        app.abort();
+        let pushes = Client::connect("127.0.0.1", port, client_secret, server_public)
+            .await
+            .unwrap()
+            .subscribe()
+            .await
+            .unwrap();
+        let handler = answering(json!({"ok": 1}));
+        let app = tokio::spawn(async move { pushes.run(&handler).await });
+        assert_eq!(
+            push_to_daemon_result(&config, &request("lsp.settings")).await,
+            Ok(Some(json!({"ok": 1})))
+        );
+        seen.lock().unwrap().truncate(1);
         // Something that is not a request is refused, and nothing reaches the app.
         let refused = {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
