@@ -16,9 +16,11 @@ use tsunagiai_lib::{
     claude_code,
     database::{self, script::Scripts, DatabaseProfile, Keychain},
     formation::{self, FormationAgent, PlannedChild},
-    formation_ask, formation_message, formation_page, formation_server, gmail, identity,
+    formation_ask, formation_message, formation_page,
+    formation_server::{self, PushRequest},
+    gmail, identity,
     lsp::{self, LspServerSettings},
-    orca_preview, preview_plugin,
+    lsp_plugin, orca_preview, preview_plugin,
     screen_bridge::{self, Request as ScreenRequest},
     skills::{self, Skill, SkillScreen},
     todoist,
@@ -266,6 +268,39 @@ struct LspSshHostArgs {
     project: String,
     /// A Host of `~/.ssh/config` of this Mac, through which the worktrees of a saved environment are reached. An empty text takes it off.
     ssh_host: String,
+}
+
+/// The arguments of the pushed tools of the language servers (`--lsp`, #1242). They have no `environment`: the app keeps the settings of the saved environment that the push came through.
+#[derive(Deserialize, JsonSchema)]
+struct LspProjectArgs {
+    /// The project: the id of its repository in Orca (`repoId` of `orca worktree ps`, `id` of `orca repo list`), as the first instruction names it.
+    project: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct LspPushedSaveArgs {
+    /// The project: the id of its repository in Orca, as the first instruction names it.
+    project: String,
+    /// The server to save.
+    server: LspServerArgs,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct LspPushedDeleteArgs {
+    /// The project: the id of its repository in Orca, as the first instruction names it.
+    project: String,
+    /// The language of the server to delete (A-21).
+    language: String,
+}
+
+/// What a pushed tool answers when the push did not give the settings back: the app took the request and said nothing.
+const LSP_NO_ANSWER: &str = "つなぎAIが設定を返しませんでした";
+
+/// The error of a pushed tool: the reason of the push (fixed words of ours, or the app's own refusal), and that nothing was written on this PC.
+fn lsp_push_failed(reason: &str) -> String {
+    format!(
+        "つなぎAIに言語サーバーの設定を頼めませんでした: {reason}。この PC には何も書いていません"
+    )
 }
 
 /// The environment of a tool of the language servers as the settings key it: this Mac is none, which is how the app saves it.
@@ -687,6 +722,49 @@ fn todo_draft_arg(args: impl IntoIterator<Item = String>) -> bool {
     args.into_iter().any(|arg| arg == "--todo-draft")
 }
 
+/// The tools of the plugin of #1242 that a Claude Code gets to set up the language servers of a project (A-34): the reads and writes of the servers, and no other. That Claude Code can start from the text of a mail, a message or a Todo as well (A-9), and what a server runs is a command of a shell, so any other tool would be one that an injected instruction could use.
+const LSP_TOOLS: [&str; 3] = ["lsp_settings", "lsp_server_save", "lsp_server_delete"];
+
+/// The ssh Host of a project, the tool that comes with `LSP_TOOLS` and which only a Claude Code on the app's PC is given (`--lsp-local`): a Host is one of `~/.ssh/config` of the app's PC, and the push to the app carries no such request (#1242).
+const LSP_SSH_HOST_TOOL: &str = "lsp_repo_ssh_host_set";
+
+/// How `--lsp` and `--lsp-local` serve the tools of the language servers.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum LspMode {
+    /// `--lsp-local` (the app's own PC): the tools read and write `lsp-settings.json` of this PC.
+    Local,
+    /// `--lsp` (the PC of a saved environment): each tool pushes its request to the app, and writes nothing here.
+    Pushed,
+}
+
+/// The tools of the plugin of #1242: the pushed ones with `--lsp`, which write nothing on this PC (they take the project and no environment: the app uses the connection's), and the four of `lsp_*` of this PC with `--lsp-local`.
+fn lsp_router(mode: LspMode) -> ToolRouter<Tsunagiai> {
+    match mode {
+        LspMode::Pushed => Tsunagiai::lsp_pushed_router(),
+        LspMode::Local => {
+            let mut router = Tsunagiai::tool_router();
+            let kept: Vec<&str> = LSP_TOOLS.into_iter().chain([LSP_SSH_HOST_TOOL]).collect();
+            keep_only(&mut router, &kept);
+            router
+        }
+    }
+}
+
+/// The mode of `--lsp` or `--lsp-local` among `args`, or none when neither is there. Both together are an error.
+fn lsp_arg(args: impl IntoIterator<Item = String>) -> Result<Option<LspMode>, String> {
+    let (mut local, mut pushed) = (false, false);
+    for arg in args {
+        local |= arg == lsp_plugin::LOCAL_ARG;
+        pushed |= arg == lsp_plugin::ARG;
+    }
+    match (local, pushed) {
+        (true, true) => Err("--lsp と --lsp-local は一緒に使えません".to_owned()),
+        (true, false) => Ok(Some(LspMode::Local)),
+        (false, true) => Ok(Some(LspMode::Pushed)),
+        (false, false) => Ok(None),
+    }
+}
+
 /// The tools of a Claude Code started by "Claude を起動" (A-16, A-45): `preview_open` only. That Claude Code can start with the text of a mail, a message or a Todo as its first prompt (A-9), and the plugin of A-45 gives it this server, so any other tool (a read of the mail, a trash, a post to Slack, a write of a connection) would be one an injected instruction could use.
 const PREVIEW_TOOLS: [&str; 1] = ["preview_open"];
 
@@ -750,6 +828,13 @@ fn write_preview_plugin() -> Result<std::path::PathBuf, String> {
     let mcp =
         std::env::current_exe().map_err(|e| format!("tsunagiai-mcp の場所が分かりません: {e}"))?;
     preview_plugin::write_plugin(&identity::config_dir()?, &mcp)
+}
+
+/// Writes the plugin of #1242 in the config folder of this machine, with this `tsunagiai-mcp` as its server for a saved environment's PC (`--lsp`), and answers its folder.
+fn write_lsp_plugin() -> Result<std::path::PathBuf, String> {
+    let mcp =
+        std::env::current_exe().map_err(|e| format!("tsunagiai-mcp の場所が分かりません: {e}"))?;
+    lsp_plugin::write_plugin(&identity::config_dir()?, &mcp, false)
 }
 
 /// Writes the files of the orchestrator of `name` in the config folder of this machine and runs its script in place of this process, with this `tsunagiai-mcp` as the server of its `mcp.json`, and `projects` as its first instruction. It returns only when that failed, with the message.
@@ -1213,8 +1298,8 @@ impl Tsunagiai {
         let push = orca_preview::open_push(&a.worktree, &a.file)?;
         let fields = orca_preview::open_fields(&a.worktree, &a.file)?;
         // On the PC of a saved environment the daemon of `--serve` carries the request to the app through the connection the app keeps open; on the app's own PC there is no such daemon (or no app connected to it), and the request goes through the app's socket.
-        let pushed = match formation_server::push_to_daemon(&self.dir, &push).await {
-            Ok(()) => return Ok(PREVIEW_ASKED.into()),
+        let pushed = match formation_server::push_to_daemon_result(&self.dir, &push).await {
+            Ok(_) => return Ok(PREVIEW_ASKED.into()),
             Err(e) => e,
         };
         screen_bridge::request_app(
@@ -1299,6 +1384,59 @@ impl Tsunagiai {
             eprintln!("tsunagiai: todoist_add_task the app was not told: {e}");
         }
         Ok("タスクを追加しました".into())
+    }
+}
+
+impl Tsunagiai {
+    /// Pushes `request` to the app through `push.sock` and answers the settings it gives back. It never falls back to this PC's `lsp-settings.json`: the project belongs to the saved environment that the push goes to, and this PC's file would be that of another PC.
+    async fn push_lsp(&self, request: Result<PushRequest, String>) -> Result<String, String> {
+        match formation_server::push_to_daemon_result(&self.dir, &request?).await {
+            Ok(Some(settings)) => json(&settings),
+            Ok(None) => Err(lsp_push_failed(LSP_NO_ANSWER)),
+            Err(reason) => Err(lsp_push_failed(&reason)),
+        }
+    }
+}
+
+/// The tools of the plugin of #1242 on the PC of a saved environment (`--lsp`): the names of three of `lsp_*` above, which push their request to the app instead of writing this PC's settings. The app keeps the settings of that environment, so no tool takes one, and `lsp_repo_ssh_host_set` is not among them.
+#[tool_router(router = lsp_pushed_router)]
+impl Tsunagiai {
+    #[tool(
+        name = "lsp_settings",
+        description = "Read the language servers of a project of the Orca screen of the app (A-34), through the app: {environment, project, sshHost, servers: [{language, name, autoStart, command, mount, service}]}: one server for each language. A project with nothing saved has no server (servers is empty). command, mount and service are left out when the app decides them. The project is the one of the saved environment this Claude Code runs on. It fails, in Japanese, when the app is not running, is not connected to this PC, or refuses the request; nothing is read or written on this PC.",
+        annotations(read_only_hint = true)
+    )]
+    async fn lsp_settings_pushed(
+        &self,
+        Parameters(a): Parameters<LspProjectArgs>,
+    ) -> Result<String, String> {
+        self.push_lsp(lsp_plugin::settings_push(&a.project)).await
+    }
+
+    #[tool(
+        name = "lsp_server_save",
+        description = "Save the language server of one language of a project of the Orca screen of the app (A-34), through the app: the server of the same language is replaced as a whole (a setting left out is not kept), else this one is added after the others. language is a language name of the Orca editor's colors (A-21: ruby, typescript, javascript, python, go, rust and the like), and a project has one server for each language. name is what the screen shows (left out: the name of the app's table for the language). command is a shell statement that /bin/sh -c runs in the worktree of the project (inside the compose service when the server runs in one), and must speak LSP on its standard input and output; the app runs it as written when a file of the languages is opened. Leave command out to run the server that the app finds for the language in the place the worktree runs in. Answers the settings of the project as saved, as lsp_settings does. It fails, in Japanese, when the app is not running, is not connected to this PC, or refuses the request; nothing is written on this PC.",
+        annotations(destructive_hint = true)
+    )]
+    async fn lsp_server_save_pushed(
+        &self,
+        Parameters(a): Parameters<LspPushedSaveArgs>,
+    ) -> Result<String, String> {
+        self.push_lsp(lsp_plugin::save_push(&a.project, a.server.into()))
+            .await
+    }
+
+    #[tool(
+        name = "lsp_server_delete",
+        description = "Delete the language server of that language from a project of the Orca screen of the app (A-34), through the app. A language that the project has no server for is an error. Answers the settings of the project as saved, as lsp_settings does. It fails, in Japanese, when the app is not running, is not connected to this PC, or refuses the request; nothing is written on this PC.",
+        annotations(destructive_hint = true)
+    )]
+    async fn lsp_server_delete_pushed(
+        &self,
+        Parameters(a): Parameters<LspPushedDeleteArgs>,
+    ) -> Result<String, String> {
+        self.push_lsp(lsp_plugin::delete_push(&a.project, &a.language))
+            .await
     }
 }
 
@@ -1560,6 +1698,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+    // The plugin of the language servers (#1242) for the PC of a saved environment: it writes `lsp-plugin/` for this `tsunagiai-mcp`, prints its path and serves no MCP.
+    if lsp_plugin::requested(std::env::args().skip(1)) {
+        match write_lsp_plugin() {
+            Ok(dir) => {
+                println!("{}", dir.display());
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        }
+    }
     match formation_start_arg(std::env::args().skip(1)) {
         Ok(Some(name)) => {
             let message = project_args(std::env::args().skip(1))
@@ -1577,6 +1728,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let calendar = calendar_arg(std::env::args().skip(1));
     let preview = preview_arg(std::env::args().skip(1));
     let todo_draft = todo_draft_arg(std::env::args().skip(1));
+    let lsp = lsp_arg(std::env::args().skip(1))?;
     if calendar && formation.is_some() {
         return Err("--calendar と --formation は一緒に使えません".into());
     }
@@ -1588,11 +1740,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--todo-draft は --calendar、--preview、--formation のどれとも一緒に使えません".into(),
         );
     }
+    if lsp.is_some() && (calendar || preview || todo_draft || formation.is_some()) {
+        return Err(
+            "--lsp と --lsp-local は --calendar、--preview、--todo-draft、--formation のどれとも一緒に使えません"
+                .into(),
+        );
+    }
     let server = Tsunagiai {
         auth: Auth::new(),
         dir: identity::config_dir()?,
         only_screen: todo_draft.then_some(TODO_DRAFT_SCREEN),
-        router: if todo_draft {
+        router: if let Some(mode) = lsp {
+            lsp_router(mode)
+        } else if todo_draft {
             todo_draft_router()
         } else if preview {
             preview_router()
@@ -1616,16 +1776,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
     use super::{
         calendar_answer, calendar_arg, calendar_router, db_test_answer, event_done_answer,
-        form_opened, form_refused, formation_arg, formation_start_arg, lsp_environment,
-        preview_arg, preview_router, project_args, router, screen_allowed, screen_read_answer,
-        screen_text_answer, skill_get_answer, skill_list_answer, skill_save_answer, skill_summary,
-        todo_draft_arg, todo_draft_router, todoist_answer, CalendarDeleteEventArgs,
-        CalendarEventArgs, CalendarSetShownArgs, CalendarShowSlotsArgs, CalendarUpdateEventArgs,
-        DbProfileSaveArgs, FormationAgent, FormationFilesArgs, FormationGitArgs,
-        FormationLaunchArgs, FormationPlanArgs, FormationReadArgs, FormationStatusArgs,
-        FormationWorktreesArgs, LspServerArgs, LspServerSaveArgs, LspServerSettings,
-        LspSshHostArgs, NewEvent, PreviewOpenArgs, ScreenReadArgs, ScreenWriteArgs, Skill,
-        SkillGetArgs, SkillSaveArgs, SkillScreen, TodoistAddTaskArgs, Tsunagiai, TODO_DRAFT_SCREEN,
+        form_opened, form_refused, formation_arg, formation_start_arg, lsp_arg, lsp_environment,
+        lsp_router, preview_arg, preview_router, project_args, router, screen_allowed,
+        screen_read_answer, screen_text_answer, skill_get_answer, skill_list_answer,
+        skill_save_answer, skill_summary, todo_draft_arg, todo_draft_router, todoist_answer,
+        CalendarDeleteEventArgs, CalendarEventArgs, CalendarSetShownArgs, CalendarShowSlotsArgs,
+        CalendarUpdateEventArgs, DbProfileSaveArgs, FormationAgent, FormationFilesArgs,
+        FormationGitArgs, FormationLaunchArgs, FormationPlanArgs, FormationReadArgs,
+        FormationStatusArgs, FormationWorktreesArgs, LspMode, LspServerArgs, LspServerSaveArgs,
+        LspServerSettings, LspSshHostArgs, NewEvent, PreviewOpenArgs, ScreenReadArgs,
+        ScreenWriteArgs, Skill, SkillGetArgs, SkillSaveArgs, SkillScreen, TodoistAddTaskArgs,
+        Tsunagiai, LSP_SSH_HOST_TOOL, LSP_TOOLS, TODO_DRAFT_SCREEN,
     };
 
     #[test]
@@ -1957,6 +2118,253 @@ mod tests {
         // The tools of every other client are as they were.
         assert!(tool_names(false).iter().any(|n| n == "preview_open"));
         assert!(tool_names(false).iter().any(|n| n == "trash"));
+    }
+
+    fn names_of(router: rmcp::handler::server::router::tool::ToolRouter<Tsunagiai>) -> Vec<String> {
+        let mut names: Vec<String> = router
+            .list_all()
+            .into_iter()
+            .map(|t| t.name.to_string())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn the_flags_of_the_language_servers_are_arguments_of_their_own_and_not_together() {
+        let args = |list: &[&str]| list.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
+        assert_eq!(lsp_arg(args(&["--lsp"])), Ok(Some(LspMode::Pushed)));
+        assert_eq!(
+            lsp_arg(args(&["--other", "--lsp-local"])),
+            Ok(Some(LspMode::Local))
+        );
+        for none in [
+            &[][..],
+            &["lsp"],
+            &["--lsp=1"],
+            &["--lsps"],
+            &["--lsp-plugin"],
+        ] {
+            assert_eq!(lsp_arg(args(none)), Ok(None), "{none:?}");
+        }
+        assert!(lsp_arg(args(&["--lsp", "--lsp-local"])).is_err());
+    }
+
+    #[test]
+    fn the_plugin_of_the_language_servers_is_offered_its_tools_and_nothing_else() {
+        // On the PC of a saved environment: the three pushed tools, with no ssh Host.
+        let mut kept = LSP_TOOLS.map(str::to_owned).to_vec();
+        kept.sort();
+        assert_eq!(names_of(lsp_router(LspMode::Pushed)), kept);
+        // On the app's own PC: those of this PC's settings, and the ssh Host.
+        let mut local = kept.clone();
+        local.push(LSP_SSH_HOST_TOOL.to_owned());
+        local.sort();
+        assert_eq!(names_of(lsp_router(LspMode::Local)), local);
+        assert!(!LSP_TOOLS.contains(&LSP_SSH_HOST_TOOL));
+        // The tools of every other client are as they were: the pushed ones are not among them.
+        let all = tool_names(false);
+        assert_eq!(all.iter().filter(|n| *n == "lsp_settings").count(), 1);
+        assert!(all.iter().any(|n| n == "lsp_repo_ssh_host_set"));
+        assert!(!tool_names(true).iter().any(|n| n.starts_with("lsp_")));
+    }
+
+    #[test]
+    fn a_pushed_tool_takes_a_project_and_no_environment_and_a_write_asks_for_a_check() {
+        let tools = Tsunagiai::lsp_pushed_router().list_all();
+        let tool = |name: &str| tools.iter().find(|t| t.name == name).unwrap();
+        for name in LSP_TOOLS {
+            let schema = serde_json::to_value(&tool(name).input_schema).unwrap();
+            let properties = schema["properties"].as_object().unwrap();
+            assert!(properties.contains_key("project"), "{name}");
+            assert!(!properties.contains_key("environment"), "{name}");
+            assert!(schema["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r == "project"));
+            let text = tool(name).description.clone().unwrap().to_string();
+            assert!(text.contains("through the app"), "{name}");
+            assert!(
+                text.contains("nothing") && text.contains("on this PC"),
+                "{name}"
+            );
+        }
+        let hint = |name: &str| tool(name).annotations.clone().unwrap();
+        assert_eq!(hint("lsp_settings").read_only_hint, Some(true));
+        assert_eq!(hint("lsp_server_save").destructive_hint, Some(true));
+        assert_eq!(hint("lsp_server_delete").destructive_hint, Some(true));
+        let save = serde_json::to_value(&tool("lsp_server_save").input_schema).unwrap();
+        assert!(save["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r == "server"));
+    }
+
+    mod lsp_pushed_routes {
+        use rmcp::handler::server::wrapper::Parameters;
+        use tsunagiai_lib::formation_server;
+
+        use super::super::{
+            LspProjectArgs, LspPushedDeleteArgs, LspPushedSaveArgs, LspServerArgs, Tsunagiai,
+        };
+
+        fn server(name: &str) -> Tsunagiai {
+            // A short path: the name of a socket has a limit of about a hundred bytes.
+            let dir =
+                std::path::PathBuf::from("/tmp").join(format!("lp-{}-{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(formation_server::remote_dir(&dir)).unwrap();
+            Tsunagiai {
+                auth: tsunagiai_lib::auth::Auth::new(),
+                dir,
+                formation: None,
+                only_screen: None,
+                router: Tsunagiai::lsp_pushed_router(),
+            }
+        }
+
+        fn save_args() -> Parameters<LspPushedSaveArgs> {
+            Parameters(LspPushedSaveArgs {
+                project: "repo-1".into(),
+                server: LspServerArgs {
+                    language: "rust".into(),
+                    name: None,
+                    auto_start: true,
+                    command: Some("rust-analyzer".into()),
+                    mount: None,
+                    service: None,
+                },
+            })
+        }
+
+        /// A daemon at `push.sock` that keeps what it is asked and answers with `reply`.
+        fn daemon(
+            server: &Tsunagiai,
+            reply: &'static str,
+        ) -> std::sync::Arc<std::sync::Mutex<Vec<String>>> {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let listener =
+                tokio::net::UnixListener::bind(formation_server::push_socket(&server.dir)).unwrap();
+            let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let log = seen.clone();
+            tokio::spawn(async move {
+                loop {
+                    let Ok((mut stream, _)) = listener.accept().await else {
+                        return;
+                    };
+                    let mut text = String::new();
+                    stream.read_to_string(&mut text).await.unwrap();
+                    log.lock().unwrap().push(text);
+                    stream.write_all(reply.as_bytes()).await.unwrap();
+                }
+            });
+            seen
+        }
+
+        #[tokio::test]
+        async fn with_no_daemon_the_error_says_nothing_was_written_and_this_pcs_settings_are_untouched(
+        ) {
+            let server = server("none");
+            let error = server
+                .lsp_server_save_pushed(save_args())
+                .await
+                .unwrap_err();
+            assert!(error.contains("サーバーが動いていません"), "{error}");
+            assert!(error.contains("この PC には何も書いていません"), "{error}");
+            assert!(server
+                .lsp_settings_pushed(Parameters(LspProjectArgs {
+                    project: "repo-1".into()
+                }))
+                .await
+                .is_err());
+            let delete = Parameters(LspPushedDeleteArgs {
+                project: "repo-1".into(),
+                language: "rust".into(),
+            });
+            assert!(server.lsp_server_delete_pushed(delete).await.is_err());
+            assert!(!server.dir.join("lsp-settings.json").exists());
+            std::fs::remove_dir_all(&server.dir).unwrap();
+        }
+
+        #[tokio::test]
+        async fn a_tool_pushes_its_request_and_answers_the_settings_the_app_gave_back() {
+            let server = server("push");
+            let seen = daemon(
+                &server,
+                r#"{"ok":true,"result":{"environment":"pc-a","project":"repo-1","servers":[]}}"#,
+            );
+            let answer = server
+                .lsp_settings_pushed(Parameters(LspProjectArgs {
+                    project: "repo-1".into(),
+                }))
+                .await
+                .unwrap();
+            let value: serde_json::Value = serde_json::from_str(&answer).unwrap();
+            assert_eq!(value["environment"], "pc-a");
+            server.lsp_server_save_pushed(save_args()).await.unwrap();
+            let delete = Parameters(LspPushedDeleteArgs {
+                project: "repo-1".into(),
+                language: "rust".into(),
+            });
+            server.lsp_server_delete_pushed(delete).await.unwrap();
+            let requests: Vec<serde_json::Value> = seen
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|text| serde_json::from_str(text).unwrap())
+                .collect();
+            assert_eq!(
+                requests[0],
+                serde_json::json!({"method": "lsp.settings", "params": {"project": "repo-1"}})
+            );
+            assert_eq!(requests[1]["method"], "lsp.server_save");
+            assert_eq!(requests[1]["params"]["server"]["command"], "rust-analyzer");
+            assert_eq!(requests[1]["params"]["server"]["autoStart"], true);
+            assert_eq!(
+                requests[2],
+                serde_json::json!({"method": "lsp.server_delete", "params": {"project": "repo-1", "language": "rust"}})
+            );
+            assert!(requests
+                .iter()
+                .all(|r| r["params"].get("environment").is_none()));
+            assert!(!server.dir.join("lsp-settings.json").exists());
+            std::fs::remove_dir_all(&server.dir).unwrap();
+        }
+
+        #[tokio::test]
+        async fn a_refusal_of_the_app_and_an_answer_with_no_settings_are_errors_that_write_nothing_here(
+        ) {
+            let server = server("refused");
+            daemon(
+                &server,
+                r#"{"ok":false,"error":"アプリはこの依頼を受けられません"}"#,
+            );
+            let error = server
+                .lsp_server_save_pushed(save_args())
+                .await
+                .unwrap_err();
+            assert!(
+                error.contains("アプリはこの依頼を受けられません"),
+                "{error}"
+            );
+            assert!(error.contains("この PC には何も書いていません"), "{error}");
+            std::fs::remove_file(formation_server::push_socket(&server.dir)).unwrap();
+            daemon(&server, r#"{"ok":true}"#);
+            let error = server
+                .lsp_settings_pushed(Parameters(LspProjectArgs {
+                    project: "repo-1".into(),
+                }))
+                .await
+                .unwrap_err();
+            assert!(
+                error.contains("つなぎAIが設定を返しませんでした"),
+                "{error}"
+            );
+            assert!(!server.dir.join("lsp-settings.json").exists());
+            std::fs::remove_dir_all(&server.dir).unwrap();
+        }
     }
 
     #[test]

@@ -32,7 +32,7 @@ use crate::{
         Client, PushHandler, PushRequest, STOPPED_LINE,
     },
     identity::IDENTIFIER,
-    keychain, orca, orca_link, orca_preview,
+    keychain, lsp_plugin, orca, orca_link, orca_preview,
 };
 
 /// The keychain service of the app's secret key, and the user of its item.
@@ -1071,11 +1071,26 @@ fn screen_of_push(
         .unwrap_or_else(|| Err(REFUSED_PUSH.to_owned()))
 }
 
-/// What the app does with a push of `environment`: the request to open a preview is given to the screen of the development screen (`preview-open`), which answers it (with no value: `preview.open` gives none back), and every other push is refused.
-fn push_handler(app: tauri::AppHandle, environment: String) -> PushHandler {
+/// What the app answers a push of the language servers (#1242: `lsp.settings`, `lsp.server_save` and `lsp.server_delete`) that came through the connection of `environment`: `None` when it is another request, else the settings of the project as saved, or the reason it is refused. The environment is the connection's, never a value of the request, and `lsp.ssh_host_set` is not a request that is taken (a Host of `~/.ssh/config` is of this PC, and the owner chooses it on the screen).
+fn lsp_answer(
+    config: &Path,
+    environment: &str,
+    request: &PushRequest,
+) -> Option<Result<Value, String>> {
+    Some(lsp_plugin::LspPush::of(request)?.and_then(|push| push.run(config, environment)))
+}
+
+/// What the app does with a push of `environment`: a request of the language servers is done with the settings of that environment and answered with the settings as saved (`lsp_answer`), the request to open a preview is given to the screen of the development screen (`preview-open`), which answers it (with no value: `preview.open` gives none back), and every other push is refused.
+fn push_handler(app: tauri::AppHandle, config: PathBuf, environment: String) -> PushHandler {
     Arc::new(move |request| {
-        let (app, environment) = (app.clone(), environment.clone());
+        let (app, config, environment) = (app.clone(), config.clone(), environment.clone());
         Box::pin(async move {
+            if lsp_plugin::LspPush::of(&request).is_some() {
+                return orca::blocking(move || lsp_answer(&config, &environment, &request))
+                    .await?
+                    .unwrap_or_else(|| Err(REFUSED_PUSH.to_owned()))
+                    .map(Some);
+            }
             let fields = screen_of_push(&request, &environment)?;
             crate::screen_bridge::write_screen(&app, orca_preview::OPEN_TARGET, fields)
                 .await
@@ -1110,7 +1125,7 @@ fn keep_pushes_to(
             config.clone(),
             environment.to_owned(),
             app_version.clone(),
-            push_handler(app.clone(), environment.to_owned()),
+            push_handler(app.clone(), config.clone(), environment.to_owned()),
         )
     });
     Ok(())
@@ -2885,6 +2900,77 @@ mod tests {
                 ("relative".to_owned(), "a.html".to_owned()),
             ])
         );
+    }
+
+    #[test]
+    fn a_push_of_the_language_servers_works_on_the_environment_of_the_connection_and_answers_the_settings(
+    ) {
+        let config =
+            std::env::temp_dir().join(format!("tsunagiai-push-lsp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&config);
+        std::fs::create_dir_all(&config).unwrap();
+        let push = |method: &str, params: Value| PushRequest {
+            method: method.to_owned(),
+            params,
+        };
+        let answer = |environment: &str, request: &PushRequest| {
+            lsp_answer(&config, environment, request).unwrap()
+        };
+        // Nothing saved: no server.
+        let read = push("lsp.settings", serde_json::json!({"project": "repo-1"}));
+        let empty = answer("pc-a", &read).unwrap();
+        assert_eq!(empty["environment"], "pc-a");
+        assert_eq!(empty["servers"], serde_json::json!([]));
+        // A save answers the settings as saved, for the environment of the connection and not the one the request names.
+        let save = push(
+            "lsp.server_save",
+            serde_json::json!({
+                "project": "repo-1",
+                "environment": "pc-b",
+                "server": {"language": "rust", "name": "rust-analyzer", "autoStart": true, "command": "rust-analyzer"}
+            }),
+        );
+        let saved = answer("pc-a", &save).unwrap();
+        assert_eq!(saved["environment"], "pc-a");
+        assert_eq!(saved["servers"][0]["command"], "rust-analyzer");
+        assert_eq!(answer("pc-a", &read).unwrap(), saved);
+        assert_eq!(
+            answer("pc-b", &read).unwrap()["servers"],
+            serde_json::json!([])
+        );
+        // A save that the app's own save would refuse is refused, and nothing is written.
+        let bad = push(
+            "lsp.server_save",
+            serde_json::json!({"project": "repo-1", "server": {"language": "rust", "name": "", "autoStart": true, "mount": "relative"}}),
+        );
+        assert!(answer("pc-a", &bad).is_err());
+        assert_eq!(answer("pc-a", &read).unwrap(), saved);
+        // A delete answers the settings as saved, and a language with no server is refused.
+        let delete = push(
+            "lsp.server_delete",
+            serde_json::json!({"project": "repo-1", "language": "rust"}),
+        );
+        assert_eq!(
+            answer("pc-a", &delete).unwrap()["servers"],
+            serde_json::json!([])
+        );
+        assert!(answer("pc-a", &delete).is_err());
+        // The ssh host is not a request that is taken, and a request that cannot be read is refused in fixed words.
+        assert!(lsp_answer(
+            &config,
+            "pc-a",
+            &push(
+                "lsp.ssh_host_set",
+                serde_json::json!({"project": "repo-1", "sshHost": "h"})
+            )
+        )
+        .is_none());
+        assert_eq!(
+            answer("pc-a", &push("lsp.settings", Value::Null)),
+            Err("依頼を読めませんでした".to_owned())
+        );
+        assert!(lsp_answer(&config, "pc-a", &push("preview.open", Value::Null)).is_none());
+        std::fs::remove_dir_all(config).unwrap();
     }
 
     #[test]

@@ -5,7 +5,7 @@
 //! - The frame: XSalsa20-Poly1305 under a key for each direction, with a nonce that is the direction and a counter, so that a replayed, reordered or reused frame does not open.
 //! - The handshake: each side sends an ephemeral public key, and the keys are derived from the DH of the ephemeral keys and the DH of the two pinned (static) keys together with the transcript, so that one who does not know its static key cannot derive them.
 //! - The API: JSON inside a frame (`version`, `children.read`, `children.drop`, `pages.read`, `messages.read`, `asked.read`, `asked.clear`, `page.read`, `image.read`, `page.answer`, `subscribe`, `stop`).
-//! - The pushes (#983): `subscribe` turns the connection into one that the daemon pushes requests through, so the PC can ask something of the app without a port on the app's PC. `Hub` is the daemon's end (`Hub::push`, fed by `push.sock` of `remote/`, which a `tsunagiai-mcp` of that PC reaches with `push_to_daemon`), `Pushes` is the app's end.
+//! - The pushes (#983): `subscribe` turns the connection into one that the daemon pushes requests through, so the PC can ask something of the app without a port on the app's PC. `Hub` is the daemon's end (`Hub::push`, fed by `push.sock` of `remote/`, which a `tsunagiai-mcp` of that PC reaches with `push_to_daemon_result`), `Pushes` is the app's end.
 //! - The server (`serve`, the daemon of `--serve`) and the client (`Client`), which the app uses.
 //!
 //! A key is in no error text and no `Debug` output (the types that hold one derive none).
@@ -876,11 +876,6 @@ fn serve_local(socket: &Path, hub: Arc<Hub>) -> Result<tokio::task::JoinHandle<(
 #[cfg(not(unix))]
 fn serve_local(_: &Path, _: Arc<Hub>) -> Result<tokio::task::JoinHandle<()>, String> {
     Err("unix のみ対応しています".to_owned())
-}
-
-/// What a `tsunagiai-mcp` of the PC calls to ask something of the app and not read a value from it: `push_to_daemon_result` with the value dropped.
-pub async fn push_to_daemon(config: &Path, request: &PushRequest) -> Result<(), String> {
-    push_to_daemon_result(config, request).await.map(|_| ())
 }
 
 /// What a `tsunagiai-mcp` of the PC calls to ask something of the app: the daemon pushes `request` to the app that is connected and gives its answer, with the value that the app's handler gave back, if any. An error when no daemon runs, no app is connected or the app refused.
@@ -3131,7 +3126,7 @@ mod tests {
         );
         // No app is connected.
         assert_eq!(
-            push_to_daemon(&config, &request("preview.open")).await,
+            push_to_daemon_result(&config, &request("preview.open")).await,
             Err(NOT_CONNECTED.to_owned())
         );
         // The app subscribes on a server that shares the hub.
@@ -3159,9 +3154,10 @@ mod tests {
             push_to_daemon_result(&config, &request("preview.open")).await,
             Ok(None)
         );
-        push_to_daemon(&config, &request("preview.open"))
-            .await
-            .unwrap();
+        assert_eq!(
+            push_to_daemon_result(&config, &request("preview.open")).await,
+            Ok(None)
+        );
         assert_eq!(seen.lock().unwrap().len(), 2);
         // The value the app's handler gives back comes through the socket of the daemon.
         app.abort();
@@ -3199,13 +3195,13 @@ mod tests {
         std::fs::write(push_socket(&config), "stale").unwrap();
         let again = serve_local(&push_socket(&config), Hub::new()).unwrap();
         assert_eq!(
-            push_to_daemon(&config, &request("preview.open")).await,
+            push_to_daemon_result(&config, &request("preview.open")).await,
             Err(NOT_CONNECTED.to_owned())
         );
         again.abort();
         std::fs::remove_file(push_socket(&config)).unwrap();
         assert_eq!(
-            push_to_daemon(&config, &request("preview.open")).await,
+            push_to_daemon_result(&config, &request("preview.open")).await,
             Err("サーバーが動いていません".to_owned())
         );
         app.abort();

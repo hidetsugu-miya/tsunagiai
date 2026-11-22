@@ -25,6 +25,7 @@ pub mod images;
 pub mod jira;
 mod keychain;
 pub mod lsp;
+pub mod lsp_plugin;
 pub mod mail_address;
 pub mod mail_attach;
 pub mod mail_send;
