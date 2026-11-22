@@ -10,7 +10,7 @@ Procedure A prepares the Release PR when changes wait for the release, and merge
 Procedure B sees the release of a merged Release PR through: `release-watcher` (Haiku).
 The lead is the session that read this file. It launches the two agents, checks their returns and sorts a failed release run; it runs neither procedure itself.
 The rules of both are in "Rules" at the end of this file.
-The session that prepares the Release PR merges it, and sees the release through; it does not wait for the owner to merge (at the owner's instruction, 2026-11-21). Only a session prepares it (at the owner's instruction, 2026-11-21; #1179: the night run, which merged it itself, is removed).
+Only a session prepares the Release PR, merges it and sees the release through, and it does not wait for the owner (at the owner's instruction, 2026-11-21; #1179: the night run is removed).
 Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.claude/tools/"`.
 
 ## Steps
@@ -25,7 +25,7 @@ Give each launch the absolute path of the main checkout.
    - `in-use`: another session has `release/next` and is preparing the Release PR. Tell the owner and stop.
    - `merge-refused` and `blocked`: tell the owner the reason and stop, with the Release PR open. Merge by no other means (no `--admin`, no bypass of the ruleset).
 2. Launch `release-watcher`, at once after a `merged`, and also for a `follow_up` or `tag_due` that `post-gh.sh` or `plan-release.py release` shows a session that did not merge. Check its return:
-   - `released`: run `plan-release.py release` once; `follow_up` and `tag_due` must be null. Report the version.
+   - `released`: run `plan-release.py release` once. When it still prints a `follow_up` or `tag_due`, launch `release-watcher` again for it, and tell the owner if the same one is printed after that launch. Report the versions.
    - `nothing-left`: nothing is left from a merge.
    - `run-failed`: sort the cause yourself with `gh run view {run_id} --log-failed` ("After the Release PR is merged" in "Rules"), then launch `release-watcher` again after a rerun or a fix.
    - `no-run`: no run of the merge exists, and the run list it returns shows none for the merge: make the annotated tag by hand on `commit` and push it in the same command (`versioning.md`), then launch `release-watcher` again. Look at the run list first: a run in progress is the workflow tagging.

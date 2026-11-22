@@ -16,8 +16,9 @@ import { initTodoClaude, syncTodoClaude, toggleTodoClaude } from "./todo-claude.
 import { renderDetail } from "./todo-detail.js";
 import { discardDraft, draftOpen } from "./todo-draft.js";
 import { loadedComments } from "./todo-comments.js";
-import { editingField, projectName, projectOf, recountTodo, setTodoCount, settleLocal, todoState } from "./todo-data.js";
+import { editingField, projectName, projectOf, recountTodo, searching, setTodoCount, settleLocal, todoState } from "./todo-data.js";
 import { renderList, renderProjects } from "./todo-list.js";
+import { clearSearch, initTodoSearch, searchTodo } from "./todo-search.js";
 import { cancelTodoReload, todoCall } from "./todo-write.js";
 import { logError, showFailure } from "./error-card.js";
 import { copyText } from "./view.js";
@@ -113,6 +114,8 @@ export function todoMode(mode: "token" | "list" | "detail" | "draft") {
   $("todo-main").classList.toggle("drafting", mode === "draft");
   document.getElementById("todo-draft")?.toggleAttribute("hidden", mode !== "draft");
   $("todo-more").hidden = mode !== "detail";
+  // The search has no place in the token form or the page of a draft.
+  $("todo-search").hidden = mode === "token" || mode === "draft";
   // Only a task can be handed over, so the button is in the header of a task only.
   $("todo-orca-open").hidden = mode !== "detail";
   sideUsable = mode === "list" || mode === "detail";
@@ -134,6 +137,7 @@ export function showTokenForm(note = "") {
   todoState.doneStale = true;
   setTodoCount([]);
   todoState.open = null;
+  clearSearch();
   $("todo-notice").replaceChildren();
   todoMode("token");
   $("todo-title").textContent = "Todo";
@@ -205,7 +209,9 @@ export async function loadTodo(quiet = false, withDone = true) {
       return false;
     }
     if (quiet && same && !todoState.undrawn) return false;
-    renderTodo();
+    // A search is made again on the new data, so its results follow the tasks.
+    if (searching()) await searchTodo();
+    else renderTodo();
   } catch (e) {
     if (!quiet || ++quietFails === 3) logError("todo", e);
   }
@@ -384,6 +390,7 @@ export function initTodo() {
     $("todo-handoff").scrollIntoView({ block: "start" });
   };
   initTodoClaude();
+  initTodoSearch();
   $("todo-tool-claude").onclick = toggleTodoClaude;
   // 30% of the screen at first, its least; the divider keeps it between 30% and 45% of the screen (the CSS holds the same range). Under the tasks it is the height, 30% to 45%, kept apart from the width.
   split = initSplit($("todo"), $("todo-split"), { min: 0.3, max: 0.45, lying: { min: 0.3, max: 0.45 } });

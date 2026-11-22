@@ -3,6 +3,7 @@ import type { ParentRef } from "./bindings/ParentRef";
 import type { PickedDue } from "./bindings/PickedDue";
 import type { ProjectItem } from "./bindings/ProjectItem";
 import type { TaskItem } from "./bindings/TaskItem";
+import type { TaskHit } from "./bindings/TaskHit";
 import type { Todo } from "./bindings/Todo";
 import { accountButtons } from "./accounts.js";
 import { $ } from "./dom.js";
@@ -46,6 +47,12 @@ export const todoState = {
   descEdit: null as { id: string; value: string } | null,
   // The projects whose children the side list hides (all are shown at first). Kept in memory only.
   closedProjects: new Set<string>(),
+  // The text in the search field (T-9). A text with no word is no search: the list shows.
+  query: "",
+  // What the search found for `query`, as Rust answered it.
+  hits: [] as TaskHit[],
+  // Only the latest of overlapping searches may draw.
+  searchSeq: 0,
   // The tasks whose subtasks the list shows (all are hidden at first). Kept in memory only, so a redraw after a load keeps them.
   openTasks: new Set<string>(),
 };
@@ -62,6 +69,9 @@ export interface TaskFields {
   // The task's whole list of label names.
   labels?: string[];
 }
+
+// Whether the search field holds a word, so that the results take the place of the list (T-9).
+export const searching = () => todoState.query.trim() !== "";
 
 // Open tasks that "今日" lists: overdue or due today.
 export const isDueToday = (t: TaskItem) => t.bucket === "overdue" || t.bucket === "today";

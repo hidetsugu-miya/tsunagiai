@@ -2,7 +2,7 @@
 // Rust starts, keeps and stops the processes (`lsp_start`, `lsp_restart`, `lsp_stop`), tells each change of their state (the event `lsp-status`), reads how the servers are started from the worktree (`lsp_launches`, once for all of them), finds the languages that the worktree has and the server of the app's table for each (`lsp_detect`) and saves the settings of the repository (`lsp_settings_set`); this module draws them and takes the presses.
 // A card of a language that the repository has a server of shows its state and the way it is started; the fields of the settings are opened only by 「手で直す」 of its menu. A language that the worktree has and the repository has no server of is a card of dotted line, where 「使う」 saves the server of the table with nothing replaced. 「使わない」 hides it while this worktree is shown.
 // A file opened in the editor starts the server that takes its language when the settings say 「自動で起動」 (`ensureServer`), unless the owner stopped it with 「止める」; a server this screen started is stopped when no tab of its worktree is open any more, or when Orca's list has not the worktree any more (`syncServers`). The container is started only by its button, never by itself. Nothing is kept outside memory here.
-// Claude Code sets the servers up (#976): the ✦ of the heading, and 「Claude に頼む」 of a language the worktree has and no server is found for, open the pane of A-36 under the cards (`showClaudeCode`, with Claude Code's own tools, the owner `orca-lsp`, and the first instruction Rust built, `lsp_claude_request`). The pane is of one request (the worktree and the language, or all of them): another request closes it and starts a new one, its ✕ closes it (`closeClaudeCode`), and the part hidden, another worktree shown or the Orca screen left only hide it (the process goes on, and the same pane comes back). It is closed when its worktree is gone from Orca's list. The cards follow what Claude saves through the watch of the settings below.
+// Claude Code sets the servers up (#976, #1247): the ✦ of the heading, and 「Claude に頼む」 of a language the worktree has and no server is found for, ask Rust to start a Claude tab in the work pane for the worktree that is shown (`lsp_claude_start`). The screen of the work pane follows the tab it answers (the callback `started`: it selects the tab, an old one when Rust answers it again); a refusal (a saved environment the owner has not agreed to) is the message of the card, or the line under the heading. The cards follow what Claude saves through the watch of the settings below.
 // While the part is shown, the settings are read at an interval, so that a change made elsewhere (`tsunagiai-mcp`, A-34) is drawn: the text that is being typed in and the fields that are open stay. The interval stops when the part is hidden, when another worktree is shown or when the project is gone from the list.
 import type { LspFound } from "./bindings/LspFound";
 import type { LspLanguageLook } from "./bindings/LspLanguageLook";
@@ -11,7 +11,7 @@ import type { LspRepoSettings } from "./bindings/LspRepoSettings";
 import type { LspServerSettings } from "./bindings/LspServerSettings";
 import type { LspStatus } from "./bindings/LspStatus";
 import type { LspStatusEvent } from "./bindings/LspStatusEvent";
-import { closeClaudeCode, hideClaudeCode, isClaudeCodeShowing, showClaudeCode } from "./claude-code.js";
+import type { OrcaStarted } from "./bindings/OrcaStarted";
 import { $, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
 import { confirmDelete } from "./hint.js";
@@ -32,8 +32,9 @@ const STATE_LABELS = { indexing: "索引中", running: "動作中", stopped: "�
 // How often the settings are read while the part is shown.
 const WATCH_MS = 2000;
 
-// What the screen is told: the settings of a project changed, so the files open in it look for their server again.
+// What the screen is told: the settings of a project changed, so the files open in it look for their server again; and a Claude tab was started (or found again) for a worktree, which the work pane follows.
 let changed: (place: LspPlace) => void = () => {};
+let followed: (launched: OrcaStarted, target: string | null) => void = () => {};
 
 // A server of a worktree: its key is the language it takes.
 interface ServerPlace extends LspPlace {
@@ -84,11 +85,6 @@ let saving: Promise<void> = Promise.resolve();
 let version = 0;
 let pending = 0;
 let timer: number | null = null;
-// The Claude Code pane's id and owner, the request it was opened for (null: none open) and whether the part is shown.
-const CLAUDE_ID = "lsp-claude";
-const CLAUDE_OWNER = "orca-lsp";
-let claude: (LspPlace & { language: string | null; prompt: string }) | null = null;
-let partShown = false;
 
 const statusOf = (language: string): LspStatus => (pane === null ? NOT_STARTED : (statuses.get(keyOf(pane.target, pane.path, language)) ?? NOT_STARTED));
 const args = (place: ServerPlace) => ({ environment: place.target, project: place.project, worktree: place.path, server: place.server });
@@ -612,47 +608,25 @@ const removeServer = (language: string) => queue(() => saveNow({ remove: languag
 
 // ---- Claude Code ----
 
-const sameWorktree = (a: LspPlace, b: LspPlace | null) => b !== null && a.target === b.target && a.project === b.project && a.path === b.path;
-
-// Shows the pane of the request, or hides it: it is shown while the part is shown and the worktree is the one of the request.
-function drawClaude() {
-  const root = $("orca-lsp-claude");
-  const shown = claude !== null && partShown && sameWorktree(claude, pane);
-  root.hidden = !shown;
-  if (!shown) return hideClaudeCode(CLAUDE_OWNER);
-  const host = $("orca-lsp-claude-term");
-  if (!isClaudeCodeShowing(host, CLAUDE_ID, CLAUDE_OWNER)) showClaudeCode(host, { id: CLAUDE_ID, builtinTools: true, prompt: claude!.prompt }, CLAUDE_OWNER);
-}
-
-function closeClaude() {
-  if (claude === null) return;
-  claude = null;
-  closeClaudeCode(CLAUDE_ID, CLAUDE_OWNER);
-  drawClaude();
-}
-
-// Opens the pane for the worktree that is shown and `language` (null: every language of it). The same request that is open stays as it is; another one closes the pane and starts a new one. A refusal of the instruction is the message of the card of that language, else the line under the heading.
+// Asks Rust to start Claude Code in the worktree that is shown, for `language` (null: every language of it), and hands the tab it answers to the screen. A refusal is the message of the card of that language, else the line under the heading.
 async function askClaude(language: string | null) {
   const here = pane;
   if (here === null) return;
   const mine = generation;
-  const same = () => claude !== null && sameWorktree(claude, here) && claude.language === language;
-  if (same()) return;
-  let prompt: string;
+  let launched: OrcaStarted;
   try {
-    prompt = await invoke("lsp_claude_request", { environment: here.target, project: here.project, worktree: here.path, language });
+    launched = await invoke("lsp_claude_start", { environment: here.target, project: here.project, worktree: here.path, language });
   } catch (e) {
     if (mine !== generation) return;
     note = { key: language, text: String(e) };
     drawNote();
     return;
   }
-  if (mine !== generation || same()) return;
-  closeClaude();
-  claude = { ...here, language, prompt };
+  // The tab was started: the work pane follows it even when another worktree is shown now.
+  followed(launched, here.target);
+  if (mine !== generation) return;
   note = null;
   drawNote();
-  drawClaude();
 }
 
 // ---- starting and stopping ----
@@ -738,9 +712,8 @@ export async function ensureServer(place: LspPlace, server: string) {
   if (pane?.target === place.target && pane?.path === place.path) drawState();
 }
 
-// Stops the servers this screen started whose worktree `gone` says is gone (no tab of it is open, or Orca's list has not the worktree). The pane of Claude Code is closed only when `listed` says that Orca's list has not its worktree: the file pane shows a worktree with no tab open.
-export function syncServers(gone: (target: string | null, path: string) => boolean, listed: (target: string | null, path: string) => boolean) {
-  if (claude !== null && listed(claude.target, claude.path)) closeClaude();
+// Stops the servers this screen started whose worktree `gone` says is gone (no tab of it is open, or Orca's list has not the worktree).
+export function syncServers(gone: (target: string | null, path: string) => boolean) {
   for (const [key, place] of started) {
     if (!gone(place.target, place.path)) continue;
     started.delete(key);
@@ -767,8 +740,6 @@ function stopWatch() {
 // The Orca screen is left (or the work pane is not shown): nothing is read by the clock until the file pane is drawn again.
 export function pauseLsp() {
   stopWatch();
-  partShown = false;
-  drawClaude();
 }
 
 // Whether a question of the Command key may be sent to the server `server` of the worktree: not when it is known to be indexing or stopped (it can only refuse), and when nothing is known of it yet Rust says.
@@ -796,20 +767,17 @@ export function syncLsp(next: LspPlace | null, visible: boolean) {
     reading = false;
     draw();
   }
-  partShown = visible && pane !== null;
-  if (partShown) {
+  if (visible && pane !== null) {
     startWatch();
     if (!loaded) void load();
   } else stopWatch();
-  drawClaude();
 }
 
-export function initLsp(on: { changed: (place: LspPlace) => void }) {
+export function initLsp(on: { changed: (place: LspPlace) => void; started: (launched: OrcaStarted, target: string | null) => void }) {
   changed = on.changed;
+  followed = on.started;
   $("orca-lsp-ask").innerHTML = CLAUDE_SVG;
   $("orca-lsp-ask").onclick = () => void askClaude(null);
-  $("orca-lsp-claude-close").innerHTML = CLOSE_SVG;
-  $("orca-lsp-claude-close").onclick = closeClaude;
   $("orca-lsp-reload").innerHTML = RELOAD_SVG;
   // The reload finds the languages again, and shows the cards that 「使わない」 hid.
   $("orca-lsp-reload").onclick = () => {

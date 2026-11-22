@@ -1,4 +1,4 @@
-import { askScreen, boot, callsOf, claudeKeyReady, claudeMissing, claudeReady, comment, copiedTexts, count, dueToday, holds, inbox, mock, onceId, pickFile, rejects, release, setClock, slackLoad, slackMessageUrl, slackSummary, stubClipboard, task, textsOf, today, todoData, waitForCalls, waitForCount, waitForText, openTodo, CARD, CARDS } from "../support";
+import { askScreen, boot, callsOf, claudeKeyReady, claudeMissing, claudeReady, comment, copiedTexts, count, dueToday, holds, inbox, mock, onceId, pickFile, rejects, release, setClock, slackLoad, slackMessageUrl, slackSummary, stubClipboard, task, textsOf, today, todoData, waitForCalls, waitForCount, waitForText, openTodo, taskHit, CARD, CARDS } from "../support";
 
 // A press as a mouse makes it. WebDriver's element click sends no pointerdown, which is what closes a popover (as in calendar.e2e.ts).
 const press = (target: ChainablePromiseElement) => browser.action("pointer").move({ origin: target }).down().up().perform();
@@ -3643,5 +3643,206 @@ describe("todo projects", () => {
     await waitForCalls(move);
     await browser.waitUntil(async () => JSON.stringify(await projectLines()) === JSON.stringify(ORIGINAL), { timeoutMsg: "the list did not come back" });
     await expect($(CARD)).toHaveText(expect.stringContaining("Todoist に接続できません"));
+  });
+});
+
+describe("todo: search (T-9)", () => {
+  const input = "#todo-search-input";
+  const clear = "#todo-search-clear";
+
+  // The Todo screen with two tasks to find: "Write report" (k1, Work) with a description of two lines and a label, and "Pay report fee" (k5, Home).
+  async function openSearch() {
+    const data = todoData();
+    data.tasks[0] = { ...data.tasks[0], description: "Draft the intro\nSend the report to Sam", labels: ["Urgent"] };
+    data.tasks.push(task("k5", "Pay report fee", "p4", "none"));
+    await boot({ inbox: inbox(), todoist_load: data, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await waitForCount("#todo-list li.task", 1);
+    return [
+      taskHit(data.tasks[0], "Work", { name: [{ start: 6, end: 12 }], description: [{ start: 25, end: 31 }], labels: [[{ start: 0, end: 3 }]] }),
+      taskHit(data.tasks[4], "Home", { name: [{ start: 4, end: 10 }] }),
+    ];
+  }
+
+  // Types `text` in the field, with `todoist_search` answering `hits`, and waits until the last call carries all of it.
+  async function searchFor(text: string, hits: unknown) {
+    const search = await mock("todoist_search", hits);
+    await $(input).setValue(text);
+    await browser.waitUntil(async () => ((await callsOf(search)) as { query: string }[]).at(-1)?.query === text, { timeoutMsg: `todoist_search never got "${text}"` });
+    return search;
+  }
+
+  it("has the field in the header with a name and no placeholder, and the × only while it holds text", async () => {
+    await openSearch();
+    await expect($("#todo-body > header #todo-search")).toBeDisplayed();
+    await expect($("#todo-search")).toHaveAttribute("role", "search");
+    await expect($(input)).toHaveAttribute("aria-label", "タスクを検索");
+    await expect($(input)).not.toHaveAttribute("placeholder");
+    await expect($(clear)).not.toBeDisplayed();
+    await expect($(clear)).toHaveAttribute("aria-label", "検索を消す");
+    const [title, search] = await browser.execute(() => [document.getElementById("todo-title")!.getBoundingClientRect().right, document.getElementById("todo-search")!.getBoundingClientRect().left]);
+    expect(title).toBeLessThanOrEqual(search);
+    await $(input).setValue("a");
+    await expect($(clear)).toBeDisplayed();
+  });
+
+  it("replaces the list with the results of every project, with the count and the project of each row", async () => {
+    const hits = await openSearch();
+    await searchFor("report", hits);
+    await waitForCount("#todo-list li.task", 2);
+    await expect($("#todo-list .group")).toHaveText("全プロジェクトで 2 件");
+    expect(await textsOf("#todo-list li.task .tname")).toEqual(["Write report", "Pay report fee"]);
+    expect(await textsOf("#todo-list li.task .ptag .pname")).toEqual(["Work", "Home"]);
+    // The title keeps the list that was open, and the add field is away.
+    await expect($("#todo-title")).toHaveText("今日");
+    await expect($("#todo-add")).not.toBeDisplayed();
+  });
+
+  it("marks the words that hit in the name, the line of the description that holds them, and a label", async () => {
+    const hits = await openSearch();
+    await searchFor("report", hits);
+    await waitForCount("#todo-list li.task", 2);
+    expect(await textsOf("#todo-list mark")).toEqual(["report", "report", "Urg", "report"]);
+    expect(await textsOf("#todo-list li.task .tname mark")).toEqual(["report", "report"]);
+    // The second line shows the line of the description that was hit, not the first one.
+    expect((await textsOf("#todo-list li.task .desc"))[0]).toBe("Send the report to Sam");
+    expect(await textsOf("#todo-list li.task .desc mark")).toEqual(["report"]);
+    expect(await textsOf("#todo-list li.task .label mark")).toEqual(["Urg"]);
+  });
+
+  it("shows the first line of the description when no hit is in it, and a count of 0 with no row", async () => {
+    const hits = await openSearch();
+    const search = await searchFor("report", [{ ...hits[0], name: [], description: [], labels: [[]] }]);
+    await waitForCount("#todo-list li.task", 1);
+    expect((await textsOf("#todo-list li.task .desc"))[0]).toBe("Draft the intro");
+    expect(await count("#todo-list mark")).toBe(0);
+    await mock(search, []);
+    await $(input).addValue("x");
+    await expect($("#todo-list .group")).toHaveText("全プロジェクトで 0 件");
+    await waitForCount("#todo-list li.task", 0);
+  });
+
+  it("brings the list back when the field is emptied, and calls nothing for a text with no word", async () => {
+    const hits = await openSearch();
+    const search = await searchFor("report", hits);
+    await waitForCount("#todo-list li.task", 2);
+    await $(input).click();
+    await browser.keys(Array(6).fill("Backspace"));
+    await waitForCount("#todo-list li.task", 1);
+    await expect($("#todo-list")).toHaveText(expect.stringContaining("Write report"));
+    await expect($("#todo-list .group")).toHaveText("今日");
+    await expect($("#todo-add")).toBeDisplayed();
+    await expect($(clear)).not.toBeDisplayed();
+    // White space is no word: the list stays and Rust is not asked.
+    const calls = (await callsOf(search)).length;
+    await $(input).setValue("  ");
+    await expect($("#todo-list")).toHaveText(expect.stringContaining("Write report"));
+    expect((await callsOf(search)).length).toBe(calls);
+  });
+
+  it("brings the list back with the ×, which keeps the focus in the field", async () => {
+    const hits = await openSearch();
+    await searchFor("report", hits);
+    await waitForCount("#todo-list li.task", 2);
+    await $(clear).click();
+    await waitForCount("#todo-list li.task", 1);
+    await expect($(input)).toHaveValue("");
+    await expect($(input)).toBeFocused();
+    await expect($(clear)).not.toBeDisplayed();
+  });
+
+  it("opens the detail of a result, goes back to the results with the text kept, and closes the detail when typing", async () => {
+    const hits = await openSearch();
+    await searchFor("report", hits);
+    await waitForCount("#todo-list li.task", 2);
+    await $("#todo-list li.task:first-child .tname").click();
+    await expect($("#todo-detail")).toBeDisplayed();
+    await expect($("#todo-search")).toBeDisplayed();
+    await $("#todo-back").click();
+    await waitForCount("#todo-list li.task", 2);
+    await expect($("#todo-list .group")).toHaveText("全プロジェクトで 2 件");
+    await expect($(input)).toHaveValue("report");
+    await $("#todo-list li.task:first-child .tname").click();
+    await expect($("#todo-detail")).toBeDisplayed();
+    await $(input).addValue("s");
+    await expect($("#todo-detail")).not.toBeDisplayed();
+    await waitForCount("#todo-list li.task", 2);
+  });
+
+  it("empties the field when a project of the side list is picked", async () => {
+    const hits = await openSearch();
+    await searchFor("report", hits);
+    await waitForCount("#todo-list li.task", 2);
+    await $('#projects .proj[data-view="p4"]').click();
+    await expect($("#todo-title")).toHaveText("Home");
+    await expect($(input)).toHaveValue("");
+    await waitForCount("#todo-list li.task", 1);
+    await expect($("#todo-list")).toHaveText(expect.stringContaining("Pay report fee"));
+    await expect($("#todo-add")).toBeDisplayed();
+  });
+
+  it("shows a card for a failed search and keeps the results of the last answer", async () => {
+    const hits = await openSearch();
+    const search = await searchFor("report", hits);
+    await waitForCount("#todo-list li.task", 2);
+    await mock(search, rejects("検索できません"));
+    await $(input).addValue("s");
+    await expect($(CARD)).toHaveText(expect.stringContaining("検索できません"));
+    await expect($("#todo-list .group")).toHaveText("全プロジェクトで 2 件");
+    await waitForCount("#todo-list li.task", 2);
+  });
+
+  it("draws the new tasks in the results when the search made again after a load fails", async () => {
+    const hits = await openSearch();
+    const search = await searchFor("report", hits);
+    await waitForCount("#todo-list li.task", 2);
+    // What Todoist has after the completion: k1 is gone, and k5 has another name.
+    const after = todoData();
+    after.tasks.push(task("k5", "Pay fee (renamed)", "p4", "none"));
+    after.tasks = after.tasks.filter((t) => t.id !== "k1");
+    await mock("todoist_set_done", true);
+    await mock("todoist_load", after);
+    await mock(search, rejects("検索できません"));
+    await $("#todo-list li.task:first-child .check").click();
+    await expect($(CARD)).toHaveText(expect.stringContaining("検索できません"));
+    await browser.waitUntil(async () => JSON.stringify(await textsOf("#todo-list li.task .tname")) === JSON.stringify(["Pay fee (renamed)"]), { timeoutMsg: "the results did not follow the load" });
+  });
+
+  it("takes a task completed or deleted here out of the results and the count at once", async () => {
+    const hits = await openSearch();
+    await searchFor("report", hits);
+    await waitForCount("#todo-list li.task", 2);
+    const after = todoData();
+    after.tasks.push(task("k5", "Pay report fee", "p4", "none"));
+    after.tasks = after.tasks.filter((t) => t.id !== "k1");
+    await mock("todoist_set_done", true);
+    await mock("todoist_load", after);
+    await $("#todo-list li.task:first-child .check").click();
+    await waitForCount("#todo-list li.task", 1);
+    await expect($("#todo-list .group")).toHaveText("全プロジェクトで 1 件");
+    expect(await textsOf("#todo-list li.task .tname")).toEqual(["Pay report fee"]);
+    expect(await callsOf("todoist_set_done")).toHaveLength(1);
+  });
+
+  it("searches once for a run of typing, with the text it ended on", async () => {
+    const hits = await openSearch();
+    const search = await mock("todoist_search", hits);
+    // Three input events in one turn of the page: no pause between them.
+    await browser.execute((sel) => {
+      const field = document.querySelector<HTMLInputElement>(sel)!;
+      for (const text of ["r", "re", "rep"]) {
+        field.value = text;
+        field.dispatchEvent(new Event("input"));
+      }
+    }, input);
+    await waitForCount("#todo-list li.task", 2);
+    expect(await callsOf(search)).toEqual([{ query: "rep" }]);
+  });
+
+  it("is not shown under the token form", async () => {
+    await boot({ inbox: inbox(), todoist_load: null, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await expect($("#todo-token")).toBeDisplayed();
+    await expect($("#todo-search")).not.toBeDisplayed();
   });
 });

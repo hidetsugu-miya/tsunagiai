@@ -76,12 +76,15 @@ const STEP_BRANCHES: &str = "branch の確認";
 const STEP_TERMINAL: &str = "ターミナルの作成";
 const STEP_RECORD: &str = "記録の書き込み";
 const STEP_PLUGIN: &str = "プラグインの書き出し";
-const STEP_HOOK: &str = "メッセージを記録するフックの書き出し";
+const STEP_SETTINGS: &str = "子の設定の書き出し";
 const STEP_IDLE: &str = "子のエージェントの立ち上がり待ち";
 const STEP_SEND: &str = "最初の指示の送信";
+const STEP_DISPATCH: &str = "子の Dispatch の作成";
 const STEP_GIT: &str = "git での確認";
 const STEP_REMOVE: &str = "worktree の削除";
 const STEP_STOP: &str = "ターミナルを閉じる";
+/// The file that carries the lock between processes while a formation's Run is made, so that children launched side by side share one Run.
+const RUN_LOCK: &str = "run.lock";
 const STEP_WORKTREE_BASE: &str = "worktree の場所の設定";
 const STEP_EXCLUDE: &str = "git の追跡外の設定";
 pub(crate) const STEP_LISTED: &str = "worktree の一覧の読み取り";
@@ -182,7 +185,7 @@ pub fn migrate_legacy(config: &Path) -> Result<(), String> {
 
 // ---- the record ----
 
-/// The agent that runs a child: Claude Code (the default) or Codex (A-41). SendMessage reaches only a Claude Code, so a Codex child hands its result over in a file (`formation_claude.md`).
+/// The agent that runs a child: Claude Code (the default) or Codex (A-41). A Codex child hands its result over in a file (`formation_claude.md`).
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -350,11 +353,11 @@ pub(crate) fn update(
 pub struct PlannedChild {
     /// The name the child will be launched with.
     pub name: String,
-    /// The environment of the repository: `local`, the PC this orchestrator runs on. Another environment is refused: SendMessage reaches only a child on the same PC.
+    /// The environment of the repository: `local`, the PC this orchestrator runs on. Another environment is refused: a child is launched on the PC of its orchestrator only.
     pub environment: String,
     /// The repository: its name in `orca repo list` of that environment.
     pub repo: String,
-    /// The agent the child will run: `claude` (the default) or `codex`. A Codex child cannot be reached by SendMessage: its result goes in a file.
+    /// The agent the child will run: `claude` (the default) or `codex`. A Codex child hands its result over in a file.
     #[serde(default)]
     pub agent: FormationAgent,
 }
@@ -482,7 +485,7 @@ fn check_created_branch(requested: &str, created: &str) -> Result<(), String> {
     ))
 }
 
-/// A child's name must reach one session with SendMessage: it is not the name of a formation (the name of its orchestrator's session) and not the name of a child of another formation. A child of `formation` itself of that name is the one `plan` replaces and `launch` takes over, so it is not a conflict here.
+/// A child's name must name one session: it is not the name of a formation (the name of its orchestrator's session) and not the name of a child of another formation. A child of `formation` itself of that name is the one `plan` replaces and `launch` takes over, so it is not a conflict here.
 fn check_child_name(config: &Path, formation: &str, name: &str) -> Result<(), String> {
     check_name(name)?;
     migrate_legacy(config)?;
@@ -510,7 +513,7 @@ fn name_conflict(
         .find(|(_, children)| children.iter().any(|c| c.name == name))
     {
         return Err(format!(
-            "「{name}」はフォーメーション「{owner}」の子の名前です。SendMessage の宛先が決まらなくなるので、別の名前にしてください"
+            "「{name}」はフォーメーション「{owner}」の子の名前です。名前が重なって、どの子か決まらなくなるので、別の名前にしてください"
         ));
     }
     Ok(())
@@ -618,7 +621,47 @@ struct Meta {
     /// The handle of the terminal of the orchestrator in the Orca of a saved environment (`start_orchestrator_with`): only a formation of a saved environment has one. A file written before it was kept has none. A formation that has none never had its orchestrator started on its PC, so that PC has no record of it and the screen's polls do not ask.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     orchestrator_terminal: Option<String>,
+    /// The Run of Orca's orchestration that holds the children of this formation as Dispatches (#1237): made at the first launch, in the Orca of this Mac (`ensure_run`). A formation with none has launched no child since the Run was introduced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    run_id: Option<String>,
+    /// The Dispatch of each launched child (the child's name and the Dispatch's id), so that a stop and a close fence it (`stop_dispatch`). It is here and not in `Launch`, so that the record of the children stays as it was. A child that was launched before the Run was introduced has none.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    dispatches: BTreeMap<String, String>,
+    /// The `sequence` of the last message of the Run that `messages.jsonl` took in (`formation_message::sync_orchestration`): the ones after it are new.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    messages_sequence: u64,
     // A file of v0.82.x also has `pcRepoPath`, the folder of the first project's repository: it is not read any more (the record of the PC is read from the server of that PC), and the next write of the file leaves it out.
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+/// What `formation.json` knows of the orchestration of Orca for the record of the messages (`formation_message`): the Run, the Dispatch of each child by its name, and the sequence of the last message taken in.
+pub(crate) struct OrchestrationState {
+    pub run_id: String,
+    pub dispatches: BTreeMap<String, String>,
+    pub sequence: u64,
+}
+
+/// The Run of `formation` with its Dispatches, or none when it has no Run (no child was launched into it, or the file cannot be read) or the Run's id is not one Orca gives.
+pub(crate) fn orchestration_state(config: &Path, formation: &str) -> Option<OrchestrationState> {
+    let meta = read_meta(config, formation).ok()?;
+    let run_id = meta.run_id.filter(|id| check_orca_id(id).is_ok())?;
+    Some(OrchestrationState {
+        run_id,
+        dispatches: meta.dispatches,
+        sequence: meta.messages_sequence,
+    })
+}
+
+/// Keeps the sequence of the last message that `messages.jsonl` took in.
+pub(crate) fn set_messages_sequence(
+    config: &Path,
+    formation: &str,
+    sequence: u64,
+) -> Result<(), String> {
+    update_meta(config, formation, |meta| meta.messages_sequence = sequence)
 }
 
 /// The file of `formation`: a missing one is none, but one that is there and cannot be read is an error, so that the orchestrator does not start as if the formation had no project.
@@ -676,12 +719,12 @@ pub(crate) fn orchestrator_home(config: &Path, formation: &str) -> (String, Opti
     )
 }
 
-/// A formation belongs to one PC: a project of another environment is refused, because a Claude Code reaches another by `SendMessage` only on the same PC, so the orchestrator and its children must be there together.
+/// A formation belongs to one PC: a project of another environment is refused, because its children are launched on the PC of its orchestrator only (`check_children_here`).
 fn check_one_environment(projects: &[FormationProject]) -> Result<(), String> {
     let environment = formation_environment(projects);
     match projects.iter().find(|p| p.environment != environment) {
         Some(other) => Err(format!(
-            "フォーメーションは一つの PC に属します。環境「{environment}」と環境「{}」にまたがるプロジェクトは入れられません（リーダーと子が別の PC にいると、SendMessage が届かないためです）",
+            "フォーメーションは一つの PC に属します。環境「{environment}」と環境「{}」にまたがるプロジェクトは入れられません（子は、リーダーと同じ PC にだけ置けるためです）",
             other.environment
         )),
         None => Ok(()),
@@ -1089,30 +1132,37 @@ fn all_terminals_args(environment: &str) -> Vec<String> {
     on(orca::args_of(&["terminal", "list", "--json"]), environment)
 }
 
-/// Writes the hook of a Claude Code child that records its SendMessage calls (`formation_message`, #1084) in the folder of its formation, for the `tsunagiai-mcp` that runs this launch, and answers its path. A Codex child has no SendMessage and no hook.
-fn write_child_hook(config: &Path, formation: &str, name: &str) -> Result<PathBuf, String> {
-    let mcp =
-        std::env::current_exe().map_err(|e| format!("tsunagiai-mcp の場所が分かりません: {e}"))?;
+/// The file of a Claude Code child's `--settings` in the folder of its formation.
+fn child_settings_file(name: &str) -> String {
+    format!("settings-{name}.json")
+}
+
+/// The settings that a Claude Code child's `--settings` takes: the `permissions` for the Figma server of its plugin (`formation_assets::figma_permissions`, A-41, #1162), because the child runs in the auto mode. No hook records its messages: they are read from the Run of Orca (#1238).
+fn child_settings() -> String {
+    serde_json::to_string_pretty(
+        &json!({"permissions": crate::formation_assets::figma_permissions()}),
+    )
+    .unwrap_or_default()
+}
+
+/// Writes the settings of a Claude Code child in the folder of its formation and answers its path. A Codex child has none.
+fn write_child_settings(config: &Path, formation: &str, name: &str) -> Result<PathBuf, String> {
     let folder = dir(config, formation);
-    let file = crate::formation_message::child_hook_file(name);
-    accounts::write_atomic(
-        &folder,
-        &file,
-        &crate::formation_message::hook_settings(&mcp, formation, Some(name)),
-    )?;
+    let file = child_settings_file(name);
+    accounts::write_atomic(&folder, &file, &child_settings())?;
     Ok(folder.join(file))
 }
 
 /// The command of a Codex child's terminal (A-41): its sandbox lets it write in the worktree, and it never stops to ask (no `-n`: its title is the name that Orca gives the terminal, and no plugin: it reads the prompt alone).
 const CODEX_COMMAND: &str = "codex --sandbox workspace-write --ask-for-approval never";
 
-/// The command of the child's terminal: for Claude Code, Claude Code in auto mode at the effort `medium` (#911) under its name (`claude -n`, which is also the address of `SendMessage`), with the plugin of A-41 (`--plugin-dir`, in single quotes: the path of the config folder may hold a space) and the hook that records its SendMessage calls (`--settings {hook}`, #1084). The name was checked, so the rest of the command line holds nothing a shell would read.
-fn child_command(agent: FormationAgent, name: &str, plugin_dir: &Path, hook: &Path) -> String {
+/// The command of the child's terminal: for Claude Code, Claude Code in auto mode at the effort `medium` (#911) under its name (`claude -n`), with the plugin of A-41 (`--plugin-dir`, in single quotes: the path of the config folder may hold a space) and its settings (`--settings {settings}`, the Figma permissions, #1162). The name was checked, so the rest of the command line holds nothing a shell would read.
+fn child_command(agent: FormationAgent, name: &str, plugin_dir: &Path, settings: &Path) -> String {
     match agent {
         FormationAgent::Claude => format!(
             "claude -n {name} --permission-mode auto --effort medium --plugin-dir {} --settings {}",
             crate::claude_code::sh_quote(&plugin_dir.to_string_lossy()),
-            crate::claude_code::sh_quote(&hook.to_string_lossy())
+            crate::claude_code::sh_quote(&settings.to_string_lossy())
         ),
         FormationAgent::Codex => CODEX_COMMAND.to_owned(),
     }
@@ -1124,7 +1174,7 @@ fn terminal_create_args(
     agent: FormationAgent,
     name: &str,
     plugin_dir: &Path,
-    hook: &Path,
+    settings: &Path,
     environment: &str,
 ) -> Vec<String> {
     let mut args = orca::args_of(&["terminal", "create", "--worktree"]);
@@ -1133,7 +1183,7 @@ fn terminal_create_args(
         "--title".into(),
         name.into(),
         "--command".into(),
-        child_command(agent, name, plugin_dir, hook),
+        child_command(agent, name, plugin_dir, settings),
         "--json".into(),
     ]);
     on(args, environment)
@@ -1164,6 +1214,230 @@ fn terminal_send_args(handle: &str, prompt: &str, environment: &str) -> Vec<Stri
         "--json".into(),
     ]);
     on(args, environment)
+}
+
+// ---- the Run and the Dispatches of Orca's orchestration (#1237) ----
+// A formation has one Run, and each child is a Dispatch of it: the terminal is made as before (`terminal create`), and `orchestration dispatch --to {handle}` assigns it a task. Every value joined to its flag (`--spec=...`), so that a text that looks like an option stays one argument.
+
+/// Whether `id` is an id that Orca's orchestration gave (`run_...`, `task_...`, `ctx_...`): a letter or a digit first, then letters, digits, `_` and `-`, at most 64. The ids come back from the CLI and are kept in files the orchestrator can write, so they are checked again before they go into an argument.
+fn check_orca_id(id: &str) -> Result<(), String> {
+    if id.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && id.len() <= 64
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "Orca の orchestration の id が正しくありません: {id}"
+        ))
+    }
+}
+
+fn run_create_args(formation: &str, environment: &str) -> Vec<String> {
+    on(
+        vec![
+            "orchestration".into(),
+            "run-create".into(),
+            format!("--objective=formation {formation}"),
+            "--json".into(),
+        ],
+        environment,
+    )
+}
+
+fn task_create_args(run_id: &str, formation: &str, name: &str, environment: &str) -> Vec<String> {
+    on(
+        vec![
+            "orchestration".into(),
+            "task-create".into(),
+            format!("--run={run_id}"),
+            format!("--task-title={name}"),
+            format!("--spec=the child {name} of the formation {formation}"),
+            "--json".into(),
+        ],
+        environment,
+    )
+}
+
+/// The Dispatch of a task to the child's terminal. There is no `--inject`: the terminal is not typed into, and `--return-preamble` gives the text that tells the child how to use the orchestration, which the first instruction carries.
+fn dispatch_args(run_id: &str, task_id: &str, handle: &str, environment: &str) -> Vec<String> {
+    on(
+        vec![
+            "orchestration".into(),
+            "dispatch".into(),
+            format!("--run={run_id}"),
+            format!("--task={task_id}"),
+            format!("--to={handle}"),
+            "--return-preamble".into(),
+            "--json".into(),
+        ],
+        environment,
+    )
+}
+
+fn worker_stop_args(dispatch_id: &str, environment: &str) -> Vec<String> {
+    on(
+        vec![
+            "orchestration".into(),
+            "worker-stop".into(),
+            format!("--dispatch={dispatch_id}"),
+            "--json".into(),
+        ],
+        environment,
+    )
+}
+
+/// The newest `limit` messages of a Run, whole (`--full`: the concise view has neither the time nor the sequence). Orca answers the newest first (its inbox is `ORDER BY sequence DESC LIMIT n`, read in the code of Orca 1.4.269), and a heartbeat is a row too.
+pub(crate) fn inbox_args(run_id: &str, limit: usize, environment: &str) -> Vec<String> {
+    on(
+        vec![
+            "orchestration".into(),
+            "inbox".into(),
+            format!("--run={run_id}"),
+            format!("--limit={limit}"),
+            "--full".into(),
+            "--json".into(),
+        ],
+        environment,
+    )
+}
+
+/// The id that `run-create` and `task-create` answer (`runId`, `taskId`; the whole record of `--full` has `task.id`), checked.
+fn orca_id_of(result: &Value, key: &str, whole: &str) -> Result<String, String> {
+    let id = orca::text_of(result, key)
+        .or_else(|| result[whole]["id"].as_str())
+        .ok_or_else(|| format!("Orca の答えに {key} がありません"))?;
+    check_orca_id(id)?;
+    Ok(id.to_owned())
+}
+
+/// The id of the Dispatch and the preamble of `orchestration dispatch --return-preamble` (its `result`: `dispatch.id` and `preamble`). The preamble is Orca's text for the child.
+fn dispatch_of(result: &Value) -> Result<(String, String), String> {
+    let id = result["dispatch"]["id"]
+        .as_str()
+        .ok_or("Orca の答えに dispatch.id がありません")?;
+    check_orca_id(id)?;
+    let preamble = result["preamble"].as_str().unwrap_or_default().trim();
+    Ok((id.to_owned(), preamble.to_owned()))
+}
+
+/// Whether a child of `agent` is a Dispatch of the Run and talks with `orchestration send` and `check`: a Claude Code child does, and a Codex child hands its result over in files (`formation_claude.md`).
+fn talks_by_messages(agent: FormationAgent) -> bool {
+    agent != FormationAgent::Codex
+}
+
+/// The first instruction of a child with the preamble of its Dispatch before it, when there is one.
+fn first_instruction(preamble: &str, prompt: &str) -> String {
+    if preamble.is_empty() {
+        prompt.to_owned()
+    } else {
+        format!("{preamble}\n\n{prompt}")
+    }
+}
+
+/// The Run of `formation`: the one `formation.json` holds, else a new one (`run-create`), kept there. The Run binds itself to the terminal of the process that makes it, which is the orchestrator's (the `tsunagiai-mcp` of its Claude Code). Children launched side by side share one Run: the lock of the file `RUN_LOCK` is held while it is read and made.
+fn ensure_run(
+    config: &Path,
+    formation: &str,
+    environment: &str,
+    write: &dyn Fn(&[String]) -> Result<Value, String>,
+) -> Result<String, String> {
+    let _held = lock_file(config, formation, RUN_LOCK)?;
+    if let Some(id) = read_meta(config, formation)?.run_id {
+        check_orca_id(&id)?;
+        return Ok(id);
+    }
+    let id = orca_id_of(
+        &write(&run_create_args(formation, environment))?,
+        "runId",
+        "run",
+    )?;
+    update_meta(config, formation, |meta| meta.run_id = Some(id.clone()))?;
+    Ok(id)
+}
+
+/// What the Dispatch of a launched child gives: the id of the Run and of the Dispatch (the addresses `run:{id}` and `dispatch:{id}` that the leader and the child use for each other, #1238) and the preamble of the Dispatch.
+#[derive(Debug)]
+struct Dispatched {
+    run_id: String,
+    dispatch_id: String,
+    preamble: String,
+}
+
+/// Makes the task and the Dispatch of a launched child in the Run of its formation, keeps the Dispatch's id in `formation.json`, and answers the ids and the preamble. The terminal `handle` is the child's own.
+fn dispatch_child(
+    config: &Path,
+    formation: &str,
+    name: &str,
+    handle: &str,
+    environment: &str,
+    write: &dyn Fn(&[String]) -> Result<Value, String>,
+) -> Result<Dispatched, String> {
+    let run_id = ensure_run(config, formation, environment, write)?;
+    let task_id = orca_id_of(
+        &write(&task_create_args(&run_id, formation, name, environment))?,
+        "taskId",
+        "task",
+    )?;
+    let (dispatch_id, preamble) = dispatch_of(&write(&dispatch_args(
+        &run_id,
+        &task_id,
+        handle,
+        environment,
+    ))?)?;
+    update_meta(config, formation, |meta| {
+        meta.dispatches.insert(name.to_owned(), dispatch_id.clone());
+    })?;
+    Ok(Dispatched {
+        run_id,
+        dispatch_id,
+        preamble,
+    })
+}
+
+/// The Dispatch of the child `name` that `formation.json` holds, if it has one (a child launched before the Run was introduced has none, and neither does one whose file cannot be read).
+fn dispatch_id_of(config: &Path, formation: &str, name: &str) -> Option<String> {
+    read_meta(config, formation)
+        .ok()?
+        .dispatches
+        .get(name)
+        .filter(|id| check_orca_id(id).is_ok())
+        .cloned()
+}
+
+/// Fences the Dispatch of the child `name` before its terminal is closed (`worker-stop`: it closes no unsupervised terminal, which stays the close's own work). `None` when the child has no Dispatch; else whether Orca did it. A failure stops nothing: the terminal is closed all the same.
+fn stop_dispatch(
+    config: &Path,
+    formation: &str,
+    name: &str,
+    environment: &str,
+    write: &dyn Fn(&[String]) -> Result<Value, String>,
+) -> Option<bool> {
+    let id = dispatch_id_of(config, formation, name)?;
+    Some(write(&worker_stop_args(&id, environment)).is_ok())
+}
+
+/// After a close: when the child had a Dispatch (`fenced` is `Some`), says in `done` whether it was fenced (`dispatchStopped`) and takes it out of `formation.json`.
+fn finish_dispatch(
+    config: &Path,
+    formation: &str,
+    name: &str,
+    fenced: Option<bool>,
+    done: &mut Value,
+) {
+    if let Some(stopped) = fenced {
+        done["dispatchStopped"] = json!(stopped);
+        forget_dispatch(config, formation, name);
+    }
+}
+
+/// Takes the Dispatch of a child that was closed out of `formation.json`. A formation whose file is gone is left alone.
+fn forget_dispatch(config: &Path, formation: &str, name: &str) {
+    let _ = update_meta(config, formation, |meta| {
+        meta.dispatches.remove(name);
+    });
 }
 
 /// The shell sentence that starts an orchestrator on its PC: it begins with `exec`, so the `sh` takes the place of the login shell it is typed into and the terminal ends with the process that runs in it (a sentence typed without it leaves the login shell, and the terminal, listed after Claude Code has ended; measured on Orca, #943). In it the `remote/tsunagiai-mcp` that the app put there (`formation_remote::program_path`) first runs `--serve --bind {host}`, which starts the server of A-37 unless it runs (a failure is not shown and does not stop the orchestrator), and then takes the place of the `sh` with `--formation-start {name}` and one `--project {repo}` for each of `repos` (it writes the orchestrator's files on that PC and starts Claude Code with the projects as its first instruction, so nothing is typed into the terminal afterwards). It is typed into the login shell of the terminal, whichever shell that is: the `sh -c` has its script in one single quote with none inside, and the repositories follow it as the arguments `"$@"` of that script, each in single quotes of its own (`claude_code::sh_quote`, a quote closed, escaped and opened again). sh, bash and zsh read that the same way, and fish reads it the same way too while the name holds no `\`, because fish treats a `\` inside single quotes as an escape; so a name with a `\` is refused. A PC without the program prints `MCP_NOT_PLACED` and opens a shell in its place (`exec "${SHELL:-/bin/sh}"`), so the terminal stays and the owner can read the words (an `exit` would close the terminal with them). The name must pass `check_name`, so it holds no character a shell reads, `host` must be an IP address (it is put in the sentence as the address prints), and the repositories must pass what `first_prompt` checks (`local_first_prompt`), so that a name `tsunagiai-mcp` would refuse is refused here, where the app can say it.
@@ -1344,7 +1618,7 @@ pub fn answer(done: Result<Value, Refusal>) -> String {
 
 // ---- the tools ----
 
-fn orca_read(args: &[String]) -> Result<Value, String> {
+pub(crate) fn orca_read(args: &[String]) -> Result<Value, String> {
     orca::call(args, orca::READ_TIMEOUT).map_err(orca::message_of)
 }
 
@@ -1538,13 +1812,13 @@ pub(crate) fn now_ms() -> u64 {
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
-/// A child is launched on the PC of its orchestrator and nowhere else: the orchestrator reaches a child by SendMessage, which reaches only a Claude Code on the same PC. For `tsunagiai-mcp` of a PC that is `local`; another environment is refused with nothing planned, launched or written. The tools that only read take any environment.
+/// A child is launched on the PC of its orchestrator and nowhere else (a Dispatch to a terminal of a saved environment is not made yet, #1236). For `tsunagiai-mcp` of a PC that is `local`; another environment is refused with nothing planned, launched or written. The tools that only read take any environment.
 fn check_children_here(environment: &str) -> Result<(), String> {
     if environment == LOCAL {
         return Ok(());
     }
     Err(format!(
-        "環境「{environment}」には子を置けません。SendMessage は同じ PC の中でしか届かないので、子はリーダーと同じ PC の環境「{LOCAL}」にだけ置けます。他の環境は、formation_environments などで読むだけにしてください"
+        "環境「{environment}」には子を置けません。別の PC の子の起動には、まだ対応していません。子はリーダーと同じ PC の環境「{LOCAL}」にだけ置けます。他の環境は、formation_environments などで読むだけにしてください"
     ))
 }
 
@@ -1754,11 +2028,12 @@ pub fn launch(
     }
     let agent = agent_for(agent, &record, name);
     // The plugin of A-41 is written (replaced as a whole) before anything is made, so that a failure leaves no worktree. A Codex child has none: it reads the prompt alone.
-    let (plugin_dir, hook) = match agent {
+    let (plugin_dir, settings) = match agent {
         FormationAgent::Claude => (
             crate::formation_assets::write_plugin(config)
                 .map_err(|e| Refusal::failed(STEP_PLUGIN, e))?,
-            write_child_hook(config, formation, name).map_err(|e| Refusal::failed(STEP_HOOK, e))?,
+            write_child_settings(config, formation, name)
+                .map_err(|e| Refusal::failed(STEP_SETTINGS, e))?,
         ),
         FormationAgent::Codex => (PathBuf::new(), PathBuf::new()),
     };
@@ -1804,7 +2079,7 @@ pub fn launch(
         agent,
         name,
         &plugin_dir,
-        &hook,
+        &settings,
         environment,
     ))
     .map_err(|e| kept(STEP_TERMINAL, e))?;
@@ -1832,6 +2107,24 @@ pub fn launch(
     })?;
     let recorded = |step: &'static str, e: String| {
         kept(step, e).saying("子は記録に入っているので、formation_close で片付けられます")
+    }; // A Claude Code child is a Dispatch of the formation's Run (#1237): the preamble of the Dispatch goes in front of the first instruction. A Codex child reports by files and is no Dispatch, so that no preamble tells it to talk with orchestration.
+    let dispatched = if talks_by_messages(agent) {
+        Some(
+            dispatch_child(config, formation, name, &handle, environment, &|args| {
+                orca::write(args)
+            })
+            .map_err(|e| recorded(STEP_DISPATCH, e))?,
+        )
+    } else {
+        None
+    };
+    let prompt = match &dispatched {
+        Some(dispatched) if !dispatched.preamble.is_empty() => {
+            let preamble =
+                check_prompt(&dispatched.preamble).map_err(|e| recorded(STEP_DISPATCH, e))?;
+            first_instruction(&preamble, &prompt)
+        }
+        _ => prompt,
     };
     let idle = orca::call(&terminal_wait_args(&handle, environment), IDLE_WAIT_RUN)
         .map_err(orca::message_of)
@@ -1855,6 +2148,8 @@ pub fn launch(
         "paneKey": pane_key,
         "created": created,
         "closedShells": closed,
+        "runId": dispatched.as_ref().map(|d| d.run_id.as_str()),
+        "dispatchId": dispatched.as_ref().map(|d| d.dispatch_id.as_str()),
     }))
 }
 
@@ -2486,9 +2781,14 @@ fn stop_with(
             "「{name}」のターミナルが、Orca の一覧でその子のものと確かめられないので、何も閉じていません。すでに閉じてあるか、Orca の一覧を読めませんでした"
         )));
     }
+    let dispatch = stop_dispatch(config, formation, name, &environment, write);
     write(&terminal_close_args(&launch.handle, &environment))
         .map_err(|e| Refusal::failed(STEP_STOP, e).saying("何も閉じていません"))?;
-    Ok(json!({ "name": name, "path": launch.path, "terminalClosed": true }))
+    let mut done = json!({ "name": name, "path": launch.path, "terminalClosed": true });
+    if let Some(stopped) = dispatch {
+        done["dispatchStopped"] = json!(stopped);
+    }
+    Ok(done)
 }
 
 /// What `inspect_child` found a child to need, with nothing done yet.
@@ -2733,14 +3033,19 @@ fn close_with(
             environment,
             terminal,
         } => {
+            let fenced = terminal
+                .then(|| stop_dispatch(config, formation, name, &environment, write))
+                .flatten();
             let terminal = terminal.then(|| write(&terminal_close_args(&handle, &environment)));
             dropped().map_err(|e| Refusal::from(e).saying("記録から外せませんでした"))?;
-            Ok(json!({
+            let mut done = json!({
                 "name": name,
                 "path": path,
                 "worktreeGone": true,
                 "terminalClosed": terminal.is_some_and(|t| t.is_ok()),
-            }))
+            });
+            finish_dispatch(config, formation, name, fenced, &mut done);
+            Ok(done)
         }
         Closing::Detach {
             handle,
@@ -2748,13 +3053,18 @@ fn close_with(
             terminal,
         } => {
             // The owner may have closed the tab already: the entry is dropped all the same.
+            let fenced = terminal
+                .then(|| stop_dispatch(config, formation, name, &environment, write))
+                .flatten();
             let terminal = terminal.then(|| write(&terminal_close_args(&handle, &environment)));
             dropped().map_err(|e| Refusal::from(e).saying("記録から外せませんでした"))?;
-            Ok(json!({
+            let mut done = json!({
                 "name": name,
                 "folderKept": true,
                 "terminalClosed": terminal.is_some_and(|t| t.is_ok()),
-            }))
+            });
+            finish_dispatch(config, formation, name, fenced, &mut done);
+            Ok(done)
         }
         Closing::Remove {
             path,
@@ -2772,6 +3082,7 @@ fn close_with(
                 .with("child", holder));
             }
             // The owner may have closed the tab already: the worktree is removed all the same.
+            let fenced = stop_dispatch(config, formation, name, &environment, write);
             let terminal = write(&terminal_close_args(&handle, &environment));
             let removed = write(&worktree_rm_args(
                 &path,
@@ -2788,6 +3099,7 @@ fn close_with(
                 "path": path,
                 "terminalClosed": terminal.is_ok(),
             });
+            finish_dispatch(config, formation, name, fenced, &mut done);
             if let Some(branch) = preserved_branch(&removed) {
                 done["preservedBranch"] = json!(branch);
             }
@@ -4112,7 +4424,7 @@ pub(crate) fn environment_gone_now(environment: &str) -> bool {
     environment_gone(&orca_read, environment)
 }
 
-/// A formation's name must not be one of the existing formations, and not the name of a child of any formation: a child's name is the address of its SendMessage, and a formation's name is the session name of its orchestrator.
+/// A formation's name must not be one of the existing formations, and not the name of a child of any formation: a child's name is the name of its session, and a formation's name is the session name of its orchestrator.
 fn check_formation_name(
     name: &str,
     formations: &[String],
@@ -4126,7 +4438,7 @@ fn check_formation_name(
         .find(|(_, children)| children.iter().any(|c| c.name == name))
     {
         return Err(format!(
-            "「{name}」はフォーメーション「{owner}」の子の名前です。SendMessage の宛先が決まらなくなるので、別の名前にしてください"
+            "「{name}」はフォーメーション「{owner}」の子の名前です。名前が重なって、どの子か決まらなくなるので、別の名前にしてください"
         ));
     }
     Ok(())
@@ -4165,6 +4477,7 @@ fn create_with(
         projects,
         created_at: Some(created_at),
         orchestrator_terminal: None,
+        ..Meta::default()
     };
     let written = serde_json::to_string_pretty(&meta)
         .map_err(|e| e.to_string())
@@ -5708,7 +6021,7 @@ mod tests {
                 FormationAgent::Claude,
                 "web-2",
                 Path::new("/c/formation-plugin"),
-                Path::new("/c/formations/f/message-hook-web-2.json"),
+                Path::new("/c/formations/f/settings-web-2.json"),
                 "local"
             ),
             [
@@ -5719,7 +6032,7 @@ mod tests {
                 "--title",
                 "web-2",
                 "--command",
-                "claude -n web-2 --permission-mode auto --effort medium --plugin-dir '/c/formation-plugin' --settings '/c/formations/f/message-hook-web-2.json'",
+                "claude -n web-2 --permission-mode auto --effort medium --plugin-dir '/c/formation-plugin' --settings '/c/formations/f/settings-web-2.json'",
                 "--json",
                 "--environment=local"
             ]
@@ -5790,24 +6103,20 @@ mod tests {
     }
 
     #[test]
-    fn the_hook_of_a_child_is_written_in_the_folder_of_its_formation_for_that_child() {
+    fn the_settings_of_a_child_are_written_in_the_folder_of_its_formation_for_that_child() {
         let config = std::env::temp_dir().join(format!(
-            "tsunagiai-child-hook-{}-{}",
+            "tsunagiai-child-settings-{}-{}",
             std::process::id(),
             now_ms()
         ));
-        let path = write_child_hook(&config, "api-work", "web-2").unwrap();
+        let path = write_child_settings(&config, "api-work", "web-2").unwrap();
+        assert_eq!(path, dir(&config, "api-work").join("settings-web-2.json"));
+        // Only the permissions for the Figma server: no hook records the messages (#1238).
+        let settings: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
-            path,
-            dir(&config, "api-work").join("message-hook-web-2.json")
-        );
-        let hook: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        let command = hook["hooks"]["PostToolUse"][0]["hooks"][0]["command"]
-            .as_str()
-            .unwrap();
-        assert!(
-            command.ends_with(" --formation-message api-work --from web-2"),
-            "{command}"
+            settings,
+            json!({"permissions": crate::formation_assets::figma_permissions()})
         );
         std::fs::remove_dir_all(&config).unwrap();
     }
@@ -5815,8 +6124,8 @@ mod tests {
     #[test]
     fn a_codex_child_is_started_with_its_sandbox_and_no_plugin_or_name_flag() {
         let plugin = Path::new("/c/formation-plugin");
-        let hook = Path::new("/c/formations/f/message-hook-web-2.json");
-        let command = child_command(FormationAgent::Codex, "web-2", plugin, hook);
+        let settings = Path::new("/c/formations/f/settings-web-2.json");
+        let command = child_command(FormationAgent::Codex, "web-2", plugin, settings);
         assert_eq!(
             command,
             "codex --sandbox workspace-write --ask-for-approval never"
@@ -5831,7 +6140,7 @@ mod tests {
             FormationAgent::Codex,
             "web-2",
             plugin,
-            hook,
+            settings,
             "local",
         );
         // Its title is the child's name, and its command is the one above.
@@ -5900,26 +6209,26 @@ mod tests {
     }
 
     #[test]
-    fn the_command_of_a_child_passes_the_plugin_folder_and_the_hook_as_quoted_words() {
-        let hook = Path::new("/c/formations/f/message-hook-web-2.json");
+    fn the_command_of_a_child_passes_the_plugin_folder_and_the_settings_as_quoted_words() {
+        let settings = Path::new("/c/formations/f/settings-web-2.json");
         assert_eq!(
             child_command(
                 FormationAgent::Claude,
                 "web-2",
                 Path::new("/c/formation-plugin"),
-                hook
+                settings
             ),
-            "claude -n web-2 --permission-mode auto --effort medium --plugin-dir '/c/formation-plugin' --settings '/c/formations/f/message-hook-web-2.json'"
+            "claude -n web-2 --permission-mode auto --effort medium --plugin-dir '/c/formation-plugin' --settings '/c/formations/f/settings-web-2.json'"
         );
         // A folder with a space or a quote stays one word.
         assert!(child_command(
             FormationAgent::Claude,
             "web-2",
             Path::new("/c/it's here/formation-plugin"),
-            Path::new("/c/it's here/hook.json")
+            Path::new("/c/it's here/settings.json")
         )
         .ends_with(
-            r"--plugin-dir '/c/it'\''s here/formation-plugin' --settings '/c/it'\''s here/hook.json'"
+            r"--plugin-dir '/c/it'\''s here/formation-plugin' --settings '/c/it'\''s here/settings.json'"
         ));
     }
 
@@ -5935,7 +6244,7 @@ mod tests {
                 FormationAgent::Claude,
                 "web-2",
                 Path::new("/c/formation-plugin"),
-                Path::new("/c/hook.json"),
+                Path::new("/c/settings.json"),
                 environment,
             ),
             terminal_wait_args("term_1", environment),
@@ -6888,6 +7197,243 @@ mod tests {
         assert_eq!(rows, [true, false]);
         // A planned child is drawn as before.
         assert!(child_row(&planned("p", "x"), LOCAL, None).created);
+    }
+
+    /// A stand-in Orca for the orchestration: it records the calls, and answers as `orca orchestration` does (the `result` of its JSON).
+    fn orchestration_orca(calls: &Calls, args: &[String]) -> Result<Value, String> {
+        calls.run(args)?;
+        Ok(match args[1].as_str() {
+            "run-create" => json!({"runId": "run_1"}),
+            "task-create" => json!({"taskId": "task_1", "status": "ready"}),
+            "dispatch" => json!({
+                "dispatch": {"id": "ctx_1", "status": "dispatched"},
+                "injected": false,
+                "preamble": "check with orca orchestration check"
+            }),
+            _ => json!({}),
+        })
+    }
+
+    #[test]
+    fn the_children_of_a_formation_are_dispatches_of_one_run() {
+        let config = temp_dir("dispatch");
+        std::fs::create_dir_all(dir(&config, F)).unwrap();
+        let orca = Calls::new();
+        let write = |args: &[String]| orchestration_orca(&orca, args);
+        let dispatched = dispatch_child(&config, F, "a", "term_a", LOCAL, &write).unwrap();
+        assert_eq!(dispatched.preamble, "check with orca orchestration check");
+        // The leader's addresses: the Run and the child's Dispatch.
+        assert_eq!(
+            (dispatched.run_id.as_str(), dispatched.dispatch_id.as_str()),
+            ("run_1", "ctx_1")
+        );
+        dispatch_child(&config, F, "b", "term_b", LOCAL, &write).unwrap();
+        // One Run for both; a task and a Dispatch for each.
+        assert_eq!(
+            orca.names(),
+            [
+                "orchestration run-create",
+                "orchestration task-create",
+                "orchestration dispatch",
+                "orchestration task-create",
+                "orchestration dispatch",
+            ]
+        );
+        let calls = orca.0.borrow();
+        assert_eq!(calls[0], run_create_args(F, LOCAL));
+        assert_eq!(calls[1], task_create_args("run_1", F, "a", LOCAL));
+        // The Dispatch is to the child's own terminal, takes no `--inject` and asks for the preamble.
+        assert_eq!(calls[2], dispatch_args("run_1", "task_1", "term_a", LOCAL));
+        assert!(calls[2].contains(&"--return-preamble".to_owned()));
+        assert!(!calls[2].contains(&"--inject".to_owned()));
+        assert!(calls[2].contains(&"--environment=local".to_owned()));
+        let meta = read_meta(&config, F).unwrap();
+        assert_eq!(meta.run_id.as_deref(), Some("run_1"));
+        assert_eq!(meta.dispatches["a"], "ctx_1");
+        assert_eq!(meta.dispatches["b"], "ctx_1");
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn an_id_that_orca_gave_is_checked_before_it_is_kept_or_used() {
+        assert!(check_orca_id("ctx_a216846d92ef").is_ok());
+        for bad in ["", "a b", "--run=x", "-x", "ctx/1", &"x".repeat(65)] {
+            assert!(check_orca_id(bad).is_err(), "{bad}");
+        }
+        let config = temp_dir("dispatch-bad-id");
+        std::fs::create_dir_all(dir(&config, F)).unwrap();
+        let err = ensure_run(&config, F, LOCAL, &|_| Ok(json!({"runId": "run 1"}))).unwrap_err();
+        assert!(err.contains("id が正しくありません"));
+        assert_eq!(read_meta(&config, F).unwrap().run_id, None);
+        let err = ensure_run(&config, F, LOCAL, &|_| Ok(json!({}))).unwrap_err();
+        assert!(err.contains("runId"));
+        assert!(dispatch_of(&json!({"dispatch": {}})).is_err());
+        assert!(dispatch_of(&json!({"dispatch": {"id": "ctx 1"}})).is_err());
+        // No preamble is no text, not an error.
+        assert_eq!(
+            dispatch_of(&json!({"dispatch": {"id": "ctx_1"}})).unwrap(),
+            ("ctx_1".to_owned(), String::new())
+        );
+        // The full record of `--full` is read too.
+        assert_eq!(
+            orca_id_of(&json!({"task": {"id": "task_9"}}), "taskId", "task").unwrap(),
+            "task_9"
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_failure_of_the_run_or_the_dispatch_keeps_nothing_it_did_not_make() {
+        let config = temp_dir("dispatch-fails");
+        std::fs::create_dir_all(dir(&config, F)).unwrap();
+        let err = dispatch_child(&config, F, "a", "term_a", LOCAL, &|_| {
+            Err("orca is down".into())
+        })
+        .unwrap_err();
+        assert_eq!(err, "orca is down");
+        let orca = Calls::new();
+        let fail_dispatch = |args: &[String]| {
+            if args[1] == "dispatch" {
+                orca.run(args)?;
+                Err("not accepted".to_owned())
+            } else {
+                orchestration_orca(&orca, args)
+            }
+        };
+        assert!(dispatch_child(&config, F, "a", "term_a", LOCAL, &fail_dispatch).is_err());
+        // The Run was made and is kept for the next child; the child has no Dispatch.
+        let meta = read_meta(&config, F).unwrap();
+        assert_eq!(meta.run_id.as_deref(), Some("run_1"));
+        assert!(meta.dispatches.is_empty());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn only_a_claude_code_child_is_a_dispatch_that_talks_by_messages() {
+        assert!(talks_by_messages(FormationAgent::Claude));
+        assert!(!talks_by_messages(FormationAgent::Codex));
+    }
+
+    #[test]
+    fn the_inbox_asks_for_the_newest_rows_of_the_run() {
+        let args = inbox_args("run_1", 50, LOCAL);
+        assert!(args.contains(&"--limit=50".to_owned()));
+        assert!(args.contains(&"--run=run_1".to_owned()));
+        assert!(args.contains(&"--full".to_owned()));
+    }
+
+    #[test]
+    fn the_preamble_goes_before_the_first_instruction() {
+        assert_eq!(first_instruction("", "do it"), "do it");
+        assert_eq!(
+            first_instruction("use check", "do it"),
+            "use check\n\ndo it"
+        );
+    }
+
+    #[test]
+    fn a_stopped_child_has_its_dispatch_fenced_before_its_terminal_is_closed() {
+        let config = temp_dir("stop-dispatch");
+        let there = temp_dir("stop-dispatch-there");
+        std::fs::create_dir_all(&there).unwrap();
+        let path = there.to_string_lossy().into_owned();
+        recorded(&config, &path, "term_a", "me/a");
+        update_meta(&config, F, |m| {
+            m.dispatches.insert("a".into(), "ctx_1".into());
+        })
+        .unwrap();
+        let listed = json!({"worktrees": [{"path": path, "isMainWorktree": false, "agents": [{"paneKey": "tab-a:leaf"}]}]});
+        let orca = Calls::new();
+        let done = stop_with(&config, F, "a", &|_| Ok(listed.clone()), &|args| {
+            orca.run(args)
+        })
+        .unwrap();
+        assert_eq!(done["dispatchStopped"], true);
+        assert_eq!(
+            orca.names(),
+            ["orchestration worker-stop", "terminal close"]
+        );
+        assert_eq!(orca.0.borrow()[0], worker_stop_args("ctx_1", LOCAL));
+        // The child stays in the record, and so does its Dispatch.
+        assert_eq!(read_meta(&config, F).unwrap().dispatches["a"], "ctx_1");
+        // A worker-stop that fails does not keep the terminal open.
+        let orca = Calls::new();
+        let done = stop_with(&config, F, "a", &|_| Ok(listed.clone()), &|args| {
+            orca.run(args)?;
+            if args[1] == "worker-stop" {
+                Err("fenced already".into())
+            } else {
+                Ok(json!({}))
+            }
+        })
+        .unwrap();
+        assert_eq!(done["terminalClosed"], true);
+        assert_eq!(done["dispatchStopped"], false);
+        std::fs::remove_dir_all(&config).unwrap();
+        std::fs::remove_dir_all(&there).unwrap();
+    }
+
+    #[test]
+    fn a_closed_child_has_its_dispatch_fenced_and_forgotten() {
+        let config = temp_dir("close-dispatch");
+        let there = temp_dir("close-dispatch-there");
+        std::fs::create_dir_all(&there).unwrap();
+        let path = there.to_string_lossy().into_owned();
+        let listed = json!({"worktrees": [{"path": path, "isMainWorktree": false, "agents": [{"paneKey": "tab-a:leaf"}]}]});
+        recorded_in_folder(&config, &path, "term_a");
+        update_meta(&config, F, |m| {
+            m.dispatches.insert("a".into(), "ctx_1".into());
+            m.dispatches.insert("other".into(), "ctx_2".into());
+        })
+        .unwrap();
+        let orca = Calls::new();
+        let done = close_with(
+            &config,
+            F,
+            "a",
+            None,
+            &|_| Ok(listed.clone()),
+            &|args| orca.run(args),
+            &no_remote_git,
+        )
+        .unwrap();
+        assert_eq!(done["dispatchStopped"], true);
+        assert_eq!(
+            orca.names(),
+            ["orchestration worker-stop", "terminal close"]
+        );
+        let meta = read_meta(&config, F).unwrap();
+        assert_eq!(meta.dispatches.keys().collect::<Vec<_>>(), ["other"]);
+        // A child with no Dispatch (launched before the Run) closes as it did, and the answer has no key for it.
+        recorded_in_folder(&config, &path, "term_a");
+        let orca = Calls::new();
+        let done = close_with(
+            &config,
+            F,
+            "a",
+            None,
+            &|_| Ok(listed.clone()),
+            &|args| orca.run(args),
+            &no_remote_git,
+        )
+        .unwrap();
+        assert!(done.get("dispatchStopped").is_none());
+        assert_eq!(orca.names(), ["terminal close"]);
+        std::fs::remove_dir_all(&config).unwrap();
+        std::fs::remove_dir_all(&there).unwrap();
+    }
+
+    #[test]
+    fn a_dispatch_in_a_record_that_is_no_orca_id_is_not_used() {
+        let config = temp_dir("dispatch-record");
+        std::fs::create_dir_all(dir(&config, F)).unwrap();
+        update_meta(&config, F, |m| {
+            m.dispatches.insert("a".into(), "--all".into());
+        })
+        .unwrap();
+        assert_eq!(dispatch_id_of(&config, F, "a"), None);
+        assert_eq!(dispatch_id_of(&config, F, "nobody"), None);
+        std::fs::remove_dir_all(&config).unwrap();
     }
 
     #[test]
@@ -12483,7 +13029,7 @@ mod tests {
         assert_eq!(check_children_here(LOCAL), Ok(()));
         let err = check_children_here("mac-studio").unwrap_err();
         assert!(
-            err.contains("環境「mac-studio」") && err.contains("SendMessage"),
+            err.contains("環境「mac-studio」") && err.contains("まだ対応していません"),
             "{err}"
         );
         // Nothing is read or written: the refusal is first, and the record stays as it was.
@@ -12500,7 +13046,7 @@ mod tests {
             ],
         )
         .unwrap_err();
-        assert!(err.error.contains("SendMessage"), "{}", err.error);
+        assert!(err.error.contains("まだ対応していません"), "{}", err.error);
         assert!(!dir(&config, "alpha").exists());
         let err = launch(
             &config,
@@ -12513,7 +13059,7 @@ mod tests {
             "go",
         )
         .unwrap_err();
-        assert!(err.error.contains("SendMessage"), "{}", err.error);
+        assert!(err.error.contains("まだ対応していません"), "{}", err.error);
         assert!(!dir(&config, "alpha").exists());
     }
 
