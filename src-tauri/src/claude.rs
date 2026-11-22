@@ -421,13 +421,21 @@ pub(crate) fn locations(home: Option<PathBuf>, windows: bool) -> Vec<PathBuf> {
         .collect()
 }
 
-/// `plan` of `claude auth status` as shown to the user: `max` is "Max".
+/// `subscriptionType` of `claude auth status` as shown to the user: `max` is "Max". `parse_status` turns Max 20x into "Ultra" first.
 fn plan_label(plan: &str) -> String {
     let mut chars = plan.trim().chars();
     chars
         .next()
         .map(|c| c.to_uppercase().chain(chars).collect())
         .unwrap_or_default()
+}
+
+/// Max 20x (`planTier` `max_20x`) is Ultra since Anthropic renamed the plans (2026-10-30); `subscriptionType` `ultra` is Ultra too.
+fn plan_name(subscription_type: &str, plan_tier: &str) -> String {
+    if plan_tier.trim() == "max_20x" || subscription_type.trim().eq_ignore_ascii_case("ultra") {
+        return "Ultra".to_owned();
+    }
+    plan_label(subscription_type)
 }
 
 /// The version of `claude --version` (`2.1.314 (Claude Code)`).
@@ -444,7 +452,10 @@ fn parse_status(out: &str, version: String) -> Result<Claude, String> {
     }
     Ok(Claude::Ready {
         email: status["email"].as_str().unwrap_or_default().to_owned(),
-        plan: plan_label(status["subscriptionType"].as_str().unwrap_or_default()),
+        plan: plan_name(
+            status["subscriptionType"].as_str().unwrap_or_default(),
+            status["planTier"].as_str().unwrap_or_default(),
+        ),
         version,
         method: Method::Subscription,
     })
@@ -1972,6 +1983,34 @@ mod tests {
         assert_eq!(plan_label("max"), "Max");
         assert_eq!(plan_label(" pro "), "Pro");
         assert_eq!(plan_label(""), "");
+    }
+
+    #[test]
+    fn max_20x_and_ultra_are_ultra() {
+        assert_eq!(plan_name("max", "max_20x"), "Ultra");
+        assert_eq!(plan_name("ultra", ""), "Ultra");
+        assert_eq!(plan_name("max", "max_5x"), "Max");
+        assert_eq!(plan_name("max", ""), "Max");
+        assert_eq!(plan_name("pro", ""), "Pro");
+    }
+
+    #[test]
+    fn a_max_20x_status_shows_ultra() {
+        let out = r#"{"loggedIn":true,"email":"a@example.com","subscriptionType":"max","planTier":"max_20x"}"#;
+        assert_eq!(
+            parse_status(out, "2.1.314".into()),
+            Ok(Claude::Ready {
+                email: "a@example.com".into(),
+                plan: "Ultra".into(),
+                version: "2.1.314".into(),
+                method: Method::Subscription
+            })
+        );
+        let out = r#"{"loggedIn":true,"email":"a@example.com","subscriptionType":"max","planTier":"max_5x"}"#;
+        assert!(matches!(
+            parse_status(out, "2.1.314".into()),
+            Ok(Claude::Ready { plan, .. }) if plan == "Max"
+        ));
     }
 
     #[test]
