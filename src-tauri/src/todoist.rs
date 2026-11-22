@@ -1261,6 +1261,130 @@ fn build_todo<Tz: TimeZone>(
     }
 }
 
+/// A stretch of a text that a search word hit, counted in UTF-16 code units (what a JS string counts), so the screen can cut the text with `slice`.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct HitSpan {
+    start: u32,
+    end: u32,
+}
+
+/// A task a search found, with where the words hit (T-9), to color them.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct TaskHit {
+    task: TaskItem,
+    /// The name of the project the task is in; empty when the project is not known.
+    project: String,
+    /// The hits in `task.content`, in order and apart from each other.
+    name: Vec<HitSpan>,
+    /// The hits in `task.description`.
+    description: Vec<HitSpan>,
+    /// The hits in each of `task.labels`, one list for each label, in the same order.
+    labels: Vec<Vec<HitSpan>>,
+}
+
+/// `text` in lower case, one entry for each lower-case character with the UTF-16 range of the character it came from.
+fn fold(text: &str) -> Vec<(char, u32, u32)> {
+    let mut at = 0;
+    let mut folded = Vec::new();
+    for c in text.chars() {
+        let end = at + c.len_utf16() as u32;
+        folded.extend(c.to_lowercase().map(|l| (l, at, end)));
+        at = end;
+    }
+    folded
+}
+
+/// Where `word` (folded, not empty) occurs in `text`, apart from each other.
+fn word_spans(text: &[(char, u32, u32)], word: &[char]) -> Vec<HitSpan> {
+    let mut spans = Vec::new();
+    let mut i = 0;
+    while i + word.len() <= text.len() {
+        if text[i..i + word.len()]
+            .iter()
+            .map(|f| f.0)
+            .eq(word.iter().copied())
+        {
+            spans.push(HitSpan {
+                start: text[i].1,
+                end: text[i + word.len() - 1].2,
+            });
+            i += word.len();
+        } else {
+            i += 1;
+        }
+    }
+    spans
+}
+
+/// Puts the spans in order and joins those that overlap or touch.
+fn merge_spans(mut spans: Vec<HitSpan>) -> Vec<HitSpan> {
+    spans.sort_by_key(|s| (s.start, s.end));
+    let mut merged: Vec<HitSpan> = Vec::new();
+    for s in spans {
+        match merged.last_mut() {
+            Some(last) if s.start <= last.end => last.end = last.end.max(s.end),
+            _ => merged.push(s),
+        }
+    }
+    merged
+}
+
+/// The tasks of `todo` whose name, description or labels hold every word of `query` (words are split at white space; capitals do not matter),
+/// in the order of `todo`. A word may hit in any of the three; a query with no word finds nothing.
+fn search_todo(todo: &Todo, query: &str) -> Vec<TaskHit> {
+    let words: Vec<Vec<char>> = query
+        .split_whitespace()
+        .map(|w| fold(w).into_iter().map(|f| f.0).collect())
+        .collect();
+    if words.is_empty() {
+        return Vec::new();
+    }
+    let projects: HashMap<&str, &str> = todo
+        .projects
+        .iter()
+        .map(|p| (p.id.as_str(), p.name.as_str()))
+        .collect();
+    todo.tasks
+        .iter()
+        .filter_map(|t| {
+            // The name, the description, then the labels.
+            let texts: Vec<_> = [t.content.as_str(), t.description.as_str()]
+                .into_iter()
+                .chain(t.labels.iter().map(String::as_str))
+                .map(fold)
+                .collect();
+            let mut spans: Vec<Vec<HitSpan>> = vec![Vec::new(); texts.len()];
+            for word in &words {
+                let mut hit = false;
+                for (text, spans) in texts.iter().zip(&mut spans) {
+                    let found = word_spans(text, word);
+                    hit |= !found.is_empty();
+                    spans.extend(found);
+                }
+                if !hit {
+                    return None;
+                }
+            }
+            let mut spans = spans.into_iter().map(merge_spans);
+            Some(TaskHit {
+                task: t.clone(),
+                project: projects
+                    .get(t.project_id.as_str())
+                    .map(|name| (*name).to_owned())
+                    .unwrap_or_default(),
+                name: spans.next().unwrap_or_default(),
+                description: spans.next().unwrap_or_default(),
+                labels: spans.collect(),
+            })
+        })
+        .collect()
+}
+
 /// What the commands keep in memory: the token, so the keychain is read once, and the last completed tasks, which a load after an operation reuses.
 #[derive(Default)]
 pub struct TodoistState {
@@ -1642,6 +1766,30 @@ pub async fn todoist_cached(app: AppHandle) -> Result<Option<Todo>, String> {
         rebucket(&mut todo, Local::now().date_naive(), &Local);
         todo
     }))
+}
+
+/// Searches the active tasks the last `todoist_load` left in memory for the words of `query` (T-9); asks Todoist nothing. Empty until a load, and for a query with no word.
+#[tauri::command]
+pub async fn todoist_search(
+    state: State<'_, TodoistState>,
+    query: String,
+) -> Result<Vec<TaskHit>, String> {
+    if query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let todo = {
+        let sync = state.sync.lock().await;
+        let done = Arc::clone(&state.done.lock().unwrap());
+        build_todo(
+            sync.projects.clone(),
+            sync.labels.clone(),
+            sync.tasks.clone(),
+            &done,
+            Local::now().date_naive(),
+            &Local,
+        )
+    };
+    Ok(search_todo(&todo, &query))
 }
 
 /// Whether a token is stored. Asks Todoist nothing, so a settings screen can show it at once.
@@ -4925,5 +5073,125 @@ mod tests {
         assert_eq!(tasks[1]["id"], "k2");
         assert_eq!(tasks[1]["parentId"], "k1");
         assert_eq!(tasks[1]["due"], Value::Null);
+    }
+
+    fn search_todo_of(tasks: Vec<ApiTask>) -> Todo {
+        build_todo(
+            vec![
+                project("P1", "仕事", "charcoal", false, 0),
+                project("P2", "Home", "charcoal", false, 1),
+            ],
+            vec![],
+            tasks,
+            &[],
+            date("2026-10-29"),
+            &jst(),
+        )
+    }
+
+    fn span(start: u32, end: u32) -> HitSpan {
+        HitSpan { start, end }
+    }
+
+    #[test]
+    fn a_search_hits_the_name_the_description_and_the_labels_without_regard_to_capitals() {
+        let todo = search_todo_of(vec![
+            task(json!({"id": "a", "project_id": "P1", "content": "Pay the Invoice"})),
+            task(
+                json!({"id": "b", "project_id": "P2", "content": "x", "description": "the invoice is late"}),
+            ),
+            task(json!({"id": "c", "content": "y", "labels": ["urgent", "INVOICE-2"]})),
+            task(json!({"id": "d", "content": "unrelated", "description": "none"})),
+        ]);
+        let hits = search_todo(&todo, "invoice");
+        let ids: Vec<_> = hits.iter().map(|h| h.task.id.as_str()).collect();
+        assert_eq!(ids, ["a", "b", "c"]);
+        assert_eq!(hits[0].name, [span(8, 15)]);
+        assert_eq!(hits[0].description, []);
+        assert_eq!(hits[1].name, []);
+        assert_eq!(hits[1].description, [span(4, 11)]);
+        assert_eq!(hits[2].labels, [vec![], vec![span(0, 7)]]);
+    }
+
+    #[test]
+    fn a_search_names_the_project_of_each_hit() {
+        let todo = search_todo_of(vec![
+            task(json!({"id": "a", "project_id": "P1", "content": "請求書"})),
+            task(json!({"id": "b", "project_id": "P2", "content": "請求書"})),
+            task(json!({"id": "c", "project_id": "gone", "content": "請求書"})),
+        ]);
+        let projects: Vec<_> = search_todo(&todo, "請求")
+            .into_iter()
+            .map(|h| h.project)
+            .collect();
+        assert_eq!(projects, ["仕事", "Home", ""]);
+    }
+
+    #[test]
+    fn a_search_needs_every_word_but_each_may_hit_in_another_field() {
+        let todo = search_todo_of(vec![
+            task(json!({"id": "a", "content": "請求書を送る", "description": "田中さん宛"})),
+            task(json!({"id": "b", "content": "請求書を送る"})),
+            task(json!({"id": "c", "content": "田中さんに電話", "labels": ["請求書"]})),
+        ]);
+        // The ideographic space splits the words too.
+        for query in ["請求書 田中", "田中　請求書"] {
+            let ids: Vec<_> = search_todo(&todo, query)
+                .into_iter()
+                .map(|h| h.task.id)
+                .collect();
+            assert_eq!(ids, ["a", "c"], "{query}");
+        }
+    }
+
+    #[test]
+    fn a_search_with_no_word_or_no_hit_finds_nothing() {
+        let todo = search_todo_of(vec![task(json!({"id": "a", "content": "請求書"}))]);
+        assert!(search_todo(&todo, "").is_empty());
+        assert!(search_todo(&todo, " \u{3000}\t").is_empty());
+        assert!(search_todo(&todo, "領収書").is_empty());
+        assert!(search_todo(&search_todo_of(vec![]), "請求").is_empty());
+    }
+
+    #[test]
+    fn spans_count_utf16_units_so_a_text_can_be_cut_by_them() {
+        // The emoji is two units, so the hit starts at 3 although it is the third character.
+        let todo = search_todo_of(vec![task(json!({"id": "a", "content": "😀 abc ABC"}))]);
+        let hit = &search_todo(&todo, "abc")[0];
+        assert_eq!(hit.name, [span(3, 6), span(7, 10)]);
+        let units: Vec<u16> = hit.task.content.encode_utf16().collect();
+        assert_eq!(String::from_utf16(&units[3..6]).unwrap(), "abc");
+    }
+
+    #[test]
+    fn spans_of_words_that_overlap_or_touch_are_joined_and_the_repeats_are_apart() {
+        let todo = search_todo_of(vec![task(json!({"id": "a", "content": "aaaa abcd"}))]);
+        assert_eq!(search_todo(&todo, "aa")[0].name, [span(0, 4)]);
+        assert_eq!(search_todo(&todo, "ab bc")[0].name, [span(5, 8)]);
+        assert_eq!(search_todo(&todo, "ab cd")[0].name, [span(5, 9)]);
+    }
+
+    #[test]
+    fn a_subtask_row_is_found_with_its_parent_and_a_completed_one_is_not() {
+        let todo = {
+            let parent = task(json!({"id": "p", "content": "引っ越し"}));
+            let sub = task(json!({"id": "s", "parent_id": "p", "content": "電気の手続き"}));
+            let done = task(json!({"id": "d", "parent_id": "p", "content": "ガスの手続き"}));
+            build_todo(
+                vec![],
+                vec![],
+                vec![parent, sub],
+                &[done],
+                date("2026-10-29"),
+                &jst(),
+            )
+        };
+        let hits = search_todo(&todo, "手続き");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].task.id, "s");
+        assert_eq!(
+            hits[0].task.parent.as_ref().map(|p| p.id.as_str()),
+            Some("p")
+        );
     }
 }
