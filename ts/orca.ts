@@ -81,8 +81,12 @@ let mix: Lists = { rows: [], worktrees: [], projects: [], terminals: [] };
 type Scope = "full" | "screen" | "badge";
 // The sidebar button's count: the agents that wait for the user, and the notices (see `track`). The rows held, or what a read for the count alone found.
 let waitingCount = 0;
-// The rows that work now (group `working`, with a status that says so). A failed read cannot say that any does, so it clears them: the sidebar icon turns yellow and fades while there is one (see `track`).
+// The rows of the target that work now (group `working`, with a status that says so). A failed read cannot say that any does, so it clears them: the sidebar icon turns yellow and fades while there is one (see `track`).
 let workingCount = 0;
+// The rows of this machine that work now while a saved environment is the target (A-33): they mark the icon and are in its label, and are not in the count of the waiting ones or in the notices. A read of this machine that failed has none.
+let hereWorking = 0;
+const isWorking = (r: OrcaRow) => r.group === "working" && (r.status === "working" || r.status === "monitoring");
+const workingOf = (read: OrcaLocal | null | undefined) => (read?.state === "ready" ? read.rows.filter(isWorking).length : 0);
 // The notices: the panes of the stopped agents (done, failed or interrupted) that changed while the app ran and have not been shown on this screen yet.
 const notified = new Set<string>();
 // The panes that were stopped when last seen (a pane that left the list stays here, so one that comes back stopped is not noticed again), and whether a read of the target was taken as the base (its rows are never noticed).
@@ -179,8 +183,7 @@ const viewedPane = () => {
 // or that first appeared in a later read already stopped (a pane seen stopped before is never new, even after it left the list and came back). A notice goes when the agent runs again, leaves the list, or its session is shown. A row with no pane cannot be opened, so it has no notice.
 function track(rows: OrcaRow[]) {
   waitingCount = rows.filter((r) => r.group === "waiting").length;
-  const working = rows.filter((r) => r.group === "working" && (r.status === "working" || r.status === "monitoring"));
-  workingCount = working.length;
+  workingCount = rows.filter(isWorking).length;
   const live = new Set<string>();
   for (const r of rows) {
     if (r.paneKey === null) continue;
@@ -356,8 +359,9 @@ function drawBadge() {
   setNavCount("nav-orca", waiting, "開発", "確認待ち");
   // The number that work is not drawn: the button's icon is yellow and fades, and the label says it (read aloud, and in the tooltip on hover).
   const nav = $("nav-orca");
-  nav.classList.toggle("working", workingCount > 0);
-  const parts = [...(waiting > 0 ? [`確認待ち ${waiting} 件`] : []), ...(workingCount > 0 ? [`作業中 ${workingCount} 件`] : [])];
+  const working = workingCount + hereWorking;
+  nav.classList.toggle("working", working > 0);
+  const parts = [...(waiting > 0 ? [`確認待ち ${waiting} 件`] : []), ...(working > 0 ? [`作業中 ${working} 件`] : [])];
   nav.setAttribute("aria-label", parts.length === 0 ? "開発" : `開発（${parts.join("、")}）`);
 }
 
@@ -1020,7 +1024,7 @@ function adopt(read: OrcaOverview) {
   // A target that changed (the saved one is gone, or the file was changed): the notices and the base of the old one are not the new one's.
   if (view !== null && next.target !== view.target) forgetNotices();
   view = keep ? { ...next, rows: view!.rows, worktrees: view!.worktrees, projects: view!.projects, terminals: view!.terminals } : next;
-  // The count and the notices are the target's alone (A-6): `view` holds the target's lists, and this machine's, beside them, are not tracked.
+  // The count of the waiting ones and the notices are the target's alone (A-6): `view` holds the target's lists, and this machine's, beside them, are not tracked (only its working rows mark the icon, `hereWorking`).
   if (view.state === "ready") track(view.rows);
   else if (view.state === "missing") forgetNotices();
   else workingCount = 0;
@@ -1037,6 +1041,7 @@ function adoptHere(read: OrcaLocal | null | undefined) {
     here = read.state === "ready" ? read : { ...read, rows: here?.rows ?? [], worktrees: here?.worktrees ?? [], projects: here?.projects ?? [], terminals: here?.terminals ?? [] };
     hereTry = Date.now();
   }
+  hereWorking = workingOf(here);
   remix();
 }
 
@@ -1274,6 +1279,8 @@ async function load(scope: Scope, force = false) {
   if (scope === "badge" && next.state !== "missing") {
     if (next.state === "ready") track(next.rows);
     else workingCount = 0;
+    // The read for the count carries this machine's rows beside a saved environment's; one that has none (the stream of this machine gives them, or this machine is the target) leaves what is held.
+    if (next.local && !localStreaming()) hereWorking = workingOf(next.local);
     drawBadge();
     return;
   }
