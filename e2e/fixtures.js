@@ -88,6 +88,8 @@ const answers = {
   database_disconnect: null,
   // No orca command: the Orca screen reads once and stops.
   orca_overview: { state: "missing", message: "", target: null, environments: [], rows: [], worktrees: [], projects: [], terminals: [], known: true },
+  // A-8: no title fixed; a spec that checks the pin mocks `orca_titles`.
+  orca_titles: {},
   orca_destination: { state: "missing", message: "", target: null, environments: [], rows: [], worktrees: [], projects: [], terminals: [], known: false },
   // The terminals of the Orca screen (A-8, A-12): this machine's mirror reads an empty screen, and a saved environment's stream sends nothing until a spec gives it events.
   orca_terminal_read: [],
@@ -282,6 +284,8 @@ const computed = {
   lsp_settings: ({ environment, project }) => ({ environment, project, sshHost: null, servers: [] }),
   lsp_settings_set: ({ settings }) => settings,
   ssh_hosts: () => [],
+  // A-8: the titles as Rust answers a save of one title alone (the one saved, or none for an empty title); a spec that holds more mocks `orca_title_set`.
+  orca_title_set: ({ target, key, title }) => (title.trim() === "" ? {} : { [target]: { [key]: title.trim() } }),
   orca_browse_dir: ({ path }) => {
     const resolvedPath = path.trim() === "" || path.trim() === "~" ? "/home/dev" : path;
     if (!(resolvedPath in browseTree)) throw "Orca のフォルダの一覧を読めません";

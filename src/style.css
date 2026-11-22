@@ -1478,7 +1478,15 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 /* A-8: a session's row in four lines: the status icon and the branch, the title, then 「あなた」 and 「AI」 with their text. Each line is one line, cut with an ellipsis. */
 .orca-session-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .orca-session-branch { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Menlo, monospace; font-size: calc(12px * var(--fs)); color: var(--muted); }
-.orca-session-title { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 22px; font-weight: 600; }
+.orca-session-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+/* A-8: the pin of a title the owner fixed, and the pencil that types a new one (it shows while the pointer is on the row or the focus is in it; `visibility`, so that it takes no click while hidden). The field takes the rest of the line. */
+.orca-session-pin { flex: none; font-size: calc(11px * var(--fs)); line-height: 1; }
+.orca-session-edit { flex: none; visibility: hidden; padding: 0 3px; border: 0; border-radius: 4px; background: transparent; font: inherit; font-size: calc(12px * var(--fs)); line-height: 1.3; color: var(--muted); cursor: pointer; }
+.orca-session:hover .orca-session-edit, .orca-session:focus-within .orca-session-edit { visibility: visible; }
+.orca-session-edit:hover { background: var(--soft); color: var(--accent-text); }
+.orca-session-edit:focus-visible { outline: 2px solid var(--accent); }
+.orca-session-title-input { flex: 1 1 0; min-width: 0; box-sizing: border-box; padding: 1px 4px; border: 1px solid var(--accent); border-radius: 4px; background: var(--surface); font: inherit; font-weight: 600; color: inherit; user-select: text; -webkit-user-select: text; }
+.orca-session-title-input:focus { outline: none; }
 .orca-line { display: flex; align-items: center; gap: 6px; min-width: 0; padding-left: 22px; font-size: calc(12px * var(--fs)); color: var(--muted); }
 .orca-line-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A-8: the small tag at the start of a line: 「あなた」, 「AI」 (the color of a question while the session waits for an input), 「サブ」 and 「シェル」. */

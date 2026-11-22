@@ -254,6 +254,10 @@ interface Tab {
   where: string;
   // The name a session row of the list shows (A-8): the git branch of its worktree, else the worktree's name (`rowBranch`). Only a Claude session and a plain terminal have one; the rest show `where`.
   branch?: string;
+  // The key a session's title is kept under (A-8): a Claude session's pane key, a plain terminal's handle. Only a Claude session and a plain terminal have one.
+  titleKey?: string;
+  // Whether `title` is one the owner fixed (A-8): the row draws a pin.
+  fixed?: boolean;
   // Where the tab is: null for this machine, else the name of the saved environment. A terminal's comes from its row, a file's and a diff's from the project they were opened in.
   environment: string | null;
   // A file outside the worktree that a definition named (A-34): the tab has a lock, and the file is read only. `gem` marks one that is a Ruby file.
@@ -272,6 +276,13 @@ function projectPlace(key: string): string | null {
   const project = mix.projects.find((p) => p.key === key);
   return project === undefined ? (view?.target ?? null) : placeOf(project);
 }
+
+// The titles the owner fixed for sessions (A-8), by target (`titleTarget`: the saved environment's name, or this machine's) and by `titleKey`: read once at the start of the screen, and held as Rust answers each save.
+let titles: Record<string, Record<string, string>> = {};
+const titleTarget = (environment: string | null) => environment ?? THIS_MACHINE;
+const fixedTitle = (environment: string | null, key: string): string | undefined => titles[titleTarget(environment)]?.[key];
+// The session whose title is being typed in its row (A-8) and the text typed so far: a redraw of the list keeps the field.
+let editing: { id: string; value: string } | null = null;
 
 const claudeTabId = (paneKey: string) => `claude:${paneKey}`;
 const plainTabId = (handle: string) => `orca:${handle}`;
@@ -312,13 +323,15 @@ function tabsOf(key: string): Tab[] {
   const tabs: Tab[] = [];
   for (const r of mix.rows) {
     if (r.projectKey !== key || r.paneKey === null || isChildSession(r)) continue;
-    tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: r.line || "（題名なし）", latest: r.latest, prompt: r.promptLine ?? null, answer: r.answerLine ?? null, subagents: r.subagents, agents: r.subagentList ?? [], shell: r.shell ?? null, handle: r.handle, path: r.path, where: worktreeLabel(r), branch: rowBranch(r), environment: placeOf(r) });
+    const fixed = fixedTitle(placeOf(r), r.paneKey);
+    tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: fixed ?? (r.line || "（題名なし）"), titleKey: r.paneKey, fixed: fixed !== undefined, latest: r.latest, prompt: r.promptLine ?? null, answer: r.answerLine ?? null, subagents: r.subagents, agents: r.subagentList ?? [], shell: r.shell ?? null, handle: r.handle, path: r.path, where: worktreeLabel(r), branch: rowBranch(r), environment: placeOf(r) });
   }
   for (const t of mix.terminals) {
     if (t.projectKey !== key || isChildSession(t)) continue;
     const repo = mix.worktrees.find((w) => w.path === t.path && placeOf(w) === placeOf(t))?.repo ?? mix.projects.find((p) => p.key === t.projectKey)?.name ?? "";
     const ended = t.ended || endedHandles.has(t.handle);
-    tabs.push({ id: plainTabId(t.handle), kind: "plain", status: ended ? "interrupted" : "done", label: ended ? "終了" : "起動中", ended, title: t.title || "ターミナル", latest: null, subagents: 0, agents: [], shell: null, handle: t.handle, path: t.path, where: worktreeLabel({ repo, branch: t.branch }), branch: rowBranch(t), environment: placeOf(t) });
+    const fixed = fixedTitle(placeOf(t), t.handle);
+    tabs.push({ id: plainTabId(t.handle), kind: "plain", status: ended ? "interrupted" : "done", label: ended ? "終了" : "起動中", ended, title: fixed ?? (t.title || "ターミナル"), titleKey: t.handle, fixed: fixed !== undefined, latest: null, subagents: 0, agents: [], shell: null, handle: t.handle, path: t.path, where: worktreeLabel({ repo, branch: t.branch }), branch: rowBranch(t), environment: placeOf(t) });
   }
   const place = projectPlace(key);
   for (const f of filesOf(place, key)) {
@@ -478,7 +491,112 @@ function sessionWithWorks(t: Tab, key: string) {
   return wrap;
 }
 
-// A session of the open project, in four lines (A-8): its status icon and the name of its worktree's branch, the title of its tab, then the tag 「あなた」 with its last prompt and the tag 「AI」 with its last answer (a line whose text is missing is not drawn; the tag of the answer has the color of a question while the session waits for an input). It is selected when it is the tab selected.
+// The pencil of a row (A-8): it turns the title into a field. It is in the row's button, so its press does not reach the row.
+function editButton(t: Tab) {
+  const edit = tag("button", "orca-session-edit", "✎");
+  edit.type = "button";
+  edit.dataset.key = `title-edit:${t.id}`;
+  edit.setAttribute("aria-label", "題名を変える");
+  edit.onclick = (e) => {
+    e.stopPropagation();
+    editing = { id: t.id, value: t.title };
+    draw();
+    const input = $("orca-list").querySelector<HTMLInputElement>(`[data-key="${CSS.escape(`title:${t.id}`)}"]`);
+    input?.focus();
+    input?.select();
+  };
+  return edit;
+}
+
+// The field that the title of a row is typed in (A-8): Enter saves it (an empty text gives the automatic title back), Escape and the focus leaving cancel it. Its keys and presses do not reach the row (the selection, the menu of the peek).
+function titleInput(id: string, key: string, environment: string | null, value: string) {
+  const input = tag("input", "orca-session-title-input");
+  input.type = "text";
+  input.value = value;
+  input.dataset.key = `title:${id}`;
+  input.setAttribute("aria-label", "題名");
+  let done = false;
+  input.oninput = () => {
+    if (editing?.id === id) editing.value = input.value;
+  };
+  input.onkeydown = (e) => {
+    e.stopPropagation();
+    if (composing(e)) return;
+    if (e.key === "Enter") {
+      e.preventDefault();
+      done = true;
+      void saveTitle(environment, key, input.value);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      done = true;
+      stopEditing();
+    }
+  };
+  for (const type of ["keyup", "keypress", "click", "dblclick", "mousedown", "contextmenu"]) input.addEventListener(type, (e) => e.stopPropagation());
+  // A field that a redraw took out of the page is not a cancel: the redraw puts the field back.
+  input.onblur = () => {
+    if (!done && input.isConnected) stopEditing();
+  };
+  return input;
+}
+
+function stopEditing() {
+  editing = null;
+  draw();
+}
+
+// Saves the title of a session (an empty one takes it out) and holds the titles Rust answers.
+async function setTitle(environment: string | null, key: string, title: string) {
+  titles = await invoke("orca_title_set", { target: titleTarget(environment), key, title });
+}
+
+async function saveTitle(environment: string | null, key: string, title: string) {
+  try {
+    await setTitle(environment, key, title);
+  } catch (e) {
+    showFailure("orca", e);
+  }
+  stopEditing();
+}
+
+// Whether the titles of sessions that a list read well no longer holds are being taken out.
+let forgettingTitles = false;
+
+// A title of a session that the list of its place, read well, no longer holds is taken out (A-8). A list that failed or is not on the screen says nothing, so no title goes for it.
+async function forgetTitles() {
+  if (forgettingTitles) return;
+  const gone: [string | null, string][] = [];
+  for (const [target, keyed] of Object.entries(titles)) {
+    const environment = target === THIS_MACHINE ? null : target;
+    if (!listRead(environment)) continue;
+    const live = new Set<string | null>([...mix.rows.filter((r) => placeOf(r) === environment).map((r) => r.paneKey), ...mix.terminals.filter((t) => placeOf(t) === environment).map((t) => t.handle)]);
+    for (const key of Object.keys(keyed)) if (!live.has(key)) gone.push([environment, key]);
+  }
+  if (gone.length === 0) return;
+  forgettingTitles = true;
+  try {
+    for (const [environment, key] of gone) await setTitle(environment, key, "");
+  } catch (e) {
+    logError("orca", e);
+  } finally {
+    forgettingTitles = false;
+  }
+  draw();
+}
+
+// Reads the titles the owner fixed, once, at the start of the screen.
+async function loadTitles() {
+  try {
+    titles = await invoke("orca_titles");
+  } catch (e) {
+    logError("orca", e);
+    return;
+  }
+  void forgetTitles();
+  draw();
+}
+
+// A session of the open project, in three lines (A-8): its status icon, the name of its worktree's branch and the title of its tab (with the pin when the owner fixed it, and the pencil that types a new one), then the tag 「あなた」 with its last prompt and the tag 「AI」 with its last answer (a line whose text is missing is not drawn; the tag of the answer has the color of a question while the session waits for an input). It is selected when it is the tab selected.
 function sessionNode(t: Tab, key: string) {
   const row = tag("button", "orca-session");
   row.type = "button";
@@ -489,7 +607,18 @@ function sessionNode(t: Tab, key: string) {
   // The branch of the worktree the session works in, else the worktree's name (the `branch` of its tab).
   const head = tag("span", "orca-session-head");
   head.append(statusIcon(t.status, t.label), tag("span", "orca-session-branch", t.branch ?? t.where));
-  row.append(head, tag("span", "orca-session-title", t.title));
+  if (editing?.id === t.id && t.titleKey !== undefined) head.append(titleInput(t.id, t.titleKey, t.environment, editing.value));
+  else {
+    head.append(tag("span", "orca-session-title", t.title));
+    if (t.fixed) {
+      const pin = tag("span", "orca-session-pin", "📌");
+      pin.setAttribute("role", "img");
+      pin.setAttribute("aria-label", "固定");
+      head.append(pin);
+    }
+    if (t.titleKey !== undefined) head.append(editButton(t));
+  }
+  row.append(head);
   if (t.prompt) row.append(lineNode("orca-session-prompt", tagNode("you", "あなた"), t.prompt));
   if (t.answer) row.append(lineNode("orca-session-answer", tagNode(t.status === "question" ? "question" : "ai", "AI"), t.answer));
   row.onclick = () => selectSession(key, t.id);
@@ -689,14 +818,14 @@ function drawFeed() {
   trackChildOnly();
   // The sessions under the open projects: what is drawn of them.
   const openTabs = new Map([...opened].map((k): [string, Tab[]] => [k, ownTabs(k)]));
-  const sessions = [...openTabs].map(([k, tabs]) => [k, tabs.map((t) => [t.id, t.status, t.label, t.title, t.prompt, t.answer, t.where, t.branch, t.subagents, t.agents, t.shell, t.environment, worksOpen.has(t.id)])]);
+  const sessions = [...openTabs].map(([k, tabs]) => [k, tabs.map((t) => [t.id, t.status, t.label, t.title, t.prompt, t.answer, t.where, t.branch, t.subagents, t.agents, t.shell, t.environment, worksOpen.has(t.id), t.fixed ?? false])]);
   // Only what is drawn: a project's time of activity moves with the work and would redraw the list (and restart the working mark) for nothing.
   const rowOf = (p: OrcaProject) => [p.key, p.name, p.status, p.sessions, placeOf(p), childFolderCount(p.key), childOnly.has(p.key)];
   // The rows of the projects, the search expression and the row the keys are on: found once for this drawing.
   const re = matcher();
   const rows = visibleRows(re);
   const on = cursorKey(rows);
-  const key = JSON.stringify([view?.state ?? null, mix.projects.map(rowOf), needle(), on, pickedProject(), sessions, selectedTab(), stoppedOpen]);
+  const key = JSON.stringify([view?.state ?? null, mix.projects.map(rowOf), needle(), on, pickedProject(), sessions, selectedTab(), stoppedOpen, editing?.id ?? null]);
   if (key === feedKey) return;
   feedKey = key;
   const box = feed();
@@ -1069,6 +1198,7 @@ function settle() {
     pruneTerminals((handle, source) => !read.includes(source.environment) || held.has(handle));
     forgetGone();
   }
+  void forgetTitles();
   claimStarted();
 }
 
@@ -1854,5 +1984,6 @@ export function initOrca() {
     },
     menu: openTabMenu,
   });
+  void loadTitles();
   load("full");
 }
