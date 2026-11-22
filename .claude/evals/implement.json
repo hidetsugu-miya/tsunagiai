@@ -60,13 +60,14 @@
       "id": 5,
       "name": "flaky-fix-runs-no-load",
       "prompt": "あなたは implement の実行の手順 6 にいるリードです。`.claude/skills/implement/SKILL.md` の手順 6.3 を読み、`.claude/evals/files/implement/flaky-item.md` の項目を直す `code-implementer` の起動の文（prompt）を書き出してください。起動はせず、コマンドも実行しないでください。",
-      "expected_output": "起動の文に、負荷をかける処理と全件の実行をせず、その spec だけを 1 回ずつ回すことが書かれている。",
+      "expected_output": "起動の文に、負荷をかける処理と E2E・CI の実行をしないことが書かれている。spec の実行はリードが、返りのあとに回す。",
       "files": [
         ".claude/evals/files/implement/flaky-item.md"
       ],
       "assertions": [
         "起動の文に、PC に負荷をかける処理を動かさないことが書かれている",
-        "起動の文に、全件の実行をせず、`orca-files` の spec だけを 1 回ずつ回すことが書かれている",
+        "起動の文に、E2E や CI の実行（全件も `--only` も）をしないことが書かれている",
+        "起動の文で、担当に `run-e2e.sh` を回させていない",
         "「Orders for the implementer」を `制約:` としてそのまま入れている"
       ]
     }

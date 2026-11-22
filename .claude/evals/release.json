@@ -3,15 +3,30 @@
   "evals": [
     {
       "id": 1,
-      "name": "harness-only-change-does-not-wait",
-      "prompt": "あなたは implement の実行の手順 7 に来たリードです。`.claude/skills/release/SKILL.md` を読み、手順 A の入口として、`.claude/evals/files/release/merged-harness-fix.md` の状況でリリースを待つ変更があるかを判断してください。コマンドは実行せず、判断とその根拠、次にすること（Release PR を用意するか）を書いてください。GitHub には読み書きともに触れないでください。",
-      "expected_output": "#1500 は `.claude/skills/` と `.claude/evals/` だけの変更なので待つ変更に数えず、Release PR は用意しない。",
+      "name": "lead-reruns-a-runner-failure",
+      "prompt": "あなたは implement の実行の手順 7 に来たリードで、release-preparer が `merged` を返し、release-watcher を起動したところです。`.claude/skills/release/SKILL.md` を読み、release-watcher が `.claude/evals/files/release/watcher-return.md` の JSON を返したときに、リードがすることを決めてください。コマンドは実行せず、打つはずのコマンドを順に書き、判断の根拠も書いてください。GitHub には読み書きともに触れないでください。",
+      "expected_output": "ログがランナーの停止だけを示すので、コミットに原因は無い。リードが `gh run view 9876543210 --log-failed` で確かめ、`gh run rerun 9876543210 --failed` で再実行し、release-watcher をもう一度起動する。手でタグは打たない。",
       "files": [
-        ".claude/evals/files/release/merged-harness-fix.md"
+        ".claude/evals/files/release/watcher-return.md"
       ],
       "assertions": [
-        "#1500 を、リリースを待つ変更に数えていない（ドキュメント、`.claude/agents/`、`.claude/evals/`、`.claude/rules/`、`.claude/skills/` だけの変更だから）",
-        "Release PR を用意せず、何も用意するものが無いと結論している"
+        "リード自身が `gh run view 9876543210 --log-failed` などで原因を確かめている（release-watcher には任せない）",
+        "ランナーの失敗なので `gh run rerun 9876543210 --failed` を打つ",
+        "再実行のあと、release-watcher をもう一度起動する",
+        "手でタグを打たず、`--admin` も使わない"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "lead-files-an-issue-for-an-unphotographed-screen",
+      "prompt": "あなたは implement の実行の手順 7 に来たリードで、release-preparer を起動したところです。`.claude/skills/release/SKILL.md` を読み、release-preparer が `.claude/evals/files/release/preparer-return.md` の JSON を返したときに、リードがすることを決めてください。コマンドは実行せず、打つはずのコマンドや呼ぶスキルを順に書いてください。GitHub には読み書きともに触れないでください。",
+      "expected_output": "`merged` を確かめたあと、`unphotographed` の「Slack 一覧」について、リードが `issue-plan` で issue を立て（label `documentation`）、そのあと release-watcher を起動する。",
+      "files": [
+        ".claude/evals/files/release/preparer-return.md"
+      ],
+      "assertions": [
+        "`unphotographed` の「Slack 一覧」について、リード自身が `issue-plan` で issue を立てると書いている（label `documentation`）",
+        "issue を立てたあとで release-watcher を起動すると書いている"
       ]
     }
   ]
