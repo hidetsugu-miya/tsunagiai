@@ -316,19 +316,19 @@ function syncSelection() {
   showSelected(false);
 }
 
-// Asks before the child is closed: the same confirmation for the menu of a card and for the × of a done child's card (it is anchored on the name, which a redraw does not touch while it is open).
-function askClose(c: FormationChild, anchor: Element) {
+// Asks before the child is closed: the same confirmation for the menu of a card (「停止」, `stop` true) and for the × of a done child's card (「削除」); it is anchored on the name, which a redraw does not touch while it is open.
+function askClose(c: FormationChild, anchor: Element, stop: boolean) {
   const formation = currentFormation();
   if (formation === null || closing.has(closingKey(formation, c.name))) return;
-  confirmChildDelete(anchor, c.name, c.created, () => void closeChild(formation, c.name, false, null));
+  confirmChildDelete(anchor, c.name, c.created, stop, () => void closeChild(formation, c.name, false, null));
 }
 
-// The menu of a right press on a card: 「削除」 alone, as a row of the list has (formation-list.ts).
+// The menu of a right press on a card: 「停止」 alone.
 function openCardMenu(c: FormationChild, anchor: Element, e: MouseEvent) {
   e.preventDefault();
   const formation = currentFormation();
   if (formation === null || closing.has(closingKey(formation, c.name))) return;
-  openMenu(anchor, [{ label: "削除", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => askClose(c, anchor) }], { at: { x: e.clientX, y: e.clientY } });
+  openMenu(anchor, [{ label: "停止", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => askClose(c, anchor, true) }], { at: { x: e.clientX, y: e.clientY } });
 }
 
 // Closes the child `name` of `formation` (A-37). Without `force` a worktree that has something to lose is kept, and the answer asks the owner to force it; with it (`path`: where the worktree was shown to be) the worktree goes all the same, and only when Rust finds the child at that path. An error shows as a failed read does, and so does the branch that Orca kept (`notice`).
@@ -658,7 +658,7 @@ function closeButton(c: FormationChild, anchor: Element): HTMLButtonElement {
   button.type = "button";
   button.dataset.close = c.name;
   button.setAttribute("aria-label", `${c.name} を閉じる`);
-  button.onclick = () => askClose(c, anchor);
+  button.onclick = () => askClose(c, anchor, false);
   return button;
 }
 

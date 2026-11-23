@@ -1105,31 +1105,32 @@ describe("orchestration mode: close a child from its card", () => {
   const gone = { closed: true, reason: null, changed: [], untracked: [], unpushed: [], path: "", environment: "", preservedBranch: null };
   const kept = { closed: false, path: "/w/web-update", environment: "local", preservedBranch: null, reason: "worktree にコミットしていない変更か、追跡していないファイルがあります。また、どのリモートにも届いていないコミットがあります", changed: [" M src/a.rb"], untracked: ["?? tmp/x.log", "?? tmp/y.log"], unpushed: ["abc1234 add a"] };
 
-  it("opens a menu with 削除 alone on a right press of a card, a planned one too", async () => {
+  it("opens a menu with 停止 alone on a right press of a card, a planned one too", async () => {
     await openSession(mixed());
     await rightPress("web-update");
     await expect($(".menu")).toBeDisplayed();
-    expect(await textsOf('.menu button[role="menuitem"]')).toEqual(["削除"]);
+    expect(await textsOf('.menu button[role="menuitem"]')).toEqual(["停止"]);
     await expect($('.menu button[role="menuitem"]')).toHaveElementClass("danger");
     expect(await count('.menu button[role="menuitem"] svg')).toBe(1);
     await browser.keys("Escape");
     await expect($(".menu")).not.toExist();
     await rightPress("e2e-check");
-    expect(await textsOf('.menu button[role="menuitem"]')).toEqual(["削除"]);
+    expect(await textsOf('.menu button[role="menuitem"]')).toEqual(["停止"]);
   });
 
   it("asks first, with the name, and calls nothing on キャンセル", async () => {
     await openSession(mixed());
     const close = await mock("formation_close_child");
     await ask("web-update");
-    await expect($('.pop[role="alertdialog"] h3')).toHaveText("web-update を削除しますか？");
+    await expect($('.pop[role="alertdialog"] h3')).toHaveText("web-update を停止しますか？");
+    await expect(yes()).toHaveText("停止");
     await $('.pop[role="alertdialog"] .text-btn:not(.danger)').click();
     await expect(confirm()).not.toExist();
     expect(await callsOf(close)).toEqual([]);
     expect(await cardNames()).toHaveLength(5);
   });
 
-  it("closes the child by its formation and name without force on 削除, and takes its card and its session away", async () => {
+  it("closes the child by its formation and name without force on 停止, and takes its card and its session away", async () => {
     await openSession(mixed());
     await waitForCalls("orca_terminal_read");
     expect(await readHandles()).toEqual(["term_web-update"]);
@@ -1185,6 +1186,7 @@ describe("orchestration mode: close a child from its card", () => {
     await mock("formation_children", without("api-update"));
     await $('#formation-flow-list [data-close="api-update"]').click();
     await expect($('.pop[role="alertdialog"] h3')).toHaveText("api-update を削除しますか？");
+    await expect(yes()).toHaveText("削除");
     expect(await callsOf(close)).toEqual([]);
     await yes().click();
     expect(await waitForCalls(close)).toEqual([{ formation: "formation", name: "api-update", force: false, path: null }]);
