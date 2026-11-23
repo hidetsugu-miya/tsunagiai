@@ -207,15 +207,24 @@ fn formation_of(id: &str) -> Option<&str> {
     id.strip_prefix(FORMATION_ID_PREFIX)
 }
 
-/// The arguments of `/bin/sh`: the script, then `--plugin-dir {folder}` when the pane has a skill, then `--` and `prompt`, the one positional argument of `claude [prompt]`, its first instruction. The `--` is needed because the script ends with `--mcp-config`, which takes several values, and would take the prompt for one of them (measured: `claude --mcp-config a.json "x"` reads `x` as a config file); it also keeps a prompt from being read as an option. The shell is not asked to read the prompt: it is one element of the list, and the script passes it on as `"$@"`.
-fn launch_args(script: &Path, plugin_dir: Option<&Path>, prompt: Option<String>) -> Vec<String> {
+/// The arguments of `/bin/sh`: the script, then `--plugin-dir {folder}` when the pane has a skill, then the first instruction `prompt`. A pane's is given as `--append-system-prompt {prompt}` (A-36, #1293): it is the system prompt, so it is not shown in the terminal as a first message that Claude answers (measured: a value that starts with `-` stays the one value of the flag, also after `--mcp-config`). The orchestrator's (`formation`, A-37) is a work to start, so it stays the one positional argument of `claude [prompt]`, after a `--`: the script ends with `--mcp-config`, which takes several values, and would take the prompt for one of them (measured: `claude --mcp-config a.json "x"` reads `x` as a config file), and the `--` also keeps a prompt from being read as an option. The shell is not asked to read the prompt: it is one element of the list, and the script passes it on as `"$@"`.
+fn launch_args(
+    script: &Path,
+    plugin_dir: Option<&Path>,
+    prompt: Option<String>,
+    formation: bool,
+) -> Vec<String> {
     let mut args = vec![script.to_string_lossy().into_owned()];
     if let Some(dir) = plugin_dir {
         args.push("--plugin-dir".to_owned());
         args.push(dir.to_string_lossy().into_owned());
     }
     if let Some(prompt) = prompt {
-        args.push("--".to_owned());
+        args.push(if formation {
+            "--".to_owned()
+        } else {
+            "--append-system-prompt".to_owned()
+        });
         args.push(prompt);
     }
     args
@@ -364,7 +373,7 @@ pub struct FormationStart {
     pub cwd: PathBuf,
 }
 
-/// The start of the orchestrator on this machine, for `tsunagiai-mcp` at `mcp` (the running one): the files written as the app writes them for its own pane (`write_formation_files`), and the command that runs the script. `claude` is found as the panes find it. `projects` are the repositories of its formation, all of this machine (`local`): they are its first instruction, passed as `claude [prompt]` as in the pane of the app, so nothing has to be typed into the terminal (a typed text would wait behind Claude Code's question whether to trust the folder, which the owner answers on the screen, and which nothing here answers). With no project there is no instruction. A name that `first_prompt` refuses is an error before any file is written.
+/// The start of the orchestrator on this machine, for `tsunagiai-mcp` at `mcp` (the running one): the files written as the app writes them for its own pane (`write_formation_files`), and the command that runs the script. `claude` is found as the panes find it. `projects` are the repositories of its formation, all of this machine (`local`): they are its first instruction, passed as `claude [prompt]` as in the pane of the orchestrator in the app, so nothing has to be typed into the terminal (a typed text would wait behind Claude Code's question whether to trust the folder, which the owner answers on the screen, and which nothing here answers). With no project there is no instruction. A name that `first_prompt` refuses is an error before any file is written.
 pub fn formation_start(
     config: &Path,
     name: &str,
@@ -385,7 +394,7 @@ fn formation_start_with(
     let script = write_formation_files(config, name, claude, mcp)?;
     Ok(FormationStart {
         program: "/bin/sh".to_owned(),
-        args: launch_args(&script, None, prompt),
+        args: launch_args(&script, None, prompt, true),
         cwd: crate::formation::dir(config, name),
     })
 }
@@ -964,7 +973,12 @@ fn prepare(
     };
     let spec = Spec {
         program: "/bin/sh".to_owned(),
-        args: launch_args(&script, plugin.as_ref().map(CallPlugin::path), prompt),
+        args: launch_args(
+            &script,
+            plugin.as_ref().map(CallPlugin::path),
+            prompt,
+            formation.is_some(),
+        ),
         cwd,
         env: connection.env(),
         cols,
@@ -974,7 +988,7 @@ fn prepare(
 }
 
 /// Starts Claude Code in a pseudo terminal for the pane `id` (the pane `formation:{name}` is the orchestrator of the formation `name`, A-37): its output and its end go through `channel`. The orchestrator's first instruction names the projects saved with its formation, which Rust reads itself. `builtin_tools` leaves Claude Code's own tools on (the screens give it only the tools of `tsunagiai-mcp` otherwise), `permission_mode` is `manual`, `auto` (#1074: for the calendar pane, with the calendar tools only) or `auto-todo-draft` (#1148: for the pane of a Todo's draft, with that screen's tools only); every mode but `manual` with `builtin_tools`, or for the orchestrator, is refused,
-/// `skill` is a saved skill that it is given, and `prompt` is its first instruction (A-36, #976: passed as `claude [prompt]` after a `--`, as the orchestrator's is; the orchestrator takes none from the screen). A failure is the message the pane shows. An `id` that has a process is ended first. The answer is the number of this start, which `claude_code_close` takes with the id.
+/// `skill` is a saved skill that it is given, and `prompt` is its first instruction (A-36, #976, #1293: passed as `--append-system-prompt {prompt}`, so it is not shown in the terminal; the orchestrator takes none from the screen, and its own is passed as `claude [prompt]` after a `--`). A failure is the message the pane shows. An `id` that has a process is ended first. The answer is the number of this start, which `claude_code_close` takes with the id.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn claude_code_start(
@@ -1399,39 +1413,60 @@ mod tests {
     #[test]
     fn the_script_gets_the_plugin_folder_as_arguments() {
         assert_eq!(
-            launch_args(Path::new("/c/start.sh"), None, None),
+            launch_args(Path::new("/c/start.sh"), None, None, false),
             ["/c/start.sh"]
         );
         assert_eq!(
             launch_args(
                 Path::new("/c/start.sh"),
                 Some(Path::new("/tmp/tsunagiai-skill-1")),
-                None
+                None,
+                false
             ),
             ["/c/start.sh", "--plugin-dir", "/tmp/tsunagiai-skill-1"]
         );
     }
 
     #[test]
-    fn the_first_instruction_follows_a_double_dash_as_one_element_whatever_it_holds() {
+    fn a_panes_first_instruction_is_the_one_value_of_append_system_prompt_whatever_it_holds() {
         let prompt = "> 環境: local / a'b \"c\" $(x) `y`; -z\n".to_owned();
         assert_eq!(
-            launch_args(Path::new("/c/start.sh"), None, Some(prompt.clone())),
-            ["/c/start.sh".to_owned(), "--".to_owned(), prompt.clone()]
+            launch_args(Path::new("/c/start.sh"), None, Some(prompt.clone()), false),
+            [
+                "/c/start.sh".to_owned(),
+                "--append-system-prompt".to_owned(),
+                prompt.clone()
+            ]
         );
         assert_eq!(
             launch_args(
                 Path::new("/c/start.sh"),
                 Some(Path::new("/tmp/p")),
-                Some(prompt.clone())
+                Some(prompt.clone()),
+                false
             ),
             [
                 "/c/start.sh".to_owned(),
                 "--plugin-dir".to_owned(),
                 "/tmp/p".to_owned(),
-                "--".to_owned(),
+                "--append-system-prompt".to_owned(),
                 prompt
             ]
+        );
+        // A text that starts with `-` is still the value of the flag, and nothing follows it.
+        let dashed = "--bogus -p x".to_owned();
+        assert_eq!(
+            launch_args(Path::new("/c/start.sh"), None, Some(dashed.clone()), false).last(),
+            Some(&dashed)
+        );
+    }
+
+    #[test]
+    fn the_orchestrators_first_instruction_follows_a_double_dash_as_one_element() {
+        let prompt = "> 環境: local / a'b \"c\" $(x) `y`; -z\n".to_owned();
+        assert_eq!(
+            launch_args(Path::new("/c/start.sh"), None, Some(prompt.clone()), true),
+            ["/c/start.sh".to_owned(), "--".to_owned(), prompt]
         );
     }
 

@@ -1977,10 +1977,9 @@ body.orca-dragging .orca-edit-preview iframe, #orca-panes[data-resizing] .orca-e
 #todo.below #todo-split { width: auto; height: 7px; border-left: 0; border-top: 1px solid var(--line); cursor: row-resize; }
 #todo.below #todo-split span { width: 32px; height: 3px; }
 #todo.below.dragging { cursor: row-resize; }
-/* A-9: on the Todo screen the pane follows the detail, under the comments, in the scroll of #todo-main: it is as high as its content, and the terminal of a session has a height of its own (the pane has none to fill). */
+/* A-9: on the Todo screen the pane follows the detail, under the comments, in the scroll of #todo-main: it is as high as its content. */
 #todo-handoff { flex: none; max-width: 980px; margin-top: 16px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
 #todo-handoff .ho-main, #todo-handoff .ho-form.ho-fill { flex: none; }
-#todo-handoff .ho-term { flex: none; height: 480px; }
 #slack-thread.assist-orca { grid-template-columns: minmax(0, 1fr) auto max(400px, clamp(33.3333%, var(--chat-w, 33.3333%), 50%)); }
 .ho-pane.ho-slack { display: contents; }
 .ho-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
@@ -2029,15 +2028,16 @@ body.orca-dragging .orca-edit-preview iframe, #orca-panes[data-resizing] .orca-e
 .ho-card-meta { font-size: calc(12px * var(--fs)); color: var(--muted); }
 .ho-card-row .icon-btn { width: 28px; height: 28px; flex: none; }
 .ho-card-row .icon-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
-.ho-session-head { padding: 8px 8px 8px 16px; }
-.ho-session-head .icon-btn { width: 32px; height: 32px; }
+/* A-9: the card of the session handed to. */
+.ho-session-card { flex: none; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.ho-session-top { align-self: stretch; display: flex; align-items: flex-start; gap: 8px; font-size: calc(13px * var(--fs)); font-weight: bold; }
+.ho-session-top .icon-btn { width: 28px; height: 28px; flex: none; }
+.ho-session-top .icon-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.ho-session-open { height: 28px; }
 .ho-session-title { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .ho-session-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ho-session-state { display: inline-flex; align-items: center; gap: 6px; margin-top: 2px; font-size: calc(12px * var(--fs)); font-weight: normal; color: var(--accent); }
 .ho-session-state::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
-.ho-note { margin: 0; padding: 16px; font-size: calc(13px * var(--fs)); color: var(--muted); }
-/* A-9: the terminal of the session handed to (A-12), under its header; it takes the height that is left. */
-.ho-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
 /* The Orca tab of the Slack thread's right pane sits in the rows of the grid that the Claude pane uses. */
 #reply-chat .chat-head { box-sizing: border-box; min-height: var(--header-h); padding: 0 16px; border-bottom-color: var(--chip-line); }
 #reply-tabs { display: flex; gap: 2px; align-self: stretch; }
@@ -2174,7 +2174,7 @@ body.orca-dragging .orca-edit-preview iframe, #orca-panes[data-resizing] .orca-e
 #slack-screen.below #slack-thread { display: flex; flex-direction: column; }
 #slack-screen.below #st-detail { display: flex; flex-direction: column; flex-grow: calc(1 - clamp(0.3333, var(--chat-h, 0.3333), 0.5)); flex-shrink: 1; flex-basis: 0; }
 #slack-screen.below #reply-chat { display: flex; flex-direction: column; width: auto; flex-grow: clamp(0.3333, var(--chat-h, 0.3333), 0.5); flex-shrink: 1; flex-basis: 0; }
-#slack-screen.below #reply-term { flex: 1; }
+#slack-screen.below #reply-term, #slack-screen.below #reply-claude-ask { flex: 1; }
 #st-body { min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
 #st-reply .composer-foot, #sc-reply .composer-foot { justify-content: flex-end; }
 .icon-btn.chat-send-icon { flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: var(--on-accent); }
@@ -2292,6 +2292,9 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 #st-reply, #sc-reply { flex: none; padding: 12px 24px 16px; border-top: 1px solid var(--line); }
 /* S-7: the host of Claude Code's terminal takes the rows of the old log and request field in the grid of the pane; 「元に戻す」 of its writes is above the reply field, at the right. */
 #reply-term { grid-row: 2 / -1; min-height: 0; overflow: hidden; }
+/* S-7: the Claude tab is closed at first and shows the question, as the Todo's does (T-7), in the rows of the terminal. */
+#reply-claude-ask { grid-row: 2 / -1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; }
+#reply-claude-ask p { margin: 0; color: var(--ink-soft); }
 #st-undo-bar { display: flex; justify-content: flex-end; margin-bottom: 8px; }
 #st-undo { height: 26px; padding: 0 12px; font-size: calc(12px * var(--fs)); }
 #st-error, #sc-error { margin: 0 0 8px; }

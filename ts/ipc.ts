@@ -282,6 +282,10 @@ export interface Commands {
   slack_react: { args: { teamId: string; channel: string; ts: string; name: string; add: boolean }; result: boolean };
   // What the emoji picker (S-25) lists for the workspace: the standard emoji (Slack's name and the Unicode emoji, no skin tone variant) and the custom emoji with an image (S-26; an `alias:` is not listed again). Nothing is saved.
   slack_emoji_catalog: { args: { teamId: string }; result: EmojiCatalog };
+  // Notes that the user added the reaction `name` in the workspace (S-25), for `slack_emoji_frequent`. Called after an add that succeeded, never for a take-off. Saved in `slack-emoji-usage.json`.
+  slack_emoji_used: { args: { teamId: string; name: string }; result: null };
+  // The names of the emoji the user reacted with most in the workspace, most first, at most 24 (S-25). Empty for a workspace with no use.
+  slack_emoji_frequent: { args: { teamId: string }; result: string[] };
   // The attached images (a thread file's `thumbUrl`) as data: URIs by URL; the token goes to files.slack.com only. What cannot be fetched is not in the map.
   slack_file_images: { args: { teamId: string; urls: string[] }; result: Record<string, string> };
   // The user's own icon in each workspace.
@@ -348,6 +352,8 @@ export interface Commands {
   orca_terminal_input: { args: { handle: string; text: string; environment?: string }; result: null };
   // A-8, A-12: opens `url` in the default browser, for a link ⌘+clicked in a terminal. Only an http or https URL is opened; any other fails with the message.
   orca_open_url: { args: { url: string }; result: null };
+  // A-8: the path inside the worktree `path` that the `file:` link `uri` of a terminal names (the host part is ignored, percent escapes are decoded). Fails with the message when the link is no `file:` link or names a file outside the worktree, a `..` or a control character. The file system is not looked at.
+  orca_link_relative: { args: { uri: string; path: string }; result: string };
   // A-12: whether this machine's Orca is paired (the pairing is in the keychain, never returned). Asks Orca nothing.
   orca_pairing_status: { args: undefined; result: OrcaPairing };
   // A-12: keeps the pairing of a link that Orca made for "This computer" (the token is exchanged with Orca, which must run, and stored in the keychain); answers whether a pairing is kept.

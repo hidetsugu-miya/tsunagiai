@@ -63,6 +63,9 @@ const ANSI = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "whi
 // What a link in the text is: it starts with http:// or https:// and ends before a space, a quote, a bracket, or a full-width punctuation mark or bracket (U+3000 to U+303F and U+FF00 to U+FFEF), so a URL in a Japanese sentence is cut where the sentence goes on.
 const URL_REGEX = /(https?|HTTPS?):[/]{2}[^\s"'!*(){}|\\^<>`\u3000-\u303f\uff00-\uffef]*[^\s"':,.!?{}|\\^~[\]`()<>\u3000-\u303f\uff00-\uffef]/;
 
+// A link of the file scheme (a URL scheme is not case-sensitive).
+const FILE_LINK = /^file:/i;
+
 // Where a terminal comes from: the stream of a saved environment or of this machine's paired Orca, a mirror (of this machine, or of a saved environment that is not streamed), or a pseudo terminal that tsunagiai opened itself for Claude Code (`pty`, A-36: `handle` is the id of the pane).
 // `path` is the worktree the terminal runs in and `environment` where the terminal's row is (null: this machine), where a file dropped on it is put (A-10); a pty has neither ("" and null) and takes no file.
 // `pty` is what a pty is started with: whether Claude Code keeps its own tools, how it asks for a tool ("manual" asks for every tool that writes, "auto" is the calendar pane's, #1074), the saved skill it is given and its first instruction (`prompt`, null for none); `onEnd` is called when its process ends by itself with the exit code 0 (not when it could not start, and not when it ended with an exit code or a signal: the message stays drawn).
@@ -141,6 +144,8 @@ let streamSeq = 0;
 // The host elements that take files already.
 const listening = new WeakSet<HTMLElement>();
 let onError: (e: unknown) => void = () => {};
+// What a ⌘+click on a `file:` link does (A-8): the Orca screen opens the file of the terminal's worktree (`initOrcaTerminal`).
+let onFileLink: (source: TermSource, uri: string) => void = () => {};
 // Ghostty's settings as imported, null before the first import.
 let settings: TerminalSettings | null = null;
 // The font chosen in the settings for the terminals (A-20): the family (null is the app's own) and the size; null follows Ghostty's settings.
@@ -314,10 +319,11 @@ function newInstance(source: TermSource, owner: string): Instance {
   el.className = "orca-term-box";
   el.hidden = true;
   stash().append(el);
-  // The click on a link: only ⌘ with the left button opens it, and the selection goes. Rust opens http and https URLs and refuses the others (an OSC 8 link may name any: xterm.js drops a non-http one before this unless `allowNonHttpProtocols` is set, as Orca sets it).
+  // The click on a link: only ⌘ with the left button opens it, and the selection goes. A `file:` link of a terminal that has a worktree goes to the Orca screen (A-8); any other link goes to Rust, which opens http and https URLs and refuses the others (an OSC 8 link may name any: xterm.js drops a non-http one before this unless `allowNonHttpProtocols` is set, as Orca sets it).
   const open = (event: MouseEvent, uri: string) => {
     if (!event.metaKey || event.ctrlKey || event.altKey || event.button !== 0) return;
-    invoke("orca_open_url", { url: uri }).catch(onError);
+    if (FILE_LINK.test(uri) && instance.source.path !== "") onFileLink(instance.source, uri);
+    else invoke("orca_open_url", { url: uri }).catch(onError);
     term.clearSelection();
   };
   // The URL is the tooltip of the box while the pointer is over a link.
@@ -833,9 +839,10 @@ export function giveBackTerminal(id: string, owner: string) {
   if (instance && instance.owner === owner) instance.owner = ORCA_SCREEN;
 }
 
-// What a failed send of typed keys does (the screen shows the message).
-export function initOrcaTerminal(report: (e: unknown) => void) {
+// `report` is what a failed send of typed keys does (the screen shows the message), and `openFileLink` what a ⌘+click on a `file:` link does.
+export function initOrcaTerminal(report: (e: unknown) => void, openFileLink: (source: TermSource, uri: string) => void) {
   onError = report;
+  onFileLink = openFileLink;
   document.fonts?.ready.then(fitSoon).catch(() => {});
   // The system's appearance picks the light or the dark colors (unless the settings fix it, then a change of it draws nothing new).
   darkScheme.addEventListener("change", () => {

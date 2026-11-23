@@ -2519,6 +2519,37 @@ pub fn orca_open_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
         .map_err(|e| format!("ブラウザを開けません: {e}"))
 }
 
+const NOT_IN_WORKTREE: &str = "開けるのはワークツリーの中のファイルだけです";
+
+/// The path inside the worktree that a `file:` link of a terminal names (A-8): the link is read by the `url` crate, the host part is ignored (a program writes the name of its own PC there), the query and the fragment are dropped, and the path has its percent escapes taken out before it is held to the worktree and to the checks of A-18 (`check_relative`), so an escaped `..` or `/` is seen as what it is. What a terminal prints can come from someone else, so the answer is a relative path, with no `..`, no empty part and no control character, of a file under `worktree`, and never anything else. The file system is not looked at.
+fn link_relative(uri: &str, worktree: &str) -> Result<String, String> {
+    if !worktree.starts_with('/')
+        || worktree.len() > crate::orca_files::MAX_PATH
+        || worktree.chars().any(char::is_control)
+    {
+        return Err("ワークツリーのパスが正しくありません".into());
+    }
+    let url = url::Url::parse(uri).map_err(|_| NOT_IN_WORKTREE.to_string())?;
+    if url.scheme() != "file" {
+        return Err(NOT_IN_WORKTREE.into());
+    }
+    let path = crate::images::percent_decode(url.path());
+    let base = worktree.trim_end_matches('/');
+    let relative = path
+        .strip_prefix(base)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .filter(|relative| !relative.contains('\u{FFFD}'))
+        .ok_or_else(|| NOT_IN_WORKTREE.to_string())?;
+    crate::orca_files::check_relative(relative, false).map_err(|_| NOT_IN_WORKTREE.to_string())?;
+    Ok(relative.to_owned())
+}
+
+/// The path inside the worktree `path` that the `file:` link `uri` of a terminal names (A-8), for the screen to open it (`link_relative`).
+#[tauri::command]
+pub fn orca_link_relative(uri: String, path: String) -> Result<String, String> {
+    link_relative(&uri, &path)
+}
+
 /// Checks the keys and the terminal.
 fn check_input(
     mirror: &OrcaMirror,
@@ -2848,6 +2879,81 @@ mod tests {
         ] {
             assert!(browser_url(raw).is_err(), "{raw} was accepted");
         }
+    }
+
+    #[test]
+    fn a_file_link_gives_the_path_inside_the_worktree() {
+        let wt = "/work/example";
+        for (uri, want) in [
+            (
+                "file:///work/example/tmp/adr-removal.html",
+                "tmp/adr-removal.html",
+            ),
+            ("file:///work/example/a.txt", "a.txt"),
+            ("file://localhost/work/example/a.txt", "a.txt"),
+            ("file://my-pc.local/work/example/a.txt", "a.txt"),
+            ("file:///work/example/a%20b/%E3%81%82.md", "a b/あ.md"),
+            ("file:///work/example/日本語.md", "日本語.md"),
+            ("file:///work/example/a.html?x=1#L10", "a.html"),
+            ("file:///work/example/100%25.txt", "100%.txt"),
+            ("FILE:///work/example/a.txt", "a.txt"),
+        ] {
+            assert_eq!(link_relative(uri, wt).as_deref(), Ok(want), "{uri}");
+        }
+        assert_eq!(
+            link_relative("file:///work/example/a.txt", "/work/example/").as_deref(),
+            Ok("a.txt")
+        );
+    }
+
+    #[test]
+    fn a_file_link_outside_the_worktree_or_odd_is_refused() {
+        let wt = "/work/example";
+        let long = format!("file:///work/example/{}", "a/".repeat(2100));
+        for uri in [
+            "file:///etc/passwd",
+            "file:///work/example",
+            "file:///work/example/",
+            "file:///work/example/dir/",
+            "file:///work/example2/a.txt",
+            "file:///work/a.txt",
+            "file:///work/example/../secret.txt",
+            "file:///work/example/a/../../secret.txt",
+            "file:///work/example/%2e%2e/secret.txt",
+            "file:///work/example/a%2F..%2F..%2Fsecret.txt",
+            "file:///work/example/%2E%2E%2Fsecret.txt",
+            "file:///work/example/a%00b.txt",
+            "file:///work/example/a%0Ab.txt",
+            "file:///work/example/a%1Bb.txt",
+            "file:///work/example/a%7Fb.txt",
+            "file:///work/example/a%FFb.txt",
+            "file:///work/example/a%2F%2Fb.txt",
+            "https://example.com/work/example/a.txt",
+            "javascript:alert(1)",
+            "/work/example/a.txt",
+            "work/example/a.txt",
+            "tmp/a.html",
+            "file:",
+            "",
+            long.as_str(),
+        ] {
+            assert!(link_relative(uri, wt).is_err(), "{uri} was accepted");
+        }
+    }
+
+    #[test]
+    fn a_file_link_needs_an_absolute_worktree_without_control_characters() {
+        let uri = "file:///work/example/a.txt";
+        for wt in [
+            "",
+            "work/example",
+            "../work/example",
+            "/work/ex\nample",
+            "/work/ex\0ample",
+        ] {
+            assert!(link_relative(uri, wt).is_err(), "{wt:?} was accepted");
+        }
+        assert_eq!(link_relative("file:///a.txt", "/").as_deref(), Ok("a.txt"));
     }
 
     #[test]

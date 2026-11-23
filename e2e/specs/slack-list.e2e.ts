@@ -2085,10 +2085,13 @@ describe("slack list: the history of a channel (S-20)", () => {
       const history = await open();
       const thread = await mock("slack_thread", slackThread([threadMessage(slackTs(20), "Alice Example", "first")]));
       const react = await mock("slack_react", true);
+      const used = await mock("slack_emoji_used");
       await $$("#sc-feed .reaction")[0].click();
       expect(await waitForCalls(react)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: firstTs, name: "tada", add: true }]);
       await browser.waitUntil(async () => (await chips())[0][1] === "4");
       expect(await chips()).toEqual([["tada", "4", true, "true", false], ["eyes", "1", true, "true", false]]);
+      // The add is told to Rust for "よく使う" of the picker.
+      expect(await waitForCalls(used)).toEqual([{ teamId: workspace.teamId, name: "tada" }]);
       expect(await callsOf(thread)).toEqual([]);
       await expect($("#slack-thread")).not.toBeDisplayed();
       expect(await callsOf(history)).toHaveLength(1);
@@ -2097,20 +2100,25 @@ describe("slack list: the history of a channel (S-20)", () => {
     it("takes off the reaction the user gave, and the reaction nobody else gave is gone", async () => {
       await open();
       const react = await mock("slack_react", true);
+      const used = await mock("slack_emoji_used");
       await $$("#sc-feed .reaction")[1].click();
       expect(await waitForCalls(react)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: firstTs, name: "eyes", add: false }]);
       await waitForCount("#sc-feed .reaction", 1);
       expect(await chips()).toEqual([["tada", "3", false, "false", false]]);
+      // A take-off is not a use.
+      expect(await callsOf(used)).toEqual([]);
     });
 
     it("shows the error and changes nothing when slack_react fails", async () => {
       await open();
       const before = await chips();
       const react = await mock("slack_react", rejects("このメッセージにはこれ以上リアクションを付けられません"));
+      const used = await mock("slack_emoji_used");
       await $$("#sc-feed .reaction")[0].click();
       await waitForCalls(react);
       await expect($(".toast")).toHaveText(expect.stringContaining("リアクションを変えられませんでした: このメッセージにはこれ以上リアクションを付けられません"));
       expect(await chips()).toEqual(before);
+      expect(await callsOf(used)).toEqual([]);
     });
 
     it("sends a press once while it is on its way: the button is off until Rust answers", async () => {
@@ -2157,16 +2165,19 @@ describe("slack list: the history of a channel (S-20)", () => {
       const addButton = (row: number) => browser.execute((i) => document.querySelectorAll("#sc-feed .feed-item")[i].querySelector<HTMLElement>(".reaction-add")!.click(), row);
       const cellNames = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>(".emoji-pop .emoji-cell")].filter((c) => !c.hidden && !c.closest("[hidden]")).map((c) => c.dataset.name));
       const rows = () => [timelineMessage(oldTs, "Bob Example", "dev", "old"), ...reacted()];
-      const openPicker = async (row: number) => {
+      const sectionNames = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>(".emoji-pop .emoji-sec")].filter((s) => !s.hidden).map((s) => s.querySelector("h3")!.textContent));
+      // `frequent`: what slack_emoji_frequent answers, mocked after the history is open (booting reloads the page and clears an earlier mock); `extra` is the number of cells of the section that this makes.
+      const openPicker = async (row: number, extra = 0, frequent?: string[]) => {
         const history = await openHistory(rows());
         await pressChannel();
         await waitForCalls(history);
         await waitForCount("#sc-feed .reaction", 2);
         const list = await mock("slack_emoji_catalog", catalog());
+        const used = frequent ? await mock("slack_emoji_frequent", frequent) : "slack_emoji_frequent";
         await addButton(row);
         await expect($(".emoji-pop")).toBeDisplayed();
-        await waitForCount(".emoji-pop .emoji-cell", 4);
-        return { history, list };
+        await waitForCount(".emoji-pop .emoji-cell", 4 + extra);
+        return { history, list, used };
       };
 
       it("opens from the button of a message with reactions and of one without, asks for the list of the workspace, and does not open the row's thread", async () => {
@@ -2182,6 +2193,45 @@ describe("slack list: the history of a channel (S-20)", () => {
         await expect($$("#sc-feed .reaction-add")[0]).toHaveAttribute("aria-label", "リアクションを追加");
         expect(await browser.execute(() => [...document.querySelectorAll("#sc-feed .feed-item")].map((i) => [...i.querySelectorAll(".reactions > *")].map((e) => e.className.split(" ")[0])))).toEqual([["reaction-add"], ["reaction", "reaction", "reaction-add"]]);
         expect(await callsOf(thread)).toEqual([]);
+      });
+
+      it("lists the emoji Rust gives as most used first, under よく使う, and leaves out one the list has not", async () => {
+        const { used: frequent } = await openPicker(1, 3, ["eyes", "partyparrot", "deleted_one", "tada"]);
+        expect(await callsOf(frequent)).toEqual([{ teamId: workspace.teamId }]);
+        expect(await sectionNames()).toEqual(["よく使う", "カスタム", "標準"]);
+        expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>(".emoji-pop .emoji-sec")[0].querySelectorAll<HTMLElement>(".emoji-cell")].map((c) => c.dataset.name))).toEqual(["eyes", "partyparrot", "tada"]);
+        // The section narrows with the text, like the others.
+        await $(".emoji-pop input").setValue("EYE");
+        expect(await cellNames()).toEqual(["eyes", "eyes"]);
+      });
+
+      it("has no よく使う when Rust gives no name or fails, and the other sections are still listed", async () => {
+        await openPicker(1);
+        expect(await sectionNames()).toEqual(["カスタム", "標準"]);
+        await browser.keys("Escape");
+        await mock("slack_emoji_frequent", rejects("設定を読めません"));
+        await addButton(1);
+        await waitForCount(".emoji-pop .emoji-cell", 4);
+        expect(await sectionNames()).toEqual(["カスタム", "標準"]);
+      });
+
+      it("picks from よく使う like any cell: slack_react is called and the use is told to Rust", async () => {
+        await openPicker(1, 1, ["partyparrot"]);
+        const react = await mock("slack_react", true);
+        const used = await mock("slack_emoji_used");
+        await $(".emoji-pop .emoji-sec:first-child .emoji-cell").click();
+        expect(await waitForCalls(react)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: firstTs, name: "partyparrot", add: true }]);
+        expect(await waitForCalls(used)).toEqual([{ teamId: workspace.teamId, name: "partyparrot" }]);
+      });
+
+      it("does not tell Rust a use when slack_react fails", async () => {
+        await openPicker(1);
+        await mock("slack_react", rejects("このメッセージにはこれ以上リアクションを付けられません"));
+        const used = await mock("slack_emoji_used");
+        await $('.emoji-pop .emoji-cell[data-name="tada"]').click();
+        await waitForCalls("slack_react");
+        await expect($(".toast")).toHaveText(expect.stringContaining("リアクションを変えられませんでした"));
+        expect(await callsOf(used)).toEqual([]);
       });
 
       it("narrows the cells by a part of the name", async () => {
@@ -2220,7 +2270,7 @@ describe("slack list: the history of a channel (S-20)", () => {
         await browser.waitUntil(async () => (await chips())[0][1] === "4");
         expect((await chips())[0]).toEqual(["tada", "4", true, "true", false]);
         await addButton(1);
-        await waitForCount(".emoji-pop .emoji-cell", 5);
+        await waitForCount(".emoji-pop .emoji-cell", 4);
         await mock("slack_react", rejects("Slack アプリに reactions:write のスコープがありません。追加して、トークンを貼り直してください"));
         await $('.emoji-pop .emoji-cell[data-name="eyes"]').click();
         await waitForCalls("slack_react");

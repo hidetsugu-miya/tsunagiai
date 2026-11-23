@@ -1,3 +1,4 @@
+pub mod emoji_usage;
 pub mod socket;
 
 use std::{
@@ -1027,6 +1028,8 @@ pub async fn slack_remove_workspace(
                 &without_watched_team(seen, &gone),
             )?;
         }
+        // And the emoji the user reacted with (S-25).
+        emoji_usage::forget_team(&dir, &gone)?;
         Ok(list)
     })
     .await

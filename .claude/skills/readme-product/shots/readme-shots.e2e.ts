@@ -6,7 +6,6 @@ import type { TaskItem } from "../../ts/bindings/TaskItem";
 import type { OrcaWorktree } from "../../ts/bindings/OrcaWorktree";
 import type { SideChannel } from "../../ts/bindings/SideChannel";
 import type { SideWorkspace } from "../../ts/bindings/SideWorkspace";
-import type { ThreadDetail } from "../../ts/bindings/ThreadDetail";
 import type { ThreadItem } from "../../ts/bindings/ThreadItem";
 import type { TimelineMessage } from "../../ts/bindings/TimelineMessage";
 import type { Todo } from "../../ts/bindings/Todo";
@@ -21,7 +20,6 @@ import {
   orcaTerminal,
   para,
   plain,
-  rowOf,
   setClock,
   slackThread,
   span,
@@ -86,50 +84,6 @@ const threads = (): ThreadItem[] => [
 
 const inboxOf = () => ({ accounts: [WORK, HOME], threads: threads(), needsLogin: [], failed: {}, historyIds: { [WORK]: "100", [HOME]: "200" } });
 
-const invoiceThread = (): ThreadDetail => ({
-  subject: "請求書の金額が画面と合わない件",
-  unread: true,
-  messages: [
-    {
-      id: "m0",
-      ...sender("鈴木 陽菜 <hina.suzuki@example.com>"),
-      to: "ren.tanaka@example.com",
-      toLabel: "To 田中 蓮",
-      dateMs: minutesAgo(64),
-      snippet: "経理の鈴木です。お客さまから請求書の金額についてお問い合わせをいただきました。",
-      html: false,
-      authenticated: false,
-      body: "田中さん\n\n経理の鈴木です。お客さまから請求書の金額についてお問い合わせをいただきました。\nサポートで確認をお願いできますか。",
-    },
-    {
-      id: "m00",
-      ...sender("田中 蓮 <ren.tanaka@example.com>"),
-      to: "hina.suzuki@example.com",
-      toLabel: "To 鈴木 陽菜",
-      dateMs: minutesAgo(41),
-      snippet: "承知しました。同じ条件のお客さまがいないか調べて、開発にも共有します。",
-      html: false,
-      authenticated: false,
-      body: "鈴木さん\n\n承知しました。同じ条件のお客さまがいないか調べて、開発にも共有します。",
-    },
-    {
-      id: "m1",
-      ...sender("田中 蓮 <ren.tanaka@example.com>"),
-      to: WORK,
-      toLabel: "To 自分",
-      dateMs: minutesAgo(18),
-      snippet: "お疲れさまです。",
-      html: false,
-      authenticated: false,
-      body: "佐藤さん\n\nお疲れさまです。サポートの田中です。\n\n10 月分の請求書について、お客さまから「画面の金額と違う」とお問い合わせがありました。\n\n・画面の請求額: 118,800 円\n・請求書の金額: 120,000 円\n\n差額は 1,200 円で、10 月に割引クーポンを使ったお客さまだけで起きているようです。\n同じ条件のお客さまが、ほかに 14 件見つかりました。\n\nお客さまには、明日の午前中に回答するとお伝えしています。\n原因が分かりましたら、教えていただけますか。\n\nよろしくお願いします。\n\n田中 蓮",
-    },
-  ],
-  reply: {
-    one: { to: [{ label: "田中 蓮", mailbox: "田中 蓮 <ren.tanaka@example.com>" }], cc: [] },
-    all: { to: [{ label: "田中 蓮", mailbox: "田中 蓮 <ren.tanaka@example.com>" }], cc: [] },
-  },
-});
-
 // ---- Orca ----
 
 type Spec = [repo: string, branch: string, line: string, extra: Partial<OrcaRow> & { minutes?: number }];
@@ -151,8 +105,8 @@ const worktreeList = (): OrcaWorktree[] => [
   ...specs.map(([repo, branch]) => worktreeOf(repo, branch)),
   ...["billing-api", "shop-web", "mobile-api", "admin-console", "design-docs", "auth-service", "notify-worker", "data-batch", "ops-scripts", "landing-page"].map((repo) => worktreeOf(repo, "main")),
 ];
-// The instruction typed in the pane of the handoff photo (A-9).
-const INSTRUCTION = "この差額の原因を調べて、直してください。同じ条件のお客さまがほかにいないかも確かめてください。";
+// The instruction typed in the Orca tab of the Slack thread of the handoff photo (A-9).
+const INSTRUCTION = "夜間バッチが遅くなった原因を調べて、割引の集計にインデックスを足す修正を入れてください。";
 const overview = () => orcaOverview(rows(), worktreeList(), { terminals: [orcaTerminal("billing-api", "zsh", { branch: "fix/invoice-discount" })] });
 
 // ---- calendar ----
@@ -359,6 +313,7 @@ const slackDetail = () => ({
     threadMessage(tsAgo(14, 16), "佐藤 葵", "インデックスを足せば直りそうです。テスト環境で試します。", {}),
     threadMessage(tsAgo(9, 6), "小林 樹", "月初の明細が増えたぶんだと思います。インデックスを確認してみます。", { rich: plain("月初の明細が増えたぶんだと思います。インデックスを確認してみます。") }),
   ]),
+  teamId: wsA.teamId,
   channel: "C4",
 });
 
@@ -374,7 +329,8 @@ const common = () => ({
   todoist_load: todo(),
   calendar_week: week(),
   calendar_choices: calendarChoices(),
-  app_info: { version: "0.41.1", updatable: true },
+  // The version the footer shows: the latest release, which shots.sh reads from the tags.
+  app_info: { version: process.env.SHOT_VERSION!, updatable: true },
 });
 
 async function start(extra: Record<string, unknown> = {}) {
@@ -387,18 +343,20 @@ async function start(extra: Record<string, unknown> = {}) {
 describe("readme shots", () => {
   it("handoff", async () => {
     await start();
-    await mock("thread", invoiceThread());
-    await mock("set_read", true);
-    await rowOf("unread-threads", "請求書の金額が画面と合わない件").$(".subject").click();
-    await expect($("#thread-subject")).toHaveText("請求書の金額が画面と合わない件");
-    await $("#thread-orca").click();
-    await expect($("#mail-handoff")).toBeDisplayed();
-    // The list of Orca is read when the pane opens: the project chip is enabled once the projects are in.
-    await expect($("#mail-handoff .ho-project")).toBeEnabled();
-    await $("#mail-handoff .ho-project").click();
+    await mock("slack_thread", slackDetail());
+    await $("#nav-slack").click();
+    await expect($("#slack-list")).toBeDisplayed();
+    // The thread of #dev-billing: its row holds the unread reply, and the window is wide enough for the pane to be on the right of the thread (S-7).
+    await $('//*[contains(@class, "feed-row")][contains(., "夜間バッチの集計が、昨日から")]//button[contains(@class, "feed-open")]').click();
+    await waitForCount("#st-msgs .st-msg", 8);
+    await $("#reply-tab-orca").click();
+    await expect($("#st-orca")).toBeDisplayed();
+    // The list of Orca is read when the tab opens: the project chip is enabled once the projects are in.
+    await expect($("#st-orca .ho-project")).toBeEnabled();
+    await $("#st-orca .ho-project").click();
     await $('//div[@role="menu"]//button[normalize-space(.)="billing-api"]').click();
-    await $("#mail-handoff textarea").setValue(INSTRUCTION);
-    await expect($("#mail-handoff .ho-form .chat-send")).toBeEnabled();
+    await $("#st-orca textarea").setValue(INSTRUCTION);
+    await expect($("#st-orca .ho-form .chat-send")).toBeEnabled();
     await shot("handoff");
   });
 
