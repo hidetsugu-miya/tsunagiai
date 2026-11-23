@@ -1534,12 +1534,17 @@ export async function readDestination(environment: string | null, force: boolean
 }
 
 // Selects the session of the pane `paneKey` on the Orca screen and shows the screen ("Orca の画面で開く"). A session the list does not hold yet leaves the project and the tab as they are, and the work pane is shown all the same: no formation stays selected.
-export function openInOrca(paneKey: string | null) {
+// `launched` is the answer of the launch of a hand-over (A-9: its terminal's handle, and the place it started in, null for this machine): a session that the list does not hold yet is followed as the plus follows its start, so once the list holds it, its project and tab are selected.
+// A place that is neither the target nor this machine is not in the list, so the screen is shown with the selection as it is.
+export function openInOrca(paneKey: string | null, launched?: { handle: string | null; environment: string | null }) {
   deselectFormation();
   const row = paneKey === null ? null : (mix.rows.find((r) => r.paneKey === paneKey) ?? null);
   if (row) {
     setProject(row.projectKey);
     chooseTab(claudeTabId(row.paneKey!));
+  } else if (launched !== undefined && (paneKey !== null || launched.handle !== null)) {
+    started = { kind: "claude", paneKey, handle: launched.handle, target: launched.environment, until: Date.now() + START_WAIT_MS };
+    claimStarted();
   }
   setScreen("orca");
 }

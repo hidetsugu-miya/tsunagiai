@@ -890,6 +890,8 @@ export class HandoffPane {
     this.sending.add(key);
     this.errors.delete(key);
     this.update();
+    // The session that was started, which the Orca screen is to show (below).
+    let follow: { paneKey: string | null; handle: string | null } | null = null;
     try {
       const context = card ? { kind: card.kind, title: card.title, body: card.body } : null;
       const summary = context ? await this.summarise(key, context, instruction) : [];
@@ -898,6 +900,7 @@ export class HandoffPane {
       const destination: HandoffDestination = { kind: "new", path: worktree };
       const started = await invoke("orca_handoff", { destination, instruction, files: uploaded.map((f) => f.text), summary, context, environment });
       sessions.set(key, { path: worktree, paneKey: started.paneKey, handle: started.handle, environment, seen: false });
+      follow = { paneKey: started.paneKey, handle: started.handle };
       made.delete(key);
       summarised.delete(key);
       forms.delete(key);
@@ -916,6 +919,8 @@ export class HandoffPane {
       this.sync();
       this.update();
       this.el?.input.focus();
+      // The hand-over moves to the Orca screen and selects the session there (A-9), unless the item was left while it ran: the screen the owner went to is not taken from them.
+      if (follow !== null && this.itemKey === key) openInOrca(follow.paneKey, { handle: follow.handle, environment });
     }
   }
 }
