@@ -54,7 +54,17 @@ export interface MenuItem {
   pick: () => unknown;
 }
 
+// A button of the row of icons above the rows of a menu (A-16): its `label` is its `aria-label`, which the tooltip shows.
+export interface IconItem {
+  label: string;
+  // The markup of a line icon (a constant of icons.ts, never text from outside).
+  icon: string;
+  pick: () => unknown;
+}
+
 export interface MenuOptions {
+  // A row of icon buttons at the top of the menu, a line under it when rows follow (A-16).
+  icons?: IconItem[];
   // A field at the top of the menu that narrows the rows to those whose label holds the text (A-9): its `aria-label`, and the line shown when no row matches.
   search?: { label: string; empty: string };
   // Where the menu opens when it is not under its anchor (the pointer of a right press).
@@ -66,6 +76,26 @@ export function openMenu(anchor: Element, items: MenuItem[], options: MenuOption
   menu.setAttribute("role", "menu");
   // With a search field the rows scroll in `list` and the field stays above them.
   const list = options.search ? tag("div", "menu-list") : menu;
+  if (options.icons) {
+    const row = tag("div", "menu-icons");
+    for (const item of options.icons) {
+      const b = tag("button");
+      b.setAttribute("role", "menuitem");
+      b.setAttribute("aria-label", item.label);
+      b.innerHTML = item.icon;
+      b.onclick = () => {
+        closeMenu();
+        item.pick();
+      };
+      row.append(b);
+    }
+    list.append(row);
+    if (items.length > 0) {
+      const line = tag("div", "menu-sep");
+      line.setAttribute("role", "separator");
+      list.append(line);
+    }
+  }
   const rows = items.map((item) => {
     if (item.divider) {
       const line = tag("div", "menu-sep");

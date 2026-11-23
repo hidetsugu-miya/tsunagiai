@@ -16,7 +16,7 @@ const noPane: OrcaStarted = { paneKey: null, handle: null };
 // What `orca_terminal_create` answers for a terminal made in example-api (it has a handle and no pane key), and the plain terminal once the list holds it.
 const created: OrcaStarted = { paneKey: null, handle: "term_new_sh" };
 const createdTerminal = () => orcaTerminal("example-api", "zsh", { handle: "term_new_sh" });
-// The two items of the plus.
+// The three items of the plus: the icons of the terminal and the scratchpad (found by their aria-label), and the row of Claude.
 const CLAUDE = "Claude を起動";
 const TERMINAL = "ターミナルを開く";
 const SCRATCHPAD = "スクラッチパッド";
@@ -467,13 +467,17 @@ describe("orca", () => {
     expect(await callsOf("orca_terminal_read")).toEqual([]);
   });
 
-  it("is enabled by a selected project, and opens a menu of 「Claude を起動」, 「ターミナルを開く」 and 「スクラッチパッド」", async () => {
+  it("is enabled by a selected project, and opens a menu of the icons of 「ターミナルを開く」 and 「スクラッチパッド」 above 「Claude を起動」", async () => {
     await openOrca();
     await expect($(".orca-plus")).toBeDisabled();
     await pickProject("example-api");
     await expect($(".orca-plus")).toBeEnabled();
     await pressPlus();
-    expect(await textsOf('.menu[role="menu"] button')).toEqual([CLAUDE, TERMINAL, SCRATCHPAD]);
+    expect(await browser.execute(() => [...document.querySelectorAll('.menu[role="menu"] button')].map((b) => b.getAttribute("aria-label") ?? b.textContent))).toEqual([TERMINAL, SCRATCHPAD, CLAUDE]);
+    // The two icons only (no text) are in the row above the line, and Claude is the row under it.
+    expect(await textsOf(".menu-icons button")).toEqual(["", ""]);
+    expect(await count('.menu[role="menu"] > .menu-icons + [role="separator"] + button')).toBe(1);
+    expect(await count('.menu-icons button[role="menuitem"]')).toBe(2);
     // Each item draws its own icon in place of the dot.
     expect(await count('.menu[role="menu"] button svg')).toBe(3);
     expect(await count('.menu[role="menu"] .pdot')).toBe(0);
@@ -486,15 +490,29 @@ describe("orca", () => {
       probe.remove();
       return { claude, icons: [...document.querySelectorAll('.menu[role="menu"] button svg')].map((svg) => getComputedStyle(svg).color) };
     });
-    expect(colors.icons[0]).toBe(colors.claude);
+    expect(colors.icons[0]).not.toBe(colors.claude);
     expect(colors.icons[1]).not.toBe(colors.claude);
-    expect(colors.icons[2]).not.toBe(colors.claude);
+    expect(colors.icons[2]).toBe(colors.claude);
     await expect($(".orca-plus")).toHaveAttribute("aria-expanded", "true");
     // Escape closes it, and nothing was started.
     await browser.keys("Escape");
     await expect($(".menu")).not.toExist();
     expect(await callsOf("orca_start")).toHaveLength(0);
     expect(await callsOf("orca_terminal_create")).toHaveLength(0);
+  });
+
+  it("shows the name of an icon of the plus as a tooltip, and starts a terminal from the icon", async () => {
+    await openOrca();
+    await pickProject("example-api");
+    await pressPlus();
+    // The window has no pointer to put over the icon, so the mouseover that the tooltip listens for is dispatched, once.
+    await browser.execute((once) => window.__e2e_once__(once) && document.querySelector('.menu-icons button[aria-label="スクラッチパッド"]')!.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })), onceId());
+    await expect($(".tooltip")).toBeDisplayed();
+    await expect($(".tooltip")).toHaveText(SCRATCHPAD);
+    const create = await mock("orca_terminal_create", created);
+    await pickItem(TERMINAL);
+    expect(await waitForCalls(create)).toEqual([{ path: "/work/example-api", environment: null }]);
+    await expect($(".menu")).not.toExist();
   });
 
   it("starts Claude at once in the one worktree of the selected project, with no prompt and the target the screen shows", async () => {
@@ -3972,12 +3990,12 @@ describe("orca: scratchpad (A-29)", () => {
       return [input.selectionStart, input.selectionEnd, input.value];
     });
 
-  it("is the third item of the plus, with an icon, and is enabled for a project's row", async () => {
+  it("is the second icon of the plus, with a line icon, and is enabled for a project's row", async () => {
     await openOrca();
     await pickProject("example-app");
     await pressPlus();
-    expect(await textsOf('.menu[role="menu"] button')).toEqual([CLAUDE, TERMINAL, SCRATCHPAD]);
-    expect(await count('.menu[role="menu"] button:nth-child(3) svg')).toBe(1);
+    expect(await browser.execute(() => [...document.querySelectorAll('.menu[role="menu"] button')].map((b) => b.getAttribute("aria-label") ?? b.textContent))).toEqual([TERMINAL, SCRATCHPAD, CLAUDE]);
+    expect(await count('.menu-icons button[aria-label="スクラッチパッド"] svg')).toBe(1);
     expect(await count('.menu[role="menu"] button:disabled')).toBe(0);
   });
 

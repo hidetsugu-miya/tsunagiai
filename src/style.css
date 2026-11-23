@@ -786,6 +786,8 @@ a.c-file:hover { background: var(--hover); }
 .menu button:disabled { opacity: .45; cursor: default; }
 .menu button:disabled:hover { background: transparent; }
 .menu-sep { flex: none; height: 1px; margin: 4px 6px; background: var(--chip-line); }
+.menu-icons { flex: none; display: flex; gap: 4px; }
+.menu .menu-icons button { justify-content: center; width: 36px; padding: 0; border-radius: 8px; color: var(--ink-soft); }
 .menu-searchable { box-sizing: border-box; overflow: hidden; }
 .menu-search { flex: none; box-sizing: border-box; width: 100%; height: 28px; margin: 0 0 4px; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 14px; outline: 0; background: var(--surface); font: inherit; color: inherit; }
 .menu-search:focus { border-color: var(--accent); }

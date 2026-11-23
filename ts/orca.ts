@@ -1723,15 +1723,19 @@ function openTabMenu(anchor: Element, tab: string, pane: string) {
   if (items.length > 0) openMenu(anchor, items);
 }
 
-// The plus (A-16, A-29): a menu of "Claude を起動", "ターミナルを開く" and "スクラッチパッド". The first two start in a worktree of the project selected in the list pane, and the scratchpad is a file of that worktree.
+// The plus (A-16, A-29): a row of the icons of "ターミナルを開く" and "スクラッチパッド" above a line and the row "Claude を起動". The terminal and Claude start in a worktree of the project selected in the list pane, and the scratchpad is a file of that worktree.
 function openStartMenu(anchor: Element) {
   if (view === null || projectKey === null) return;
-  const item = (label: string, icon: string, pick: () => void) => ({ label, color: "var(--accent)", icon, current: false, pick });
-  openMenu(anchor, [
-    item("Claude を起動", CLAUDE_SVG.replace("<svg ", '<svg class="orca-start-claude" '), () => void chooseWorktree(anchor, (w) => start("claude", w))),
-    item("ターミナルを開く", TERMINAL_SVG, () => void chooseWorktree(anchor, (w) => start("terminal", w))),
-    item("スクラッチパッド", SCRATCHPAD_SVG, () => void chooseWorktree(anchor, (w) => askScratchpad(anchor, w.path, placeOf(w)))),
-  ]);
+  openMenu(
+    anchor,
+    [{ label: "Claude を起動", color: "var(--accent)", icon: CLAUDE_SVG.replace("<svg ", '<svg class="orca-start-claude" '), current: false, pick: () => void chooseWorktree(anchor, (w) => start("claude", w)) }],
+    {
+      icons: [
+        { label: "ターミナルを開く", icon: TERMINAL_SVG, pick: () => void chooseWorktree(anchor, (w) => start("terminal", w)) },
+        { label: "スクラッチパッド", icon: SCRATCHPAD_SVG, pick: () => void chooseWorktree(anchor, (w) => askScratchpad(anchor, w.path, placeOf(w))) },
+      ],
+    },
+  );
 }
 
 // A project with one worktree acts in it at once; with none or more than one, the dialog of the worktrees narrowed to the project's asks (a project with none says so there). The worktrees of the formations' children are not among them (A-16, A-37); the list of the formations is waited for only when it was never read, and is read again behind the choice when it is not recent.
