@@ -4683,6 +4683,31 @@ describe("orca: files and editor (A-18)", () => {
     await expect($(CARDS)).not.toExist();
   });
 
+  it("reads the file shown again by the clock with the file pane hidden, in the rich view and in the source, and does not read the tree meanwhile (A-18, issue #1329)", async () => {
+    await openFiles({ ...timers({ orcaClock: 1000 }), editor_settings: { autosaveMs: 60000 } });
+    await openMarkdown("# 前\n\n本文\n");
+    expect(await rich("h1")).toEqual(["前"]);
+    await filesToggle().click();
+    await expect($("#orca-files")).not.toBeDisplayed();
+    const tree = await mock("orca_files_list", dirOf("", [["only-on-disk.rs", false]]));
+    // The rich view follows the disk with no file pane.
+    const next = "# 後\n\n本文\n";
+    await mock("markdown_split", parts(next));
+    await mock("markdown_patch", patched(next));
+    const read = await mock("orca_file_read", text(next, "sig-2", "markdown", "markdown"));
+    await browser.waitUntil(async () => (await rich("h1")).join() === "後", { timeoutMsg: "the rich view never followed the disk" });
+    expect((await callsOf(read))[0]).toEqual({ path: "/work/example-app", relative: "a.rs", environment: null });
+    // The source follows it too.
+    await modeButton("ソース").click();
+    await expect(modeButton("ソース")).toHaveAttribute("aria-pressed", "true");
+    await mock("orca_file_read", text("# 三\n", "sig-3", "markdown", "markdown"));
+    await expect($(".orca-edit-area")).toHaveValue("# 三\n", { trim: false });
+    // Two more periods: the tree is not read while the pane is hidden.
+    await browser.pause(2200);
+    expect(await callsOf(tree)).toEqual([]);
+    await expect($(CARDS)).not.toExist();
+  });
+
   it("reads the diff shown and the history shown again by the clock: a diff that changed is drawn in place, the same commits are not drawn again, and a new commit comes to the top with the chosen commit kept (A-24, A-27)", async () => {
     await openFiles(historyFixtures(timers({ orcaClock: 1000 })));
     await waitForCount("#orca-files-tree .orca-file", 4);

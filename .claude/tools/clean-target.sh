@@ -1,5 +1,5 @@
 #!/bin/sh
-# Deletes the old build output of the app itself from src-tauri/target of the main checkout and of every worktree; launchd runs it every day at 21:00 (harness.md).
+# Deletes the old build output of the app itself from src-tauri/target of the main checkout and of every worktree; session-start.sh runs it in the background at the start of every session (harness.md).
 # Usage: clean-target.sh  (no arguments; it prints the size of each target before and after)
 # In each profile (target/debug, target/release, ...) it deletes what has nothing modified in the last 24 hours, or nothing newer than the src-tauri/Cargo.toml of its checkout (the output built before the last change of Cargo.toml, which is now a change of the dependencies or features: the version is fixed at 0.0.0, so a release does not touch the file; no build uses that output again), and nothing while cargo or rustc runs:
 # every entry directly under incremental/, and the entries of the app itself (tsunagiai-*, tsunagiai_lib-*, libtsunagiai_lib-*, tsunagiai_mcp-*, and the same names with cookapps for the output built before the rename) directly under deps/, build/ and .fingerprint/.
