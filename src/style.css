@@ -1132,7 +1132,9 @@ button.formation-tab-main:focus-visible { outline: 2px solid var(--accent); outl
 .fp-facts dd > .fp-fold-btn { margin-left: 8px; }
 .fp-diagram { margin: 0; display: flex; flex-direction: column; gap: 6px; }
 .fp-diagram-box { overflow-x: auto; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
-.fp-diagram-box svg { width: 100%; max-width: 100%; height: auto; fill: initial; stroke: none; stroke-width: initial; }
+.fp-diagram-box svg { width: 100%; max-width: 100%; height: auto; fill: var(--_fg); stroke: none; stroke-width: initial; stroke-linecap: initial; stroke-linejoin: initial; }
+/* The colors of a diagram that Pele draws (A-41), from the variables of :root. */
+.pele { --pele-bg: var(--surface); --pele-fg: var(--ink-soft); --pele-muted: var(--muted); --pele-line: var(--ink-soft); --pele-surface: var(--soft); --pele-surface-alt: var(--bar); --pele-border: var(--accent-dim); --pele-accent: var(--accent); --pele-critical: var(--danger); --pele-error: var(--danger); }
 .fp-diagram figcaption { color: var(--muted); font-size: calc(13px * var(--fs)); }
 .fp-image { margin: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 .fp-image-box { max-width: 100%; }

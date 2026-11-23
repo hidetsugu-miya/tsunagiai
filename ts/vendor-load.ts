@@ -5,7 +5,7 @@
 const TERMINAL = ["vendor/xterm.js", "vendor/addon-fit.js", "vendor/addon-unicode11.js", "vendor/addon-web-links.js", "vendor/addon-webgl.js"];
 const HIGHLIGHT = ["vendor/highlight.min.js", "vendor/highlight-languages.js"];
 const MILKDOWN = ["vendor/milkdown.js"];
-const MERMAID = ["vendor/mermaid.min.js"];
+const PELE = ["vendor/pele.global.js"];
 
 const loading = new Map<string, Promise<void>>();
 const loaded = new Set<string>();
@@ -65,5 +65,5 @@ export const highlightReady = () => loaded.has("highlight");
 // Milkdown (the rich view of a Markdown file in the editor, A-26): one file that scripts/build-milkdown.mjs bundles.
 export const loadMilkdown = () => once("milkdown", MILKDOWN);
 
-// Mermaid (the diagrams of a decision page, A-41): one file, read only when a page has a diagram.
-export const loadMermaid = () => once("mermaid", MERMAID);
+// Pele (the diagrams of a decision page, A-41): one file, read only when a page has a diagram.
+export const loadPele = () => once("pele", PELE);

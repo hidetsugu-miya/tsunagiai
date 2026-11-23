@@ -138,7 +138,7 @@ Each block is an object with a `type`:
 - `before-after`: `before` and `after` (arrays of blocks), with `before_caption` (default `今`) and `after_caption` (default `変更後`).
 - `image`: `root`, `path`, `caption`. A screenshot of the current screen or of the adopted after-state, or a UI reference image. How an option that is not adopted would look goes in that option's `image`.
 - `folded`: `summary` and `blocks`, a group the owner opens.
-- `diagram`: `mermaid` and `caption` (optional). Its first line names the type: `flowchart` (or `graph`), `sequenceDiagram` or `stateDiagram` (or `stateDiagram-v2`). The check reads that first word and the syntax, and a syntax error is refused with the diagram's JSON path.
+- `diagram`: `mermaid` and `caption` (optional). Its first line names the type: `flowchart` (or `graph`), `sequenceDiagram` or `stateDiagram` (or `stateDiagram-v2`), or another type of Mermaid 12.1.0 that the screen draws, such as `classDiagram`, `erDiagram`, `gantt` or `pie`. The check reads that first word and the syntax, and a syntax error is refused with the diagram's JSON path.
 - `evidence`: `items`, evidence items, shown folded.
 
 A `list` has at least one item, a `table` at least one row, and an `evidence` block at least one item. Blocks nest at most 6 deep.
