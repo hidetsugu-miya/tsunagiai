@@ -75,6 +75,31 @@ avatar.style.background = colorOf(name);
 img.src = `https://example.com/avatar/${address}`;
 ```
 
+## Icons
+
+### Write the shape of an icon only in `ts/icons.ts`
+
+`ts/icons.ts` holds every icon's shape, once. A module takes the `*_SVG` string it needs from there (`withClass` puts a class on one), and `src/index.html` writes `<svg data-svg="{name}"></svg>` with no child, which `fillIcons` fills at the start of `main.ts` (an `svg` keeps the attributes it had besides `viewBox` and `aria-hidden`).
+The same shape written in several places drifted apart and had to be changed in each (the Claude star was in `index.html` eleven times); reading a shape back from a button of the page made the order of the code matter.
+`.claude/tools/check-icons.sh` fails on `<svg`, `<path` and the other shape elements in a `ts/` module other than `ts/icons.ts`, and on a child element or an `<svg>` without `data-svg` in `index.html`. `post-edit.sh` runs it on every edit of such a file, and `run-ci.sh` runs it on the whole tree.
+A shape that looks like an existing one but differs gets its own name; do not change a shape to make two the same, because the screen must not change.
+
+```ts
+// Good: ts/icons.ts
+export const CLOSE_SVG = icon("close", '<path d="M6 6l12 12M18 6L6 18"/>');
+// Good: another module
+button.innerHTML = CLOSE_SVG;
+// Bad: a shape written in a module
+button.innerHTML = '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+```
+
+```html
+<!-- Good -->
+<button class="icon-btn" aria-label="閉じる"><svg data-svg="close"></svg></button>
+<!-- Bad: a shape in the page -->
+<button class="icon-btn" aria-label="閉じる"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+```
+
 ## CSS
 
 ### Hide an element that must not take clicks with `visibility: hidden`

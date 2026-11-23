@@ -14,6 +14,7 @@ import { initFormation } from "./formation.js";
 import { initFormationFlow } from "./formation-flow.js";
 import { initGhostty } from "./ghostty.js";
 import { initHint } from "./hint.js";
+import { fillIcons } from "./icons.js";
 import { initInbox, load, showInboxList } from "./inbox.js";
 import { initLogSettings } from "./log-settings.js";
 import { initMailCompose } from "./mail-compose.js";
@@ -39,6 +40,7 @@ import { initPrompt } from "./todo-prompt.js";
 import { initTooltip } from "./tooltip.js";
 import { initUpdate } from "./update.js";
 
+fillIcons();
 initAccounts();
 initTooltip();
 initInbox();

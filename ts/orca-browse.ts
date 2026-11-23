@@ -1,12 +1,10 @@
 // The dialog that picks a folder on the server of a saved environment (A-38, issue #782), in the form of Orca's own "browse the host's file system": a breadcrumb with the buttons up and home, a field that narrows the names (and takes a path that starts with "/"), the folders of the folder shown, the path that will be added, and the two buttons.
 // Rust lists the folders (`orca_browse_dir`) and adds the project (`orca_project_add`). The paths are POSIX paths: the folder above is cut at the last "/", and a name is joined with one. The names come from the server, so they are drawn as text, never as markup.
 import { composing, partMatcher, tag } from "./dom.js";
-import { CHEVRON_SVG, CLOSE_SVG, FOLDER_SVG, svgOf } from "./icons.js";
+import { CHEVRON_SVG, CLOSE_SVG, FOLDER_SVG, HOME_SVG, UP_FOLDER_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { showFailure } from "./error-card.js";
 
-const HOME_SVG = svgOf('<path d="M4 11l8-7 8 7v9h-5v-6H9v6H4z"/>');
-const UP_FOLDER_SVG = svgOf('<path d="M12 19V5"/><path d="M6 11l6-6 6 6"/>');
 
 const segmentsOf = (path: string) => path.split("/").filter((s) => s !== "");
 const joinPath = (dir: string, name: string) => `${dir.endsWith("/") ? dir : `${dir}/`}${name}`;
