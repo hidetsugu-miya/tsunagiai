@@ -9,7 +9,7 @@
 // While an agent works, the button's icon is yellow and fades slowly; the number that work is only in the button's label.
 // A search field in the row of the heading 「プロジェクト」 (A-19), opened by the magnifier at the right end of the row or by ⌘J, narrows the projects by name.
 // The bell in that row (A-8) switches the list to the work: the sessions of every project, the newest change first, each with the pin and the pencil of its title; while a search text is typed the list is the projects again.
-// While the screen and the file pane are shown, the clock also reads again, every 10 seconds, what the file pane shows and the files and differences that the panes show (`rereadFiles`; A-18, A-24, A-27), without a word.
+// While the screen is shown and the window is not hidden, the clock also reads again, every 10 seconds, the files and differences that the panes show, and, while the file pane is shown, what the file pane shows (`rereadFiles`; A-18, A-24, A-27), without a word.
 // A read in the background swaps the rows in place: the selection and the scroll position stay, and `show()` is never called by it.
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import type { OrcaAgent } from "./bindings/OrcaAgent";
@@ -95,7 +95,7 @@ let baselined = false;
 let loadSeq = 0;
 let loading = false;
 let lastTry = 0;
-// When the clock last read the files again (`rereadFiles`), or last found the screen, the window or the file pane hidden: the next read is one period after it.
+// When the clock last read the files again (`rereadFiles`), or last found the screen or the window hidden: the next read is one period after it.
 let filesAt = Date.now();
 // Whether the list of projects is open (A-23): held in memory only, so the screen is open again when the app starts.
 let listOpen = true;
@@ -1039,8 +1039,8 @@ function syncEditor(tabs: Tab[]) {
     const host = editorHostOf(pane.id);
     if (tab?.kind === "file" && host) placements.push({ id: tab.id, host });
   }
-  // A file that comes back into a pane is read again while the file pane is shown (A-18).
-  showEditors(placements, filesShown());
+  // A file that comes back into a pane is read again, whether the file pane is shown or not (A-18).
+  showEditors(placements);
 }
 
 // Shows the difference of the diff tab selected in each pane while the screen is shown (in the host of the editor, which a pane shows one of).
@@ -1052,7 +1052,7 @@ function syncDiff(tabs: Tab[]) {
     const host = editorHostOf(pane.id);
     if (tab?.kind === "diff" && host) placements.push({ id: tab.id, host });
   }
-  showDiffs(placements, filesShown());
+  showDiffs(placements);
 }
 
 // Shows the definition of the definition tab selected in each pane while the screen is shown (in the host of the editor, which a pane shows one of).
@@ -1527,9 +1527,9 @@ function rereadTabs() {
   refreshDiffs();
 }
 
-// The clock's read of the files (A-18, A-24, A-27): what the file pane shows (the tree, or the history) and the tabs of files and differences that the panes show. Each skips what is still being read.
+// The clock's read of the files (A-18, A-24, A-27): the tabs of files and differences that the panes show, and, while the file pane is shown, what it shows (the tree, or the history). Each skips what is still being read.
 function rereadFiles() {
-  refreshFiles(true);
+  if (filesShown()) refreshFiles(true);
   rereadTabs();
 }
 
@@ -1539,8 +1539,8 @@ function refresh() {
   syncPeek();
   // The time of the rows of the work moves by the minute, with no read of the list (a streamed list is read by no clock).
   if (listShown() && activeShown() && !document.hidden) drawFeed();
-  // The files are read again every period while the screen, the window and the file pane are shown, whatever the list does (streamed or being read).
-  if (!shown() || document.hidden || !filesShown()) filesAt = Date.now();
+  // The files are read again every period while the screen and the window are shown, whatever the file pane and the list do (streamed or being read).
+  if (!shown() || document.hidden) filesAt = Date.now();
   else if (Date.now() - filesAt >= shownMs()) {
     filesAt = Date.now();
     rereadFiles();

@@ -2,7 +2,7 @@
 // A file is saved by itself: once the typing has stopped for the time of the settings, the text goes to Rust with the signature of the text that was read, and Orca writes only if the disk still holds it.
 // When it does not (the file was changed elsewhere, or is gone), nothing is written and the heading says so; the text stays in the editor and is not tried again until the tab is opened anew.
 // Typing that still waits for its timer when the window is closed is sent at once (`pagehide`).
-// A file that a pane shows is read again by the clock of the Orca screen, and when it is shown again after it was out of the page (`refreshEditors`, `showEditors`): only a file with no typing that waits for the disk, and its text is replaced, with the caret and the scroll kept, only when the disk holds another text than the one that was read. A read that fails says nothing.
+// A file that a pane shows is read again by the clock of the Orca screen (whether the file pane is shown or not), and when it is shown again after it was out of the page (`refreshEditors`, `showEditors`): only a file with no typing that waits for the disk, and its text is replaced, with the caret and the scroll kept, only when the disk holds another text than the one that was read. A read that fails says nothing.
 // A file whose language a language server takes asks for its definitions (A-34): the right button with the Command key on a name sends the editor's text, with the place of the character under the mouse, to the screen (`definition`), which shows the answer in the definition tab under the pane of the editor. A file the definition put outside the worktree (a gem) is a file of this editor too, read only (`outside`: its `relative` is the server's absolute path, Rust reads it by `lsp_read_outside`, and nothing is saved), and a place of a definition is gone to by `goTo`.
 // While the Command key is down and the mouse stays on a name for LINK_WAIT_MS, the editor asks whether the name has a definition (`lsp_definition_exists`, only of a server that is running) and draws an underline under it in the accent color, in the box of the text under the layer of colors, with the pointer for the cursor (A-34, `showLink`, `hideLink`). The answer is kept by the name's range until the text changes; the key's release, the mouse leaving the editor, typing and the scroll take the underline away.
 // The line of the caret (the source) and the paragraph of the caret (the rich view) have a faint band under the text, drawn here (A-18, A-26): `placeBand` and `placeRichBand`, called for each file at each change of the selection of the page and by the events of the text area.
@@ -1101,8 +1101,8 @@ export function refreshEditors() {
   for (const f of files.values()) if (f.el.isConnected) void reread(f);
 }
 
-// Shows each file of `placements` in its host element and takes every other file out of the page (it keeps its text). With `fresh`, a file that was out of the page and is put back is read again.
-export function showEditors(placements: { id: string; host: HTMLElement }[], fresh: boolean) {
+// Shows each file of `placements` in its host element and takes every other file out of the page (it keeps its text). A file that was out of the page and is put back is read again.
+export function showEditors(placements: { id: string; host: HTMLElement }[]) {
   const shown = new Set(placements.map((p) => p.id));
   for (const [id, f] of files) {
     if (shown.has(id)) continue;
@@ -1127,7 +1127,7 @@ export function showEditors(placements: { id: string; host: HTMLElement }[], fre
     f.bandMetrics = null;
     placeBand(f);
     flushJump(f);
-    if (back && fresh) void reread(f);
+    if (back) void reread(f);
   }
 }
 
