@@ -39,6 +39,7 @@ import type { OrcaRow } from "../ts/bindings/OrcaRow";
 import type { OrcaStatus } from "../ts/bindings/OrcaStatus";
 import type { OrcaStreamEvent } from "../ts/bindings/OrcaStreamEvent";
 import type { ClaudeCodeEvent } from "../ts/bindings/ClaudeCodeEvent";
+import type { OrcaFilesEvent } from "../ts/bindings/OrcaFilesEvent";
 import type { OrcaTermEvent } from "../ts/bindings/OrcaTermEvent";
 import type { OrcaTerminal } from "../ts/bindings/OrcaTerminal";
 import type { OrcaWorktree } from "../ts/bindings/OrcaWorktree";
@@ -1027,6 +1028,8 @@ const deliver = (command: string, event: unknown, nth: number) =>
 // A-12: an event of the stream of the list (`orca_stream_open`), and of the terminal shown (`orca_stream_terminal`).
 export const sendStream = (event: OrcaStreamEvent, nth = -1) => deliver("orca_stream_open", event, nth);
 export const sendTerm = (event: OrcaTermEvent, nth = -1) => deliver("orca_stream_terminal", event, nth);
+// A-12, A-18: an event of the watch of the files of a worktree (`orca_stream_files`).
+export const sendFiles = (event: OrcaFilesEvent, nth = -1) => deliver("orca_stream_files", event, nth);
 // A-36: an event of the process of a Claude Code pane (`claude_code_start`).
 export const sendClaudeCode = (event: ClaudeCodeEvent, nth = -1) => deliver("claude_code_start", event, nth);
 

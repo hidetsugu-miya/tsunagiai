@@ -1,7 +1,7 @@
 #!/bin/sh
 # Deletes the old build output of the app itself from src-tauri/target of the main checkout and of every worktree; session-start.sh runs it in the background at the start of every session (harness.md).
 # Usage: clean-target.sh  (no arguments; it prints the size of each target before and after)
-# In each profile (target/debug, target/release, ...) it deletes what has nothing modified in the last 24 hours, or nothing newer than the src-tauri/Cargo.toml of its checkout (the output built before the last change of Cargo.toml, which is now a change of the dependencies or features: the version is fixed at 0.0.0, so a release does not touch the file; no build uses that output again), and nothing while cargo or rustc runs:
+# In each profile (target/debug, target/release, ...) it deletes what has nothing modified in the last 24 hours, or nothing newer than the src-tauri/Cargo.toml of its checkout (the output built before the last change of Cargo.toml, which is now a change of the dependencies or features: the version is fixed at 0.0.0, so a release does not touch the file; no build uses that output again), and it stops at the first check that finds cargo or rustc running (checked before each worktree and before each deletion; it logs one line and ends, and the next run cleans):
 # every entry directly under incremental/, and the entries of the app itself (tsunagiai-*, tsunagiai_lib-*, libtsunagiai_lib-*, tsunagiai_mcp-*, and the same names with cookapps for the output built before the rename) directly under deps/, build/ and .fingerprint/.
 # The output of dependency crates stays, because a change of the dependencies of the app changes the hash of the output of the app itself, and the output of the crates that did not change is still used.
 # It also deletes the records and logs of run-ci.sh and run-e2e.sh (.claude/ci/ and .claude/e2e/ of the main checkout) that are older than 30 days; check-ci.sh and check-e2e.sh read only the record of HEAD.
@@ -28,7 +28,13 @@ is_stale() {
   [ -f "$2" ] && [ -z "$(find "$1" -newer "$2" -print 2>/dev/null | head -n 1)" ]
 }
 
+# True when cargo or rustc runs: a build in progress may be about to use an old file.
+busy() {
+  pgrep -x cargo >/dev/null || pgrep -x rustc >/dev/null
+}
+
 # Deletes the old output inside one target directory ($1) of the checkout whose Cargo.toml is $2.
+# Returns 1 at once, deleting nothing more, when cargo or rustc runs.
 clean_one() {
   for profile in "$1"/*/; do
     [ -d "$profile" ] || continue
@@ -43,7 +49,12 @@ clean_one() {
             *) continue ;;
           esac
         fi
-        is_stale "$entry" "$2" && rm -rf "$entry"
+        is_stale "$entry" "$2" || continue
+        if busy; then
+          echo "中止: cargo か rustc が動いています (${entry})"
+          return 1
+        fi
+        rm -rf "$entry"
       done
     done
   done
@@ -56,16 +67,18 @@ run() {
     n="$(find "$dir" -maxdepth 1 -type f -mtime +30 -print -delete | wc -l | tr -d ' ')"
     echo "${dir}: 30 日を超えた記録とログを ${n} 件消しました"
   done
-  # A build in progress may be about to use an old file, so nothing is deleted while cargo or rustc runs; the next day's run cleans.
-  if pgrep -x cargo >/dev/null || pgrep -x rustc >/dev/null; then
-    echo "スキップ: cargo か rustc が動いています"
-    return 0
-  fi
   git worktree list --porcelain | sed -n 's/^worktree //p' | while IFS= read -r wt; do
     target="$wt/src-tauri/target"
     [ -d "$target" ] || continue
+    if busy; then
+      echo "中止: cargo か rustc が動いています (${target})"
+      break
+    fi
     before="$(du -sh "$target" | cut -f1)"
-    clean_one "$target" "$wt/src-tauri/Cargo.toml"
+    clean_one "$target" "$wt/src-tauri/Cargo.toml" || {
+      echo "${target}: ${before} -> $(du -sh "$target" | cut -f1) (途中で中止)"
+      break
+    }
     after="$(du -sh "$target" | cut -f1)"
     echo "${target}: ${before} -> ${after}"
   done

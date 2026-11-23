@@ -9,7 +9,7 @@
 // While an agent works, the button's icon is yellow and fades slowly; the number that work is only in the button's label.
 // A search field in the row of the heading 「プロジェクト」 (A-19), opened by the magnifier at the right end of the row or by ⌘J, narrows the projects by name.
 // The bell in that row (A-8) switches the list to the work: the sessions of every project, the newest change first, each with the pin and the pencil of its title; while a search text is typed the list is the projects again.
-// While the screen is shown and the window is not hidden, the clock also reads again, every 10 seconds, the files and differences that the panes show, and, while the file pane is shown, what the file pane shows (`rereadFiles`; A-18, A-24, A-27), without a word.
+// While the screen is shown and the window is not hidden, the clock also reads again, every 10 seconds, the files and differences that the panes show, and, while the file pane is shown, what the file pane shows (`rereadFiles`; A-18, A-24, A-27), without a word; the files and the tree of a worktree whose disk is watched and ready (`orca-watch.ts`, A-18) are read when the watch tells a change, not by the clock.
 // A read in the background swaps the rows in place: the selection and the scroll position stay, and `show()` is never called by it.
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import type { OrcaAgent } from "./bindings/OrcaAgent";
@@ -39,7 +39,8 @@ import { initOrcaDatabase } from "./orca-database.js";
 import { closeDiff, type DiffCommit, diffsOf, hasDiffIn, openDiff as openDiffTab, refreshDiffs, showDiffs } from "./orca-diff.js";
 import { closeFile, dirtyIds, discardFiles, filesOf, goTo, hasFileIn, holdFiles, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, refreshEditors, resolveServers, showEditors } from "./orca-editor.js";
 import { ensureServer, initLsp, mayAsk, pauseLsp, syncServers } from "./orca-lsp.js";
-import { filesShown, initOrcaFiles, refreshFiles, rereadScratchpad, syncFiles, toggleFiles } from "./orca-files.js";
+import { filesShown, initOrcaFiles, openFolders, refreshFiles, rereadScratchpad, syncFiles, toggleFiles, treeWatch } from "./orca-files.js";
+import { syncFileWatches, unwatched, watchReady } from "./orca-watch.js";
 import { type PaneModel, drawTree, editorHostOf, initPaneTree, type TreeModel } from "./orca-pane-tree.js";
 import { applyLocal, findTab, focusedTab, layoutOf, needsSync, type PaneTabs, panesOf, syncPanes } from "./orca-panes.js";
 import { closePeek, drawPeek, initPeek, openPeek, peeking } from "./orca-peek.js";
@@ -1347,6 +1348,14 @@ function syncPeek() {
 }
 
 function draw() {
+  drawScreen();
+  watchFiles();
+}
+
+// Watches the disk of the worktrees whose files the screen shows, where the list streams (A-12, A-18). The screen calls it when another screen is shown, which lets them go.
+export const watchFiles = () => syncFileWatches(shown() && !document.hidden, streamsEnvironment);
+
+function drawScreen() {
   syncServers(serverGone);
   drawBadge();
   drawStarted();
@@ -1528,9 +1537,12 @@ function rereadTabs() {
 }
 
 // The clock's read of the files (A-18, A-24, A-27): the tabs of files and differences that the panes show, and, while the file pane is shown, what it shows (the tree, or the history). Each skips what is still being read.
+// The files and the tree of a worktree whose disk is watched and ready are read when the watch tells a change, so the clock leaves them; the differences and the history stay (a commit is no change that Orca tells). Orca does not watch `.git` and `node_modules`, so the clock reads a file in them, and the tree while one of their folders is open.
 function rereadFiles() {
-  if (filesShown()) refreshFiles(true);
-  rereadTabs();
+  const tree = treeWatch();
+  if (filesShown() && !(tree !== null && watchReady(tree.target, tree.path) && !openFolders().some(unwatched))) refreshFiles(true);
+  refreshEditors((target, path, relative) => watchReady(target, path) && !unwatched(relative));
+  refreshDiffs();
 }
 
 function refresh() {
@@ -2062,6 +2074,7 @@ export function initOrca() {
       }
     },
     moved: rereadTabs,
+    watching: watchFiles,
     // One draw for the whole delete, not one for each entry whose tabs closed.
     deleted: (here, deleted) => {
       let closed = false;
@@ -2081,6 +2094,7 @@ export function initOrca() {
     // A session shown again after the window was hidden is seen.
     drawBadge();
     refresh();
+    watchFiles();
   });
   // The files and the history of the file pane are read again when the app is activated (A-18, A-27), and by the clock (`refresh`), as nothing watches the disk.
   window.addEventListener("focus", () => shown() && refreshFiles());

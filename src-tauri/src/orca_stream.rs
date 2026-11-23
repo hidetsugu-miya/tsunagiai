@@ -3,6 +3,7 @@
 //! The list of sessions comes from `session.tabs.subscribeAll`, named by `worktree.ps`, which is read once when the connection opens and again when a worktree it did not list appears,
 //! every 10 seconds (the branch of a worktree can change with no change of the tabs) and right after the app switched a branch (`orca_switch_branch`), one read at a time;
 //! each terminal shown (one for each pane of the work pane, A-17) comes from its own `terminal.subscribe` (its size from `terminal.updateViewport`), and the keys go with `terminal.send`.
+//! A worktree's files are watched too (`files.watch`, one subscription for each worktree the screen names with `orca_stream_files`, which it cancels with `files.unwatch`): Orca sends the paths that changed, in a window of 150 to 500 milliseconds, and the screen reads again the files, the differences and the tree that they touch.
 //! Nothing else is read again by a clock. None of these methods is a public interface of Orca: they were checked on Orca 1.4.249. Nothing is stored here.
 //! What a terminal prints and the keys typed are in no log line, no error text and no event but the terminal's own channel; a token is in none at all.
 
@@ -43,6 +44,8 @@ const MIN_COLS: u16 = 20;
 const MAX_COLS: u16 = 1000;
 const MIN_ROWS: u16 = 8;
 const MAX_ROWS: u16 = 500;
+/// The longest path of a worktree that is watched.
+const MAX_PATH: usize = 4096;
 
 /// What the stream tells the screen about the list.
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -93,6 +96,27 @@ pub enum OrcaTermEvent {
     Ended { message: String },
 }
 
+/// What the stream tells the screen about the files of a worktree it watches.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum OrcaFilesEvent {
+    /// The watch is set: a change from now on is told (one that came before is not, so the screen reads what it shows once).
+    Ready,
+    /// What changed, as absolute paths of the worktree's machine: `directories` are those of them that are a folder or were deleted (a deleted path may have been a folder), whose files are changed too.
+    Changed {
+        paths: Vec<String>,
+        directories: Vec<String>,
+    },
+    /// The watch ended (Orca ended it, it failed, or the connection was lost; `message` says why, in Japanese, and is blank when Orca ended it): it is set again with the next connection, and not before.
+    Ended { message: String },
+}
+
 /// Who holds the size of a terminal (`fit-override-changed`): another desktop's window (`remote-desktop-fit`), a desktop that is fitted to its pane (`desktop-fit`) or a phone (`mobile-fit`).
 #[derive(Serialize, Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
@@ -124,12 +148,25 @@ pub struct Watch {
     sink: Box<dyn FnMut(OrcaTermEvent) -> bool + Send>,
 }
 
+/// A worktree whose files the screen watches.
+pub struct FilesWatch {
+    path: String,
+    /// The number the screen gave this watch; a close of an earlier watch of the same worktree does not end this one.
+    generation: u64,
+    /// Gives an event to the screen; `false` when the screen no longer takes them.
+    sink: Box<dyn FnMut(OrcaFilesEvent) -> bool + Send>,
+}
+
 /// What the screen asks of the stream that runs.
 pub enum StreamCommand {
     /// Show this terminal (it is subscribed in place of one shown before with the same handle); the others shown stay.
     Terminal(Watch),
     /// Show the terminal `handle` no more: it is unsubscribed. It ends only the showing of its generation (the second field), so a close that comes after a later showing of the handle changes nothing.
     TerminalClose(String, u64),
+    /// Watch the files of this worktree (it is watched in place of one watched before with the same path); the others watched stay.
+    Files(FilesWatch),
+    /// Watch the files of the worktree `path` no more: it ends only the watch of its generation (the second field).
+    FilesClose(String, u64),
     /// Claim the size the pane fits for the terminal `handle` (the first field), so Orca sizes the terminal to the pane.
     Viewport(String, OrcaViewport),
     /// Keys typed into the terminal `handle` (the first field); they go while it is subscribed or at least in Orca's list, and the answer says whether Orca took them.
@@ -373,6 +410,69 @@ fn term_event_of(result: &Value) -> Option<OrcaTermEvent> {
     }
 }
 
+/// What a frame of `files.watch` (its `result`) is.
+#[derive(Debug, PartialEq)]
+enum FilesFrame {
+    /// The subscription is made: the id that `files.unwatch` takes.
+    Starting(String),
+    Event(OrcaFilesEvent),
+}
+
+/// A frame of `files.watch` for the screen. A frame with nothing to tell (a change with no path, a type this app does not know) is of no use to the screen.
+fn files_frame_of(result: &Value) -> Option<FilesFrame> {
+    let event = match result["type"].as_str()? {
+        "starting" => {
+            return result["subscriptionId"]
+                .as_str()
+                .map(|id| FilesFrame::Starting(id.to_owned()))
+        }
+        "ready" => OrcaFilesEvent::Ready,
+        "changed" => {
+            let (mut paths, mut directories) = (Vec::new(), Vec::new());
+            for event in result["events"].as_array()? {
+                let Some(path) = event["absolutePath"].as_str() else {
+                    continue;
+                };
+                if event["isDirectory"].as_bool() == Some(true) || event["kind"] == "delete" {
+                    directories.push(path.to_owned());
+                }
+                paths.push(path.to_owned());
+            }
+            if paths.is_empty() {
+                return None;
+            }
+            OrcaFilesEvent::Changed { paths, directories }
+        }
+        "error" => OrcaFilesEvent::Ended {
+            message: "ファイルの監視でエラーが起きました".into(),
+        },
+        "end" => OrcaFilesEvent::Ended {
+            message: String::new(),
+        },
+        _ => return None,
+    };
+    Some(FilesFrame::Event(event))
+}
+
+/// `files.watch` of the worktree at `path`.
+fn files_watch_params(path: &str) -> Value {
+    json!({"worktree": format!("path:{path}")})
+}
+
+/// `files.unwatch` of the subscription `subscription`.
+fn files_unwatch_params(subscription: &str) -> Value {
+    json!({"subscriptionId": subscription})
+}
+
+/// A worktree the screen may watch: not blank, no control character, and not longer than a path can be.
+fn check_worktree(path: &str) -> Result<(), String> {
+    if path.is_empty() || path.len() > MAX_PATH || path.chars().any(char::is_control) {
+        Err("ワークツリーが正しくありません".into())
+    } else {
+        Ok(())
+    }
+}
+
 /// A size Orca takes: a pane too small or too large for it is sent at the nearest size it takes.
 pub(crate) fn clamp_viewport(viewport: OrcaViewport) -> OrcaViewport {
     OrcaViewport {
@@ -425,6 +525,12 @@ struct Subscribed {
     request_id: String,
 }
 
+/// The request that watches a worktree's files on the connection, and the subscription it made (known once Orca's first frame, `starting`, came).
+struct FilesSub {
+    request_id: String,
+    subscription: Option<String>,
+}
+
 /// What one connection holds.
 struct Connection {
     ps: Value,
@@ -442,12 +548,20 @@ struct Connection {
     ended: HashSet<String>,
     inputs: HashMap<String, oneshot::Sender<Result<(), String>>>,
     last_list: Option<OrcaStreamEvent>,
+    /// The worktrees watched on the connection, by path.
+    files: HashMap<String, FilesSub>,
+    /// The watches of the screen that ended on this connection (ended by Orca, or refused), so they are not made again until the next connection or a new watch of the worktree.
+    files_ended: HashSet<String>,
+    /// The requests of watches that were cancelled before Orca's `starting`: the subscription is cancelled when it comes.
+    files_retired: HashSet<String>,
 }
 
 /// What lasts over the connections: the name of the viewer and the terminals the screen shows, by handle.
 struct Stream {
     client: String,
     watches: HashMap<String, Watch>,
+    /// The worktrees whose files the screen watches, by path.
+    files: HashMap<String, FilesWatch>,
     attempt: usize,
 }
 
@@ -457,6 +571,24 @@ impl Stream {
         self.watches
             .get(handle)
             .is_some_and(|w| w.generation != generation)
+    }
+
+    /// The same for the watch of the worktree `path`.
+    fn watches_later(&self, path: &str, generation: u64) -> bool {
+        self.files
+            .get(path)
+            .is_some_and(|w| w.generation != generation)
+    }
+}
+
+/// The stream ends (the screen closed it, or opened another in its place and aborted this one): every watch of files is told, so that the screen reads by the clock again instead of waiting for a change that no longer comes.
+impl Drop for Stream {
+    fn drop(&mut self) {
+        for watch in self.files.values_mut() {
+            let _ = (watch.sink)(OrcaFilesEvent::Ended {
+                message: NOT_CONNECTED.into(),
+            });
+        }
     }
 }
 
@@ -542,6 +674,47 @@ impl Connection {
         handles.sort();
         for handle in handles {
             self.unsubscribe(link, client, &handle).await?;
+        }
+        Ok(())
+    }
+
+    /// Watches the worktrees the screen names that are not watched, and not ended on this connection.
+    async fn watch_files(&mut self, link: &mut WsLink, stream: &mut Stream) -> Result<(), String> {
+        let mut paths: Vec<String> = stream.files.keys().cloned().collect();
+        paths.sort();
+        for path in paths {
+            if self.files.contains_key(&path) || self.files_ended.contains(&path) {
+                continue;
+            }
+            let request_id = link
+                .send_request("files.watch", files_watch_params(&path))
+                .await
+                .map_err(reason_of)?;
+            self.files.insert(
+                path,
+                FilesSub {
+                    request_id,
+                    subscription: None,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// Cancels the watch of the worktree `path`. One that Orca has not answered yet is cancelled when its `starting` comes. The answer is not waited for.
+    async fn unwatch_files(&mut self, link: &mut WsLink, path: &str) -> Result<(), String> {
+        let Some(sub) = self.files.remove(path) else {
+            return Ok(());
+        };
+        match sub.subscription {
+            Some(subscription) => {
+                link.send_request("files.unwatch", files_unwatch_params(&subscription))
+                    .await
+                    .map_err(reason_of)?;
+            }
+            None => {
+                self.files_retired.insert(sub.request_id);
+            }
         }
         Ok(())
     }
@@ -653,6 +826,56 @@ impl Connection {
                     self.unsubscribe(link, &stream.client, &handle).await?;
                 }
             }
+        } else if let Some(path) = self
+            .files
+            .iter()
+            .find(|(_, s)| s.request_id == id)
+            .map(|(path, _)| path.clone())
+        {
+            let frame = match result_of(response) {
+                Ok(result) => files_frame_of(&result),
+                Err(e) => Some(FilesFrame::Event(OrcaFilesEvent::Ended {
+                    message: reason_of(e),
+                })),
+            };
+            match frame {
+                Some(FilesFrame::Starting(subscription)) => {
+                    if let Some(sub) = self.files.get_mut(&path) {
+                        sub.subscription = Some(subscription);
+                    }
+                }
+                Some(FilesFrame::Event(event)) => {
+                    if matches!(event, OrcaFilesEvent::Ended { .. }) {
+                        self.files.remove(&path);
+                        self.files_ended.insert(path.clone());
+                    }
+                    let taken = stream.files.get_mut(&path).is_some_and(|w| (w.sink)(event));
+                    if !taken {
+                        // The screen is gone: the worktree is let go.
+                        stream.files.remove(&path);
+                        self.unwatch_files(link, &path).await?;
+                    }
+                }
+                None => {}
+            }
+        } else if self.files_retired.contains(id) {
+            let frame = result_of(response).ok().as_ref().and_then(files_frame_of);
+            match frame {
+                Some(FilesFrame::Starting(subscription)) => {
+                    self.files_retired.remove(id);
+                    link.send_request("files.unwatch", files_unwatch_params(&subscription))
+                        .await
+                        .map_err(reason_of)?;
+                }
+                // The watch failed or ended before it was cancelled: nothing is left to cancel.
+                Some(FilesFrame::Event(OrcaFilesEvent::Ended { .. })) => {
+                    self.files_retired.remove(id);
+                }
+                None if response["ok"] == false => {
+                    self.files_retired.remove(id);
+                }
+                _ => {}
+            }
         } else if let Some(reply) = self.inputs.remove(id) {
             let _ = reply.send(
                 result_of(response)
@@ -688,6 +911,21 @@ impl Connection {
                 stream.watches.remove(&handle);
                 self.ended.remove(&handle);
                 self.unsubscribe(link, &stream.client, &handle).await?;
+            }
+            Some(StreamCommand::Files(watch)) => {
+                let path = watch.path.clone();
+                self.unwatch_files(link, &path).await?;
+                self.files_ended.remove(&path);
+                stream.files.insert(path, watch);
+                self.watch_files(link, stream).await?;
+            }
+            Some(StreamCommand::FilesClose(path, generation)) => {
+                if stream.watches_later(&path, generation) {
+                    return Ok(true);
+                }
+                stream.files.remove(&path);
+                self.files_ended.remove(&path);
+                self.unwatch_files(link, &path).await?;
             }
             Some(StreamCommand::Viewport(handle, viewport)) => {
                 if let Some(watch) = stream.watches.get_mut(&handle) {
@@ -762,7 +1000,11 @@ async fn serve(
         ended: HashSet::new(),
         inputs: HashMap::new(),
         last_list: None,
+        files: HashMap::new(),
+        files_ended: HashSet::new(),
+        files_retired: HashSet::new(),
     };
+    connection.watch_files(link, stream).await?;
     let mut ps_at = Instant::now() + PS_EVERY;
     loop {
         let silence = link.silence_deadline();
@@ -804,6 +1046,7 @@ async fn run_loop<F, Fut>(
     let mut stream = Stream {
         client,
         watches: HashMap::new(),
+        files: HashMap::new(),
         attempt: 0,
     };
     loop {
@@ -814,6 +1057,12 @@ async fn run_loop<F, Fut>(
         let Err(reason) = result else {
             return;
         };
+        // A watch of files is set again with the next connection: until its `ready` the screen reads by the clock.
+        stream.files.retain(|_, w| {
+            (w.sink)(OrcaFilesEvent::Ended {
+                message: reason.clone(),
+            })
+        });
         sink(OrcaStreamEvent::Status {
             live: false,
             message: reason,
@@ -831,6 +1080,14 @@ async fn run_loop<F, Fut>(
                     Some(StreamCommand::TerminalClose(handle, generation)) => {
                         if !stream.shows_later(&handle, generation) {
                             stream.watches.remove(&handle);
+                        }
+                    }
+                    Some(StreamCommand::Files(watch)) => {
+                        stream.files.insert(watch.path.clone(), watch);
+                    }
+                    Some(StreamCommand::FilesClose(path, generation)) => {
+                        if !stream.watches_later(&path, generation) {
+                            stream.files.remove(&path);
                         }
                     }
                     Some(StreamCommand::Viewport(handle, viewport)) => {
@@ -1018,6 +1275,50 @@ pub async fn orca_stream_terminal_close(
     let _ = state.send(
         environment.as_deref(),
         StreamCommand::TerminalClose(handle, generation),
+    );
+    Ok(())
+}
+
+/// Watches the files of the worktree at `path` on the stream of `environment` (`None`: this machine's), the place of the tab: `ready` once the watch is set, then each change, and `ended` when it ends. Where no stream runs the answer is 「接続先につながっていません」 and the channel gets `ended`.
+#[tauri::command]
+pub async fn orca_stream_files(
+    state: tauri::State<'_, OrcaStream>,
+    environment: Option<String>,
+    path: String,
+    generation: u64,
+    channel: tauri::ipc::Channel<OrcaFilesEvent>,
+) -> Result<(), String> {
+    check_worktree(&path)?;
+    let failed = channel.clone();
+    state
+        .send(
+            environment.as_deref(),
+            StreamCommand::Files(FilesWatch {
+                path,
+                generation,
+                sink: Box::new(move |event| channel.send(event).is_ok()),
+            }),
+        )
+        .inspect_err(|reason| {
+            let _ = failed.send(OrcaFilesEvent::Ended {
+                message: reason.clone(),
+            });
+        })
+}
+
+/// Watches the files of the worktree at `path` no more: the watch is cancelled with `files.unwatch`. It ends only the watch of its generation.
+#[tauri::command]
+pub async fn orca_stream_files_close(
+    state: tauri::State<'_, OrcaStream>,
+    environment: Option<String>,
+    path: String,
+    generation: u64,
+) -> Result<(), String> {
+    check_worktree(&path)?;
+    // With no stream there is nothing to let go.
+    let _ = state.send(
+        environment.as_deref(),
+        StreamCommand::FilesClose(path, generation),
     );
     Ok(())
 }
@@ -1697,6 +1998,7 @@ mod tests {
         let mut stream = Stream {
             client: "tsunagiai-test".into(),
             watches: HashMap::new(),
+            files: HashMap::new(),
             attempt: 0,
         };
         // Nothing is shown: a close has nothing to spare.
@@ -1991,6 +2293,283 @@ mod tests {
             .await;
         assert!(answer.await.unwrap().is_ok());
 
+        commands.send(StreamCommand::Close).ok().unwrap();
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    fn files_watch(path: &str, generation: u64) -> (FilesWatch, Seen<OrcaFilesEvent>) {
+        let seen: Seen<OrcaFilesEvent> = Arc::default();
+        let into = seen.clone();
+        let watch = FilesWatch {
+            path: path.into(),
+            generation,
+            sink: Box::new(move |event| {
+                into.lock().unwrap().push(event);
+                true
+            }),
+        };
+        (watch, seen)
+    }
+
+    #[test]
+    fn a_frame_of_files_watch_is_the_subscription_a_ready_a_change_or_an_end() {
+        assert_eq!(
+            files_frame_of(&json!({"subscriptionId": "files-watch-1", "type": "starting"})),
+            Some(FilesFrame::Starting("files-watch-1".into()))
+        );
+        assert_eq!(
+            files_frame_of(&json!({"type": "starting"})),
+            None,
+            "a start with no id cannot be cancelled"
+        );
+        assert_eq!(
+            files_frame_of(&json!({"subscriptionId": "files-watch-1", "type": "ready"})),
+            Some(FilesFrame::Event(OrcaFilesEvent::Ready))
+        );
+        // A change lists every path; a folder and a deleted path (that may have been a folder) are also in `directories`.
+        let changed = json!({"type": "changed", "worktree": "path:/w/a", "events": [
+            {"absolutePath": "/w/a/x.txt", "isDirectory": false, "kind": "update"},
+            {"absolutePath": "/w/a/src", "isDirectory": true, "kind": "create"},
+            {"absolutePath": "/w/a/old", "isDirectory": false, "kind": "delete"},
+            {"isDirectory": false, "kind": "update"},
+        ]});
+        assert_eq!(
+            files_frame_of(&changed),
+            Some(FilesFrame::Event(OrcaFilesEvent::Changed {
+                paths: vec!["/w/a/x.txt".into(), "/w/a/src".into(), "/w/a/old".into()],
+                directories: vec!["/w/a/src".into(), "/w/a/old".into()],
+            }))
+        );
+        // A change with no path says nothing.
+        assert_eq!(
+            files_frame_of(&json!({"type": "changed", "events": []})),
+            None
+        );
+        assert_eq!(files_frame_of(&json!({"type": "changed"})), None);
+        // Orca's text of an error is not passed on.
+        assert_eq!(
+            files_frame_of(&json!({"type": "error", "message": "secret"})),
+            Some(FilesFrame::Event(OrcaFilesEvent::Ended {
+                message: "ファイルの監視でエラーが起きました".into()
+            }))
+        );
+        assert_eq!(
+            files_frame_of(&json!({"type": "end"})),
+            Some(FilesFrame::Event(OrcaFilesEvent::Ended {
+                message: String::new()
+            }))
+        );
+        assert_eq!(files_frame_of(&json!({"type": "other"})), None);
+        assert_eq!(files_frame_of(&json!({})), None);
+    }
+
+    #[test]
+    fn files_watch_names_the_worktree_by_its_path_and_unwatch_the_subscription() {
+        assert_eq!(files_watch_params("/w/a"), json!({"worktree": "path:/w/a"}));
+        assert_eq!(
+            files_unwatch_params("files-watch-1"),
+            json!({"subscriptionId": "files-watch-1"})
+        );
+        assert!(check_worktree("/w/a").is_ok());
+        assert!(check_worktree("").is_err());
+        assert!(check_worktree("/w/a\nb").is_err());
+        assert!(check_worktree(&"/a".repeat(MAX_PATH)).is_err());
+    }
+
+    #[test]
+    fn a_close_of_an_earlier_watch_does_not_end_a_later_one() {
+        let mut stream = Stream {
+            client: "tsunagiai-test".into(),
+            watches: HashMap::new(),
+            files: HashMap::new(),
+            attempt: 0,
+        };
+        assert!(!stream.watches_later("/w/a", 1));
+        stream.files.insert("/w/a".into(), files_watch("/w/a", 1).0);
+        assert!(!stream.watches_later("/w/a", 1));
+        stream.files.insert("/w/a".into(), files_watch("/w/a", 2).0);
+        assert!(stream.watches_later("/w/a", 1));
+        assert!(!stream.watches_later("/w/a", 2));
+        assert!(!stream.watches_later("/w/b", 1));
+    }
+
+    #[test]
+    fn the_end_of_a_stream_tells_every_watch_of_files_that_it_ended() {
+        let (a, a_events) = files_watch("/w/a", 1);
+        let (b, b_events) = files_watch("/w/b", 1);
+        let mut stream = Stream {
+            client: "tsunagiai-test".into(),
+            watches: HashMap::new(),
+            files: HashMap::new(),
+            attempt: 0,
+        };
+        stream.files.insert("/w/a".into(), a);
+        stream.files.insert("/w/b".into(), b);
+        drop(stream);
+        let ended = OrcaFilesEvent::Ended {
+            message: NOT_CONNECTED.into(),
+        };
+        assert_eq!(*a_events.lock().unwrap(), vec![ended.clone()]);
+        assert_eq!(*b_events.lock().unwrap(), vec![ended]);
+    }
+
+    #[tokio::test]
+    async fn a_stream_that_is_stopped_while_it_waits_to_connect_ends_the_watches_of_files() {
+        let (commands, receiver) = unbounded_channel();
+        let task = tokio::spawn(run_loop(
+            || async { Err::<WsLink, String>("down".into()) },
+            receiver,
+            |_| {},
+            "tsunagiai-test".into(),
+        ));
+        // The first connection failed and the next is a second away: the watch is held for it.
+        let (watch, events) = files_watch("/w/a", 1);
+        commands.send(StreamCommand::Files(watch)).ok().unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(events.lock().unwrap().is_empty());
+        // The stream is replaced by another (`orca_stream_open` aborts it): the watch is told.
+        task.abort();
+        let _ = task.await;
+        assert_eq!(
+            events.lock().unwrap().clone(),
+            [OrcaFilesEvent::Ended {
+                message: NOT_CONNECTED.into()
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_files_of_a_worktree_are_watched_told_cancelled_and_ended_with_the_connection() {
+        let (listener, url) = bind().await;
+        let desktop = Desktop::new([44; 32]);
+        let key = desktop.public_key_b64();
+        let (commands, receiver) = unbounded_channel();
+        let task = tokio::spawn(run_loop(
+            move || {
+                let (url, key) = (url.clone(), key.clone());
+                async move { WsLink::connect(&url, "device-token", &key).await }
+            },
+            receiver,
+            |_| {},
+            "tsunagiai-test".into(),
+        ));
+        // Asked for before the connection: it is watched as the connection opens.
+        let (first, first_events) = files_watch("/w/a", 1);
+        commands.send(StreamCommand::Files(first)).ok().unwrap();
+        let mut server = FakeDesktop::accept(&listener, desktop, "device-token", None).await;
+        let request = server.request().await;
+        server
+            .send(json!({"id": request["id"], "ok": true, "result": ps()}))
+            .await;
+        let tabs = server.request().await;
+        assert_eq!(tabs["method"], "session.tabs.subscribeAll");
+        let watch = server.request().await;
+        assert_eq!(watch["method"], "files.watch");
+        assert_eq!(watch["params"], json!({"worktree": "path:/w/a"}));
+        let watch_id = watch["id"].clone();
+        streamed(
+            &mut server,
+            &watch_id,
+            json!({"subscriptionId": "files-watch-1", "type": "starting"}),
+        )
+        .await;
+        streamed(
+            &mut server,
+            &watch_id,
+            json!({"subscriptionId": "files-watch-1", "type": "ready"}),
+        )
+        .await;
+        streamed(
+            &mut server,
+            &watch_id,
+            json!({"type": "changed", "events": [{"absolutePath": "/w/a/x.txt", "isDirectory": false, "kind": "update"}]}),
+        )
+        .await;
+        assert_eq!(
+            until(&first_events, 2).await,
+            [
+                OrcaFilesEvent::Ready,
+                OrcaFilesEvent::Changed {
+                    paths: vec!["/w/a/x.txt".into()],
+                    directories: vec![]
+                }
+            ]
+        );
+
+        // Another worktree is watched beside it, and cancelled before Orca's first frame: it is cancelled when that comes.
+        let (second, second_events) = files_watch("/w/b", 1);
+        commands.send(StreamCommand::Files(second)).ok().unwrap();
+        let watch_b = server.request().await;
+        assert_eq!(watch_b["params"], json!({"worktree": "path:/w/b"}));
+        commands
+            .send(StreamCommand::FilesClose("/w/b".into(), 1))
+            .ok()
+            .unwrap();
+        // A close of an earlier watch of /w/a (generation 0) ends nothing.
+        commands
+            .send(StreamCommand::FilesClose("/w/a".into(), 0))
+            .ok()
+            .unwrap();
+        commands
+            .send(StreamCommand::FilesClose("/w/a".into(), 1))
+            .ok()
+            .unwrap();
+        let unwatch = server.request().await;
+        assert_eq!(unwatch["method"], "files.unwatch");
+        assert_eq!(
+            unwatch["params"],
+            json!({"subscriptionId": "files-watch-1"})
+        );
+        streamed(
+            &mut server,
+            &watch_b["id"],
+            json!({"subscriptionId": "files-watch-2", "type": "starting"}),
+        )
+        .await;
+        let unwatch = server.request().await;
+        assert_eq!(unwatch["method"], "files.unwatch");
+        assert_eq!(
+            unwatch["params"],
+            json!({"subscriptionId": "files-watch-2"})
+        );
+        assert!(second_events.lock().unwrap().is_empty());
+
+        // Orca ends a watch: the screen is told once, and the watch is not made again on this connection.
+        let (third, third_events) = files_watch("/w/c", 1);
+        commands.send(StreamCommand::Files(third)).ok().unwrap();
+        let watch_c = server.request().await;
+        assert_eq!(watch_c["params"], json!({"worktree": "path:/w/c"}));
+        streamed(&mut server, &watch_c["id"], json!({"type": "end"})).await;
+        assert_eq!(
+            until(&third_events, 1).await,
+            [OrcaFilesEvent::Ended {
+                message: String::new()
+            }]
+        );
+
+        // A refused watch ends with Orca's code and not its text.
+        let (fourth, fourth_events) = files_watch("/w/d", 1);
+        commands.send(StreamCommand::Files(fourth)).ok().unwrap();
+        let watch_d = server.request().await;
+        server
+            .send(json!({"id": watch_d["id"], "ok": false, "error": {"code": "not_found", "message": "secret"}}))
+            .await;
+        let ended = until(&fourth_events, 1).await;
+        assert!(
+            matches!(&ended[0], OrcaFilesEvent::Ended { message } if message.contains("not_found") && !message.contains("secret"))
+        );
+
+        // The connection is lost: every watch that is held is told.
+        let (fifth, fifth_events) = files_watch("/w/e", 1);
+        commands.send(StreamCommand::Files(fifth)).ok().unwrap();
+        let watch_e = server.request().await;
+        assert_eq!(watch_e["params"], json!({"worktree": "path:/w/e"}));
+        drop(server);
+        let ended = until(&fifth_events, 1).await;
+        assert!(matches!(&ended[0], OrcaFilesEvent::Ended { message } if !message.is_empty()));
         commands.send(StreamCommand::Close).ok().unwrap();
         tokio::time::timeout(Duration::from_secs(5), task)
             .await

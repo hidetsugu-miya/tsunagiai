@@ -97,6 +97,20 @@
         "差し戻しの prompt が、全件の `run-e2e.sh` と `run-ci.sh` を許していない",
         "初回の起動の prompt については、`run-ci.sh` も `run-e2e.sh` も回させないと書いている"
       ]
+    },
+    {
+      "id": 8,
+      "name": "bindings-change-passes-shots-tsc",
+      "prompt": "あなたは implement の実行の手順 3 にいるリードです。`.claude/skills/implement/SKILL.md` の手順 3 と「Orders for the implementer」を読み、`.claude/evals/files/implement/bindings-change-item.md` の issue を実装する `code-implementer` の起動の文（prompt）を書き出してください。この記録が、あなたの持つ実行の文脈です。起動はせず、コマンドも実行しないでください。",
+      "expected_output": "起動の文の `制約:` に、`ts/bindings/` の型を変えたら README の撮影用 spec の tsc（`npx tsc --noEmit -p .claude/skills/readme-product/shots/tsconfig.json`）も通す決まりが入っている。",
+      "files": [
+        ".claude/evals/files/implement/bindings-change-item.md"
+      ],
+      "assertions": [
+        "起動の文の `制約:` に、`ts/bindings/` の型を変えたら `npx tsc --noEmit -p .claude/skills/readme-product/shots/tsconfig.json` も通す決まりが入っている",
+        "「Orders for the implementer」の ほかの行も `制約:` としてそのまま入っている",
+        "起動の文で、担当に `run-ci.sh` と `run-e2e.sh` を回させていない"
+      ]
     }
   ]
 }
