@@ -1534,7 +1534,7 @@ export async function readDestination(environment: string | null, force: boolean
   }
 }
 
-// Selects the session of the pane `paneKey` on the Orca screen and shows the screen ("Orca の画面で開く"). A session the list does not hold yet leaves the project and the tab as they are, and the work pane is shown all the same: no formation stays selected.
+// Selects the session of the pane `paneKey` on the Orca screen and shows the screen ("開発画面で開く"). A session the list does not hold yet leaves the project and the tab as they are, and the work pane is shown all the same: no formation stays selected.
 // `environment` is where the session runs (null: this machine, else the name of the saved environment), and only a row of that place is the session: the list holds the rows of this machine beside the target's (A-33), and the same pane key in another place is another session.
 // `follow` is given by a hand-over (A-9) with the handle its launch answered: a session that the list does not hold yet is followed as the plus follows its start, so once the list holds it, its project and tab are selected.
 // A place that is neither the target nor this machine is not in the list, so the screen is shown with the selection as it is.
