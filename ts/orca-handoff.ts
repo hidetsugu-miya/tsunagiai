@@ -1,7 +1,7 @@
 // Handing the open Slack thread or Todo to Orca (A-9): a pane on the right of the screen that shows, and the user decides.
 // Before a hand-over it is a form from the top down: the destination (the Orca to talk to, the project, and the worktree of a new session: one of the project's worktrees, its own folder first, or a new one made then, with its name, the ref it starts from and its branch), the card with the content (taken off with ×) and the field for the instruction, which fills the height that is left and has the arrow button "Orca に渡す" at its bottom right.
 // The instruction is handed over as it was written; the content of the card is summarised by Claude (`claude_summarize_handoff`) when the arrow is pressed, and the summary goes with the instruction.
-// After a hand-over it shows that session: its header and its terminal (A-12, orca-terminal.ts), which takes the keys as the terminal of the Orca screen does, until the pane is closed. The prompt is composed in Rust (`orca_handoff`).
+// After a hand-over the app goes to the Orca screen (the development screen) and selects the session there; the pane, when the item is shown again, is a card of that session: "{repo} ・ {branch}", its state with the time, the button "開発画面で開く" and the close icon. It has no terminal. The prompt is composed in Rust (`orca_handoff`).
 // A pane belongs to one screen (the host): the Slack thread's Orca tab or the Todo detail. What is kept is in memory only: the conversation of each item and the session it was handed to, and the destination and the project last chosen.
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaRow } from "./bindings/OrcaRow";
@@ -9,15 +9,14 @@ import type { OrcaWorktree } from "./bindings/OrcaWorktree";
 import { getClaude, showModelSlot } from "./claude.js";
 import { createComposer } from "./composer.js";
 import { composing, isMac, tag } from "./dom.js";
-import { CLOSE_SVG, OPEN_SVG, ORCA_SVG, SLACK_SVG, TODO_SVG } from "./icons.js";
+import { CLOSE_SVG, ORCA_SVG, SLACK_SVG, TODO_SVG } from "./icons.js";
 import { type HandoffContext, type HandoffDestination, invoke } from "./ipc.js";
 import { type Attachment, drawStrip, listenForFiles, readFiles, uploadAttachments } from "./orca-attach.js";
 import type { HandoffCard } from "./orca-handoff-cards.js";
 import { openBranchList, type BranchSource, type PickedBranch } from "./orca-branch.js";
 import { openMenu } from "./menu.js";
-import { hideTerminals, isShowing, releaseTerminal, showTerminals, type TermSource } from "./orca-terminal.js";
 import { childrenFresh, isChildWorktree, readForChoice, readList } from "./formation-list.js";
-import { elapsed, heldOrca, noticeOf, openInOrca, readDestination, refreshOrca, STATUS_LABELS, streamsEnvironment, THIS_MACHINE, worktreeLabel } from "./orca.js";
+import { elapsed, heldOrca, noticeOf, openInOrca, readDestination, refreshOrca, STATUS_LABELS, THIS_MACHINE, worktreeLabel } from "./orca.js";
 
 // The item a pane is for: a key that is the same while the same thread or task is shown, and the content to hand over, built when the pane is opened.
 export interface HandoffItem {
@@ -38,7 +37,7 @@ export interface HandoffHost {
   onOpen: (open: boolean) => void;
 }
 
-// The session an item was handed to: where it runs and which terminal it shows. `environment` is the target at the time.
+// The session an item was handed to: where it runs and which tab of the Orca screen it is. `environment` is the target at the time.
 interface Session {
   path: string;
   paneKey: string | null;
@@ -95,12 +94,10 @@ const summarised = new Map<string, { context: HandoffContext; points: string[] }
 let chosenDest: string | null | undefined;
 const panes = new Set<HandoffPane>();
 let ticking = false;
-// While a session is shown, the list is read again this often (for its header).
+// While a session is shown and not ended, the list is read again this often (for its header).
 const POLL_MS = 10_000;
 const NEW_WORKTREE = "新規作成";
 const KIND_ICONS = { slack: SLACK_SVG, todo: TODO_SVG } as const;
-// The number of the next pane, which names it as the owner of its terminal.
-let paneSeq = 0;
 
 function iconButton(label: string, svg: string, className = "icon-btn") {
   const button = tag("button", className);
@@ -140,14 +137,10 @@ export class HandoffPane {
   // The `readSeq` of the read of a destination's own lists that is on its way, else 0: the poll of a shown session does not start another while it is.
   private destReading = 0;
   private lastRead = 0;
-  // Names the pane as the owner of the terminal it shows (orca-terminal.ts).
-  private owner = `handoff-${++paneSeq}`;
-  // The handle of the terminal the pane made for its session, so that it is forgotten with the session.
-  private termHandle: string | null = null;
-  // The element that takes the files dropped or pasted before a hand-over: it stays, and the form is drawn in it. After it the terminal takes them (A-10).
+  // The element that takes the files dropped or pasted before a hand-over: it stays, and the form is drawn in it (A-10).
   private formMain = tag("div", "ho-main ho-whole");
-  // The parts of the session shown: its notice, its header, the note for a session whose terminal cannot be shown, and the host of the terminal.
-  private sess: { notice: HTMLElement; title: HTMLElement; note: HTMLElement; term: HTMLElement } | null = null;
+  // The parts of the session shown: its notice and the title of its card.
+  private sess: { notice: HTMLElement; title: HTMLElement } | null = null;
   // The parts of the form shown.
   private el: {
     notice: HTMLElement;
@@ -200,7 +193,6 @@ export class HandoffPane {
     const key = item?.key ?? null;
     if (key !== this.itemKey) {
       if (this.itemKey !== null) dropIdleForm(this.itemKey);
-      this.releaseTerm();
       this.itemKey = key;
       this.removed = false;
       // The card is built when the pane opens (the form is drawn), not for each item that goes by.
@@ -215,7 +207,6 @@ export class HandoffPane {
       this.lastOpen = this.open;
       this.host.onOpen(this.open);
     }
-    this.syncTerminal();
     if (this.open && this.lastRead === 0) this.reload(true);
   }
 
@@ -255,8 +246,9 @@ export class HandoffPane {
       this.lastMinute = minute;
       this.update();
     }
-    // A shown session is read again every POLL_MS, unless the command is missing.
-    if (this.open && this.mode() === "session" && this.overview?.state !== "missing" && Date.now() - this.lastRead >= POLL_MS) this.reload(false);
+    // A shown session is read again every POLL_MS, unless the command is missing or the session has ended (its row is gone from a ready list: nothing is left to read for).
+    const s = this.session();
+    if (this.open && s && !this.ended(s) && this.overview?.state !== "missing" && Date.now() - this.lastRead >= POLL_MS) this.reload(false);
   }
 
   // The Orca the pane talks to: that of the session shown, else the one chosen, else the target of the Orca screen.
@@ -289,7 +281,6 @@ export class HandoffPane {
     if (seq !== this.readSeq || !this.open) return;
     this.overview = overview;
     this.update();
-    this.syncTerminal();
   }
 
   // The list of the screen when the destination is its target (also a stream, A-12), else a read of the destination alone.
@@ -318,40 +309,9 @@ export class HandoffPane {
     this.reload(true);
   }
 
-  // Where the terminal of a session comes from, or null when it cannot be shown: the session has no terminal (the launch named none and the list has none). A saved environment that the Orca screen streams (A-12) is streamed; any other terminal, this machine's or a saved environment's, is mirrored.
-  private sourceOf(s: Session): TermSource | null {
-    const row = this.rowOf(s);
-    // A session that was in the list and is missing from a ready one has ended (the header says so): its terminal is let go, or the mirror would read the list again every second.
-    if (!row && s.seen && this.overview?.state === "ready") return null;
-    const handle = s.handle ?? row?.handle ?? null;
-    if (handle === null) return null;
-    const kind = streamsEnvironment(s.environment) ? "stream" : "mirror";
-    return { kind, handle, path: s.path, environment: s.environment };
-  }
-
-  // The terminal belongs to this pane while it shows a session that is in view (the window shown, the pane on the screen); otherwise its stream or reads are let go. Without a terminal the note says so.
-  private syncTerminal() {
-    const s = this.open ? this.session() : undefined;
-    const sess = this.sess;
-    const source = s ? this.sourceOf(s) : null;
-    if (sess) {
-      sess.term.hidden = source === null;
-      sess.note.hidden = source !== null;
-    }
-    if (!sess || !source || document.hidden || sess.term.getClientRects().length === 0) return hideTerminals(this.owner);
-    // The pane shows another terminal now (the row gave the handle the launch did not): the old one is forgotten.
-    if (this.termHandle !== null && this.termHandle !== source.handle) this.releaseTerm();
-    this.termHandle = source.handle;
-    // Every second this runs: a terminal already shown as asked is left as it is.
-    const placement = { id: source.handle, source, host: sess.term };
-    if (!isShowing(placement, this.owner)) showTerminals([placement], source.handle, this.owner);
-  }
-
-  // Forgets the terminal the pane made (the session was forgotten, or the pane shows the session of another item).
-  private releaseTerm() {
-    if (this.termHandle === null) return;
-    releaseTerminal(this.termHandle, this.owner);
-    this.termHandle = null;
+  // A session that was in the list and is missing from a ready one has ended (the card says so).
+  private ended(s: Session) {
+    return !this.rowOf(s) && s.seen && this.overview?.state === "ready";
   }
 
   // The pane of the session: the one the launch named, else the one of its row in the list.
@@ -605,22 +565,26 @@ export class HandoffPane {
     showModelSlot("handoff-model");
   }
 
-  // The session: its header, and the terminal under it (or the note while the terminal cannot be shown).
+  // The session: a card with "{repo} ・ {branch}" and its state, the button that opens it on the Orca screen, and the close icon.
   private buildSession() {
     const title = tag("div", "ho-session-title");
-    const open = iconButton("Orca の画面で開く", OPEN_SVG);
-    open.onclick = () => openInOrca(this.session() ? this.paneKeyOf(this.session()!) : null);
+    const open = tag("button", "text-btn ho-session-open", "開発画面で開く");
+    open.type = "button";
+    open.onclick = () => {
+      const s = this.session();
+      if (s) openInOrca(this.paneKeyOf(s), s.environment, { handle: s.handle });
+    };
     const close = iconButton("閉じる", CLOSE_SVG);
     close.onclick = () => this.forget();
-    const head = tag("div", "ho-head ho-session-head");
-    head.append(title, open, close);
+    const top = tag("div", "ho-session-top");
+    top.append(title, close);
+    const card = tag("div", "ho-session-card");
+    card.append(top, open);
     const notice = tag("div", "ho-notice");
-    const note = tag("p", "ho-note", "セッションを始めました。画面は Orca で見られます。");
-    const term = tag("div", "ho-term");
     const main = tag("div", "ho-main ho-whole");
-    main.append(head, notice, term, note);
+    main.append(card, notice);
     this.el = null;
-    this.sess = { notice, title, note, term };
+    this.sess = { notice, title };
     this.host.root.replaceChildren(main);
   }
 
@@ -809,7 +773,7 @@ export class HandoffPane {
     const name = row ? `${row.repo} ・ ${row.branch}` : worktree ? worktreeLabel(worktree) : s.path;
     const time = row ? elapsed(row.atMs, Date.now(), row.group === "done") : "";
     // Until its row is in the list a new session is being checked; once it was there and a ready list lacks it, it has ended.
-    const state = row ? [STATUS_LABELS[row.status], time].filter(Boolean).join(" ・ ") : s.seen && this.overview?.state === "ready" ? "終了" : "確認中";
+    const state = row ? [STATUS_LABELS[row.status], time].filter(Boolean).join(" ・ ") : this.ended(s) ? "終了" : "確認中";
     sess.title.replaceChildren(tag("span", "ho-session-name", name), tag("span", "ho-session-state", state));
   }
 
@@ -837,7 +801,6 @@ export class HandoffPane {
   // Forgets the session handed to the item: the next open shows the send form.
   private forget() {
     if (this.itemKey === null) return;
-    this.releaseTerm();
     sessions.delete(this.itemKey);
     this.errors.delete(this.itemKey);
     this.removed = false;
@@ -890,6 +853,8 @@ export class HandoffPane {
     this.sending.add(key);
     this.errors.delete(key);
     this.update();
+    // The session that was started, which the Orca screen is to show (below).
+    let follow: { paneKey: string | null; handle: string | null } | null = null;
     try {
       const context = card ? { kind: card.kind, title: card.title, body: card.body } : null;
       const summary = context ? await this.summarise(key, context, instruction) : [];
@@ -898,6 +863,7 @@ export class HandoffPane {
       const destination: HandoffDestination = { kind: "new", path: worktree };
       const started = await invoke("orca_handoff", { destination, instruction, files: uploaded.map((f) => f.text), summary, context, environment });
       sessions.set(key, { path: worktree, paneKey: started.paneKey, handle: started.handle, environment, seen: false });
+      follow = { paneKey: started.paneKey, handle: started.handle };
       made.delete(key);
       summarised.delete(key);
       forms.delete(key);
@@ -916,6 +882,8 @@ export class HandoffPane {
       this.sync();
       this.update();
       this.el?.input.focus();
+      // The hand-over moves to the Orca screen and selects the session there (A-9), unless the item was left while it ran: `sync()` above asks the host again, and the host has no item once its thread or task, or its screen, is not shown (`host.current()`), so the screen the owner went to is not taken from them.
+      if (follow !== null && this.itemKey === key) openInOrca(follow.paneKey, environment, { handle: follow.handle });
     }
   }
 }

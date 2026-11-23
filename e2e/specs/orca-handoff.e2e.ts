@@ -1,6 +1,7 @@
 import type { HandoffSummary } from "../../ts/bindings/HandoffSummary";
 import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
-import { boot, callsOf, claudeReady, claudeSettings, composerLayout, count, fire, formationEntry, formationList, handoffSummary, heightOf, holds, huge, image, inbox, listedChild, mock, note, onceId, orcaOverview, orcaRow, orcaWorktree, PNG, rejects, release, slackLoad, sendStream, sendTerm, slackThread, slackTs, streamList, textsOf, threadMessage, timeline, timelineMessage, todoData, waitForCalls, waitForCount, CARDS } from "../support";
+import { streamList as streamedList } from "../orca-support";
+import { boot, callsOf, claudeReady, claudeSettings, composerLayout, count, fire, formationEntry, formationList, handoffSummary, heightOf, holds, huge, image, inbox, listedChild, mock, note, onceId, orcaOverview, orcaRow, orcaWorktree, PNG, rejects, release, slackLoad, sendStream, slackThread, slackTs, streamList, textsOf, threadMessage, timeline, timelineMessage, todoData, waitForCalls, waitForCount, CARDS } from "../support";
 
 // A waiting, a working and a done agent (all have a terminal), and a working one with no terminal. The pane lists none of them (it hands over to a new session only), but the Orca screen does.
 const sample = () => [
@@ -52,6 +53,24 @@ async function openTodo(fixtures: Record<string, unknown> = {}) {
   await expect($("#todo-back")).toBeDisplayed();
 }
 
+// A hand-over moves to the Orca screen (A-9): this goes back to the screen of the item, where the pane shows the session.
+async function backTo(screen: Screen) {
+  await expect($("#orca")).toBeDisplayed();
+  if (screen === SLACK) {
+    // The thread stays open while another screen is shown, so the pane keeps its session.
+    await $("#nav-slack").click();
+    if (!(await $("#slack-thread").isDisplayed())) await openThread(1);
+    await expect($("#slack-thread")).toBeDisplayed();
+    return;
+  }
+  await $("#nav-todo").click();
+  if (!(await $("#todo-back").isDisplayed())) {
+    await waitForCount("#todo-list li.task", 1);
+    await $("#todo-list li.task").click();
+  }
+  await expect($("#todo-back")).toBeDisplayed();
+}
+
 // The list of Orca is read when the pane opens: the project chip is enabled once the projects are in.
 const listRead = (screen: Screen) => expect($(`${screen.pane} .ho-project`)).toBeEnabled();
 
@@ -63,8 +82,10 @@ async function openPane(screen: Screen) {
 }
 
 const field = (screen: Screen) => $(`${screen.pane} textarea`);
-// The text the terminal of the session in the pane shows.
-const termText = (screen: Screen) => $(`${screen.pane} .ho-term .orca-term-box:not([hidden]) .xterm-rows`).getText();
+// The card of the session in the pane, and its button that opens the session on the Orca screen.
+const sessionOpen = (screen: Screen) => $(`${screen.pane} .ho-session-open`);
+// What the pane has of a terminal after a send: nothing (the session is on the Orca screen), and no note either.
+const terminalParts = (screen: Screen) => count(`${screen.pane} .ho-term, ${screen.pane} .orca-term-box, ${screen.pane} .ho-note`);
 // The arrow in the field of the instruction.
 const sendButton = (screen: Screen) => $(`${screen.pane} .ho-form .chat-send`);
 // The model and effort of the summary, in the frame of the field.
@@ -766,6 +787,8 @@ describe("orca handoff", () => {
     expect(call.summary).toEqual(POINTS);
     await browser.pause(300);
     expect(await count(`${SLACK.pane} .ho-session-name`)).toBe(0);
+    // The owner is on another thread: the Orca screen is not shown to them.
+    await expect($("#orca")).not.toBeDisplayed();
     // Its own item shows the session when it is shown again.
     await openThread(1);
     await expect($(`${SLACK.pane} .ho-session-name`)).toBeDisplayed();
@@ -802,6 +825,7 @@ describe("orca handoff", () => {
     expect(call.environment).toBeNull();
     expect(await callsOf(create)).toHaveLength(1);
     expect(await callsOf(handoff)).toHaveLength(1);
+    await backTo(SLACK);
     await expect($(`${SLACK.pane} .ho-session-name`)).toBeDisplayed();
   });
 
@@ -878,6 +902,7 @@ describe("orca handoff", () => {
     await write(SLACK, "この方針でお願い");
     await sendButton(SLACK).click();
     await waitForCalls(handoff);
+    await backTo(SLACK);
     // The close icon of the session forgets it, and the form of the next item shows the worktree again.
     await $(`${SLACK.pane} [aria-label="閉じる"]`).click();
     await openThread(0);
@@ -948,58 +973,45 @@ describe("orca handoff", () => {
     await browser.waitUntil(async () => (await textsOf(`${SLACK.pane} .ho-notice`))[0]?.includes("読み込めませんでした: 接続できません"), { timeoutMsg: "the failed read was not told" });
   });
 
-  it("shows the session after the send: its header and its terminal, which takes the keys, with no history and no field", async () => {
+  it("shows the session after the send as a card: its header, its state, the button of the development screen and the close icon, with no terminal and no field", async () => {
     await openSlack();
     const handoff = await mock("orca_handoff", started);
     await openPane(SLACK);
     await chooseProject(SLACK, "example-app");
     await write(SLACK, "原因を調べて");
     await mock("orca_overview", orcaOverview([...sample(), newRow()], worktrees()));
-    const read = await mock("orca_terminal_read", ["$ claude", "> 原因を調べて"]);
-    const input = await mock("orca_terminal_input", null);
     await sendButton(SLACK).click();
     await waitForCalls(handoff);
+    await backTo(SLACK);
     await expect($(`${SLACK.pane} .ho-session-name`)).toHaveText("example-app ・ feat/a");
     await browser.waitUntil(async () => (await textsOf(`${SLACK.pane} .ho-session-state`))[0] === "作業中 ・ 1 分", { timeoutMsg: "the state of the session was not shown" });
-    await expect($(`${SLACK.pane} [aria-label="Orca の画面で開く"]`)).toBeDisplayed();
+    expect(await textsOf(`${SLACK.pane} .ho-session-open`)).toEqual(["開発画面で開く"]);
     await expect($(`${SLACK.pane} [aria-label="閉じる"]`)).toBeDisplayed();
     expect(await count(`${SLACK.pane} .ho-card`)).toBe(0);
-    // The field of more instructions is not drawn: the terminal of the session is, mirrored from this machine.
-    expect(await count(`${SLACK.pane} textarea:not(.xterm-helper-textarea)`)).toBe(0);
-    await expect($(`${SLACK.pane} .ho-term`)).toBeDisplayed();
-    expect((await waitForCalls(read))[0]).toEqual({ handle: "term_new" });
-    await browser.waitUntil(async () => (await termText(SLACK)).includes("原因を調べて"), { timeoutMsg: "the screen of the session never showed" });
-    expect(await count(`${SLACK.pane} .ho-note`)).toBe(1);
-    await expect($(`${SLACK.pane} .ho-note`)).not.toBeDisplayed();
-    // The keys go to the terminal of the session, as on the Orca screen.
-    await $(`${SLACK.pane} .ho-term .orca-term-box:not([hidden]) .xterm-screen`).click();
-    await browser.keys(["1"]);
-    await browser.waitUntil(async () => (await callsOf(input)).length > 0, { timeoutMsg: "the key never reached the terminal" });
-    expect((await callsOf(input)).every((c) => (c as { handle: string }).handle === "term_new")).toBe(true);
+    // No field of more instructions and no terminal: the session is on the Orca screen.
+    expect(await count(`${SLACK.pane} textarea`)).toBe(0);
+    expect(await terminalParts(SLACK)).toBe(0);
   });
 
-  it("lets go of the mirror when the session that was in the list is missing from a ready one", async () => {
+  it("shows 終了 in place of the state when the session that was in the list is missing from a ready one, and reads the list no more for it", async () => {
     await openSlack();
     const handoff = await mock("orca_handoff", started);
     await openPane(SLACK);
     await chooseProject(SLACK, "example-app");
     await write(SLACK, "原因を調べて");
     await mock("orca_overview", orcaOverview([...sample(), newRow()], worktrees()));
-    const read = await mock("orca_terminal_read", ["$ claude"]);
     await sendButton(SLACK).click();
     await waitForCalls(handoff);
+    await backTo(SLACK);
     await browser.waitUntil(async () => (await textsOf(`${SLACK.pane} .ho-session-state`))[0] === "作業中 ・ 1 分", { timeoutMsg: "the state of the session was not shown" });
-    await waitForCalls(read, 2);
     // The terminal is gone from Orca: the next read of the list lacks the row.
     await mock("orca_overview", orcaOverview(sample(), worktrees()));
     await browser.waitUntil(async () => (await textsOf(`${SLACK.pane} .ho-session-state`))[0] === "終了", { timeout: 25000, timeoutMsg: "the session was not shown as ended" });
-    await expect($(`${SLACK.pane} .ho-note`)).toBeDisplayed();
-    const before = (await callsOf(read)).length;
-    await browser.pause(2500);
-    expect((await callsOf(read)).length).toBe(before);
+    await expect(sessionOpen(SLACK)).toBeDisplayed();
+    expect(await terminalParts(SLACK)).toBe(0);
   });
 
-  it("streams the terminal of a session at the saved environment the Orca screen streams", async () => {
+  it("shows the card of a session at the saved environment the Orca screen streams, handed to that environment", async () => {
     const studio = { target: "Studio", environments: ["Studio"] };
     await openSlack({ orca_overview: orcaOverview(sample(), worktrees(), studio) });
     await waitForCalls("orca_stream_open");
@@ -1011,28 +1023,25 @@ describe("orca handoff", () => {
     await sendButton(SLACK).click();
     const [call] = (await waitForCalls(handoff)) as { environment: string | null }[];
     expect(call.environment).toBe("Studio");
-    const [shown] = (await waitForCalls("orca_stream_terminal")) as { handle: string }[];
-    expect(shown.handle).toBe("term_new");
-    // No mirror for a streamed terminal.
-    expect(await callsOf("orca_terminal_read")).toEqual([]);
-    await sendTerm({ kind: "snapshot", data: "$ claude\r\n> やって", cols: 80, rows: 24 });
-    await browser.waitUntil(async () => (await termText(SLACK)).includes("やって"), { timeoutMsg: "the streamed screen never showed" });
-    await expect($(`${SLACK.pane} .ho-note`)).not.toBeDisplayed();
+    await backTo(SLACK);
+    await expect($(`${SLACK.pane} .ho-session-name`)).toBeDisplayed();
+    await expect(sessionOpen(SLACK)).toBeDisplayed();
+    expect(await terminalParts(SLACK)).toBe(0);
   });
 
-  it("says the session was started, with the button of the Orca screen and no terminal, when the launch gave neither a pane key nor a handle", async () => {
+  it("shows the card with the state being checked and its button when the launch gave neither a pane key nor a handle", async () => {
     await openSlack();
     await mock("orca_handoff", { paneKey: null, handle: null } satisfies OrcaStarted);
-    const read = await mock("orca_terminal_read", ["$"]);
     await openPane(SLACK);
     await chooseProject(SLACK, "example-app");
     await write(SLACK, "始めて");
     await sendButton(SLACK).click();
-    await expect($(`${SLACK.pane} .ho-note`)).toBeDisplayed();
-    await expect($(`${SLACK.pane} .ho-term`)).not.toBeDisplayed();
-    await expect($(`${SLACK.pane} [aria-label="Orca の画面で開く"]`)).toBeDisplayed();
-    await browser.pause(1500);
-    expect(await callsOf(read)).toEqual([]);
+    // Nothing names the session, so the Orca screen is shown with no tab selected.
+    await backTo(SLACK);
+    await expect($(`${SLACK.pane} .ho-session-name`)).toBeDisplayed();
+    expect(await textsOf(`${SLACK.pane} .ho-session-state`)).toEqual(["確認中"]);
+    await expect(sessionOpen(SLACK)).toBeDisplayed();
+    expect(await terminalParts(SLACK)).toBe(0);
   });
 
   it("keeps the notice of a session that finishes while the pane shows it, until the Orca screen shows it", async () => {
@@ -1043,6 +1052,7 @@ describe("orca handoff", () => {
     await write(SLACK, "原因を調べて");
     await mock("orca_overview", orcaOverview([...sample(), newRow()], worktrees()));
     await sendButton(SLACK).click();
+    await backTo(SLACK);
     await expect($(`${SLACK.pane} .ho-session-name`)).toHaveText("example-app ・ feat/a");
     // The waiting agent of the sample is the one in the count.
     await expect($("#nav-orca .nav-count")).toHaveText("1");
@@ -1057,26 +1067,20 @@ describe("orca handoff", () => {
   it("shows the session again when the item is left and opened again, and the close icon forgets it", async () => {
     await openSlack();
     await mock("orca_handoff", started);
-    const read = await mock("orca_terminal_read", ["$ claude"]);
     await openPane(SLACK);
     await chooseProject(SLACK, "example-app");
     await write(SLACK, "原因を調べて");
     await mock("orca_overview", orcaOverview([...sample(), newRow()], worktrees()));
     await sendButton(SLACK).click();
-    await waitForCalls(read);
-    // Back to the list: the pane is gone and the terminal is let go (nothing is read any more).
+    await backTo(SLACK);
+    await expect($(`${SLACK.pane} .ho-session-name`)).toHaveText("example-app ・ feat/a");
+    // Back to the list: the pane is gone.
     await $("#st-back").click();
     await expect($(SLACK.pane)).not.toBeDisplayed();
-    await browser.pause(1200);
-    const reads = (await callsOf(read)).length;
-    await browser.pause(2500);
-    expect((await callsOf(read)).length).toBe(reads);
-    // The same thread again: the pane is open on its session, and its terminal is read again.
+    // The same thread again: the pane is open on its session.
     await openThread(1);
     await expect($(SLACK.pane)).toBeDisplayed();
-    await waitForCalls(read, reads + 1);
     await expect($(`${SLACK.pane} .ho-session-name`)).toHaveText("example-app ・ feat/a");
-    await browser.waitUntil(async () => (await termText(SLACK)).includes("claude"), { timeoutMsg: "the screen of the session never showed" });
     // Another thread has no session: its pane shows the form.
     await openThread(0);
     await expect($(SLACK.pane)).toBeDisplayed();
@@ -1090,25 +1094,63 @@ describe("orca handoff", () => {
     expect(await count(`${SLACK.pane} .ho-session-name`)).toBe(0);
   });
 
-  it("opens the session on the Orca screen, which selects its tab and shows its terminal, and the pane shows the terminal again when the thread is opened again", async () => {
+  it("moves to the Orca screen when the session starts, which selects its tab and shows its terminal, and the button of the card opens it again", async () => {
     await openSlack();
     await mock("orca_handoff", started);
     await openPane(SLACK);
     await chooseProject(SLACK, "example-app");
     await write(SLACK, "原因を調べて");
     await mock("orca_overview", orcaOverview([...sample(), newRow()], worktrees()));
-    const read = await mock("orca_terminal_read", ["$ claude"]);
+    await mock("orca_terminal_read", ["$ claude"]);
     await sendButton(SLACK).click();
-    await waitForCalls(read);
-    await $(`${SLACK.pane} [aria-label="Orca の画面で開く"]`).click();
+    // The screen is changed by the hand-over alone: the list was read when it was shown, and the tab of the session is selected once the list holds it.
     await expect($("#orca")).toBeDisplayed();
     await expect($('.orca-tabs [data-tab="claude:tab_new:leaf_9"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
     await browser.waitUntil(async () => (await $(".orca-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("claude"), { timeoutMsg: "the screen of the session never showed on the Orca screen" });
-    // The thread is open again: the same terminal is in the pane.
-    await $("#nav-slack").click();
-    await openThread(1);
+    // The thread is open again: the pane is the card of the session, with no terminal of its own.
+    await backTo(SLACK);
     await expect($(`${SLACK.pane} .ho-session-name`)).toHaveText("example-app ・ feat/a");
-    await browser.waitUntil(async () => (await termText(SLACK)).includes("claude"), { timeoutMsg: "the screen of the session never showed in the pane" });
+    expect(await terminalParts(SLACK)).toBe(0);
+    // The button of the card opens the session on the Orca screen again.
+    await sessionOpen(SLACK).click();
+    await expect($("#orca")).toBeDisplayed();
+    await expect($('.orca-tabs [data-tab="claude:tab_new:leaf_9"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("moves to the Orca screen at a saved environment that is the target, and selects the tab of the session when its stream lists it", async () => {
+    const studio = { target: "Studio", environments: ["Studio"] };
+    await openSlack({ orca_overview: orcaOverview(sample(), worktrees(), studio) });
+    await waitForCalls("orca_stream_open");
+    // Every item of the stream is put in the environment that streams it, as Rust does.
+    await sendStream(streamedList(sample(), worktrees()));
+    await mock("orca_handoff", started);
+    await openPane(SLACK);
+    await chooseProject(SLACK, "example-app");
+    await write(SLACK, "やって");
+    await sendButton(SLACK).click();
+    await expect($("#orca")).toBeDisplayed();
+    // The list that the stream gave has no such session yet: nothing is selected.
+    expect(await count('.orca-tabs [data-tab="claude:tab_new:leaf_9"] [role="tab"]')).toBe(0);
+    await sendStream(streamedList([...sample(), newRow()], worktrees()));
+    await expect($('.orca-tabs [data-tab="claude:tab_new:leaf_9"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("moves to the Orca screen and selects nothing when the session started in a saved environment that the screen does not list, even if this machine's list holds a row with the same pane key", async () => {
+    await openSlack({ orca_overview: orcaOverview(sample(), worktrees(), { environments: ["Lab"] }) });
+    await mock("orca_destination", orcaOverview([], [orcaWorktree("example-lab", "main")], { target: "Lab", environments: ["Lab"], known: false }));
+    await mock("orca_handoff", started);
+    await mock("orca_overview", orcaOverview([...sample(), newRow()], worktrees(), { environments: ["Lab"] }));
+    await openPane(SLACK);
+    await $(`${SLACK.pane} .ho-destination`).click();
+    await $('//div[@role="menu"]//button[normalize-space(.)="Lab"]').click();
+    await browser.waitUntil(async () => (await textsOf(`${SLACK.pane} .ho-destination`))[0] === "Lab", { timeoutMsg: "the destination was not shown" });
+    await chooseProject(SLACK, "example-lab");
+    await write(SLACK, "やって");
+    await sendButton(SLACK).click();
+    await expect($("#orca")).toBeDisplayed();
+    await browser.pause(500);
+    // The row with the same pane key is this machine's, not the session's: its tab may be drawn or not, but it is never the one selected.
+    expect(await count('.orca-tabs [data-tab="claude:tab_new:leaf_9"] [role="tab"][aria-selected="true"]')).toBe(0);
   });
 
   it("opens from the header icon of a Todo, under the detail in the same scroll, with its content as the card", async () => {
@@ -1143,7 +1185,6 @@ describe("orca handoff", () => {
     await chooseProject(TODO, "example-app");
     await write(TODO, "実装して");
     await mock("orca_overview", orcaOverview([...sample(), newRow()], worktrees()));
-    const read = await mock("orca_terminal_read", ["$ claude"]);
     await sendButton(TODO).click();
     const [call] = (await waitForCalls(handoff)) as Handed[];
     expect(call.destination).toEqual({ kind: "new", path: "/work/example-app" });
@@ -1151,11 +1192,14 @@ describe("orca handoff", () => {
     expect(call.context!.title).toBe("Write report");
     expect(call.context!.body).toContain("タスク: Write report");
     expect(call.context!.body).toContain("プロジェクト: Work");
-    // After the send the terminal of the session is in the pane, at a fixed height.
-    await waitForCalls(read);
+    // The Orca screen is shown, with the tab of the session selected.
+    await expect($("#orca")).toBeDisplayed();
+    await expect($('.orca-tabs [data-tab="claude:tab_new:leaf_9"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
+    await backTo(TODO);
+    // After the send the pane is the card of the session: no terminal, and as high as its content.
     await expect($(`${TODO.pane} .ho-session-name`)).toBeDisplayed();
-    await browser.waitUntil(async () => (await termText(TODO)).includes("claude"), { timeoutMsg: "the screen of the session never showed in the pane" });
-    expect(await heightOf(`${TODO.pane} .ho-term`)).toBe(480);
+    expect(await terminalParts(TODO)).toBe(0);
+    expect(await heightOf(TODO.pane)).toBeLessThan(200);
     // Back to the list: the pane and the button are gone, and the right side still holds Claude's pane.
     await $("#todo-back").click();
     await expect($(TODO.pane)).not.toBeDisplayed();
@@ -1175,12 +1219,15 @@ describe("orca handoff", () => {
     expect(await textsOf("#reply-tabs [role=tab]")).toEqual(["Claude", "Orca"]);
     await expect($("#reply-tab-claude")).toHaveAttribute("aria-selected", "true");
     await expect($("#reply-tab-orca")).toHaveAttribute("aria-selected", "false");
-    await expect($("#reply-term")).toBeDisplayed();
+    // The Claude tab is closed at first (S-7): the question, and no terminal.
+    await expect($("#reply-claude-ask")).toBeDisplayed();
+    await expect($("#reply-term")).not.toBeDisplayed();
     await expect($("#st-orca")).not.toBeDisplayed();
     const handoff = await mock("orca_handoff", started);
     await $("#reply-tab-orca").click();
     await expect($("#reply-tab-orca")).toHaveAttribute("aria-selected", "true");
     await expect($("#reply-tab-claude")).toHaveAttribute("aria-selected", "false");
+    await expect($("#reply-claude-ask")).not.toBeDisplayed();
     await expect($("#reply-term")).not.toBeDisplayed();
     await expect($("#reply-restart")).not.toBeDisplayed();
     await listRead(SLACK);
@@ -1198,15 +1245,17 @@ describe("orca handoff", () => {
     expect(call.context.body).toContain("Please review the deploy notes.");
     expect(call.context.body).toContain("Bob Example  ");
     expect(call.context.body).toContain("Looks fine to me.");
-    await expect($(`${SLACK.pane} .ho-term`)).toBeDisplayed();
-    // Back to Claude: its pane is as it was.
+    await backTo(SLACK);
+    await expect($(`${SLACK.pane} .ho-session-card`)).toBeDisplayed();
+    // Back to Claude: its pane is as it was, closed.
     await $("#reply-tab-claude").click();
-    await expect($("#reply-term")).toBeDisplayed();
+    await expect($("#reply-claude-ask")).toBeDisplayed();
+    await expect($("#reply-term")).not.toBeDisplayed();
     await expect($("#st-orca")).not.toBeDisplayed();
-    // The Orca tab again: the session is shown with its terminal.
+    // The Orca tab again: the card of the session is shown.
     await $("#reply-tab-orca").click();
-    await expect($(`${SLACK.pane} [aria-label="Orca の画面で開く"]`)).toBeDisplayed();
-    await expect($(`${SLACK.pane} .ho-term`)).toBeDisplayed();
+    await expect(sessionOpen(SLACK)).toBeDisplayed();
+    await expect($(`${SLACK.pane} .ho-session-card`)).toBeDisplayed();
   });
 
   it("starts at the target the Orca screen holds, and sends to it", async () => {
@@ -1253,35 +1302,11 @@ describe("orca handoff", () => {
     expect(call.destination).toEqual({ kind: "new", path: "/work/example-lab" });
     expect(call.environment).toBe("Lab");
     // The session is read at its own destination, and the choice is kept for the next handoff.
-    await expect($(`${SLACK.pane} [aria-label="Orca の画面で開く"]`)).toBeDisplayed();
+    await backTo(SLACK);
+    await expect(sessionOpen(SLACK)).toBeDisplayed();
     expect((await callsOf(destination)).length).toBeGreaterThan(1);
-    // The Orca screen streams no list of Lab, so the terminal of the session is no stream in the pane.
+    // The Orca screen streams no list of Lab, so no terminal of the session is streamed.
     expect(await callsOf("orca_stream_terminal")).toEqual([]);
-  });
-
-  it("mirrors the terminal of a session at a saved environment the Orca screen does not stream, reading and typing through that environment", async () => {
-    await openSlack({ orca_overview: orcaOverview(sample(), worktrees(), { environments: ["Studio", "Lab"] }) });
-    await mock("orca_destination", orcaOverview([], [orcaWorktree("example-lab", "main")], { target: "Lab", environments: ["Studio", "Lab"], known: false }));
-    const handoff = await mock("orca_handoff", started);
-    const read = await mock("orca_terminal_read", ["$ claude", "> やって"]);
-    const input = await mock("orca_terminal_input", null);
-    await openPane(SLACK);
-    await $(`${SLACK.pane} .ho-destination`).click();
-    await $('//div[@role="menu"]//button[normalize-space(.)="Lab"]').click();
-    await browser.waitUntil(async () => (await textsOf(`${SLACK.pane} .ho-destination`))[0] === "Lab", { timeoutMsg: "the destination was not shown" });
-    await chooseProject(SLACK, "example-lab");
-    await write(SLACK, "やって");
-    await sendButton(SLACK).click();
-    await waitForCalls(handoff);
-    expect((await waitForCalls(read))[0]).toEqual({ handle: "term_new", environment: "Lab" });
-    await browser.waitUntil(async () => (await termText(SLACK)).includes("やって"), { timeoutMsg: "the screen of the session never showed" });
-    await expect($(`${SLACK.pane} .ho-note`)).not.toBeDisplayed();
-    expect(await callsOf("orca_stream_terminal")).toEqual([]);
-    // The keys go through the same environment.
-    await $(`${SLACK.pane} .ho-term .orca-term-box:not([hidden]) .xterm-screen`).click();
-    await browser.keys(["1"]);
-    await browser.waitUntil(async () => (await callsOf(input)).length > 0, { timeoutMsg: "the key never reached the terminal" });
-    expect((await callsOf(input)).every((c) => (c as { handle: string; environment: string }).handle === "term_new" && (c as { environment: string }).environment === "Lab")).toBe(true);
   });
 
   it("changes back to this machine from the menu, which lists the destination read last", async () => {
@@ -1413,7 +1438,7 @@ describe("orca handoff: attached files (A-10)", () => {
   const attachedNote = (repo: string, name = "notes.txt") => ({ text: `'${dropped(repo, name)}' `, bracketed: false });
   const thumbs = () => count(`${SLACK.pane} .attachment`);
   const paste = (...files: Parameters<typeof fire>[2]) => fire("paste", `${SLACK.pane} textarea`, files);
-  // The form takes the files (`.ho-main`); after a hand-over the terminal takes them.
+  // The form takes the files (`.ho-main`); after a hand-over the pane has no terminal, and the terminal of the Orca screen takes them.
   const zone = `${SLACK.pane} .ho-main`;
   const drop = (...files: Parameters<typeof fire>[2]) => fire("drop", zone, files);
 
@@ -1625,28 +1650,11 @@ describe("orca handoff: attached files (A-10)", () => {
     await waitForCalls(handoff);
     await release(handoff, started);
     await expect($(`${SLACK.pane} .ho-session-name`)).toExist();
+    await backTo(SLACK);
     // The session shows no strip: the image waits with the item, and the form brings it back once the session is closed.
     expect(await count(`${SLACK.pane} .attachment`)).toBe(0);
     await $(`${SLACK.pane} [aria-label="閉じる"]`).click();
     await listRead(SLACK);
     expect(await browser.execute((p) => [...document.querySelectorAll(`${p} .attachment img`)].map((i) => (i as HTMLImageElement).alt), SLACK.pane)).toEqual(["second.png"]);
-  });
-
-  it("puts an image pasted on the terminal of the session shown in its worktree and types its path there", async () => {
-    await openSlack();
-    await mock("orca_handoff", started);
-    await openPane(SLACK);
-    await chooseProject(SLACK, "example-app");
-    await write(SLACK, "始めて");
-    await mock("orca_overview", orcaOverview([...sample(), newRow()], worktrees()));
-    await mock("orca_terminal_read", ["$"]);
-    await sendButton(SLACK).click();
-    await expect($(`${SLACK.pane} .ho-term .orca-term-box:not([hidden])`)).toBeDisplayed();
-    const attach = await mock("orca_attach_file", attached("example-app"));
-    const input = await mock("orca_terminal_input", null);
-    expect(await fire("paste", `${SLACK.pane} .ho-term .xterm-helper-textarea`, [image()])).toBe(true);
-    expect(await waitForCalls(attach)).toEqual([{ path: "/work/example-app", name: "shot.png", data: PNG, environment: null }]);
-    expect(await waitForCalls(input)).toEqual([{ handle: "term_new", text: `${dropped("example-app")} ` }]);
-    expect(await thumbs()).toBe(0);
   });
 });

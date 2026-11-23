@@ -3283,6 +3283,14 @@ describe("orca: files on a terminal (A-10)", () => {
 
 describe("orca: links in a terminal (A-8, A-12)", () => {
   const lines = ["$ open", "docs: https://example.com/docs。続きを読む", "see (https://example.org/a)."];
+  // A link that a program sets with OSC 8, named by one word (the DOM renderer draws a space as U+00A0).
+  const osc8 = (uri: string, word: string) => `\x1b]8;;${uri}\x1b\\${word}\x1b]8;;\x1b\\`;
+  const WORKTREE = "/work/example-app";
+  const FILE_URI = `file://${WORKTREE}/tmp/page.html`;
+  const PREVIEW_URL = "http://127.0.0.1:12345/tok/tmp/page.html";
+  // What the editor reads and the preview asks for when a file of the worktree is opened as a tab.
+  const text: OrcaFileText = { content: "fn main() {}\n", crlf: false, signature: "sig-1", language: "rust", highlight: null };
+  const opened = { orca_files_list: { entries: [], total: 0 }, orca_files_ignored: [], orca_file_read: text, orca_file_preview_url: PREVIEW_URL };
   const shownBox = ".orca-term .orca-term-box:not([hidden])";
 
   // The centre of `needle` on the screen of the terminal shown (the text of a row is drawn in the DOM).
@@ -3330,9 +3338,16 @@ describe("orca: links in a terminal (A-8, A-12)", () => {
     await project("example-app").click();
     await browser.waitUntil(async () => (await screenText()).includes("example.org"), { timeoutMsg: "the screen never showed" });
   }
+  // The mirror of this machine's example-app, with `text` for its screen.
+  async function openMirrorWith(text: string[], shows: string) {
+    await openOrca(orcaOverview(sample(), worktrees()), opened);
+    await mock("orca_terminal_read", text);
+    await project("example-app").click();
+    await browser.waitUntil(async () => (await screenText()).includes(shows), { timeoutMsg: "the screen never showed" });
+  }
   // `shows` is a word of `text` that the screen has once it is drawn (not a phrase: the DOM renderer draws a space as U+00A0).
   async function openStream(text: string, shows: string) {
-    await openOrca(orcaOverview([], [], { target: "Studio", environments: ["Studio"] }));
+    await openOrca(orcaOverview([], [], { target: "Studio", environments: ["Studio"] }), opened);
     await waitForCalls("orca_stream_open");
     await sendStream(streamList(sample(), worktrees()));
     await project("example-app").click();
@@ -3386,11 +3401,73 @@ describe("orca: links in a terminal (A-8, A-12)", () => {
   });
 
   it("opens a link that a program set with OSC 8 the same way, and shows the message when Rust refuses its URL", async () => {
-    await openStream("$ cat\r\n\x1b]8;;file:///etc/hosts\x1b\\hosts file\x1b]8;;\x1b\\", "hosts");
+    await openStream(`$ cat\r\n${osc8("ftp://example.com/hosts", "hosts")}`, "hosts");
     const open = await mock("orca_open_url", rejects("開けるのは http か https の URL だけです"));
+    const relative = await mock("orca_link_relative", "unused");
     await clickOn("hosts", { metaKey: true });
-    expect(await waitForCalls(open)).toEqual([{ url: "file:///etc/hosts" }]);
+    expect(await waitForCalls(open)).toEqual([{ url: "ftp://example.com/hosts" }]);
     await expect($(CARD)).toHaveText("開けるのは http か https の URL だけです");
+    expect(await callsOf(relative)).toEqual([]);
+  });
+
+  it("opens an HTML file of this machine in the browser when its file: link is ⌘+clicked, and nothing without ⌘", async () => {
+    await openMirrorWith(["$ open", osc8(FILE_URI, "pagelink")], "pagelink");
+    const relative = await mock("orca_link_relative", "tmp/page.html");
+    const browserOpen = await mock("orca_file_open_in_browser", null);
+    const open = await mock("orca_open_url", null);
+    await clickOn("pagelink");
+    await browser.pause(300);
+    expect(await callsOf(relative)).toEqual([]);
+    await clickOn("pagelink", { metaKey: true });
+    expect(await waitForCalls(browserOpen)).toEqual([{ path: WORKTREE, relative: "tmp/page.html", environment: null }]);
+    expect(await callsOf(relative)).toEqual([{ uri: FILE_URI, path: WORKTREE }]);
+    expect(await callsOf(open)).toEqual([]);
+    expect(await callsOf("orca_file_preview_url")).toEqual([]);
+  });
+
+  it("opens a file that is not HTML as an editor tab of the project, on this machine", async () => {
+    await openMirrorWith(["$ open", osc8(`file://${WORKTREE}/src/main.rs`, "mainlink")], "mainlink");
+    await mock("orca_link_relative", "src/main.rs");
+    const browserOpen = await mock("orca_file_open_in_browser", null);
+    await clickOn("mainlink", { metaKey: true });
+    expect(await waitForCalls("orca_file_read")).toEqual([{ path: WORKTREE, relative: "src/main.rs", environment: null }]);
+    await browser.waitUntil(async () => (await tabTitles()).includes("main.rs"), { timeoutMsg: "the editor tab never opened" });
+    expect(await callsOf(browserOpen)).toEqual([]);
+  });
+
+  it("opens an HTML file of a saved environment as a preview tab, and not in the browser", async () => {
+    await openStream(`$ cat\r\n${osc8(FILE_URI, "pagelink")}`, "pagelink");
+    const relative = await mock("orca_link_relative", "tmp/page.html");
+    const browserOpen = await mock("orca_file_open_in_browser", null);
+    await clickOn("pagelink", { metaKey: true });
+    expect(await waitForCalls(relative)).toEqual([{ uri: FILE_URI, path: WORKTREE }]);
+    await waitForCount(".orca-edit-preview iframe", 1);
+    expect(await callsOf("orca_file_preview_url")).toEqual([{ path: WORKTREE, relative: "tmp/page.html", environment: "Studio" }]);
+    expect(await tabTitles()).toContain("page.html");
+    expect(await callsOf(browserOpen)).toEqual([]);
+  });
+
+  it("opens a file that is not HTML of a saved environment as an editor tab", async () => {
+    await openStream(`$ cat\r\n${osc8(`file://${WORKTREE}/src/main.rs`, "mainlink")}`, "mainlink");
+    await mock("orca_link_relative", "src/main.rs");
+    await clickOn("mainlink", { metaKey: true });
+    expect(await waitForCalls("orca_file_read")).toEqual([{ path: WORKTREE, relative: "src/main.rs", environment: "Studio" }]);
+    await browser.waitUntil(async () => (await tabTitles()).includes("main.rs"), { timeoutMsg: "the editor tab never opened" });
+    expect(await callsOf("orca_file_preview_url")).toEqual([]);
+  });
+
+  it("opens nothing for a file: link that Rust says is outside the worktree, and shows its message", async () => {
+    await openStream(`$ cat\r\n${osc8("file:///etc/hosts", "hosts")}`, "hosts");
+    const relative = await mock("orca_link_relative", rejects("開けるのはワークツリーの中のファイルだけです"));
+    const browserOpen = await mock("orca_file_open_in_browser", null);
+    const open = await mock("orca_open_url", null);
+    await clickOn("hosts", { metaKey: true });
+    expect(await waitForCalls(relative)).toEqual([{ uri: "file:///etc/hosts", path: WORKTREE }]);
+    await expect($(CARD)).toHaveText("開けるのはワークツリーの中のファイルだけです");
+    expect(await callsOf(browserOpen)).toEqual([]);
+    expect(await callsOf(open)).toEqual([]);
+    expect(await callsOf("orca_file_read")).toEqual([]);
+    expect(await tabTitles()).not.toContain("hosts");
   });
 });
 

@@ -7,7 +7,7 @@ import { tag } from "./dom.js";
 import { avatarColor, initials } from "./format.js";
 import { SMILE_PLUS_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
-import { openEmojiPicker, type PickedEmoji, rememberEmoji } from "./slack-emoji-picker.js";
+import { openEmojiPicker, type PickedEmoji } from "./slack-emoji-picker.js";
 import { toast } from "./toast.js";
 
 // A Slack timestamp ("1700000000.123456") as epoch milliseconds.
@@ -203,10 +203,11 @@ async function pressReaction(m: Reacted, target: ReactionTarget, name: string, b
   box.querySelector<HTMLButtonElement>(`[data-name="${CSS.escape(name)}"]`)?.setAttribute("disabled", "");
   try {
     const changed = await invoke("slack_react", { ...target, ts: m.ts, name, add });
+    // Only an add counts for the "よく使う" of the picker (S-25); a failed note is Rust's to log.
+    if (add) invoke("slack_emoji_used", { teamId: target.teamId, name }).catch(() => {});
     const change = { name, add, changed, picked };
     applyChange(m, change);
     for (const listener of changeListeners) listener(target, m.ts, change, m);
-    if (picked) rememberEmoji(target.teamId, picked);
   } catch (e) {
     toast(`リアクションを変えられませんでした: ${e}`);
   } finally {

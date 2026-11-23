@@ -685,9 +685,13 @@
                   <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>Orca
                 </button>
               </div>
-              <button id="reply-restart" type="button" class="text-btn chat-clear">やり直す</button>
+              <button id="reply-restart" type="button" class="text-btn chat-clear" hidden>やり直す</button>
             </div>
-            <div id="reply-term"></div>
+            <div id="reply-claude-ask">
+              <p>Claude に相談しますか？</p>
+              <button id="reply-claude-open" type="button" class="text-btn">相談する</button>
+            </div>
+            <div id="reply-term" hidden></div>
             <div id="st-orca" class="ho-pane ho-slack" hidden></div>
           </aside>
         </section>

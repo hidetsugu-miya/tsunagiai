@@ -1134,6 +1134,14 @@ async function openCheckedPreview(path: string, relative: string, environment: s
   draw();
 }
 
+// A `file:` link ⌘+clicked in a terminal (A-8, #1304): Rust gives its path inside the worktree of the terminal (and refuses one outside it), then an HTML file of this machine opens in the default browser (A-31) and any other file is a tab of the project in the editor, where an HTML file shows its preview (A-18, A-42; the HTML of another PC is shown there too).
+async function openTerminalLink(source: TermSource, uri: string) {
+  const { path, environment } = source;
+  const relative = await invoke("orca_link_relative", { uri, path });
+  if (environment === null && /\.html$/i.test(relative)) await invoke("orca_file_open_in_browser", { path, relative, environment });
+  else await openCheckedPreview(path, relative, environment);
+}
+
 registerDraftTarget("preview-open", {
   names: ["path", "relative", "environment"],
   isOpen: () => true,
@@ -1256,8 +1264,9 @@ function claimStarted() {
     return;
   }
   if (place.state !== "ready") return;
-  const row = wait.kind !== "terminal" ? mix.rows.find((r) => (wait.paneKey !== null && r.paneKey === wait.paneKey) || (wait.handle !== null && r.handle === wait.handle)) : undefined;
-  const terminal = wait.kind !== "claude" && wait.handle !== null ? mix.terminals.find((t) => t.handle === wait.handle) : undefined;
+  // Only an item of the place the start was made in: the list holds this machine's items beside the target's, and a pane key or a handle of another place is another session.
+  const row = wait.kind !== "terminal" ? mix.rows.find((r) => placeOf(r) === wait.target && ((wait.paneKey !== null && r.paneKey === wait.paneKey) || (wait.handle !== null && r.handle === wait.handle))) : undefined;
+  const terminal = wait.kind !== "claude" && wait.handle !== null ? mix.terminals.find((t) => placeOf(t) === wait.target && t.handle === wait.handle) : undefined;
   if (row?.paneKey) pickRow(row);
   if (terminal) pickTerminal(terminal);
   if (row || terminal) started = null;
@@ -1533,13 +1542,19 @@ export async function readDestination(environment: string | null, force: boolean
   }
 }
 
-// Selects the session of the pane `paneKey` on the Orca screen and shows the screen ("Orca の画面で開く"). A session the list does not hold yet leaves the project and the tab as they are, and the work pane is shown all the same: no formation stays selected.
-export function openInOrca(paneKey: string | null) {
+// Selects the session of the pane `paneKey` on the Orca screen and shows the screen ("開発画面で開く"). A session the list does not hold yet leaves the project and the tab as they are, and the work pane is shown all the same: no formation stays selected.
+// `environment` is where the session runs (null: this machine, else the name of the saved environment), and only a row of that place is the session: the list holds the rows of this machine beside the target's (A-33), and the same pane key in another place is another session.
+// `follow` is given by a hand-over (A-9) with the handle its launch answered: a session that the list does not hold yet is followed as the plus follows its start, so once the list holds it, its project and tab are selected.
+// A place that is neither the target nor this machine is not in the list, so the screen is shown with the selection as it is.
+export function openInOrca(paneKey: string | null, environment: string | null, follow?: { handle: string | null }) {
   deselectFormation();
-  const row = paneKey === null ? null : (mix.rows.find((r) => r.paneKey === paneKey) ?? null);
+  const row = paneKey === null ? null : (mix.rows.find((r) => r.paneKey === paneKey && placeOf(r) === environment) ?? null);
   if (row) {
     setProject(row.projectKey);
     chooseTab(claudeTabId(row.paneKey!));
+  } else if (follow !== undefined && (paneKey !== null || follow.handle !== null)) {
+    started = { kind: "claude", paneKey, handle: follow.handle, target: environment, until: Date.now() + START_WAIT_MS };
+    claimStarted();
   }
   setScreen("orca");
 }
@@ -1981,7 +1996,7 @@ function initSearch() {
 }
 
 export function initOrca() {
-  initOrcaTerminal((e) => showFailure("orca", e));
+  initOrcaTerminal((e) => showFailure("orca", e), (source, uri) => void openTerminalLink(source, uri).catch((e) => showFailure("orca", e)));
   initPeek(statusIcon, selectSession);
   initSplit($("orca"), $("orca-split"), { side: "left", min: 0.15, max: 0.5, initial: 0.19, property: "--list-w" });
   initSplit($("orca"), $("orca-files-split"), { side: "right", min: 0.15, max: 0.4, initial: 0.22, property: "--files-w" });
