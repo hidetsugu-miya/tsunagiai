@@ -1421,6 +1421,11 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 #orca-projects-head .orca-list-head { flex: 1; min-width: 0; padding: 0 0 0 18px; }
 #orca-search-open { flex: none; width: 24px; height: 24px; margin-right: 8px; color: var(--muted); }
 #orca-search-open svg { width: 14px; height: 14px; }
+/* A-8: the bell right of the heading 「プロジェクト」: pressed, the list is the work (the rows of the sessions); the number at its corner is the one of the sidebar button 「開発」. */
+#orca-bell { position: relative; flex: none; width: 24px; height: 24px; margin-right: 2px; color: var(--muted); }
+#orca-bell svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+#orca-bell[aria-pressed="true"] { background: var(--soft); color: var(--accent-text); }
+#orca-bell-count { position: absolute; right: -2px; bottom: -3px; padding: 0 2px; border-radius: 6px; background: var(--surface); color: var(--agent-question); font-size: calc(10px * var(--fs)); font-weight: 700; line-height: 12px; font-variant-numeric: tabular-nums; pointer-events: none; }
 #orca-search { display: flex; align-items: center; gap: 6px; height: 32px; box-sizing: border-box; margin: 2px 8px; padding: 0 4px 0 10px; border: 1px solid var(--chip-line); border-radius: 8px; background: var(--surface); color: var(--muted); }
 #orca-search:focus-within { border-color: var(--accent); }
 #orca-search svg { flex: none; width: 14px; height: 14px; }
@@ -1467,6 +1472,27 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-worktree-agent { flex: none; display: inline-flex; width: 15px; height: 15px; color: var(--muted); }
 .orca-worktree-agent.claude { color: var(--claude); }
 .orca-worktree-agent svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+/* A-8: the rows of the work, one step in from the heading and no card: a session's status icon, title (with the pin of a fixed one and the pencil) and time; its latest message; and its AI, project and branch. */
+.orca-actives { margin-left: 14px; }
+.orca-active { display: flex; flex-direction: column; align-items: stretch; gap: 3px; width: 100%; box-sizing: border-box; margin-bottom: 1px; padding: 7px 10px; border: 0; border-radius: 8px; background: transparent; font: inherit; font-size: calc(13px * var(--fs)); color: inherit; text-align: left; cursor: pointer; }
+.orca-active:hover { background: var(--hover); }
+.orca-active[aria-pressed="true"] { background: var(--soft); }
+.orca-active:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.orca-active-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.orca-active-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.orca-active-time { flex: none; margin-left: auto; font-size: calc(11px * var(--fs)); color: var(--muted); font-variant-numeric: tabular-nums; }
+.orca-active-latest { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(12px * var(--fs)); color: var(--muted); }
+.orca-active-foot { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: calc(11.5px * var(--fs)); color: var(--muted); }
+.orca-active-project { flex: none; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: inherit; }
+.orca-active-branch { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Menlo, monospace; font-size: calc(11px * var(--fs)); }
+/* A-8: the pin of a title the owner fixed, and the pencil that types a new one (it shows while the pointer is on the row or the focus is in it; `visibility`, so that it takes no click while hidden). The field takes the rest of the line. */
+.orca-active-pin { flex: none; font-size: calc(11px * var(--fs)); line-height: 1; }
+.orca-active-edit { flex: none; visibility: hidden; padding: 0 3px; border: 0; border-radius: 4px; background: transparent; font: inherit; font-size: calc(12px * var(--fs)); line-height: 1.3; color: var(--muted); cursor: pointer; }
+.orca-active:hover .orca-active-edit, .orca-active:focus-within .orca-active-edit { visibility: visible; }
+.orca-active-edit:hover { background: var(--soft); color: var(--accent-text); }
+.orca-active-edit:focus-visible { outline: 2px solid var(--accent); }
+.orca-active-title-input { flex: 1 1 0; min-width: 0; box-sizing: border-box; padding: 1px 4px; border: 1px solid var(--accent); border-radius: 4px; background: var(--surface); font: inherit; font-weight: 600; color: inherit; user-select: text; -webkit-user-select: text; }
+.orca-active-title-input:focus { outline: none; }
 /* The arrow at the left of a row of a list (the formations of A-37 have it). */
 .orca-arrow { position: absolute; left: 4px; top: 6px; width: 24px; height: 24px; padding: 0; border-radius: 8px; }
 .orca-arrow svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }

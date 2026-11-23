@@ -8,6 +8,7 @@
 // The sidebar button's count is the agents that wait for the user plus the notices: the agents that stopped (done, failed, interrupted) while the app ran, until their session is shown on this screen, they run again or they leave the list (the first read of a target only sets the base).
 // While an agent works, the button's icon is yellow and fades slowly; the number that work is only in the button's label.
 // A search field in the row of the heading 「プロジェクト」 (A-19), opened by the magnifier at the right end of the row or by ⌘J, narrows the projects by name.
+// The bell in that row (A-8) switches the list to the work: the sessions of every project, the newest change first, each with the pin and the pencil of its title; while a search text is typed the list is the projects again.
 // While the screen and the file pane are shown, the clock also reads again, every 10 seconds, what the file pane shows and the files and differences that the panes show (`rereadFiles`; A-18, A-24, A-27), without a word.
 // A read in the background swaps the rows in place: the selection and the scroll position stay, and `show()` is never called by it.
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
@@ -105,6 +106,15 @@ let listOpen = true;
 let query = "";
 // Whether the projects that are not running are listed under the link that follows the running ones (A-8). The search lists them all whatever this is, and clearing it leaves this as it was; in memory only.
 let stoppedOpen = false;
+// Whether the bell of the heading is pressed (A-8): the list is the work and not the projects. Held in memory only, off at each start of the app.
+let activeOnly = false;
+// The number of the bell: the sidebar button's count, as `drawBadge` found it.
+let badgeCount = 0;
+// The session whose title is being typed in its row (A-8) and the text typed so far: a redraw of the list keeps the field.
+let editing: { id: string; value: string } | null = null;
+// The field of `editing`: a draw of the list moves this very element into the new row, so that the caret, the selection and the focus stay. `redrawing` is true while the list is being drawn: a blur then is the move and no cancel.
+let titleField: HTMLInputElement | null = null;
+let redrawing = false;
 // Whether the search field (A-19) is open: it takes the place of the heading's row. It is closed again when its text is empty and the focus leaves it, or with Escape; while text is kept it stays open.
 let searchOpen = false;
 let cursor: string | null = null;
@@ -369,6 +379,8 @@ function drawBadge() {
   if (viewed !== null) notified.delete(viewed);
   const waiting = waitingCount + notified.size;
   setNavCount("nav-orca", waiting, "開発", "確認待ち");
+  badgeCount = waiting;
+  drawBell();
   // The number that work is not drawn: the button's icon is yellow and fades, and the label says it (read aloud, and in the tooltip on hover).
   const nav = $("nav-orca");
   const working = workingCount + hereWorking;
@@ -413,8 +425,23 @@ function drawNotice() {
   );
 }
 
+// Whether the list is the work: the bell is pressed and no search text is typed (A-8).
+const activeShown = () => activeOnly && needle() === "";
+
+// The bell of the heading (A-8): pressed while the list is the work, with the number of the sidebar button, and the heading names the list.
+function drawBell() {
+  const bell = $("orca-bell");
+  bell.setAttribute("aria-pressed", String(activeOnly));
+  bell.setAttribute("aria-label", badgeCount === 0 ? "作業中" : `作業中（確認待ち ${badgeCount} 件）`);
+  const count = $("orca-bell-count");
+  count.hidden = badgeCount === 0;
+  count.textContent = String(badgeCount);
+  $("orca-projects-title").textContent = activeShown() ? "作業中" : "プロジェクト";
+}
+
 // The heading's row or the search field shows (A-19), and the clear button of the field shows while something is typed.
 function drawSearch() {
+  drawBell();
   $("orca-projects-head").hidden = searchOpen;
   $("orca-search").hidden = !searchOpen;
   $("orca-search-clear").hidden = query === "";
@@ -487,6 +514,151 @@ function worktreeNode(key: string, w: OrcaWorktree) {
     syncPeek();
   };
   return row;
+}
+
+// The pencil of a row (A-8): it turns the title into a field. It is in the row's button, so its press does not reach the row.
+function editButton(t: Tab) {
+  const edit = tag("button", "orca-active-edit", "✎");
+  edit.type = "button";
+  edit.dataset.key = `title-edit:${t.id}`;
+  edit.setAttribute("aria-label", "題名を変える");
+  edit.onclick = (e) => {
+    e.stopPropagation();
+    editing = { id: t.id, value: t.title };
+    draw();
+    const input = $("orca-list").querySelector<HTMLInputElement>(`[data-key="${CSS.escape(`title:${t.id}`)}"]`);
+    input?.focus();
+    input?.select();
+  };
+  return edit;
+}
+
+// The field that the title of a row is typed in (A-8): Enter saves it (an empty text gives the automatic title back), Escape and the focus leaving cancel it. Its keys and presses do not reach the row (the selection, the menu of the peek).
+function titleInput(id: string, key: string, environment: string | null, value: string) {
+  if (titleField?.dataset.key === `title:${id}`) return titleField;
+  const input = tag("input", "orca-active-title-input");
+  titleField = input;
+  input.type = "text";
+  input.value = value;
+  input.dataset.key = `title:${id}`;
+  input.setAttribute("aria-label", "題名");
+  let done = false;
+  input.oninput = () => {
+    if (editing?.id === id) editing.value = input.value;
+  };
+  input.onkeydown = (e) => {
+    e.stopPropagation();
+    if (composing(e)) return;
+    if (e.key === "Enter") {
+      e.preventDefault();
+      done = true;
+      void saveTitle(environment, key, input.value);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      done = true;
+      stopEditing();
+    }
+  };
+  for (const type of ["keyup", "keypress", "click", "dblclick", "mousedown", "contextmenu"]) input.addEventListener(type, (e) => e.stopPropagation());
+  // The move of the field by a draw of the list is not a cancel: the same element is put in the new row.
+  input.onblur = () => {
+    if (!done && !redrawing && input.isConnected) stopEditing();
+  };
+  return input;
+}
+
+function stopEditing() {
+  editing = null;
+  titleField = null;
+  draw();
+}
+
+// Saves the title of a session (an empty one takes it out) and holds the titles Rust answers.
+async function setTitle(environment: string | null, key: string, title: string) {
+  titles = await invoke("orca_title_set", { target: titleTarget(environment), key, title });
+}
+
+async function saveTitle(environment: string | null, key: string, title: string) {
+  try {
+    await setTitle(environment, key, title);
+  } catch (e) {
+    showFailure("orca", e);
+  }
+  stopEditing();
+}
+
+// A session of the work and the tab it is (A-8).
+interface Active {
+  row: OrcaRow;
+  tab: Tab;
+}
+
+// The sessions of the work (A-8): every session of the list that has a tab and is not a launched child's, whatever its state (working, waiting, done or failed), the newest change first and across the projects. A session whose time is unknown goes last.
+function activeSessions(): Active[] {
+  const tabs = new Map<string, Tab[]>();
+  const found: Active[] = [];
+  for (const row of mix.rows) {
+    const id = row.paneKey === null || isChildSession(row) ? null : rowTabId(row);
+    if (id === null) continue;
+    if (!tabs.has(row.projectKey)) tabs.set(row.projectKey, ownTabs(row.projectKey));
+    const tab = tabs.get(row.projectKey)!.find((t) => t.id === id);
+    if (tab !== undefined) found.push({ row, tab });
+  }
+  return found.sort((a, b) => b.row.atMs - a.row.atMs);
+}
+
+// The name of the project of a row, and the branch of its worktree (the worktree's name when it is on none).
+const projectNameOf = (r: OrcaRow) => mix.projects.find((p) => p.key === r.projectKey)?.name ?? r.repo;
+const branchOf = (r: OrcaRow) => mix.worktrees.find((w) => w.path === r.path && placeOf(w) === placeOf(r))?.gitBranch || r.branch;
+
+// The time a session's row shows: since its state began, and for a stopped one how long ago it ended.
+const activeTime = (r: OrcaRow, now: number) => elapsed(r.atMs, now, isStopped(r));
+
+// A session of the work, in three lines (A-8): its status icon, its title (with the pin when the owner fixed it, and the pencil that types a new one) and its time; its latest message; then the icon of its AI, its project and its branch. It is selected when it is the tab selected. Everything that comes from outside is text.
+function activeNode({ row: r, tab: t }: Active, now: number) {
+  const key = r.projectKey;
+  const row = tag("button", "orca-active");
+  row.type = "button";
+  row.dataset.key = `tab:${t.id}`;
+  // Not `data-tab`: that names a tab of the work pane, which the pane tree looks for with `closest`.
+  row.dataset.session = t.id;
+  row.setAttribute("aria-pressed", String(key === pickedProject() && t.id === selectedTab()));
+  const head = tag("span", "orca-active-head");
+  head.append(statusIcon(t.status, t.label));
+  if (editing?.id === t.id && t.titleKey !== undefined) head.append(titleInput(t.id, t.titleKey, t.environment, editing.value));
+  else {
+    head.append(tag("span", "orca-active-title", t.title));
+    if (t.fixed) {
+      const pin = tag("span", "orca-active-pin", "📌");
+      pin.setAttribute("role", "img");
+      pin.setAttribute("aria-label", "固定");
+      head.append(pin);
+    }
+    if (t.titleKey !== undefined) head.append(editButton(t));
+  }
+  head.append(tag("span", "orca-active-time", activeTime(r, now)));
+  row.append(head);
+  if (r.latest) row.append(tag("span", "orca-active-latest", r.latest));
+  const foot = tag("span", "orca-active-foot");
+  foot.append(agentIcon(r.agent), tag("span", "orca-active-project", projectNameOf(r)), tag("span", "orca-active-branch", branchOf(r)));
+  row.append(foot);
+  row.onclick = () => selectSession(key, t.id);
+  row.oncontextmenu = (e) => {
+    e.preventDefault();
+    // A terminal is shown in one place at a time: the selected project's is in the work pane, and a session with no terminal has none to show.
+    if (key === pickedProject() || (tabsOf(key).find((x) => x.id === t.id)?.handle ?? null) === null) return;
+    openPeek(key, t.id, `tab:${t.id}`);
+    syncPeek();
+  };
+  return row;
+}
+
+// The list of the work (A-8): the rows one step in from the heading, or the line that says there are none.
+function activeNodes(sessions: Active[], now: number): HTMLElement[] {
+  if (sessions.length === 0) return [emptyNode("作業中のセッションがありません")];
+  const list = tag("div", "orca-actives");
+  list.append(...sessions.map((s) => activeNode(s, now)));
+  return [list];
 }
 
 // Whether the titles of sessions that a list read well no longer holds are being taken out.
@@ -629,10 +801,10 @@ function visibleRows(re: RegExp | null) {
 }
 
 // The rows of the region at the bottom of the list: the projects that are not running, while the link is open (none while a search text is typed, which lists them in the list itself).
-const stoppedRows = () => (stoppedOpen && needle() === "" ? projectRows().filter(isNotRunning) : []);
+const stoppedRows = () => (stoppedOpen && needle() === "" && !activeOnly ? projectRows().filter(isNotRunning) : []);
 
-// How many projects are not running, which the link counts (none while a search text is typed, which has no link).
-const stoppedCount = () => (needle() === "" ? mix.projects.filter(isNotRunning).length : 0);
+// How many projects are not running, which the link counts (none while a search text is typed, which has no link, and none while the list is the work).
+const stoppedCount = () => (needle() === "" && !activeOnly ? mix.projects.filter(isNotRunning).length : 0);
 
 // The link at the bottom of the list (A-8): "› 起動していない N 件" while the others are closed, "起動していないものを隠す" while they are listed under it.
 function stoppedToggle(count: number) {
@@ -692,16 +864,29 @@ function drawFeed() {
   const re = matcher();
   const rows = visibleRows(re);
   const on = cursorKey(rows);
-  const key = JSON.stringify([view?.state ?? null, mix.projects.map(rowOf), mix.worktrees.map(worktreeOf), needle(), on, pickedProject(), pickedAt, stoppedOpen]);
+  // The sessions of the work, with what is drawn of each (the time moves by the minute, so it is part of the key).
+  const now = Date.now();
+  const sessions = activeShown() ? activeSessions() : [];
+  const sessionOf = ({ row: r, tab: t }: Active) => [t.id, t.status, t.label, t.title, t.fixed ?? false, r.latest, activeTime(r, now), r.agent ?? null, projectNameOf(r), branchOf(r), r.projectKey];
+  const key = JSON.stringify([view?.state ?? null, mix.projects.map(rowOf), mix.worktrees.map(worktreeOf), needle(), on, pickedProject(), pickedAt, stoppedOpen, activeShown(), sessions.map(sessionOf), selectedTab(), editing?.id ?? null]);
   if (key === feedKey) return;
   feedKey = key;
   const box = feed();
   const top = box.scrollTop;
   const focused = (document.activeElement as HTMLElement | null)?.dataset?.key;
-  box.replaceChildren(...projectNodes(re, rows, on));
-  box.scrollTop = top;
-  drawStopped();
+  // The field of a title being typed is moved to its new row as it is (`titleInput`); what it selects is put back after the move.
+  const field = titleField?.isConnected ? titleField : null;
+  const selected = field === null ? null : { start: field.selectionStart, end: field.selectionEnd, direction: field.selectionDirection };
+  redrawing = true;
+  try {
+    box.replaceChildren(...(activeShown() ? activeNodes(sessions, now) : projectNodes(re, rows, on)));
+    box.scrollTop = top;
+    drawStopped();
+  } finally {
+    redrawing = false;
+  }
   if (focused) $("orca-list").querySelector<HTMLElement>(`[data-key="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
+  if (selected !== null && field?.isConnected) field.setSelectionRange(selected.start, selected.end, selected.direction ?? undefined);
 }
 
 function tabNode(t: Tab, selected: boolean) {
@@ -1337,6 +1522,8 @@ function refresh() {
   // The terminals are shown only while the screen is shown.
   if (!shown()) syncTerminal();
   syncPeek();
+  // The time of the rows of the work moves by the minute, with no read of the list (a streamed list is read by no clock).
+  if (listShown() && activeShown()) drawFeed();
   // The files are read again every period while the screen, the window and the file pane are shown, whatever the list does (streamed or being read).
   if (!shown() || document.hidden || !filesShown()) filesAt = Date.now();
   else if (Date.now() - filesAt >= shownMs()) {
@@ -1801,6 +1988,11 @@ function initSearch() {
       if (searchOpen && input.value === "" && document.activeElement !== input) closeSearch();
     }, 0);
   $("orca-search-open").onclick = openSearch;
+  $("orca-bell").onclick = () => {
+    activeOnly = !activeOnly;
+    drawBell();
+    drawFeed();
+  };
   $("orca-search-clear").onclick = () => {
     clearSearch();
     input.focus();

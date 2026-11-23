@@ -145,9 +145,11 @@ describe("orca", () => {
     expect(await marked()).toBe(true);
     await $("#nav-orca").click();
     await expect($("#orca")).toBeDisplayed();
-    // The list holds the projects and no view of the agents by state.
+    // The list holds the projects, and the work (the bell, A-8) is not shown until the bell is pressed.
     expect(await count("#orca-feed .orca-project")).toBe(4);
-    await expect($("#orca-bell")).not.toExist();
+    await expect($("#orca-bell")).toExist();
+    await expect($("#orca-bell")).toHaveAttribute("aria-pressed", "false");
+    expect(await count("#orca-feed .orca-active")).toBe(0);
   });
 
   it("has no footer, no label of the target and no menu of it at the bottom of the list pane, whatever the read says", async () => {
@@ -1537,6 +1539,371 @@ describe("orca: projects", () => {
     await browser.waitUntil(async () => (await tabTitles()).length === 3, { timeoutMsg: "the new terminal never became a tab" });
     expect(await tabTitles()).toEqual(["Write the docs", "zsh", "bash"]);
     await expect(selectedTab()).toHaveText(expect.stringContaining("Write the docs"));
+  });
+
+  describe("the bell and the work (A-8)", () => {
+    const THIS = "このマシン";
+    const bell = () => $("#orca-bell");
+    const tabId = (repo: string) => claudeTab(repo);
+    // The rows of the work: the tab id, the title, the time, the latest message (null: none), the project and the branch.
+    const works = () =>
+      browser.execute(() =>
+        [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-active")].map((r) => [
+          r.dataset.session,
+          r.querySelector(".orca-active-title")?.textContent ?? null,
+          r.querySelector(".orca-active-time")!.textContent,
+          r.querySelector(".orca-active-latest")?.textContent ?? null,
+          r.querySelector(".orca-active-project")!.textContent,
+          r.querySelector(".orca-active-branch")!.textContent,
+        ]),
+      );
+    const pressedWorks = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-active")].filter((r) => r.getAttribute("aria-pressed") === "true").map((r) => r.dataset.session));
+    const expectPressed = (want: string[]) => browser.waitUntil(async () => JSON.stringify(await pressedWorks()) === JSON.stringify(want), { timeoutMsg: `the marked rows never became ${want.join()}` });
+    const activeOf = (repo: string) => $(`#orca-feed .orca-active[data-session="${tabId(repo)}"]`);
+    // Sessions in several projects, a Codex one among them, with the times 3, 8, 40 and 90 minutes ago, and one whose time is unknown; the rows that have no tab are left out.
+    const read = () =>
+      orcaOverview(
+        [
+          orcaRow("example-lib", "fix/y", "Run the tests", { group: "done", minutes: 40, agent: "codex" }),
+          orcaRow("example-db", "main", "Check the data", { group: "done", status: "failed", minutes: 90 }),
+          orcaRow("example-app", "main", "Write the docs", { minutes: 3, latest: "Reading the page", subagents: 2, shell: "ls" }),
+          orcaRow("example-web", "dev", "No time yet", { atMs: 0 }),
+          orcaRow("example-api", "feat/x", "Fix the parser", { group: "waiting", minutes: 8, latest: "どちらにしますか？" }),
+          orcaRow("example-no", "dev", "No tab", { paneKey: null, handle: null }),
+          orcaRow("example-term", "dev", "Other AI with no terminal", { agent: "antigravity", handle: null }),
+        ],
+        [orcaWorktree("example-app", "main", { gitBranch: "feat/a" }), orcaWorktree("example-notes", "develop")],
+      );
+    const openWork = async (value = read(), fixtures: Record<string, unknown> = {}) => {
+      await openOrca(value, fixtures);
+      await bell().click();
+      await expect(bell()).toHaveAttribute("aria-pressed", "true");
+    };
+
+    it("draws the bell with the number of the sidebar button, and switches the list to the work and back, kept through a read", async () => {
+      await openOrca(read());
+      await expect(bell()).toHaveAttribute("aria-pressed", "false");
+      await expect(bell()).toHaveAttribute("aria-label", "作業中（確認待ち 1 件）");
+      await expect($("#orca-bell-count")).toHaveText("1");
+      await expect($("#nav-orca .nav-count")).toHaveText("1");
+      await expect($("#orca-projects-title")).toHaveText("プロジェクト");
+      // The bell is right of the heading and left of the magnifier.
+      expect(await browser.execute(() => [...document.querySelectorAll("#orca-projects-head > *")].map((e) => e.id || e.className.split(" ")[0]))).toEqual(["orca-list-head", "orca-bell", "orca-search-open"]);
+      await expect($("#orca-stopped")).toBeDisplayed();
+      expect(await count("#orca-feed .orca-active")).toBe(0);
+      await bell().click();
+      await expect(bell()).toHaveAttribute("aria-pressed", "true");
+      await expect($("#orca-projects-title")).toHaveText("作業中");
+      // The link of the projects that are not running goes with the projects.
+      await expect($("#orca-stopped")).not.toBeDisplayed();
+      expect(await count("#orca-feed .orca-project")).toBe(0);
+      expect(await count("#orca-feed .orca-active")).toBe(5);
+      // A read keeps the switch.
+      await showAgain();
+      await expect(bell()).toHaveAttribute("aria-pressed", "true");
+      expect(await count("#orca-feed .orca-active")).toBe(5);
+      await bell().click();
+      await expect(bell()).toHaveAttribute("aria-pressed", "false");
+      await expect($("#orca-projects-title")).toHaveText("プロジェクト");
+      await expect($("#orca-stopped")).toBeDisplayed();
+      expect(await count("#orca-feed .orca-active")).toBe(0);
+    });
+
+    it("draws no number on the bell when nothing needs the user", async () => {
+      await openOrca(orcaOverview([orcaRow("example-app", "main", "Write the docs")], [orcaWorktree("example-app", "main")]));
+      await expect($("#orca-bell-count")).not.toBeDisplayed();
+      await expect(bell()).toHaveAttribute("aria-label", "作業中");
+    });
+
+    it("lists the sessions of every project, the newest change first, in three lines each, with no card and no mark of subagents or a shell", async () => {
+      await openWork();
+      expect(await works()).toEqual([
+        [tabId("example-app"), "Write the docs", "3 分", "Reading the page", "example-app", "feat/a"],
+        [tabId("example-api"), "Fix the parser", "8 分", "どちらにしますか？", "example-api", "feat/x"],
+        ["orca:term_example-lib", "Run the tests", "40 分前", null, "example-lib", "fix/y"],
+        [tabId("example-db"), "Check the data", "1 時間前", null, "example-db", "main"],
+        // A session whose time is unknown goes last, with no time.
+        [tabId("example-web"), "No time yet", "", null, "example-web", "dev"],
+      ]);
+      expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-feed .orca-active .orca-ic")].map((i) => i.dataset.status))).toEqual(["working", "question", "done", "failed", "working"]);
+      // The lines of a row: the head (icon, title, pencil and time), the latest message, and the foot (AI, project, branch); no latest line when there is none.
+      expect(await browser.execute(() => [...document.querySelectorAll("#orca-feed .orca-active")].map((r) => [...r.children].map((c) => c.className.split(" ")[0])))).toEqual([
+        ["orca-active-head", "orca-active-latest", "orca-active-foot"],
+        ["orca-active-head", "orca-active-latest", "orca-active-foot"],
+        ["orca-active-head", "orca-active-foot"],
+        ["orca-active-head", "orca-active-foot"],
+        ["orca-active-head", "orca-active-foot"],
+      ]);
+      expect(await browser.execute(() => [...document.querySelectorAll("#orca-feed .orca-active-foot .orca-worktree-agent")].map((a) => a.getAttribute("aria-label")))).toEqual(["Claude", "Claude", "codex", "Claude", "Claude"]);
+      expect(await count("#orca-feed .orca-works-toggle, #orca-feed .orca-tag, #orca-feed .orca-card")).toBe(0);
+      // One step in from the heading, and a row is no card: no border, no ground.
+      const look = await browser.execute(() => {
+        const rows = document.querySelector<HTMLElement>("#orca-feed .orca-actives")!;
+        const row = getComputedStyle(document.querySelector("#orca-feed .orca-active")!);
+        return { indent: getComputedStyle(rows).marginLeft, border: row.borderTopWidth, ground: row.backgroundColor, shadow: row.boxShadow };
+      });
+      expect(look).toEqual({ indent: "14px", border: "0px", ground: "rgba(0, 0, 0, 0)", shadow: "none" });
+    });
+
+    it("draws the lines as text, cut with an ellipsis", async () => {
+      await openWork(orcaOverview([orcaRow("example-app", "main", "長い題名".repeat(40), { latest: `<b>bold</b> ${"長い発言".repeat(40)}` })], [orcaWorktree("example-app", "main")]));
+      const look = await browser.execute(() => {
+        const r = (s: string) => document.querySelector<HTMLElement>(`#orca-feed .orca-active ${s}`)!;
+        const row = document.querySelector("#orca-feed .orca-active")!.getBoundingClientRect();
+        const cut = (e: HTMLElement) => ({ overflow: getComputedStyle(e).textOverflow, clipped: e.scrollWidth > e.clientWidth, within: e.getBoundingClientRect().right <= row.right });
+        return { title: cut(r(".orca-active-title")), latest: cut(r(".orca-active-latest")), markup: r(".orca-active-latest").querySelectorAll("b").length };
+      });
+      expect(look).toEqual({ title: { overflow: "ellipsis", clipped: true, within: true }, latest: { overflow: "ellipsis", clipped: true, within: true }, markup: 0 });
+    });
+
+    it("says there is no session when none has a tab", async () => {
+      await openWork(orcaOverview([], [orcaWorktree("example-app", "main")]));
+      await expect($("#orca-feed .feed-empty")).toHaveText("作業中のセッションがありません");
+    });
+
+    it("selects the project and the tab of a row when it is pressed, and marks the row of the selected tab", async () => {
+      await openWork();
+      await mock("orca_terminal_read", ["$ claude"]);
+      expect(await pressedWorks()).toEqual([]);
+      await activeOf("example-api").click();
+      await expect(selectedTab()).toHaveText(expect.stringContaining("Fix the parser"));
+      await expectPressed([tabId("example-api")]);
+      await activeOf("example-app").click();
+      await expect(selectedTab()).toHaveText(expect.stringContaining("Write the docs"));
+      await expectPressed([tabId("example-app")]);
+      // The projects show the same selection when the bell is pressed again.
+      await bell().click();
+      await expect(project("example-app")).toHaveAttribute("aria-pressed", "true");
+    });
+
+    it("draws the projects while a search text is typed, whatever the bell says, and the work again when it is cleared", async () => {
+      await openWork();
+      await $("#orca-search-open").click();
+      await $("#orca-search-input").setValue("example-a");
+      await browser.waitUntil(async () => (await count("#orca-feed .orca-project")) > 0, { timeoutMsg: "the projects were not drawn" });
+      expect(await count("#orca-feed .orca-active")).toBe(0);
+      expect(await textsOf("#orca-feed .orca-project-name")).toEqual(["example-app", "example-api"]);
+      // The bell is still pressed.
+      await expect(bell()).toHaveAttribute("aria-pressed", "true");
+      await $("#orca-search-clear").click();
+      await browser.waitUntil(async () => (await count("#orca-feed .orca-active")) === 5, { timeoutMsg: "the work did not come back" });
+      expect(await count("#orca-feed .orca-project")).toBe(0);
+    });
+
+    it("draws the time of a row again when the clock passes a minute, with no press", async () => {
+      await openWork(read(), timers({ orcaClock: 1000 }));
+      expect((await works())[0][2]).toBe("3 分");
+      await aMinutePasses();
+      await browser.waitUntil(async () => (await works())[0][2] === "4 分", { timeoutMsg: "the time did not move" });
+    });
+
+    it("opens the modal of A-40 by a right click on a row of a project that is not the selected one", async () => {
+      await openWork();
+      await mock("orca_terminal_read", ["$ claude"]);
+      const cancelled = await browser.execute((tab) => {
+        const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
+        document.querySelector(`#orca-feed .orca-active[data-session="${tab}"]`)!.dispatchEvent(event);
+        return event.defaultPrevented;
+      }, tabId("example-api"));
+      expect(cancelled).toBe(true);
+      await expect($("#orca-peek")).toBeDisplayed();
+      await expect($("#orca-peek-project")).toHaveText("example-api");
+      await expect($("#orca-peek-title")).toHaveText("どちらにしますか？");
+    });
+
+    describe("the title of a row (A-8)", () => {
+      const key = "tab_example-app:leaf_1";
+      const titles = () => orcaOverview([orcaRow("example-app", "feat/a", "Write the docs"), orcaRow("example-api", "main", "Fix the parser", { group: "waiting" })], worktrees());
+      const titleText = () => textsOf(`#orca-feed .orca-active[data-session="${tabId("example-app")}"] .orca-active-title`);
+      const field = ".orca-active-title-input";
+      // The page's own press of the pencil: it shows while the pointer is on the row, which the driver's pointer does not keep.
+      const pencil = () => browser.execute((tab) => document.querySelector<HTMLElement>(`#orca-feed .orca-active[data-session="${tab}"] .orca-active-edit`)!.click(), tabId("example-app"));
+      const fieldState = () =>
+        browser.execute((selector) => {
+          const input = document.querySelector<HTMLInputElement>(selector);
+          return input === null ? null : { value: input.value, selected: [input.selectionStart, input.selectionEnd], focused: document.activeElement === input };
+        }, field);
+      const opened = () => browser.waitUntil(async () => (await fieldState()) !== null, { timeoutMsg: "the field did not open" });
+
+      it("draws the title right of the icon, and the time at the right end of the first line", async () => {
+        await openWork(titles());
+        const look = await browser.execute((tab) => {
+          const head = document.querySelector(`#orca-feed .orca-active[data-session="${tab}"] .orca-active-head`)!;
+          const r = (e: Element) => e.getBoundingClientRect();
+          const title = r(head.querySelector(".orca-active-title")!);
+          const time = r(head.querySelector(".orca-active-time")!);
+          return { parts: [...head.children].map((c) => c.className.split(" ")[0]), title: head.querySelector(".orca-active-title")!.textContent, sameLine: Math.abs(title.top - time.top) < 8, timeRight: time.right <= r(head).right, after: time.left >= title.right };
+        }, tabId("example-app"));
+        expect(look).toEqual({ parts: ["orca-ic", "orca-active-title", "orca-active-edit", "orca-active-time"], title: "Write the docs", sameLine: true, timeRight: true, after: true });
+      });
+
+      // :hover and :focus never match in the E2E window (the window is hidden): the hidden state is the computed style, and the rule that shows the pencil is read from the stylesheet to say that the pointer or the focus in the row lifts it.
+      it("hides the pencil until the pointer or the focus is in the row, and draws no text of help", async () => {
+        await openWork(titles());
+        expect(await browser.execute((tab) => getComputedStyle(document.querySelector(`#orca-feed .orca-active[data-session="${tab}"] .orca-active-edit`)!).visibility, tabId("example-app"))).toBe("hidden");
+        const showing = await browser.execute(() => {
+          for (const sheet of document.styleSheets)
+            for (const rule of sheet.cssRules)
+              if (rule instanceof CSSStyleRule && rule.selectorText.includes(".orca-active-edit") && rule.style.visibility === "visible") return rule.selectorText;
+          return null;
+        });
+        expect(showing).toContain(".orca-active:hover");
+        expect(showing).toContain(".orca-active:focus-within");
+        expect(await browser.execute(() => [document.querySelector("#orca-feed .orca-active-edit")!.getAttribute("aria-label"), document.querySelector("#orca-feed .orca-active-edit")!.hasAttribute("title")])).toEqual(["題名を変える", false]);
+      });
+
+      it("turns the title into a field with the title in it, selected, and saves it with Enter: it is fixed, with a pin, in the row and the tab", async () => {
+        await openWork(titles());
+        const set = await mock("orca_title_set", { [THIS]: { [key]: "My title" } });
+        await pencil();
+        await opened();
+        expect(await fieldState()).toEqual({ value: "Write the docs", selected: [0, "Write the docs".length], focused: true });
+        // The pencil and the field do not select the session.
+        expect(await pressedWorks()).toEqual([]);
+        await $(field).setValue("My title");
+        await browser.keys("Enter");
+        expect(await waitForCalls(set)).toEqual([{ target: THIS, key, title: "My title" }]);
+        await browser.waitUntil(async () => (await count(field)) === 0, { timeoutMsg: "the field did not close" });
+        expect(await titleText()).toEqual(["My title"]);
+        expect(await textsOf("#orca-feed .orca-active-pin")).toEqual(["📌"]);
+        await activeOf("example-app").click();
+        expect(await tabTitles()).toEqual(["My title"]);
+      });
+
+      it("draws a title that was fixed before, with a pin, in the row and the tab, in place of the automatic one", async () => {
+        await openWork(titles(), { orca_titles: { [THIS]: { [key]: "Mine" } } });
+        expect(await titleText()).toEqual(["Mine"]);
+        expect(await count("#orca-feed .orca-active-pin")).toBe(1);
+        await activeOf("example-app").click();
+        expect(await tabTitles()).toEqual(["Mine"]);
+      });
+
+      it("gives the automatic title back, and takes the pin off, when an empty text is saved", async () => {
+        await openWork(titles(), { orca_titles: { [THIS]: { [key]: "Mine" } } });
+        const set = await mock("orca_title_set", {});
+        await pencil();
+        await opened();
+        expect((await fieldState())?.value).toBe("Mine");
+        await $(field).setValue("");
+        await browser.keys("Enter");
+        expect(await waitForCalls(set)).toEqual([{ target: THIS, key, title: "" }]);
+        await browser.waitUntil(async () => (await titleText())[0] === "Write the docs", { timeoutMsg: "the automatic title did not come back" });
+        expect(await count("#orca-feed .orca-active-pin")).toBe(0);
+      });
+
+      it("types the title of a terminal of another AI under its handle", async () => {
+        await openWork(orcaOverview([orcaRow("example-app", "feat/a", "Write the docs", { agent: "codex" })], worktrees()));
+        const set = await mock("orca_title_set", {});
+        await browser.execute(() => document.querySelector<HTMLElement>("#orca-feed .orca-active-edit")!.click());
+        await opened();
+        await $(field).setValue("Codex work");
+        await browser.keys("Enter");
+        expect(await waitForCalls(set)).toEqual([{ target: THIS, key: "term_example-app", title: "Codex work" }]);
+      });
+
+      it("cancels with Escape and when the focus leaves the field, and saves nothing", async () => {
+        await openWork(titles());
+        const set = await mock("orca_title_set", {});
+        await pencil();
+        await opened();
+        await $(field).setValue("Typed");
+        await browser.keys("Escape");
+        await browser.waitUntil(async () => (await count(field)) === 0, { timeoutMsg: "Escape did not close the field" });
+        expect(await titleText()).toEqual(["Write the docs"]);
+        await pencil();
+        await opened();
+        await browser.execute((selector) => document.querySelector<HTMLInputElement>(selector)!.blur(), field);
+        await browser.waitUntil(async () => (await count(field)) === 0, { timeoutMsg: "the focus leaving did not close the field" });
+        expect(await titleText()).toEqual(["Write the docs"]);
+        expect(await callsOf(set)).toEqual([]);
+      });
+
+      it("shows a failed save on a card and closes the field", async () => {
+        await openWork(titles());
+        await mock("orca_title_set", rejects("disk full"));
+        await pencil();
+        await opened();
+        await $(field).setValue("Mine");
+        await browser.keys("Enter");
+        await browser.waitUntil(async () => (await count(field)) === 0, { timeoutMsg: "the field did not close" });
+        expect(await titleText()).toEqual(["Write the docs"]);
+        await expect($(CARD)).toBeDisplayed();
+      });
+
+      it("keeps the keys and the presses of the field from the row", async () => {
+        await openWork(titles());
+        await pencil();
+        await opened();
+        await $(field).click();
+        await $(field).setValue("a b");
+        expect(await pressedWorks()).toEqual([]);
+        expect((await fieldState())?.value).toBe("a b");
+      });
+
+      // The list is read again by the clock: leaving the screen would take the focus from the field, which cancels it.
+      it("moves the very field into the new row when the list is drawn again, with what was typed, its selection and its focus", async () => {
+        await openWork(titles(), timers({ orcaClock: 1000 }));
+        await pencil();
+        await opened();
+        await $(field).setValue("a b c");
+        // A mark on the element tells a new element from the same one.
+        await browser.execute((selector) => {
+          const input = document.querySelector<HTMLInputElement>(selector)!;
+          input.dataset.mark = "kept";
+          input.setSelectionRange(1, 3);
+        }, field);
+        const kept = () =>
+          browser.execute((selector) => {
+            const input = document.querySelector<HTMLInputElement>(selector);
+            return input === null ? null : { mark: input.dataset.mark ?? null, value: input.value, selected: [input.selectionStart, input.selectionEnd], focused: document.activeElement === input };
+          }, field);
+        const before = { mark: "kept", value: "a b c", selected: [1, 3], focused: true };
+        expect(await kept()).toEqual(before);
+        // A read that changes the row (a new latest message) draws the list again.
+        await mock("orca_overview", orcaOverview([orcaRow("example-app", "feat/a", "Write the docs", { latest: "next" }), orcaRow("example-api", "main", "Fix the parser", { group: "waiting" })], worktrees()));
+        await browser.waitUntil(async () => (await count("#orca-feed .orca-active-latest")) === 1, { timeoutMsg: "the row was not drawn again" });
+        expect(await kept()).toEqual(before);
+        expect(await count(field)).toBe(1);
+        // The field still saves and cancels as before: Escape closes it with nothing saved.
+        await browser.keys("Escape");
+        await browser.waitUntil(async () => (await count(field)) === 0, { timeoutMsg: "Escape did not close the moved field" });
+        expect(await callsOf("orca_title_set")).toEqual([]);
+      });
+
+      it("takes out the titles of the sessions that the list, read well, no longer holds with one call for the place, and leaves the others", async () => {
+        const held = { [THIS]: { [key]: "Mine", "tab_gone:leaf_1": "Old", "tab_gone:leaf_2": "Older" } };
+        await openWork(titles(), { orca_titles: held, orca_titles_forget: { [THIS]: { [key]: "Mine" } } });
+        expect(await waitForCalls("orca_titles_forget")).toEqual([{ target: THIS, keys: ["tab_gone:leaf_1", "tab_gone:leaf_2"] }]);
+        expect(await callsOf("orca_title_set")).toEqual([]);
+        expect(await titleText()).toEqual(["Mine"]);
+      });
+
+      // The app starts and openOrca shows the screen: the taking out is tried at the start and again when the screen is shown (which clears what failed), so the calls up to then are one or two; what the test holds is that the clock's reads add none and that showing the screen again does.
+      it("does not send a taking out that failed again at the next read, and sends it again when the screen is shown again", async () => {
+        const held = { [THIS]: { [key]: "Mine", "tab_gone:leaf_1": "Old" } };
+        const sent = { target: THIS, keys: ["tab_gone:leaf_1"] };
+        await openWork(titles(), { orca_titles: held, orca_titles_forget: rejects("disk full"), ...timers({ orcaClock: 1000 }) });
+        await waitForCalls("orca_titles_forget");
+        await browser.pause(800);
+        const shown = await callsOf("orca_titles_forget");
+        expect(shown.length).toBeLessThanOrEqual(2);
+        for (const call of shown) expect(call).toEqual(sent);
+        // Reads of the list go on (the clock, 1.2 periods of 1 second twice), and none sends it again.
+        await browser.pause(2400);
+        expect(await callsOf("orca_titles_forget")).toHaveLength(shown.length);
+        expect(await titleText()).toEqual(["Mine"]);
+        await showAgain();
+        expect(await waitForCalls("orca_titles_forget", shown.length + 1)).toHaveLength(shown.length + 1);
+      });
+
+      it("takes out no title while the read of the list failed", async () => {
+        await openOrca(orcaOverview([], [], { state: "failed", message: "Orca is not running", environments: [] }), { orca_titles: { [THIS]: { [key]: "Mine" } } });
+        await waitForCalls("orca_titles");
+        await browser.pause(500);
+        expect(await callsOf("orca_titles_forget")).toEqual([]);
+        expect(await callsOf("orca_title_set")).toEqual([]);
+      });
+    });
   });
 
   describe("the worktrees under a project (A-8)", () => {
