@@ -5,7 +5,7 @@
 ### Start work only from a Claude Code session
 
 The owner starts the implementation of an issue from Claude Code; nothing else starts one by itself (at the owner's instruction, 2026-11-04).
-No scheduled job implements an issue (at the owner's instruction, 2026-11-21; #1179: the launchd job that ran `ship` at 00:30 is removed, and the only scheduled run left is the X post of `.claude/skills/x-post/SKILL.md`).
+No scheduled job implements an issue (at the owner's instruction, 2026-11-21; #1179: the launchd job that ran `ship` at 00:30 is removed, and the X post that was the only scheduled run left is removed too, at the owner's instruction, 2026-11-23, so no scheduled run starts a session of the repository).
 An issue is made only after its spec is settled ("Make an issue only once its spec is decided, verified, planned and shown" below), so it is ready to implement.
 Naming the issues to `implement` is that instruction: it proposes the open issues, ranked, and implements the ones the owner names, one after another or together in a worktree of its own (at the owner's instruction, 2026-11-09; Discussion #293; the worktree of its own, 2026-11-19; #1006; the owner names the issues every time, and the run never picks them, 2026-11-21; #1207).
 The one exception: before the Release PR, the run itself takes up to three items from the issues of the Lows that merged pull requests' reviews left, of flaky tests and of retrospectives, and fixes them (`review.md`, "Turn the Lows of a merged pull request into one issue…"; at the owner's instruction, 2026-11-21; #1211, #1212).
