@@ -182,7 +182,6 @@ const answers = {
     needsUserDecision: [],
     residualMustFix: [],
     structuralProposals: [],
-    adr: null,
     risks: null,
     settledDecisions: [],
     withdrawnNeedsUserDecision: [],

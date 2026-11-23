@@ -2737,7 +2737,6 @@ describe("orchestration mode: the decision page of a child", () => {
       needsUserDecision: [decisionCard("NR-1", { kind: "nr", options: [decisionOption("A", "案 A", null)], recommendation: "A", recommendationReason: "単純" })],
       residualMustFix: [decisionCard("MF-1", { kind: "must-fix", recommendation: "fix", recommendationReason: "壊れる" })],
       structuralProposals: [decisionCard("SP-1", { kind: "structural-proposal", recommendation: "approve", recommendationReason: "重複が減る" })],
-      adr: decisionCard("ADR-1", { kind: "adr", recommendation: "keep", recommendationReason: "残す価値がある" }),
       qualityLoop: { rounds: 2, fixCycles: 1, mustFixResolved: 3 },
     });
     await openPage(approval);
@@ -2745,10 +2744,9 @@ describe("orchestration mode: the decision page of a child", () => {
     expect(await labels("NR-1")).toEqual(["A案 A推奨", "その他"]);
     expect(await labels("MF-1")).toEqual(["指摘のとおり修正する推奨", "今回は対応しない"]);
     expect(await labels("SP-1")).toEqual(["承認推奨", "却下", "保留"]);
-    expect(await labels("ADR-1")).toEqual(["残す推奨", "不要"]);
     expect(await textsOf('#formation-page [data-card="SP-1"] .fp-note > span')).toEqual(["理由（却下・保留のとき）"]);
     expect(await textsOf('#formation-page [data-card="MF-1"] .fp-note > span')).toEqual(["補足（任意）"]);
-    expect(await textsOf("#formation-page .fp-sec")).toEqual(["何が変わるか", "判断が必要 1 件", "未解消の必ず直す指摘 1 件", "構造改善の提案 1 件", "ADR（設計判断の記録） 1 件", "参考", "あなたの判定"]);
+    expect(await textsOf("#formation-page .fp-sec")).toEqual(["何が変わるか", "判断が必要 1 件", "未解消の必ず直す指摘 1 件", "構造改善の提案 1 件", "参考", "あなたの判定"]);
     await $("#formation-page .fp-quality > summary").click();
     expect(await textsOf("#formation-page .fp-reference .fp-quality .fp-p")).toEqual(["実施回数: 2 回", "MustFix 修正: 1 回", "解消した必ず直す指摘: 3 件"]);
   });
@@ -3306,7 +3304,6 @@ describe("orchestration mode: the decision page of a child", () => {
       what: "設計を承認します",
       residualMustFix: [decisionCard("MF-1", { kind: "must-fix", recommendation: "fix", recommendationReason: "壊れる" })],
       structuralProposals: [decisionCard("SP-1", { kind: "structural-proposal", recommendation: "approve", recommendationReason: "重複が減る" })],
-      adr: decisionCard("ADR-1", { kind: "adr", recommendation: "keep", recommendationReason: "残す価値がある" }),
       qualityLoop: { rounds: 2, fixCycles: 1, mustFixResolved: 3 },
     });
     await openPage(approval);
@@ -3323,7 +3320,6 @@ describe("orchestration mode: the decision page of a child", () => {
         answers: [
           { card: "MF-1", choice: "skip", note: "", provisional: false },
           { card: "SP-1", choice: "reject", note: "重複は減らない", provisional: false },
-          { card: "ADR-1", choice: null, note: "", provisional: false },
         ],
         verdict: "approve",
         revision: "",
@@ -3485,7 +3481,7 @@ describe("orchestration mode: the decision page of a child", () => {
   });
 
   it("says in one line which unanswered cards go with which choice, and drops a card from it when it is answered", async () => {
-    await openPage(approvalPage({ residualMustFix: [], adr: null }));
+    await openPage(approvalPage({ residualMustFix: [] }));
     const line = `${VERDICT} .fp-unanswered`;
     expect(await rawTextsOf(line)).toEqual(["答えていないカードは、この案で送ります: NR-1 A. 案 A、SP-1 承認"]);
     await $('#formation-page [data-card="NR-1"] input[value="A"]').click();
