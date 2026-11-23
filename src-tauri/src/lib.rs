@@ -365,6 +365,8 @@ pub fn run() {
             slack::slack_unwatch,
             slack::slack_watch_seen,
             slack::slack_thread_seen,
+            slack::emoji_usage::slack_emoji_used,
+            slack::emoji_usage::slack_emoji_frequent,
             slack::slack_hidden_list,
             slack::slack_hide_channel,
             slack::slack_side_folded,
