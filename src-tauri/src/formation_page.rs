@@ -3448,6 +3448,8 @@ mod tests {
             .arg("-C")
             .arg(dir)
             .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            // The global config may sign every commit through a program that is not there.
+            .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
             .args(args)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
