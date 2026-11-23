@@ -26,7 +26,7 @@ It helps the owner see the shape of the design at a glance. It is a supplement: 
    ```
 
    Do it once the page file is written, and before you send `PAGE`.
-5. When the page tool refuses the page for the labels (a refusal that lists Japanese lines of the diagram that were not polished, or a syntax error of the Mermaid), fix the `.mmd` from the violations, polish the lines it lists in one run, replace them, rebuild the block and send the page again.
+5. When the page tool refuses the page for the labels (a refusal that lists Japanese lines of the diagram that were not polished, or a first word that is not a diagram type), fix the `.mmd` from the violations, polish the lines it lists in one run, replace them, rebuild the block and send the page again.
 6. A diagram never blocks the unit. When you cannot make a valid one in three tries, leave the `diagram` block out of the page, and say in your `DONE` summary that the diagram was not shown.
 
 ## The program

@@ -2959,11 +2959,11 @@ describe("orchestration mode: the decision page of a child", () => {
     expect(await textsOf(`${OPEN} .formation-card-title`)).toEqual([`判断: ${hostile}`]);
   });
 
-  it("draws a diagram with Mermaid as an SVG, and shows the source as text when it cannot", async () => {
+  it("draws a diagram with Pele as an SVG, and shows the source as text when it cannot", async () => {
     const good = "flowchart TD\n  A[開始] --> B[終了]";
     await openPage(decisionPage({ questions: [decisionCard("Q1", { options: [decisionOption("A", "案", null)], blocks: [{ type: "diagram", mermaid: good, caption: "流れ" }] })], changes: [] }));
     const box = '#formation-page [data-card="Q1"] .fp-diagram-box';
-    await browser.waitUntil(async () => (await $(box).getAttribute("data-drawn")) === "true", { timeoutMsg: "Mermaid never drew the diagram" });
+    await browser.waitUntil(async () => (await $(box).getAttribute("data-drawn")) === "true", { timeoutMsg: "Pele never drew the diagram" });
     expect(await count(`${box} svg`)).toBe(1);
     expect(await $(`${box} svg`).getAttribute("aria-label")).toBe("流れ");
     expect(await browser.execute((s) => document.querySelector(s)!.textContent, `${box} svg`)).toContain("開始");
@@ -2983,7 +2983,7 @@ describe("orchestration mode: the decision page of a child", () => {
     expect(size.width).not.toBe(20);
     expect(Math.abs(size.width - size.boxWidth)).toBeLessThan(1);
     expect(size.stroke).toBe("none");
-    expect(await browser.execute(() => document.querySelectorAll('script[src$="mermaid.min.js"]').length)).toBe(1);
+    expect(await browser.execute(() => document.querySelectorAll('script[src$="pele.global.js"]').length)).toBe(1);
     // The diagram is in the card, not behind 詳しく見る.
     expect(await count('#formation-page [data-card="Q1"] .fp-fold-btn')).toBe(0);
   });
@@ -3017,7 +3017,7 @@ describe("orchestration mode: the decision page of a child", () => {
     expect(await $(inside).getAttribute("data-pending")).toBe(null);
   });
 
-  it("shows the Mermaid source as text when the diagram cannot be drawn", async () => {
+  it("shows the Mermaid source as text when Pele cannot draw the diagram", async () => {
     const bad = "flowchart TD\n  A[開始 --> ((";
     await openPage(decisionPage({ questions: [decisionCard("Q1", { blocks: [{ type: "paragraph", text: "x" }, { type: "diagram", mermaid: bad, caption: null }] })] }));
     const box = '#formation-page [data-card="Q1"] .fp-diagram-box';
@@ -3083,18 +3083,18 @@ describe("orchestration mode: the decision page of a child", () => {
   it("draws the first diagram of a card that asks as wide as the card, in the colors of its classDef and subgraph styles, and keeps the line break of a label", async () => {
     await openPage(decisionPage({ questions: [ASKING] }));
     const box = `${CARD_Q} > .fp-diagram .fp-diagram-box`;
-    await browser.waitUntil(async () => (await $(box).getAttribute("data-drawn")) === "true", { timeoutMsg: "Mermaid never drew the diagram" });
+    await browser.waitUntil(async () => (await $(box).getAttribute("data-drawn")) === "true", { timeoutMsg: "Pele never drew the diagram" });
     const drawn = await browser.execute((s) => {
       const svg = document.querySelector(`${s} svg`) as SVGSVGElement;
       const holder = svg.parentElement as HTMLElement;
       const cs = getComputedStyle(holder);
       const fillOf = (text: string) => {
-        const label = [...svg.querySelectorAll("g.node")].find((g) => g.textContent?.includes(text));
+        const label = [...svg.querySelectorAll("g.pele-node")].find((g) => g.textContent?.includes(text));
         const shape = label?.querySelector("rect, polygon, path");
         return shape ? getComputedStyle(shape).fill : null;
       };
-      const cluster = [...svg.querySelectorAll("g.cluster")].find((g) => g.textContent?.includes("案 A の流れ"));
-      const joined = [...svg.querySelectorAll("g.node")].find((g) => g.textContent?.includes("会計待ちにできる"));
+      const cluster = [...svg.querySelectorAll("g.pele-cluster")].find((g) => g.textContent?.includes("案 A の流れ"));
+      const joined = [...svg.querySelectorAll("g.pele-node")].find((g) => g.textContent?.includes("会計待ちにできる"));
       return {
         width: svg.getBoundingClientRect().width,
         boxWidth: holder.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),
