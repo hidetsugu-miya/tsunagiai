@@ -769,7 +769,7 @@ export const orcaRow = (repo: string, branch: string, line: string, extra: Parti
 };
 
 // A worktree of the project `proj_{repo}`, on the git branch of its name (`extra.gitBranch` gives another one, or "" for a detached HEAD); `extra` gives another path (a second worktree of the same project, which is not the main one) or another project.
-export const orcaWorktree = (repo: string, branch: string, extra: Partial<OrcaWorktree> = {}): OrcaWorktree => ({ path: `/work/${repo}`, repo, branch, gitBranch: branch, projectKey: `proj_${repo}`, isMain: extra.path === undefined, ...extra });
+export const orcaWorktree = (repo: string, branch: string, extra: Partial<OrcaWorktree> = {}): OrcaWorktree => ({ path: `/work/${repo}`, repo, branch, gitBranch: branch, projectKey: `proj_${repo}`, isMain: extra.path === undefined, status: "idle", archived: false, ...extra });
 
 // A plain terminal of Orca (a shell) in the project of `repo`.
 export const orcaTerminal = (repo: string, title: string, extra: Partial<OrcaTerminal> = {}): OrcaTerminal => ({ handle: `term_${repo}_${title}`, title, branch: "main", projectKey: `proj_${repo}`, path: `/work/${repo}`, ended: false, ...extra });

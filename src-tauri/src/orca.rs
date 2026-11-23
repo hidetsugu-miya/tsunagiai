@@ -232,6 +232,10 @@ pub struct OrcaWorktree {
     pub project_key: String,
     /// Whether it is the repository's own folder (`isMainWorktree` of Orca), which the file pane shows for a project with no tab (A-18).
     pub is_main: bool,
+    /// The icon of its row in the project list (A-8): the highest rank among the worktree's own status (`worktree_status`) and its agents' (top-level, with a live pty), as a project takes it (`projects_of`).
+    pub status: OrcaStatus,
+    /// Whether Orca archived it (`isArchived`): the project list draws no row for it (A-8), and a launch can still name it.
+    pub archived: bool,
     /// Where it is: `None` for this machine, else the name of the saved environment.
     #[cfg_attr(test, ts(optional = nullable))]
     pub environment: Option<String>,
@@ -653,6 +657,17 @@ fn worktree_status(worktree: &Value) -> OrcaStatus {
     status_of(word, OrcaStatus::Idle)
 }
 
+/// The icon of a worktree's row in the project list (A-8): the highest rank among the worktree's own status and its agents' (top-level, with a live pty).
+fn worktree_rank(worktree: &Value) -> OrcaStatus {
+    let mut status = worktree_status(worktree);
+    for agent in worktree["agents"].as_array().into_iter().flatten() {
+        if agent["parentPaneKey"].is_null() && agent["hasLivePty"] == true {
+            status = status.min(agent_status(agent));
+        }
+    }
+    status
+}
+
 const LOCAL_HOST: &str = "local";
 
 /// The id of the host a worktree is on; one with none is this machine's.
@@ -825,6 +840,8 @@ pub fn worktrees_of(ps: &Value) -> Vec<OrcaWorktree> {
                 git_branch: git_branch_of(w),
                 project_key: project_key_of(w).unwrap_or_default(),
                 is_main: w["isMainWorktree"] == true,
+                status: worktree_rank(w),
+                archived: w["isArchived"] == true,
                 environment: None,
             })
         })
@@ -916,12 +933,7 @@ pub fn plain_terminals_of(ps: &Value, terminals: &Value, rows: &[OrcaRow]) -> Ve
 pub fn projects_of(ps: &Value, rows: &[OrcaRow], plain: &[OrcaTerminal]) -> Vec<OrcaProject> {
     let mut projects: Vec<OrcaProject> = Vec::new();
     for (worktree, key) in live_worktrees(ps) {
-        let mut status = worktree_status(worktree);
-        for agent in worktree["agents"].as_array().into_iter().flatten() {
-            if agent["parentPaneKey"].is_null() && agent["hasLivePty"] == true {
-                status = status.min(agent_status(agent));
-            }
-        }
+        let status = worktree_rank(worktree);
         let at_ms = ms_of(worktree, "lastActivityAt");
         if let Some(project) = projects.iter_mut().find(|p| p.key == key) {
             project.status = project.status.min(status);
@@ -3973,6 +3985,8 @@ mod tests {
                     git_branch: "main".into(),
                     project_key: "repo-a".into(),
                     is_main: true,
+                    status: OrcaStatus::Idle,
+                    archived: false,
                     environment: None,
                 },
                 OrcaWorktree {
@@ -3982,6 +3996,8 @@ mod tests {
                     git_branch: String::new(),
                     project_key: String::new(),
                     is_main: false,
+                    status: OrcaStatus::Idle,
+                    archived: false,
                     environment: None,
                 },
                 OrcaWorktree {
@@ -3991,6 +4007,8 @@ mod tests {
                     git_branch: "feat/dev".into(),
                     project_key: "ssh:box".into(),
                     is_main: false,
+                    status: OrcaStatus::Idle,
+                    archived: false,
                     environment: None,
                 },
                 // A worktree made with a name keeps it as `displayName`, so the git branch is read from `branch`.
@@ -4001,6 +4019,8 @@ mod tests {
                     git_branch: "feat/x".into(),
                     project_key: String::new(),
                     is_main: false,
+                    status: OrcaStatus::Idle,
+                    archived: false,
                     environment: None,
                 },
                 // A `branch` that is not `refs/heads/...` is not a local branch.
@@ -4011,6 +4031,8 @@ mod tests {
                     git_branch: String::new(),
                     project_key: String::new(),
                     is_main: false,
+                    status: OrcaStatus::Idle,
+                    archived: false,
                     environment: None,
                 },
             ]
@@ -6073,6 +6095,31 @@ mod tests {
             OrcaStatus::Idle
         );
         assert_eq!(status(json!({})), OrcaStatus::Idle);
+    }
+
+    #[test]
+    fn a_listed_worktree_has_the_highest_rank_of_itself_and_its_live_top_level_agents() {
+        let doc = json!({"worktrees": [
+            {"path": "/w/a", "sidebarStatus": "working", "agents": [
+                {"state": "waiting", "hasLivePty": true, "parentPaneKey": null},
+                {"state": "failed", "hasLivePty": true, "parentPaneKey": "t:l"}]},
+            {"path": "/w/b", "sidebarStatus": "inactive", "agents": [
+                {"state": "done", "hasLivePty": false, "parentPaneKey": null}]},
+            {"path": "/w/c", "isArchived": true, "sidebarStatus": "done", "agents": []},
+        ]});
+        let listed: Vec<(OrcaStatus, bool)> = worktrees_of(&doc)
+            .iter()
+            .map(|w| (w.status, w.archived))
+            .collect();
+        // A sub-agent and an agent with no live pty count for nothing; an archived worktree is kept for a launch and says so.
+        assert_eq!(
+            listed,
+            [
+                (OrcaStatus::Question, false),
+                (OrcaStatus::Idle, false),
+                (OrcaStatus::Done, true)
+            ]
+        );
     }
 
     #[test]

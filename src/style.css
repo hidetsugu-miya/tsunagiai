@@ -7,8 +7,6 @@ html, body { height: 100%; }
 :root { --header-h: 44px; --header-btn: 28px; --header-ic: 17px; }
 /* A-35: the height of the footer, which the pane of the unread also stops at. */
 :root { --footer-h: 36px; }
-/* A-8: the color of the tag 「あなた」 on a session's row in the list (the tags 「AI」, 「サブ」 and 「シェル」 take the accent, effort and muted colors). */
-:root { --tag-you: #246fe0; }
 body { font-family: var(--ff-base); font-size: calc(14px * var(--fs)); margin: 0; display: flex; }
 #mail-header, #inbox-header, #new-mail-header, #mail-area, #mail-side { --fs: var(--fs-mail, 1); font-family: var(--ff-mail, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #calendar { --fs: var(--fs-calendar, 1); font-family: var(--ff-calendar, var(--ff-base)); font-size: calc(14px * var(--fs)); }
@@ -1459,63 +1457,31 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-project[aria-pressed="true"] { background: var(--soft); font-weight: 600; }
 .orca-project:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .orca-project-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* A-8: the arrow at the left of a project with sessions, and its sessions under it (the status icon and the title). */
-.orca-proj { position: relative; }
-.orca-proj > .orca-project { padding-left: 32px; }
+/* A-8: the rows of a project's worktrees under its heading: the status icon, the branch, and at the right end the icon of the AI of the newest session. The selected worktree has the ground of the selected row, and then its project's heading has none. */
+.orca-proj:has(.orca-worktree[aria-pressed="true"]) > .orca-project[aria-pressed="true"] { background: transparent; }
+.orca-worktree { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; box-sizing: border-box; margin-bottom: 1px; padding: 0 10px 0 22px; border: 0; border-radius: 8px; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.orca-worktree:hover { background: var(--hover); }
+.orca-worktree[aria-pressed="true"] { background: var(--soft); }
+.orca-worktree:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.orca-worktree-branch { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Menlo, monospace; font-size: calc(12px * var(--fs)); }
+.orca-worktree-agent { flex: none; display: inline-flex; width: 15px; height: 15px; color: var(--muted); }
+.orca-worktree-agent.claude { color: var(--claude); }
+.orca-worktree-agent svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+/* The arrow at the left of a row of a list (the formations of A-37 have it). */
 .orca-arrow { position: absolute; left: 4px; top: 6px; width: 24px; height: 24px; padding: 0; border-radius: 8px; }
 .orca-arrow svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
 .orca-arrow[aria-expanded="true"] svg { transform: rotate(90deg); }
 .orca-arrow:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.orca-sessions { margin-left: 28px; }
 /* A-8: the link under the running projects that opens and closes the projects that are not running. */
 .orca-stopped-toggle { display: flex; align-items: center; gap: 4px; width: 100%; min-height: 32px; box-sizing: border-box; margin-bottom: 1px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; font: inherit; font-size: calc(12px * var(--fs)); color: var(--muted); text-align: left; cursor: pointer; }
 .orca-stopped-toggle:hover { background: var(--hover); }
 .orca-stopped-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .orca-stopped-toggle svg { flex: none; width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
 .orca-stopped-toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
-.orca-session { display: flex; flex-direction: column; align-items: stretch; gap: 3px; width: 100%; box-sizing: border-box; margin-bottom: 1px; padding: 7px 10px; border: 0; border-radius: 8px; background: transparent; font: inherit; font-size: calc(13px * var(--fs)); color: inherit; text-align: left; cursor: pointer; }
-.orca-session:hover { background: var(--hover); }
-.orca-session[aria-pressed="true"] { background: var(--soft); }
-.orca-session:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-/* A-8: a session's row in four lines: the status icon and the branch, the title, then 「あなた」 and 「AI」 with their text. Each line is one line, cut with an ellipsis. */
-.orca-session-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.orca-session-branch { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Menlo, monospace; font-size: calc(12px * var(--fs)); color: var(--muted); }
-.orca-session-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-/* A-8: the pin of a title the owner fixed, and the pencil that types a new one (it shows while the pointer is on the row or the focus is in it; `visibility`, so that it takes no click while hidden). The field takes the rest of the line. */
-.orca-session-pin { flex: none; font-size: calc(11px * var(--fs)); line-height: 1; }
-.orca-session-edit { flex: none; visibility: hidden; padding: 0 3px; border: 0; border-radius: 4px; background: transparent; font: inherit; font-size: calc(12px * var(--fs)); line-height: 1.3; color: var(--muted); cursor: pointer; }
-.orca-session:hover .orca-session-edit, .orca-session:focus-within .orca-session-edit { visibility: visible; }
-.orca-session-edit:hover { background: var(--soft); color: var(--accent-text); }
-.orca-session-edit:focus-visible { outline: 2px solid var(--accent); }
-.orca-session-title-input { flex: 1 1 0; min-width: 0; box-sizing: border-box; padding: 1px 4px; border: 1px solid var(--accent); border-radius: 4px; background: var(--surface); font: inherit; font-weight: 600; color: inherit; user-select: text; -webkit-user-select: text; }
-.orca-session-title-input:focus { outline: none; }
-.orca-line { display: flex; align-items: center; gap: 6px; min-width: 0; padding-left: 22px; font-size: calc(12px * var(--fs)); color: var(--muted); }
-.orca-line-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* A-8: the small tag at the start of a line: 「あなた」, 「AI」 (the color of a question while the session waits for an input), 「サブ」 and 「シェル」. */
-.orca-tag { flex: none; padding: 0 6px; border-radius: 9px; font-size: calc(11px * var(--fs)); font-weight: 700; line-height: 16px; white-space: nowrap; }
-.orca-tag-you { color: var(--tag-you); background: color-mix(in srgb, var(--tag-you) 12%, transparent); }
-.orca-tag-ai { color: var(--accent); background: var(--soft); }
-.orca-tag-question { color: var(--agent-question); background: color-mix(in srgb, var(--agent-question) 12%, transparent); }
-.orca-tag-sub { color: var(--effort-high); background: var(--effort-high-bg); }
-.orca-tag-shell { color: var(--muted); background: var(--line); }
 /* A-8: the mark of the formation and the number of the worktrees of its launched children, at the right end of a project's row (after the chip of its environment, when it has one). */
 .orca-project-formation { flex: none; display: inline-flex; align-items: center; gap: 3px; margin-left: auto; color: var(--muted); font-size: calc(12px * var(--fs)); font-weight: 600; line-height: 18px; font-variant-numeric: tabular-nums; }
 .orca-env + .orca-project-formation { margin-left: 8px; }
 .orca-project-formation svg { flex: none; width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-/* A-8: the toggle under a session's row that has work in it: the arrow, then the tag and the number of each kind of work. It opens the breakdown, and a press does not select the session. */
-.orca-sess { position: relative; }
-.orca-works-toggle { display: flex; align-items: center; gap: 5px; width: max-content; max-width: 100%; box-sizing: border-box; margin: 0 0 1px 32px; padding: 2px 6px 2px 2px; border: 0; border-radius: 8px; background: transparent; font: inherit; font-size: calc(11.5px * var(--fs)); color: var(--muted); cursor: pointer; }
-.orca-works-toggle:hover { background: var(--hover); }
-.orca-works-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.orca-works-arrow { flex: none; display: inline-flex; }
-.orca-works-arrow svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
-.orca-works-toggle[aria-expanded="true"] .orca-works-arrow svg { transform: rotate(90deg); }
-.orca-works-n { margin-right: 4px; font-weight: 600; font-variant-numeric: tabular-nums; }
-/* A-8: the breakdown under the toggle: a line for each subagent (its tag, its name and its task) and for the command (its tag and the command). */
-.orca-works { margin: 0 0 4px 32px; }
-.orca-work { display: flex; align-items: center; gap: 6px; min-height: 24px; padding: 0 10px 0 2px; font-size: calc(12px * var(--fs)); line-height: 18px; }
-.orca-work-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.orca-work-task { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 /* A-33: the name of the saved environment a project of the list is in (not a session), at the right end of its row. */
 .orca-env { flex: none; margin-left: auto; max-width: 9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; box-sizing: border-box; padding: 0 7px; border: 1px solid var(--chip-line); border-radius: 9px; background: var(--surface); color: var(--muted); font-size: calc(11px * var(--fs)); font-weight: 400; line-height: 16px; }
 #orca-work { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
