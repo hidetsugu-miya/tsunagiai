@@ -1,4 +1,4 @@
-// The blocks and the evidence of a decision page (A-41, formation-page.ts): what a child wrote in its page and what Rust read for it. The text is the child's, so every text goes in as `textContent`; nothing is read as HTML. The one exception is the SVG that Mermaid draws (`securityLevel: "strict"`), which goes through DOMPurify's SVG profile.
+// The blocks and the evidence of a decision page (A-41, formation-page.ts): what a child wrote in its page and what Rust read for it. The text is the child's, so every text goes in as `textContent`; nothing is read as HTML. The one exception is the SVG that Pele draws (no HTML label, no script, and no link or image), which goes through DOMPurify's SVG profile.
 import type { Block } from "./bindings/Block";
 import type { DiffRow } from "./bindings/DiffRow";
 import type { Evidence } from "./bindings/Evidence";
@@ -8,7 +8,7 @@ import type { Term } from "./bindings/Term";
 import { tag } from "./dom.js";
 import { foldOpener, holdLines, holdWhole, paintPending, pending } from "./formation-page-drawer.js";
 import { drawNode, markdownBlock } from "./formation-page-node.js";
-import { loadMermaid } from "./vendor-load.js";
+import { loadPele } from "./vendor-load.js";
 
 // A fold that opens in the text (a reference row, a change section, the details of a choice): `summary` is its label. What the drawer shows instead is `foldOpener` of formation-page-drawer.ts.
 export function fold(summary: string, className: string, open = false): HTMLDetailsElement {
@@ -167,9 +167,8 @@ export function drawImage(image: ImageRef, lazy: boolean): HTMLElement {
 
 // The number of the diagrams drawn, so that each SVG has an id of its own.
 let diagrams = 0;
-const darkScheme = () => window.matchMedia("(prefers-color-scheme: dark)").matches;
 
-// A diagram: the SVG once Mermaid has drawn it; the Mermaid source as text while it has not, and for good when it cannot draw it.
+// A diagram: the SVG once Pele has drawn it; the Mermaid source as text while it has not, and for good when it cannot draw it.
 function drawDiagram(source: string, caption: string | null, lazy: boolean): HTMLElement {
   const figure = tag("figure", "fp-diagram");
   const box = tag("div", "fp-diagram-box");
@@ -185,23 +184,21 @@ function drawDiagram(source: string, caption: string | null, lazy: boolean): HTM
 }
 
 async function paintDiagram(source: string, box: HTMLElement, label: string) {
-  const id = `fp-mermaid-${++diagrams}`;
   try {
-    await loadMermaid();
-    mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: darkScheme() ? "dark" : "default", htmlLabels: false, flowchart: { htmlLabels: false } });
-    const { svg } = await mermaid.render(id, source);
+    await loadPele();
+    // The colors are the `--pele-*` variables of style.css, so they follow the app's; the font is measured as the box draws it.
+    const { svg, width } = pele.render(source, { fontFamily: getComputedStyle(box).fontFamily, idPrefix: `fp-pele-${++diagrams}`, links: false, images: false });
     const holder = tag("div");
     holder.innerHTML = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true } });
     const drawn = holder.querySelector("svg");
     if (!drawn) throw new Error("no svg");
     drawn.setAttribute("role", "img");
     drawn.setAttribute("aria-label", label);
+    // Pele lets the SVG grow to the box; a diagram stays at its own width unless the card asks for it wide (style.css).
+    drawn.style.maxWidth = `${width}px`;
     box.replaceChildren(drawn);
     box.dataset.drawn = "true";
   } catch {
-    // Mermaid leaves its measuring elements in the body when it fails.
-    document.getElementById(id)?.remove();
-    document.getElementById(`d${id}`)?.remove();
     box.dataset.failed = "true";
   }
 }

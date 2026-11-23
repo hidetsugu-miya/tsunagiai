@@ -1132,7 +1132,9 @@ button.formation-tab-main:focus-visible { outline: 2px solid var(--accent); outl
 .fp-facts dd > .fp-fold-btn { margin-left: 8px; }
 .fp-diagram { margin: 0; display: flex; flex-direction: column; gap: 6px; }
 .fp-diagram-box { overflow-x: auto; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
-.fp-diagram-box svg { width: 100%; max-width: 100%; height: auto; fill: initial; stroke: none; stroke-width: initial; }
+.fp-diagram-box svg { width: 100%; max-width: 100%; height: auto; fill: var(--_fg); stroke: none; stroke-width: initial; stroke-linecap: initial; stroke-linejoin: initial; }
+/* The colors of a diagram that Pele draws (A-41), from the variables of :root. */
+.pele { --pele-bg: var(--surface); --pele-fg: var(--ink-soft); --pele-muted: var(--muted); --pele-line: var(--ink-soft); --pele-surface: var(--soft); --pele-surface-alt: var(--bar); --pele-border: var(--accent-dim); --pele-accent: var(--accent); --pele-critical: var(--danger); --pele-error: var(--danger); }
 .fp-diagram figcaption { color: var(--muted); font-size: calc(13px * var(--fs)); }
 .fp-image { margin: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 .fp-image-box { max-width: 100%; }
@@ -1753,6 +1755,10 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-edit-rich code { font-family: var(--editor-family, ui-monospace, Menlo, monospace); font-size: .9em; padding: .1em .3em; border-radius: 4px; background: var(--soft); }
 .orca-edit-rich pre { margin: .7em 0; padding: 10px 12px; border-radius: 8px; background: var(--soft); overflow-x: auto; white-space: pre; }
 .orca-edit-rich pre code { padding: 0; background: transparent; font-size: .9em; }
+/* A-26: a mermaid block drawn as a diagram (the colors are `.pele`, A-41). The text stays in the block, hidden; a diagram that Pele cannot draw leaves the block as the other code blocks are. */
+.orca-edit-rich pre[data-diagram="drawn"] { padding: 8px; border: 1px solid var(--line); background: var(--surface); white-space: normal; }
+.orca-edit-rich pre[data-diagram="drawn"] > code { display: none; }
+.orca-diagram svg { display: block; width: 100%; max-width: 100%; height: auto; margin: 0 auto; fill: var(--_fg); stroke: none; stroke-width: initial; stroke-linecap: initial; stroke-linejoin: initial; }
 .orca-edit-rich table { border-collapse: collapse; margin: .7em 0; }
 .orca-edit-rich th, .orca-edit-rich td { padding: 4px 10px; border: 1px solid var(--line); }
 .orca-edit-rich th { background: var(--soft); }

@@ -13,7 +13,7 @@ import { tag } from "./dom.js";
 import { CODE_SVG, EDIT_SVG, EYE_SVG, LOCK_SVG, RELOAD_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import type { DefinitionQuery } from "./orca-definition.js";
-import { highlightReady, loadHighlight, loadMilkdown } from "./vendor-load.js";
+import { highlightReady, loadHighlight, loadMilkdown, loadPele } from "./vendor-load.js";
 
 // What the heading says of the save: nothing yet, waiting for the typing to stop, on its way, done, or not done (and why).
 type Save = "idle" | "pending" | "saving" | "saved" | "changed" | "missing" | "not-utf8" | "error";
@@ -463,6 +463,8 @@ async function drawRich(f: EditorFile) {
   const text = f.area.value;
   try {
     const [{ body }] = await Promise.all([invoke("markdown_split", { text }), loadMilkdown()]);
+    // A mermaid block is drawn as a diagram (A-26): Pele is read before the view is drawn, so the diagrams are in it when it is (the scroll that a redraw keeps is not moved by a diagram that comes later). A file that has none does not read it, and one that fails to read leaves the block as code.
+    if (/^ {0,3}(```|~~~)[ \t]*mermaid\b/m.test(body)) await loadPele().catch(() => {});
     if (turn !== f.richTurn) return;
     const host = tag("div");
     f.rich.append(host);

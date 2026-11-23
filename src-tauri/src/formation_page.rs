@@ -52,6 +52,61 @@ const BLOCK_DEPTH: usize = 6;
 const DEFAULT_ROOT: &str = "deliverables";
 /// A file that a fact of a card cites, at most (bytes).
 const FACT_FILE_LIMIT: u64 = 128 * 1024;
+/// The first words of the diagram types that Pele draws (`detect` of Pele 1.13.0, which reads Mermaid 12.1.0's types): a diagram whose first word is not one of these is refused.
+const PELE_TYPES: &[&str] = &[
+    "flowchart",
+    "flowchart-elk",
+    "graph",
+    "mindmap",
+    "architecture",
+    "architecture-beta",
+    "agentflow-beta",
+    "C4Context",
+    "C4Container",
+    "C4Component",
+    "C4Dynamic",
+    "C4Deployment",
+    "kanban",
+    "classDiagram",
+    "classDiagram-v2",
+    "erDiagram",
+    "gantt",
+    "info",
+    "pie",
+    "requirement",
+    "requirementDiagram",
+    "sequenceDiagram",
+    "swimlane-beta",
+    "timeline",
+    "gitGraph",
+    "stateDiagram",
+    "stateDiagram-v2",
+    "journey",
+    "quadrantChart",
+    "sankey",
+    "sankey-beta",
+    "packet",
+    "packet-beta",
+    "xychart",
+    "xychart-beta",
+    "block",
+    "block-beta",
+    "eventmodeling",
+    "treeView-beta",
+    "radar-beta",
+    "ishikawa",
+    "ishikawa-beta",
+    "treemap",
+    "treemap-beta",
+    "railroad-beta",
+    "railroad-ebnf-beta",
+    "railroad-abnf-beta",
+    "railroad-peg-beta",
+    "venn-beta",
+    "wardley-beta",
+    "cynefin-beta",
+    "usecase-beta",
+];
 
 // ---- the page as the screen gets it ----
 
@@ -1802,7 +1857,7 @@ impl<'a> Walk<'a> {
         }
     }
 
-    /// The Mermaid text of `map["mermaid"]`: not empty, and its first word names one of the diagram types the screen draws.
+    /// The Mermaid text of `map["mermaid"]`: not empty, and its first word names one of the diagram types Pele draws (`PELE_TYPES`).
     fn mermaid(&mut self, map: &Object, path: &str) -> Option<String> {
         let mermaid = self.text(map, "mermaid", path, true)?;
         let first = mermaid
@@ -1810,13 +1865,10 @@ impl<'a> Walk<'a> {
             .find(|line| !line.trim().is_empty())
             .and_then(|line| line.split_whitespace().next())
             .unwrap_or_default();
-        if !matches!(
-            first,
-            "flowchart" | "graph" | "sequenceDiagram" | "stateDiagram" | "stateDiagram-v2"
-        ) {
+        if !PELE_TYPES.contains(&first) {
             self.bad(
                 &format!("{path}.mermaid"),
-                "最初の語は flowchart、graph、sequenceDiagram、stateDiagram、stateDiagram-v2 のどれかにしてください",
+                "最初の語は、図の種類（flowchart、graph、sequenceDiagram、stateDiagram、classDiagram、erDiagram、gantt、pie など）にしてください",
             );
             return None;
         }
@@ -3749,12 +3801,32 @@ mod tests {
     }
 
     #[test]
+    fn a_diagram_is_accepted_when_its_first_word_is_a_type_pele_draws() {
+        let repo = repo("pele-types");
+        let mut value = approval(&repo);
+        value["changes"] = json!([{"heading": "h", "blocks": [
+            {"type": "diagram", "mermaid": "pie title x\n \"a\": 1"},
+            {"type": "diagram", "mermaid": "\n  classDiagram\n  A <|-- B"},
+            {"type": "diagram", "mermaid": "gantt\n title t"},
+            {"type": "diagram", "mermaid": "Flowchart TD\n  A --> B"},
+            {"type": "diagram", "mermaid": "pieChart\n \"a\": 1"}
+        ]}]);
+        assert_eq!(
+            paths(&violations(&value, &repo)),
+            [
+                "$.changes[0].blocks[3].mermaid",
+                "$.changes[0].blocks[4].mermaid",
+            ]
+        );
+    }
+
+    #[test]
     fn blocks_and_evidence_of_an_unknown_type_are_violations() {
         let repo = repo("blocks");
         let mut value = approval(&repo);
         value["changes"] = json!([{"heading": "h", "blocks": [
             {"type": "video", "root": "repo", "path": "a.mp4", "caption": "c"},
-            {"type": "diagram", "mermaid": "pie\n \"a\": 1"},
+            {"type": "diagram", "mermaid": "notADiagram\n \"a\": 1"},
             {"type": "list", "items": []},
             {"type": "evidence", "items": [{"type": "table", "note": "n", "excerpts": []}]}
         ]}]);
@@ -5391,7 +5463,7 @@ mod tests {
         );
         // A diagram of another type, a sample out of its ranges, and a key that is no fixed choice.
         let bad = with_question(&repo, |q| {
-            q["options"][0]["diagram"] = json!({"mermaid": "pie\n  a: 1"});
+            q["options"][0]["diagram"] = json!({"mermaid": "notADiagram\n  a: 1"});
             q["options"][0]["sample"] =
                 json!({"text": "t", "font_size": 0, "font_weight": 650, "color": "red"});
             q["choice_details"] = json!({"defer": "x", "other": "y"});
