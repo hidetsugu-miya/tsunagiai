@@ -1096,7 +1096,7 @@ describe("slack thread: the emoji picker (S-25)", () => {
     expect(await browser.execute(() => document.querySelector<HTMLElement>("#st-msgs .st-msg .reactions .reaction-add")!.getBoundingClientRect().height)).toBeGreaterThan(0);
   });
 
-  it("opens under the button with the search field first, then 最近 (none yet), the workspace's custom emoji and the standard emoji, and asks Rust for the workspace's list once", async () => {
+  it("opens under the button with the search field first, then the workspace's custom emoji and the standard emoji (no よく使う while Rust gives no name), and asks Rust for the workspace's list once", async () => {
     const list = await picker();
     expect(await callsOf(list)).toEqual([{ teamId: workspace.teamId }]);
     await expect($(".emoji-pop")).toHaveAttribute("role", "dialog");
@@ -1191,8 +1191,7 @@ describe("slack thread: the emoji picker (S-25)", () => {
     expect(await count("#st-msgs .st-msg:first-child .reaction")).toBe(2);
     // The user's own, picked again: Slack says it was so already (false), and the count stays.
     await addButton(0);
-    // The tada just added is in 最近 now.
-    await waitForCount(".emoji-pop .emoji-cell", 8);
+    await waitForCount(".emoji-pop .emoji-cell", 7);
     await mock("slack_react", false);
     await $('.emoji-pop .emoji-cell[data-name="eyes"]').click();
     await waitForCalls("slack_react");
@@ -1200,39 +1199,45 @@ describe("slack thread: the emoji picker (S-25)", () => {
     expect(await textsOf('#st-msgs .st-msg:first-child .reaction[data-name="eyes"] .reaction-count')).toEqual(["1"]);
   });
 
-  it("adds a custom emoji with its name, shows its image in the reaction, and keeps it for 最近", async () => {
+  it("adds a custom emoji with its name, shows its image in the reaction, tells Rust the use, and lists it under よく使う when Rust gives it", async () => {
     await picker();
     const react = await mock("slack_react", true);
+    const used = await mock("slack_emoji_used");
     await $('.emoji-pop .emoji-cell[data-name="ステキ"]').click();
     expect(await waitForCalls(react)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: root, name: "ステキ", add: true }]);
+    expect(await waitForCalls(used)).toEqual([{ teamId: workspace.teamId, name: "ステキ" }]);
     await browser.waitUntil(async () => (await count('#st-msgs .reaction[data-name="ステキ"]')) === 1);
     await browser.waitUntil(async () => (await count('#st-msgs .reaction[data-name="ステキ"] img.reaction-img')) === 1);
-    // The picker of another message lists it first, under 最近, before the custom and standard emoji.
+    // The picker of another message lists it first, under よく使う, before the custom and standard emoji, as an image cell like the one in the custom section.
+    await mock("slack_emoji_frequent", ["ステキ"]);
     await addButton(1);
     await waitForCount(".emoji-pop .emoji-cell", 8);
-    expect(await sectionTitles()).toEqual(["最近", "カスタム", "標準"]);
+    expect(await sectionTitles()).toEqual(["よく使う", "カスタム", "標準"]);
     expect(await cells(".emoji-pop .emoji-sec:nth-child(1) .emoji-cell")).toEqual(["ステキ"]);
   });
 
-  it("puts the emoji added last first in 最近, once each", async () => {
+  it("tells Rust each emoji added as a use, and lists the names Rust gives first under よく使う, in its order and once each", async () => {
     await picker();
     const react = await mock("slack_react", true);
+    const used = await mock("slack_emoji_used");
     await $('.emoji-pop .emoji-cell[data-name="grinning"]').click();
     await waitForCalls(react);
     await browser.waitUntil(async () => (await count("#st-msgs .st-msg:first-child .reaction")) === 3);
     await addButton(1);
-    await waitForCount(".emoji-pop .emoji-cell", 8);
+    await waitForCount(".emoji-pop .emoji-cell", 7);
     await $('.emoji-pop .emoji-cell[data-name="+1"]').click();
     await waitForCalls(react, 2);
     await browser.waitUntil(async () => (await count("#st-msgs .st-msg:last-child .reaction")) === 1);
-    await addButton(1);
-    await waitForCount(".emoji-pop .emoji-cell", 9);
-    await $('.emoji-pop .emoji-sec:nth-child(1) .emoji-cell[data-name="grinning"]').click();
-    await waitForCalls(react, 3);
-    await browser.waitUntil(async () => (await count("#st-msgs .st-msg:last-child .reaction")) === 2);
+    expect(await waitForCalls(used, 2)).toEqual([
+      { teamId: workspace.teamId, name: "grinning" },
+      { teamId: workspace.teamId, name: "+1" },
+    ]);
+    // The order is Rust's (the number of uses), not the order of the adds; a name is listed once in the section.
+    const frequent = await mock("slack_emoji_frequent", ["+1", "grinning"]);
     await addButton(0);
     await waitForCount(".emoji-pop .emoji-cell", 9);
-    expect(await cells(".emoji-pop .emoji-sec:nth-child(1) .emoji-cell")).toEqual(["grinning", "+1"]);
+    expect(await callsOf(frequent)).toEqual([{ teamId: workspace.teamId }]);
+    expect(await cells(".emoji-pop .emoji-sec:nth-child(1) .emoji-cell")).toEqual(["+1", "grinning"]);
   });
 
   it("picks the first cell the search leaves with Enter", async () => {
@@ -1262,11 +1267,13 @@ describe("slack thread: the emoji picker (S-25)", () => {
     await picker();
     const before = await count("#st-msgs .st-msg:first-child .reaction");
     const react = await mock("slack_react", rejects("このメッセージにはこれ以上違う絵文字のリアクションを付けられません"));
+    const used = await mock("slack_emoji_used");
     await $('.emoji-pop .emoji-cell[data-name="grinning"]').click();
     await waitForCalls(react);
     await expect($(".toast")).toHaveText(expect.stringContaining("リアクションを変えられませんでした: このメッセージにはこれ以上違う絵文字のリアクションを付けられません"));
     expect(await count("#st-msgs .st-msg:first-child .reaction")).toBe(before);
-    // A failed pick is not remembered.
+    // A failed pick is not a use.
+    expect(await callsOf(used)).toEqual([]);
     await addButton(0);
     await waitForCount(".emoji-pop .emoji-cell", 7);
     expect(await sectionTitles()).toEqual(["カスタム", "標準"]);
@@ -1299,7 +1306,7 @@ describe("slack thread: the emoji picker (S-25)", () => {
   it("shows no text that explains the picker: the field has no placeholder and the sections are named", async () => {
     await picker();
     expect(await $(".emoji-pop input").getAttribute("placeholder")).toBeNull();
-    expect(await textsOf(".emoji-pop h3")).toEqual(["最近", "カスタム", "標準"]);
+    expect(await textsOf(".emoji-pop h3")).toEqual(["よく使う", "カスタム", "標準"]);
   });
 });
 
