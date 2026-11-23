@@ -122,29 +122,6 @@ class Ordering(unittest.TestCase):
         plain = mk(4, ["point:1"])
         self.assertEqual(numbers(pr.base_order([plain, bug])), [1, 4])
 
-    def test_the_priority_is_after_the_tier_and_before_the_quick_bug_and_none_is_last(self):
-        none = mk(1, ["bug", "point:1"])
-        p3 = mk(2, ["point:8", "priority:3"])
-        p2 = mk(3, ["point:8", "priority:2"])
-        p1 = mk(4, ["point:8", "priority:1"], created="2026-11-01T00:00:09Z")
-        self.assertEqual([pr.priority(i) for i in (p1, p2, p3, none)], [1, 2, 3, 4])
-        self.assertEqual(numbers(pr.base_order([none, p3, p2, p1])), [4, 3, 2, 1])
-        # the same priority: the quick bug goes first again
-        plain = mk(5, ["point:1", "priority:2"])
-        bug = mk(6, ["bug", "point:2", "priority:2"])
-        self.assertEqual(numbers(pr.base_order([plain, bug, p2])), [6, 5, 3])
-
-    def test_the_priority_does_not_leave_the_tier(self):
-        important = mk(1, ["importance:high", "point:8"])
-        p1 = mk(2, ["priority:1", "point:1"])
-        self.assertEqual(numbers(pr.base_order([p1, important])), [1, 2])
-
-    def test_a_blocker_of_a_higher_priority_is_taken_before_the_issue_it_blocks(self):
-        blocker = mk(1, ["point:8"])
-        p1 = mk(2, ["priority:1", "point:1"], blocked=[1])
-        p2 = mk(3, ["priority:2", "point:1"])
-        self.assertEqual(numbers(pr.base_order([p2, blocker, p1])), [1, 2, 3])
-
     def test_a_blocker_of_a_higher_tier_is_taken_across_the_tiers(self):
         blocker = mk(1, ["point:8"])
         urgent_ = mk(2, ["urgency:high", "importance:high", "point:2"], blocked=[1])
@@ -168,7 +145,7 @@ class Ordering(unittest.TestCase):
 
     def test_a_dependabot_issue_comes_before_every_tier(self):
         plain = mk(1, ["point:1"])
-        top = mk(2, ["urgency:high", "importance:high", "priority:1", "bug", "point:1"])
+        top = mk(2, ["urgency:high", "importance:high", "bug", "point:1"])
         by_label = mk(3, ["dependencies", "point:3"], created="2026-11-01T00:00:09Z")
         by_mark = mk(4, ["point:2"])
         by_mark.body = "<!-- dependabot #177 -->\n## 目的"
@@ -204,9 +181,12 @@ class Ordering(unittest.TestCase):
         j = pr.issue_json(mk(2, ["importance:high"]))
         self.assertEqual((j["urgency"], j["importance"], j["points"], j["parent"]), ("normal", "high", None, None))
 
-    def test_the_priority_in_the_snapshot(self):
-        self.assertEqual(pr.issue_json(mk(1, ["priority:2", "point:1"]))["priority"], 2)
-        self.assertIsNone(pr.issue_json(mk(2, ["point:1"]))["priority"])
+    def test_a_priority_label_changes_neither_the_order_nor_the_snapshot(self):
+        plain = mk(1, ["bug", "point:1"])
+        labelled = mk(2, ["point:8", "priority:1"])
+        self.assertEqual(numbers(pr.base_order([labelled, plain])), [1, 2])
+        self.assertNotIn("priority", pr.issue_json(labelled))
+        self.assertFalse(hasattr(pr, "priority"))
 
     def test_the_dependabot_mark_in_the_snapshot(self):
         self.assertTrue(pr.issue_json(mk(1, ["dependencies", "point:2"]))["dependabot"])
@@ -294,11 +274,6 @@ class Next(unittest.TestCase):
         ]
         out = pr.build_next(issues, set(), frozenset())
         self.assertEqual([i["number"] for i in out["start"]], [4, 3, 2, 1, 5])
-
-    def test_the_queue_is_by_priority_after_the_tier(self):
-        issues = [mk(1, ["bug", "point:1"]), mk(2, ["point:8", "priority:2"]), mk(3, ["point:8", "priority:1"]), mk(4, ["importance:high", "point:8"])]
-        out = pr.build_next(issues, set(), frozenset())
-        self.assertEqual([i["number"] for i in out["start"]], [4, 3, 2, 1])
 
     def test_a_parent_is_in_no_list_and_its_parts_start(self):
         issues = [mk(1, ["point:5"], sub=2), mk(2, ["point:3"], parent=1), mk(3, ["point:3"], sub=1), mk(4, ["point:2"])]

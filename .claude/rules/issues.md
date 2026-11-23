@@ -78,21 +78,6 @@ Good: the owner writes "this is urgent" in the session -> the agent adds urgency
 Bad:  a bug looks serious to the agent -> the agent adds urgency:high (rate its importance instead)
 ```
 
-### Use `priority:1`, `priority:2` and `priority:3` only on the owner's word
-
-`priority:1`, `priority:2` and `priority:3` order the issues inside a tier: the owner puts one on an issue to say "this one first among the issues of its tier". `priority:1` is the first, and an issue with none of them goes after `priority:3` (at the owner's instruction, 2026-11-18; #988).
-The label is put by the owner, or by an agent that follows the owner's word ("do this one first", "make it priority 1"). An agent never adds one on its own judgment, and removes or changes it only on the owner's word.
-It acts after the tier (urgency, then importance) and never carries an issue past an issue of a higher tier. Inside a tier, an issue with a higher priority comes before one with a lower priority, except the issues that block it; `plan-release.py` and `issue-ranker` follow this, as they do for the tiers.
-The rule that a bug of 1, 2 or 3 points goes first works inside one tier and one priority only.
-An issue with more than one of the three takes the one with the smallest number.
-
-```text
-Good: the owner says "do #40 first among these" -> the agent adds priority:1 and says whose word it was
-Good: #40 has priority:1 and #41 has none, both in the tier of importance:high -> #40 comes first, even if #41 is a bug of 1 point
-Bad:  a bug looks pressing to the agent -> the agent adds priority:1 (rate its importance, or ask the owner)
-Bad:  #40 has priority:1 and no importance label, and it goes ahead of an issue with importance:high
-```
-
 ### Rate the importance of an issue when you first read it
 
 `importance:high` and `importance:low` are put by whoever reads the issue first, with the reason as a one-line comment; no label means normal. Do not change a label the owner set (at the owner's instruction, 2026-11-06; Discussion #136).
@@ -104,25 +89,23 @@ Good: #150 loses the saved Todo on a failed sync -> importance:high, with "ãƒ‡ãƒ
 Bad:  #150 loses data, and no importance label is put, so it is ordered among the issues of normal importance
 ```
 
-### Order the issues: the Dependabot issues first, then the tier, the priority, the small bugs, the points and the age
+### Order the issues: the Dependabot issues first, then the tier, the small bugs, the points and the age
 
 `implement` proposes the open issues in this order, and the owner names the ones to implement (at the owner's instruction, 2026-11-21; #1207: the order is a proposal, and is not saved).
 `plan-release.py` (`snapshot` and `next`) prints them in the basic order below, and `issue-ranker` ranks them from it, with the dependencies and the parts of one feature kept together:
 - An issue made for a Dependabot pull request (the label `dependencies`, or the mark `<!-- dependabot #N -->` in its body; `dependabot-issues.sh`) comes before every tier (at the owner's instruction, 2026-11-21; #1207).
 - An issue is in one of four tiers, by urgency first and then importance: (1) `urgency:high` and `importance:high`, (2) `urgency:high` only, (3) `importance:high` only, (4) neither. A label that is missing is low, so `importance:low` and no label are the same tier. An issue goes ahead of every issue of a lower tier, except its own blockers, which may stand in any tier (at the owner's instruction, 2026-11-07; #173).
-- Inside a tier, an issue with `priority:1` comes before one with `priority:2`, that before one with `priority:3`, and that before one with none of them, again except its blockers. The label is the owner's word about the order inside a tier, and it does not carry an issue past an issue of a higher tier (at the owner's instruction, 2026-11-18; #988).
-- Inside a tier and a priority, a bug of 1, 2 or 3 points (`bug` with `point:1`, `point:2` or `point:3`) comes first, again except its blockers, so that a quick fix is done first (at the owner's instruction, 2026-11-07). A bug of 5 or 8 points is not moved forward. The rule works inside the tier and the priority and does not carry a small bug past an issue of a higher tier or a higher priority: the bugs that stop use or lose data have `importance:high`, so a small bug without it does less harm (decided by the agent, 2026-11-09, at the owner's leave; #173).
+- Inside a tier, a bug of 1, 2 or 3 points (`bug` with `point:1`, `point:2` or `point:3`) comes first, again except its blockers, so that a quick fix is done first (at the owner's instruction, 2026-11-07). A bug of 5 or 8 points is not moved forward. The rule works inside the tier and does not carry a small bug past an issue of a higher tier: the bugs that stop use or lose data have `importance:high`, so a small bug without it does less harm (decided by the agent, 2026-11-09, at the owner's leave; #173).
 - Then an issue without `importance:low` before one with it (the tier counts the two alike, and the order within the tier does not), then fewer points first (1 < 2 < 3 < 5 < 8), then the older issue first.
 
 An issue comes after the issues it depends on. A parent issue is not ranked: its parts are (`issue-plan`, "Rules").
+No label orders the issues inside a tier: the owner names the issues to start (at the owner's instruction, 2026-11-23; #1287, which retires `priority:1`, `priority:2` and `priority:3`).
 
 ```text
 Good: a Dependabot issue of 3 points and an issue with `urgency:high` and `importance:high` -> the Dependabot issue comes first
 Good: #50 depends on #42 -> #42 comes first, whatever their tiers
 Good: an issue with `importance:high` and no urgency, and a bug of 1 point with no label -> the issue of 5 points comes first, because its tier is higher
-Good: two issues in the same tier, one with `priority:2` and one with none, the one with no label a bug of 1 point -> the one with `priority:2` comes first
 Good: two bugs with no labels, of 1 point and of 3 points, and a feature of 1 point -> the two bugs come first, then the feature
-Bad:  an issue with `priority:1` and no urgency goes ahead of an issue with `urgency:high`, because it has the label
 Bad:  a bug of 1 point with no label goes ahead of an issue with `importance:high`, because it is a quick bug
 ```
 
