@@ -56,8 +56,10 @@ async function openTodo(fixtures: Record<string, unknown> = {}) {
 async function backTo(screen: Screen) {
   await expect($("#orca")).toBeDisplayed();
   if (screen === SLACK) {
+    // The thread stays open while another screen is shown, so the pane keeps its session and its terminal.
     await $("#nav-slack").click();
-    await openThread(1);
+    if (!(await $("#slack-thread").isDisplayed())) await openThread(1);
+    await expect($("#slack-thread")).toBeDisplayed();
     return;
   }
   await $("#nav-todo").click();
@@ -1171,7 +1173,8 @@ describe("orca handoff", () => {
     await sendButton(SLACK).click();
     await expect($("#orca")).toBeDisplayed();
     await browser.pause(500);
-    expect(await count('.orca-tabs [data-tab="claude:tab_new:leaf_9"] [role="tab"]')).toBe(0);
+    // Its project may be selected, with the tabs it holds, but the tab of the new session is not the one selected.
+    await expect($('.orca-tabs [data-tab="claude:tab_new:leaf_9"] [role="tab"]')).not.toHaveAttribute("aria-selected", "true");
   });
 
   it("opens from the header icon of a Todo, under the detail in the same scroll, with its content as the card", async () => {
