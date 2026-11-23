@@ -26,7 +26,7 @@ use crate::{
 
 /// A summary is one model call, about 4 seconds when measured; this only stops a hung process.
 const SUMMARY_TIMEOUT: Duration = Duration::from_secs(60);
-/// Editing the instructions sends the whole body and the conversation, so it may take longer.
+/// The summary of a handoff sends the whole content, so it may take longer.
 const EDIT_TIMEOUT: Duration = Duration::from_secs(120);
 const STATUS_TIMEOUT: Duration = Duration::from_secs(15);
 /// A high effort thinks longer (`--effort max` took 61 seconds on a small input), so every call gets this long from `high` up.
