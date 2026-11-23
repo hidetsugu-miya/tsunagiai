@@ -1134,6 +1134,10 @@ _hook_log_dir = tempfile.mkdtemp()
 os.environ["TSUNAGIAI_HOOK_LOG_DIR"] = _hook_log_dir
 atexit.register(shutil.rmtree, _hook_log_dir, ignore_errors=True)
 
+# Every git and bash started below inherits this too, so the settings of the machine (a signing program that does not answer, say) never reach a throwaway repository, as in the check-*.sh tools.
+os.environ["GIT_CONFIG_GLOBAL"] = os.devnull
+os.environ["GIT_CONFIG_SYSTEM"] = os.devnull
+
 
 class Hook(unittest.TestCase):
     """post-gh.sh against a stub project whose plan-release.py prints STUB."""
