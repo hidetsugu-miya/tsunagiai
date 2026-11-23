@@ -153,6 +153,20 @@ pub struct OrcaStarted {
     pub handle: Option<String>,
 }
 
+/// An AI CLI that `orca agent installed` lists for a place (A-16): the one that can be started there.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct OrcaAgent {
+    /// The id `orca agent launch --agent` takes (`check_agent_id`).
+    pub id: String,
+    /// The name the list shows; the id when Orca gives none.
+    pub name: String,
+    /// Whether Orca marks it as its default.
+    pub default: bool,
+}
+
 /// Where a handoff goes (A-9): a new session in a worktree.
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "kind", rename_all = "lowercase")]
@@ -999,6 +1013,39 @@ pub(crate) fn created_pane_key_of(result: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// The AI CLIs of `orca agent installed` (its `result`): an entry whose id is not in the shape of `check_agent_id` is dropped, and a name it lacks is its id.
+pub(crate) fn agents_of(result: &Value) -> Vec<OrcaAgent> {
+    result["agents"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let id = text_of(entry, "id").filter(|id| check_agent_id(id).is_ok())?;
+            Some(OrcaAgent {
+                id: id.to_owned(),
+                name: text_of(entry, "name").unwrap_or(id).to_owned(),
+                default: entry["default"] == true,
+            })
+        })
+        .collect()
+}
+
+/// The terminal `orca agent launch --surface terminal` started: `result.outcome` `handle` and `paneKey`, each `None` when the reply lacks it or holds it in a shape that is not one. A chat session (`kind` `structured`) has no terminal to follow, so it is none.
+pub(crate) fn agent_started_of(result: &Value) -> OrcaStarted {
+    let outcome = &result["outcome"];
+    if outcome["kind"] == "structured" {
+        return OrcaStarted::default();
+    }
+    OrcaStarted {
+        pane_key: text_of(outcome, "paneKey")
+            .filter(|k| check_pane_key(k).is_ok())
+            .map(str::to_owned),
+        handle: text_of(outcome, "handle")
+            .filter(|h| check_handle(h).is_ok())
+            .map(str::to_owned),
+    }
+}
+
 /// The path of the worktree `orca worktree create` made: `result.worktree.path`, which must be an absolute path.
 pub(crate) fn created_worktree_path_of(result: &Value) -> Result<String, String> {
     text_of(&result["worktree"], "path")
@@ -1104,6 +1151,31 @@ pub(crate) fn check_handle(handle: &str) -> Result<(), String> {
     } else {
         Err("宛先のターミナルが正しくありません".into())
     }
+}
+
+/// An agent id is 1 to 64 characters of `a-z`, `0-9` and `-`, and does not begin with `-`, so it is never read as an option.
+pub(crate) fn check_agent_id(id: &str) -> Result<(), String> {
+    let mut chars = id.chars();
+    let first = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+    if first
+        && id.len() <= 64
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
+        Ok(())
+    } else {
+        Err("エージェントの名前が正しくありません".into())
+    }
+}
+
+/// The agent `orca_agent_launch` starts: Claude is not, because only `orca_start` gives it the plugin of A-45.
+fn check_launch_agent(id: &str) -> Result<(), String> {
+    check_agent_id(id)?;
+    if id == "claude" {
+        return Err("Claude は「Claude を起動」で始めてください".into());
+    }
+    Ok(())
 }
 
 /// A pane is `{tabId}:{leafId}`; nothing else is accepted, and a key is never put in a command line.
@@ -1379,6 +1451,25 @@ fn launch_args(path: &str, command: &str, environment: Option<&str>) -> Vec<Stri
         format!("path:{path}"),
         "--command".into(),
         command.into(),
+        "--json".into(),
+    ]);
+    with_environment(args, environment)
+}
+
+/// The AI CLIs that can be started in a place (A-16).
+fn agents_args(environment: Option<&str>) -> Vec<String> {
+    with_environment(args_of(&["agent", "installed", "--json"]), environment)
+}
+
+/// An AI CLI other than Claude, in a terminal of the worktree (A-16). `--agent={id}` is one word, so an id is never read as an option; `--surface terminal` always runs the CLI, whatever Orca's setting "Chat | CLI" says.
+fn agent_launch_args(path: &str, agent: &str, environment: Option<&str>) -> Vec<String> {
+    let mut args = args_of(&["agent", "launch"]);
+    args.extend([
+        format!("--agent={agent}"),
+        "--worktree".into(),
+        format!("path:{path}"),
+        "--surface".into(),
+        "terminal".into(),
         "--json".into(),
     ]);
     with_environment(args, environment)
@@ -1974,6 +2065,21 @@ fn open_terminal(path: &str, environment: Option<&str>) -> Result<OrcaStarted, S
     write(&create_args(path, environment)).map(|result| created_of(&result))
 }
 
+/// The AI CLIs that `environment` (checked against the saved ones) can start (A-16).
+fn installed_agents(environment: Option<&str>) -> Result<Vec<OrcaAgent>, String> {
+    check_listed(environment)?;
+    call(&agents_args(environment), READ_TIMEOUT)
+        .map(|result| agents_of(&result))
+        .map_err(message_of)
+}
+
+/// Starts the AI CLI `agent` in the worktree at `path` (A-16), once, with the checks of a launch.
+fn launch_agent(path: &str, agent: &str, environment: Option<&str>) -> Result<OrcaStarted, String> {
+    check_launch_agent(agent)?;
+    check_start(path, environment)?;
+    write(&agent_launch_args(path, agent, environment)).map(|result| agent_started_of(&result))
+}
+
 /// Makes a new worktree named `name` in the project `project` of the target (A-9), once, and gives its path. The name, the branch and the base (when given) and the environment are validated, and the project must be in the list read just before; otherwise nothing is made.
 fn create_worktree(
     project: &str,
@@ -2477,6 +2583,22 @@ pub async fn orca_terminal_create(
     environment: Option<String>,
 ) -> Result<OrcaStarted, String> {
     blocking(move || open_terminal(&path, environment.as_deref())).await?
+}
+
+/// The AI CLIs that the place (`None`: this machine, else a saved environment's name, checked against the saved ones) can start (A-16).
+#[tauri::command]
+pub async fn orca_agents_installed(environment: Option<String>) -> Result<Vec<OrcaAgent>, String> {
+    blocking(move || installed_agents(environment.as_deref())).await?
+}
+
+/// Starts the AI CLI `agent` (not Claude) in a terminal of the worktree at `path` (the plus of the work pane, A-16). The answer is the terminal as Orca's reply names it. Never run twice.
+#[tauri::command]
+pub async fn orca_agent_launch(
+    path: String,
+    agent: String,
+    environment: Option<String>,
+) -> Result<OrcaStarted, String> {
+    blocking(move || launch_agent(&path, &agent, environment.as_deref())).await?
 }
 
 /// A-9: makes a new worktree named `name` in the project `project` (a repository key of the list) of the destination, and answers its path. Never run twice.
@@ -5493,6 +5615,144 @@ mod tests {
         // A command that looks like an option stays the one argument that follows its flag.
         let args = launch_args("/work/a", "--json", None);
         assert_eq!(args[4..6], ["--command", "--json"]);
+    }
+
+    #[test]
+    fn the_installed_agents_are_asked_for_with_the_environment_last() {
+        assert_eq!(agents_args(None), ["agent", "installed", "--json"]);
+        assert_eq!(
+            agents_args(Some("Studio")),
+            ["agent", "installed", "--json", "--environment=Studio"]
+        );
+    }
+
+    #[test]
+    fn an_agent_is_launched_as_a_terminal_with_its_id_joined_to_its_flag() {
+        assert_eq!(
+            agent_launch_args("/work/a", "antigravity", None),
+            [
+                "agent",
+                "launch",
+                "--agent=antigravity",
+                "--worktree",
+                "path:/work/a",
+                "--surface",
+                "terminal",
+                "--json"
+            ]
+        );
+        assert_eq!(
+            agent_launch_args("/work/a", "codex", Some("Studio"))
+                .last()
+                .unwrap(),
+            "--environment=Studio"
+        );
+        // A path that looks like an option stays joined to its selector.
+        assert_eq!(
+            agent_launch_args("/work/--json", "codex", None)[4],
+            "path:/work/--json"
+        );
+    }
+
+    #[test]
+    fn the_installed_agents_are_read_from_the_result_and_odd_entries_are_dropped() {
+        let result = json!({"agents": [
+            {"id": "claude", "name": "Claude", "default": true},
+            {"id": "antigravity", "name": "Antigravity", "default": false},
+            {"id": "codex"},
+            {"id": "Bad_ID", "name": "Bad"},
+            {"id": "--json", "name": "Option"},
+            {"id": "", "name": "Empty"},
+            {"name": "No id"},
+            "text",
+            null,
+        ]});
+        let agents = agents_of(&result);
+        assert_eq!(
+            agents,
+            [
+                OrcaAgent {
+                    id: "claude".into(),
+                    name: "Claude".into(),
+                    default: true
+                },
+                OrcaAgent {
+                    id: "antigravity".into(),
+                    name: "Antigravity".into(),
+                    default: false
+                },
+                // A name the entry lacks is its id.
+                OrcaAgent {
+                    id: "codex".into(),
+                    name: "codex".into(),
+                    default: false
+                },
+            ]
+        );
+        assert!(agents_of(&Value::Null).is_empty());
+        assert!(agents_of(&json!({"agents": "none"})).is_empty());
+        assert!(agents_of(&json!({"agents": []})).is_empty());
+    }
+
+    #[test]
+    fn an_agent_id_is_a_short_lowercase_word_and_claude_is_not_launched_here() {
+        for id in ["claude", "codex", "a", "0", "gemini-cli", "x1-y2"] {
+            assert!(check_agent_id(id).is_ok(), "{id}");
+        }
+        for id in [
+            "",
+            "-a",
+            "A",
+            "a_b",
+            "a b",
+            "a=b",
+            "--json",
+            "a\u{3042}",
+            "a\n",
+            &"a".repeat(65),
+        ] {
+            assert!(check_agent_id(id).is_err(), "{id:?}");
+        }
+        assert!(check_agent_id(&"a".repeat(64)).is_ok());
+        assert!(check_launch_agent("antigravity").is_ok());
+        assert!(check_launch_agent("claude").is_err());
+        assert!(check_launch_agent("").is_err());
+    }
+
+    #[test]
+    fn a_launched_agent_is_followed_by_its_handle_and_pane() {
+        let terminal = json!({"outcome": {"kind": "terminal", "handle": "term_9", "paneKey": "tab1:leaf1"}, "worktreeId": "w"});
+        assert_eq!(
+            agent_started_of(&terminal),
+            OrcaStarted {
+                pane_key: Some("tab1:leaf1".into()),
+                handle: Some("term_9".into())
+            }
+        );
+        // A chat session has no terminal to follow.
+        let structured =
+            json!({"outcome": {"kind": "structured", "handle": "term_9", "sessionId": "s"}});
+        assert_eq!(agent_started_of(&structured), OrcaStarted::default());
+        // A field that is absent, empty or not in the shape of a handle or a pane is none.
+        let odd = json!({"outcome": {"kind": "terminal", "handle": "--json", "paneKey": "a b"}});
+        assert_eq!(agent_started_of(&odd), OrcaStarted::default());
+        let part = json!({"outcome": {"kind": "terminal", "handle": "term_9"}});
+        assert_eq!(
+            agent_started_of(&part),
+            OrcaStarted {
+                pane_key: None,
+                handle: Some("term_9".into())
+            }
+        );
+        for empty in [
+            Value::Null,
+            json!({}),
+            json!({"outcome": null}),
+            json!({"outcome": "x"}),
+            json!([]),
+        ] {
+            assert_eq!(agent_started_of(&empty), OrcaStarted::default());
+        }
     }
 
     #[test]

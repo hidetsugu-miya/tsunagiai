@@ -95,6 +95,8 @@ const answers = {
   orca_terminal_read: [],
   orca_terminal_input: null,
   orca_open_url: null,
+  // A-16: no AI CLI is installed; a spec that draws the agents of the plus menu mocks `orca_agents_installed`.
+  orca_agents_installed: [],
   // M-12: a file may always be added; a spec that picks files mocks `mail_attach_pick`.
   mail_attach_check: null,
   mail_attach_pick: [],
