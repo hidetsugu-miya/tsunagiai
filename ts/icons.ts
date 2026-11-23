@@ -16,7 +16,7 @@ export const withClass = (svg: string, cls: string) => svg.replace("<svg ", `<sv
 // Fills every `<svg data-svg="{name}">` of the page with its shape. Called first by main.ts.
 export function fillIcons() {
   for (const svg of document.querySelectorAll<SVGElement>("svg[data-svg]")) {
-    const shape = shapes.get(svg.dataset.icon!);
+    const shape = shapes.get(svg.dataset.svg!);
     if (!shape) continue;
     svg.setAttribute("viewBox", shape.viewBox);
     svg.setAttribute("aria-hidden", "true");

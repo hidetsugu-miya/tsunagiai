@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # アイコンの SVG の形が ts/icons.ts の外に書かれていないかを検査する（.claude/rules/frontend.md）。
 # ts/icons.ts と ts/bindings/ を除く ts/ の .ts に svg、path、circle、rect などの要素の文字列があれば失敗する。
-# src/index.html は svg に子要素を持たせず、すべての svg に data-svg を付ける（形は ts/icons.ts の fillIcons が入れる）。
+# src/index.html は svg に子要素を持たせず、すべての svg に data-svg を付ける（形は ts/icons.ts の fillIcons が入れる）。data-svg の名前は ts/icons.ts に登録されていなければならない。
 # 使い方: check-icons.sh [ファイル...]（省略時はこの checkout の木全体。ファイルは絶対パスか checkout の root からの相対パス）。
 # 失敗時は該当の path:line を stderr に出して exit 1。
 set -uo pipefail
@@ -28,6 +28,10 @@ for f in "$@"; do
     src/index.html)
       out=$(grep -nE "$child" "$rel") && { sed "s|^|$rel:|" <<< "$out" >&2; bad=1; }
       out=$(grep -nE '<svg' "$rel" | grep -v 'data-svg=') && { sed "s|^|$rel:|" <<< "$out" >&2; bad=1; }
+      # data-svg の名前は、すべて ts/icons.ts の icon("名前", ...) に登録されていること（打ち間違いは空のアイコンになる）。
+      while IFS=: read -r n name; do
+        grep -qF "icon(\"$name\"," ts/icons.ts || { echo "$rel:$n: ts/icons.ts に無いアイコン名: $name" >&2; bad=1; }
+      done < <(grep -noE 'data-svg="[^"]*"' "$rel" | sed -E 's/:data-svg="(.*)"$/:\1/')
       ;;
   esac
 done

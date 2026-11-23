@@ -257,6 +257,13 @@ describe("sidebar", () => {
     await expect($("#nav-slack")).toHaveAttribute("aria-label", "Slack");
   });
 
+  it("fills every svg of the page with its shape from the name in data-svg", async () => {
+    await boot({ inbox: inbox(), claude_status: claudeReady });
+    await expect($("#nav-mail svg")).toHaveAttribute("data-svg", "inbox");
+    const empty = await browser.execute(() => [...document.querySelectorAll("svg[data-svg]")].filter((svg) => svg.childElementCount === 0 || !svg.getAttribute("viewBox")).map((svg) => svg.getAttribute("data-svg")));
+    expect(empty).toEqual([]);
+  });
+
   it("shows no update popup when this is the latest version", async () => {
     await boot({ inbox: inbox(), claude_status: claudeReady });
     await waitForCalls("check_update");
