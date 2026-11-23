@@ -6,8 +6,7 @@
       "body": "ts/slack-list.ts の名前の描画を直す。",
       "labels": [
         "bug",
-        "point:1",
-        "priority:1"
+        "point:1"
       ],
       "dependabot": false,
       "urgency": "normal",
