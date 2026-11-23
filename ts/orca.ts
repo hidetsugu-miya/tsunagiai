@@ -27,7 +27,7 @@ import type { PaneOp } from "./bindings/PaneOp";
 import { $, composing, isMac, partMatcher, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
 import { currentFormation, deselectFormation, isChildFolder, isChildSession, isChildWorktree, readForChoice } from "./formation-list.js";
-import { AGENT_SVG, CHEVRON_SVG, CLAUDE_SVG, COLUMNS_SVG, COPY_PATH_SVG, DATABASE_SVG, DEFINITION_SVG, DIFF_SVG, FILE_SVG, FORMATION_SVG, LOCK_SVG, ROWS_SVG, SCRATCHPAD_SVG, svgOf, TERMINAL_SVG } from "./icons.js";
+import { ACTIVITY_SVG, AGENT_SVG, ASK_SVG, CHEVRON_SVG, CLAUDE_SVG, CLOSE_SVG, COLUMNS_SVG, COPY_PATH_SVG, DATABASE_SVG, DEFINITION_SVG, DIFF_SVG, FILE_SVG, FORMATION_SVG, LOCK_SVG, ROWS_SVG, SCRATCHPAD_SVG, TERMINAL_SVG, withClass } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
 import { closeMenu, type MenuItem, openMenu, showMenu } from "./menu.js";
@@ -53,9 +53,6 @@ import { copyText, setNavCount, show } from "./view.js";
 
 // The name of each status icon (its `aria-label`).
 export const STATUS_LABELS: Record<OrcaStatus, string> = { question: "入力待ち", failed: "失敗", working: "作業中", monitoring: "監視中", interrupted: "中断", done: "完了", idle: "動いていない" };
-const ASK_SVG = svgOf('<path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>');
-const ACTIVITY_SVG = svgOf('<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>');
-const CLOSE_SVG = svgOf('<path d="M6 6l12 12M18 6L6 18"/>');
 export const THIS_MACHINE = "このマシン";
 const SHOWN_MS = 10_000;
 // The clock ticks once a second, and a spec that shortens `SHOWN_MS` (`periodMs`) shortens the tick in the same proportion.
@@ -1822,7 +1819,7 @@ async function openStartMenu(anchor: Element) {
   if (list === undefined) return;
   const row = (label: string, icon: string, pick: (worktree: OrcaWorktree) => unknown): MenuItem => ({ label, color: "var(--accent)", icon, current: false, pick: () => void chooseWorktree(anchor, pick) });
   const rows: MenuItem[] = [
-    ...(list?.some((a) => a.id === "claude") ? [row("Claude を起動", CLAUDE_SVG.replace("<svg ", '<svg class="orca-start-claude" '), (w) => start("claude", w))] : []),
+    ...(list?.some((a) => a.id === "claude") ? [row("Claude を起動", withClass(CLAUDE_SVG, "orca-start-claude"), (w) => start("claude", w))] : []),
     ...(list ?? []).filter((a) => a.id !== "claude").map((a) => row(`${a.name} を起動`, AGENT_SVG, (w) => start("agent", w, a.id))),
   ];
   openMenu(

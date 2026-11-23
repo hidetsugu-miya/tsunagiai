@@ -119,7 +119,7 @@ The tools, and the arguments that start it for one use with fewer tools or for a
 ## Tests
 
 There are three layers: static, unit and E2E, and no check is repeated in two layers.
-Static checks cover format, lint, types, the Rust-TS type match and the fixed source version, unit tests (cargo test) cover pure Rust logic, and E2E (WebdriverIO in the real WKWebView, commands mocked) covers screen behavior.
+Static checks cover format, lint, types, the Rust-TS type match, the fixed source version and where the shape of an icon is written, unit tests (cargo test) cover pure Rust logic, and E2E (WebdriverIO in the real WKWebView, commands mocked) covers screen behavior.
 The table of the layers and the rules that follow from it are in `.claude/rules/testing.md`, and how E2E runs is in `.claude/rules/e2e.md`.
 
 ```sh
@@ -133,6 +133,7 @@ cd src-tauri && cargo test --all-features    # also writes the ts-rs types to ts
 npm run e2e:build   # build the app for E2E (feature e2e)
 npm run e2e         # WebdriverIO
 scripts/check-version.sh   # the source version is the fixed one: 0.0.0 in Cargo.toml and Cargo.lock, none in tauri.conf.json
+.claude/tools/check-icons.sh   # the shape of an icon is written only in ts/icons.ts (index.html has <svg data-svg="..."> and no child)
 ```
 
 `.claude/tools/run-ci.sh` runs the static checks and unit tests above (all but the E2E two) on a clean working tree and writes a record for HEAD, and `.claude/tools/run-e2e.sh` does the same for E2E.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PostToolUse(Write|Edit|MultiEdit): 公開禁止語の検査、rustfmt、TypeScript の tsc。
+# PostToolUse(Write|Edit|MultiEdit): 公開禁止語の検査、アイコンの形の置き場所の検査、rustfmt、TypeScript の tsc。
 set -uo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/hook-log.sh"
 f=$(jq -r '.tool_input.file_path // empty')
@@ -13,6 +13,13 @@ hook_log_begin
 msg=$("$(cd "$(dirname "$0")" && pwd)/guard-public.sh" file "$f" 2>&1) || { echo "$msg" >&2; exit 2; }
 
 abs="$(cd "$(dirname "$f")" && pwd -P)/$(basename "$f")"
+
+# アイコンの形は ts/icons.ts にだけ置く。ts/*.ts と src/index.html は、その checkout の check-icons.sh で検査する（無ければ省く）。
+case "$abs" in
+  "$root"/ts/*.ts|"$root"/src/index.html)
+    [ -x "$root/.claude/tools/check-icons.sh" ] && { out=$("$root/.claude/tools/check-icons.sh" "$abs" 2>&1) || { echo "$out" >&2; exit 2; }; }
+    ;;
+esac
 case "$abs" in
   "$root"/src-tauri/*.rs)
     out=$(cd "$root/src-tauri" && mise exec -- rustfmt --edition 2021 "$abs" 2>&1) \
