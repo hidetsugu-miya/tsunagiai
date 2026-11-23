@@ -20,6 +20,14 @@ const createdTerminal = () => orcaTerminal("example-api", "zsh", { handle: "term
 const CLAUDE = "Claude を起動";
 const TERMINAL = "ターミナルを開く";
 const SCRATCHPAD = "スクラッチパッド";
+// The AI CLIs that `orca agent installed` lists for a place (A-16), and the row that each makes in the plus.
+const claudeAgent = { id: "claude", name: "Claude", default: true };
+const antigravity = { id: "antigravity", name: "Antigravity", default: false };
+const codex = { id: "codex", name: "Codex", default: false };
+const ANTIGRAVITY = "Antigravity を起動";
+const CODEX = "Codex を起動";
+// The names of the buttons of the open menu of the plus, in order (an icon button by its aria-label, a row by its text).
+const menuItems = () => browser.execute(() => [...document.querySelectorAll('.menu[role="menu"] button')].map((b) => b.getAttribute("aria-label") ?? b.textContent));
 
 const classOf = (selector: string) => browser.execute((s) => document.querySelector(s)!.className, selector);
 // Whether the sidebar icon of Orca is marked as working (the yellow icon that fades; the fade itself is not tested).
@@ -513,6 +521,199 @@ describe("orca", () => {
     await pickItem(TERMINAL);
     expect(await waitForCalls(create)).toEqual([{ path: "/work/example-api", environment: null }]);
     await expect($(".menu")).not.toExist();
+  });
+
+  it("lists the AI CLIs of the place under the line, Claude first with its color and the others with the general icon, and no line when nothing failed", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()), { orca_agents_installed: [antigravity, claudeAgent] });
+    await pickProject("example-api");
+    await pressPlus();
+    expect(await menuItems()).toEqual([TERMINAL, SCRATCHPAD, CLAUDE, ANTIGRAVITY]);
+    expect(await count('.menu[role="menu"] > .menu-icons + [role="separator"] + button')).toBe(1);
+    expect(await count('.menu[role="menu"] button svg')).toBe(4);
+    expect(await count('.menu[role="menu"] .pdot')).toBe(0);
+    const colors = await browser.execute(() => {
+      const probe = document.createElement("i");
+      probe.style.color = "var(--claude)";
+      document.body.append(probe);
+      const claude = getComputedStyle(probe).color;
+      probe.remove();
+      return { claude, icons: [...document.querySelectorAll('.menu[role="menu"] button svg')].map((svg) => getComputedStyle(svg).color) };
+    });
+    expect(colors.icons[2]).toBe(colors.claude);
+    expect(colors.icons[3]).not.toBe(colors.claude);
+    expect(await count(".menu-empty")).toBe(0);
+    expect(await callsOf("orca_agent_launch")).toHaveLength(0);
+    expect(await callsOf("orca_start")).toHaveLength(0);
+  });
+
+  it("has no row of Claude when the place does not list it, and no row at all when it lists none", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()), { orca_agents_installed: [antigravity] });
+    await pickProject("example-api");
+    await pressPlus();
+    expect(await menuItems()).toEqual([TERMINAL, SCRATCHPAD, ANTIGRAVITY]);
+    await browser.keys("Escape");
+    await mock("orca_agents_installed", []);
+    await showAgain();
+    await waitForCalls("orca_agents_installed");
+    await pickProject("example-api");
+    await pressPlus();
+    expect(await menuItems()).toEqual([TERMINAL, SCRATCHPAD]);
+    // Nothing was listed and nothing failed: no line says so.
+    expect(await count(".menu-empty")).toBe(0);
+    expect(await count('.menu[role="menu"] [role="separator"]')).toBe(0);
+  });
+
+  it("starts another AI CLI with orca_agent_launch, once, in the one worktree, with the target the screen shows", async () => {
+    await openOrca(orcaOverview(sample(), worktrees(), studio), { orca_agents_installed: [claudeAgent, antigravity] });
+    const launch = await mock("orca_agent_launch", noPane);
+    const start = await mock("orca_start", noPane);
+    await plus("example-api", ANTIGRAVITY);
+    expect(await waitForCalls(launch)).toEqual([{ path: "/work/example-api", agent: "antigravity", environment: "Studio" }]);
+    expect(await callsOf(start)).toHaveLength(0);
+    await expect($(".orca-dest-pop")).not.toExist();
+    await expect($(".toast")).toHaveText("セッションを始めました。Orca の画面で開けます。");
+    await expect($(".orca-plus")).toBeEnabled();
+    expect(await callsOf(launch)).toHaveLength(1);
+  });
+
+  it("asks which worktree when the project has several before it starts another AI CLI", async () => {
+    await openOrca(orcaOverview(sample(), twoWorktrees()), { orca_agents_installed: [antigravity] });
+    const launch = await mock("orca_agent_launch", noPane);
+    await plusIn("example-app", ANTIGRAVITY, "/work/example-app-b");
+    expect(await waitForCalls(launch)).toEqual([{ path: "/work/example-app-b", agent: "antigravity", environment: null }]);
+  });
+
+  it("follows what another AI CLI started as a plain terminal, by its handle, and keeps the plus disabled meanwhile", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()), { orca_agents_installed: [antigravity] });
+    const launch = await mock("orca_agent_launch", created);
+    await mock("orca_overview", orcaOverview(sample(), worktrees()));
+    await plus("example-api", ANTIGRAVITY);
+    await waitForCalls(launch);
+    await expect($(".toast")).toHaveText("セッションを始めました。一覧に現れるのを待っています…");
+    await expect($(".orca-plus")).toBeDisabled();
+    const read = await mock("orca_terminal_read", ["$ antigravity"]);
+    await mock("orca_overview", orcaOverview(sample(), worktrees(), { terminals: [createdTerminal()] }));
+    await showAgain();
+    expect((await waitForCalls(read))[0]).toEqual({ handle: "term_new_sh" });
+    await expect($('.orca-tabs [data-tab="orca:term_new_sh"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
+    await expect($(".toast")).not.toBeDisplayed();
+    await expect($(".orca-plus")).toBeEnabled();
+  });
+
+  it("follows what another AI CLI started as a Claude row when the list holds it as one", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()), { orca_agents_installed: [antigravity] });
+    const launch = await mock("orca_agent_launch", reply);
+    await mock("orca_overview", orcaOverview(sample(), worktrees()));
+    await plus("example-api", ANTIGRAVITY);
+    await waitForCalls(launch);
+    await expect($(".toast")).toHaveText("セッションを始めました。一覧に現れるのを待っています…");
+    await mock("orca_overview", orcaOverview([...sample(), startedRow()], worktrees()));
+    await showAgain();
+    await expect($('.orca-tabs [data-tab="claude:tab_new:leaf_1"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
+    await expect($(".toast")).not.toBeDisplayed();
+  });
+
+  it("shows the message on a card when starting another AI CLI fails, and can be pressed again", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()), { orca_agents_installed: [antigravity] });
+    const launch = await mock("orca_agent_launch", rejects("Unknown TUI agent: antigravity"));
+    await plus("example-app", ANTIGRAVITY);
+    await waitForCalls(launch);
+    await expect($(CARD)).toHaveText("Unknown TUI agent: antigravity");
+    await expect($(".toast")).not.toBeDisplayed();
+    await expect($(".orca-plus")).toBeEnabled();
+    await expect($('#orca-feed .orca-project[data-key="proj_example-app"]')).toHaveAttribute("aria-pressed", "true");
+    await mock("orca_agent_launch", noPane);
+    await pressPlus();
+    await pickItem(ANTIGRAVITY);
+    expect(await waitForCalls(launch)).toEqual([{ path: "/work/example-app", agent: "antigravity", environment: null }]);
+  });
+
+  it("says in one line that the AI CLIs could not be read, with the reason on a card, and keeps the two icons and no row of an AI CLI", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()), { orca_agents_installed: rejects("orca agent installed: 読めません") });
+    await expect($(CARD)).toHaveText("orca agent installed: 読めません");
+    await pickProject("example-api");
+    await pressPlus();
+    expect(await menuItems()).toEqual([TERMINAL, SCRATCHPAD]);
+    await expect($(".menu .menu-empty")).toHaveText("AI CLI を読み込めませんでした");
+    expect(await count('.menu[role="menu"] > .menu-icons + [role="separator"] + .menu-empty')).toBe(1);
+    // The icons work as always.
+    const create = await mock("orca_terminal_create", noPane);
+    await pickItem(TERMINAL);
+    expect(await waitForCalls(create)).toEqual([{ path: "/work/example-api", environment: null }]);
+  });
+
+  it("reads the AI CLIs of this machine and of the saved environment that is the target, each once, and gives a project the list of its own place", async () => {
+    // example-api is a project of Studio; example-app is on this machine.
+    await openOrca(onThisMachine(orcaOverview(sample(), worktrees(), studio), "example-app"));
+    const read = await mock("orca_agents_installed", holds);
+    await showAgain();
+    // This machine's first, then the target's; the clock asks for no more.
+    expect(await waitForCalls(read, 2)).toEqual([{ environment: null }, { environment: "Studio" }]);
+    await release(read, [claudeAgent, antigravity]);
+    await release(read, [claudeAgent, codex]);
+    await pickProject("example-api");
+    await pressPlus();
+    expect(await menuItems()).toEqual([TERMINAL, SCRATCHPAD, CLAUDE, CODEX]);
+    await browser.keys("Escape");
+    await pickProject("example-app");
+    await pressPlus();
+    expect(await menuItems()).toEqual([TERMINAL, SCRATCHPAD, CLAUDE, ANTIGRAVITY]);
+  });
+
+  it("opens the menu of a place whose AI CLIs were never read only when the read ends", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()), { orca_agents_installed: holds });
+    await waitForCalls("orca_agents_installed");
+    await pickProject("example-api");
+    await browser.execute((id) => window.__e2e_once__(id) && document.querySelector<HTMLElement>(".orca-plus")!.click(), onceId());
+    await browser.pause(500);
+    await expect($(".menu")).not.toExist();
+    await release("orca_agents_installed", [antigravity]);
+    await expect($('.menu[role="menu"]')).toBeDisplayed();
+    expect(await menuItems()).toEqual([TERMINAL, SCRATCHPAD, ANTIGRAVITY]);
+    // One read served the wait: the press did not ask again.
+    expect(await callsOf("orca_agents_installed")).toHaveLength(1);
+  });
+
+  it("does not open the menu that waited when another project was selected meanwhile", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()), { orca_agents_installed: holds });
+    await waitForCalls("orca_agents_installed");
+    await pickProject("example-api");
+    await browser.execute((id) => window.__e2e_once__(id) && document.querySelector<HTMLElement>(".orca-plus")!.click(), onceId());
+    await pickProject("example-app");
+    await release("orca_agents_installed", [antigravity]);
+    await browser.pause(500);
+    await expect($(".menu")).not.toExist();
+  });
+
+  it("reads the AI CLIs when the screen is shown, and neither by the clock nor while another screen is shown", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()), timers({ orcaClock: 1000 }));
+    await waitForCalls("orca_agents_installed");
+    // The clock reads the list a few times: no read of the AI CLIs comes with it.
+    await browser.pause(2500);
+    expect(await callsOf("orca_agents_installed")).toEqual([{ environment: null }]);
+    await $("#nav-mail").click();
+    await browser.pause(2500);
+    expect(await callsOf("orca_agents_installed")).toHaveLength(1);
+    await $("#nav-orca").click();
+    await expect($("#orca")).toBeDisplayed();
+    expect(await waitForCalls("orca_agents_installed", 2)).toEqual([{ environment: null }, { environment: null }]);
+  });
+
+  it("drops a read of the AI CLIs that ends after the screen was left, and reads again when the screen is shown", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()), { orca_agents_installed: holds });
+    await waitForCalls("orca_agents_installed");
+    await $("#nav-mail").click();
+    await release("orca_agents_installed", rejects("読み込めません"));
+    await browser.pause(300);
+    // Nothing is shown for it: no card.
+    expect(await count("#error-cards .error-card")).toBe(0);
+    await $("#nav-orca").click();
+    await expect($("#orca")).toBeDisplayed();
+    await waitForCalls("orca_agents_installed", 2);
+    await release("orca_agents_installed", [antigravity]);
+    await pickProject("example-api");
+    await pressPlus();
+    expect(await menuItems()).toEqual([TERMINAL, SCRATCHPAD, ANTIGRAVITY]);
   });
 
   it("starts Claude at once in the one worktree of the selected project, with no prompt and the target the screen shows", async () => {

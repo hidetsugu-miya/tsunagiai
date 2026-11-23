@@ -1,7 +1,7 @@
 // The Orca screen (A-6, A-8, A-12, A-16, A-17, A-18, A-27): two panes, and the file pane on the right (orca-files.ts, with the history of A-27 in orca-history.ts) when it is shown. The list pane is the projects (a repository of this machine or of a saved environment);
 // the work pane has the sessions of the selected project as tabs, and each tab is a terminal (orca-terminal.ts). The work pane is split into panes (A-17), each with its tabs and its terminal; Rust holds how it is split for each project (orca-panes.ts), and the selected tab is the one shown in the pane that has the focus.
 // A file opened from the file pane is a tab of the strip too, with its editor (orca-editor.ts) in the pane where a terminal would be, and so is the difference of a file from HEAD (A-24, orca-diff.ts), from the menu of the file's row, or of a file of a commit (A-27), from the history, and the definition of a name of the editor (A-34, orca-definition.ts), one tab for a project, that opens in a pane under the pane of the editor, and so are a table and the SQL of a database from the database part of the file pane (A-43, orca-database-tabs.ts).
-// The plus right after the tabs of a pane's strip starts Claude, or opens a terminal, in a worktree of the selected project, and the new tab is selected once it is listed. Nothing about a session is kept here.
+// The plus right after the tabs of a pane's strip starts Claude or another AI CLI of the place (A-16), or opens a terminal, in a worktree of the selected project, and the new tab is selected once it is listed. Nothing about a session is kept here.
 // A saved environment streams the list (`orca_stream_open`: Orca sends each change, and Rust reads the worktrees again every 10 seconds and after a switch of the branch) and nothing here reads it by the clock. This machine's Orca streams it too once the owner has paired the app with it (the card 「このマシンの Orca」 of the settings, `ts/orca-pairing-settings.ts`, which calls `pairingChanged`), also while a saved environment is the target: each place has its stream (A-33);
 // without a pairing, or while its stream cannot connect, this machine's list is read every 10 seconds while the screen is shown and every 60 seconds otherwise, one read at a time, and its terminals are mirrors,
 // and no more once the `orca` command was found missing (showing the screen reads again). Only the first read, the screen being shown, a change of the target and a read after a failure ask for the environments.
@@ -11,6 +11,7 @@
 // While the screen and the file pane are shown, the clock also reads again, every 10 seconds, what the file pane shows and the files and differences that the panes show (`rereadFiles`; A-18, A-24, A-27), without a word.
 // A read in the background swaps the rows in place: the selection and the scroll position stay, and `show()` is never called by it.
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
+import type { OrcaAgent } from "./bindings/OrcaAgent";
 import type { OrcaLocal } from "./bindings/OrcaLocal";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaProject } from "./bindings/OrcaProject";
@@ -26,7 +27,7 @@ import type { PaneOp } from "./bindings/PaneOp";
 import { $, composing, isMac, partMatcher, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
 import { currentFormation, deselectFormation, isChildFolder, isChildSession, isChildWorktree, readForChoice } from "./formation-list.js";
-import { CHEVRON_SVG, CLAUDE_SVG, COLUMNS_SVG, COPY_PATH_SVG, DATABASE_SVG, DEFINITION_SVG, DIFF_SVG, FILE_SVG, FORMATION_SVG, LOCK_SVG, ROWS_SVG, SCRATCHPAD_SVG, svgOf, TERMINAL_SVG } from "./icons.js";
+import { AGENT_SVG, CHEVRON_SVG, CLAUDE_SVG, COLUMNS_SVG, COPY_PATH_SVG, DATABASE_SVG, DEFINITION_SVG, DIFF_SVG, FILE_SVG, FORMATION_SVG, LOCK_SVG, ROWS_SVG, SCRATCHPAD_SVG, svgOf, TERMINAL_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
 import { closeMenu, type MenuItem, openMenu, showMenu } from "./menu.js";
@@ -130,8 +131,12 @@ const closing = new Set<string>();
 let busy = false;
 // The launch or the terminal that was answered: what it started, its pane key and handle (null when Orca's reply gave none), the target and when to stop waiting for its tab. The tab is selected as soon as the list holds it, and no other start is made till then.
 let started: { kind: StartKind; paneKey: string | null; handle: string | null; target: string | null; until: number } | null = null;
-type StartKind = "claude" | "terminal";
+type StartKind = "claude" | "terminal" | "agent";
 const START_WAIT_MS = 30_000;
+// The AI CLIs that each place can start (A-16), by place (null: this machine, else the name of a saved environment): the list, or null when it could not be read. Held only for the places of the screen's lists, and read when the screen is shown, not by the clock.
+const agentLists = new Map<string | null, OrcaAgent[] | null>();
+// The reads on their way, by place: the plus waits for the one of its place when that place was never read, and a read that is not in this map any more (its place left the lists, or a newer read took its turn) is dropped when it ends.
+const agentReads = new Map<string | null, Promise<void>>();
 // The streams of the lists, by place: the name of the saved environment that is the target, and null for this machine's Orca (once it is paired, whatever the target is). A place with none has its list read by the clock.
 // `channel` is the stream's own: an event of another channel is not taken. `down`: it could not connect or lost its connection, so its list is read by the clock and its terminals are mirrors until it sends a list again (a saved environment's is never down: it says so as a failed read).
 interface Stream {
@@ -1182,6 +1187,7 @@ function adopt(read: OrcaOverview) {
   // This machine's stream gives its list: a read of the CLI that comes meanwhile is not taken over it.
   adoptHere(localStreaming() ? undefined : next.local);
   settle();
+  readAgents(false);
 }
 
 // Takes this machine's read beside a saved environment's (A-33): while this machine is the target, or the command is missing, there is none. A read that did not come with one (a poll that failed before it, an event of the stream) leaves what is held,
@@ -1223,7 +1229,7 @@ function settle() {
   claimStarted();
 }
 
-// A start that gave a pane key or a handle waits for its tab: a Claude session's row is matched by either (as the side pane of A-9 does), a terminal by its handle.
+// A start that gave a pane key or a handle waits for its tab: a Claude session's row is matched by either (as the side pane of A-9 does), a terminal by its handle, and an AI CLI's start by both (it is a plain terminal, or a Claude row when it is Claude that runs in it).
 const startWaits = () => started !== null && (started.paneKey !== null || started.handle !== null);
 
 // A start whose tab the read holds now is selected (its project and its tab, so its terminal shows); one that waited too long, even if the read failed, or one for another target, is dropped.
@@ -1247,8 +1253,8 @@ function claimStarted() {
     return;
   }
   if (place.state !== "ready") return;
-  const row = wait.kind === "claude" ? mix.rows.find((r) => (wait.paneKey !== null && r.paneKey === wait.paneKey) || (wait.handle !== null && r.handle === wait.handle)) : undefined;
-  const terminal = wait.kind === "terminal" && wait.handle !== null ? mix.terminals.find((t) => t.handle === wait.handle) : undefined;
+  const row = wait.kind !== "terminal" ? mix.rows.find((r) => (wait.paneKey !== null && r.paneKey === wait.paneKey) || (wait.handle !== null && r.handle === wait.handle)) : undefined;
+  const terminal = wait.kind !== "claude" && wait.handle !== null ? mix.terminals.find((t) => t.handle === wait.handle) : undefined;
   if (row?.paneKey) pickRow(row);
   if (terminal) pickTerminal(terminal);
   if (row || terminal) started = null;
@@ -1538,6 +1544,7 @@ export function openInOrca(paneKey: string | null) {
 // The Orca screen is shown: what was read stays on screen while a new read is on its way.
 export function showOrca() {
   show("orca");
+  readAgents(true);
   forgetFailed.clear();
   noticeKey = feedKey = "";
   draw();
@@ -1723,13 +1730,57 @@ function openTabMenu(anchor: Element, tab: string, pane: string) {
   if (items.length > 0) openMenu(anchor, items);
 }
 
-// The plus (A-16, A-29): a row of the icons of "ターミナルを開く" and "スクラッチパッド" above a line and the row "Claude を起動". The terminal and Claude start in a worktree of the project selected in the list pane, and the scratchpad is a file of that worktree.
-function openStartMenu(anchor: Element) {
+// Reads the AI CLIs of the places of the lists (A-16): this machine, and the target when it is a saved environment that is listed. A place that left the lists is forgotten and its read is dropped; nothing is read while another screen is shown, or the command is missing.
+// A place that was read (well or not) is read again only by `force` (the screen being shown), never by the clock.
+function readAgents(force: boolean) {
+  const want = view === null || view.state === "missing" ? [] : [null, ...(view.target !== null && view.environments.includes(view.target) ? [view.target] : [])];
+  for (const place of [...agentLists.keys(), ...agentReads.keys()]) {
+    if (want.includes(place)) continue;
+    agentLists.delete(place);
+    agentReads.delete(place);
+  }
+  if (!listShown()) return;
+  for (const place of want) if (!agentReads.has(place) && (force || !agentLists.has(place))) readAgentsOf(place);
+}
+
+function readAgentsOf(place: string | null) {
+  const take = (agents: OrcaAgent[] | null, error?: unknown) => {
+    // Dropped: the place left the lists, or a newer read of it took its turn.
+    if (agentReads.get(place) !== read) return;
+    agentReads.delete(place);
+    // The screen was left meanwhile: nothing is kept or shown.
+    if (!listShown()) return;
+    agentLists.set(place, agents);
+    if (agents === null) showFailure("orca", error);
+  };
+  const read: Promise<void> = invoke("orca_agents_installed", { environment: place }).then(
+    (agents) => take(agents),
+    (e) => take(null, e),
+  );
+  agentReads.set(place, read);
+}
+
+// The plus (A-16, A-29): a row of the icons of "ターミナルを開く" and "スクラッチパッド" above a line and the rows of the AI CLIs that the place of the selected project can start ("Claude を起動" first, when it is listed; a line that says so when the list could not be read). The terminal, Claude and the other CLIs start in a worktree of the project selected in the list pane, and the scratchpad is a file of that worktree.
+// A place whose list was never read is waited for first.
+async function openStartMenu(anchor: Element) {
   if (view === null || projectKey === null) return;
+  const from = projectKey;
+  const place = projectPlace(from);
+  if (!agentLists.has(place) && !agentReads.has(place)) readAgents(false);
+  await agentReads.get(place);
+  if (view === null || projectKey !== from) return;
+  const list = agentLists.get(place);
+  if (list === undefined) return;
+  const row = (label: string, icon: string, pick: (worktree: OrcaWorktree) => unknown): MenuItem => ({ label, color: "var(--accent)", icon, current: false, pick: () => void chooseWorktree(anchor, pick) });
+  const rows: MenuItem[] = [
+    ...(list?.some((a) => a.id === "claude") ? [row("Claude を起動", CLAUDE_SVG.replace("<svg ", '<svg class="orca-start-claude" '), (w) => start("claude", w))] : []),
+    ...(list ?? []).filter((a) => a.id !== "claude").map((a) => row(`${a.name} を起動`, AGENT_SVG, (w) => start("agent", w, a.id))),
+  ];
   openMenu(
     anchor,
-    [{ label: "Claude を起動", color: "var(--accent)", icon: CLAUDE_SVG.replace("<svg ", '<svg class="orca-start-claude" '), current: false, pick: () => void chooseWorktree(anchor, (w) => start("claude", w)) }],
+    rows,
     {
+      note: list === null ? "AI CLI を読み込めませんでした" : undefined,
       icons: [
         { label: "ターミナルを開く", icon: TERMINAL_SVG, pick: () => void chooseWorktree(anchor, (w) => start("terminal", w)) },
         { label: "スクラッチパッド", icon: SCRATCHPAD_SVG, pick: () => void chooseWorktree(anchor, (w) => askScratchpad(anchor, w.path, placeOf(w))) },
@@ -1763,8 +1814,8 @@ function askScratchpad(anchor: Element, path: string, environment: string | null
   });
 }
 
-// Starts Claude (with no first prompt: the user types it in the terminal) or a plain terminal in the worktree, once; a failure shows its message. The project and its tab stay selected, and the new tab is followed: once the list holds it, it is selected.
-async function start(kind: StartKind, worktree: OrcaWorktree) {
+// Starts Claude (with no first prompt: the user types it in the terminal), another AI CLI (`agent`, A-16) or a plain terminal in the worktree, once; a failure shows its message. The project and its tab stay selected, and the new tab is followed: once the list holds it, it is selected.
+async function start(kind: StartKind, worktree: OrcaWorktree, agent?: string) {
   if (busy || startWaits() || view === null) return;
   const { path } = worktree;
   const target = placeOf(worktree);
@@ -1773,7 +1824,7 @@ async function start(kind: StartKind, worktree: OrcaWorktree) {
   started = null;
   draw();
   try {
-    const launched = await invoke(kind === "claude" ? "orca_start" : "orca_terminal_create", { path, environment: target });
+    const launched = kind === "agent" ? await invoke("orca_agent_launch", { path, agent: agent!, environment: target }) : await invoke(kind === "claude" ? "orca_start" : "orca_terminal_create", { path, environment: target });
     // A selection made while the start was on its way is not left for the new tab.
     if (projectKey === from && selectedTab() === tab) {
       started = { kind, paneKey: launched.paneKey, handle: launched.handle, target, until: Date.now() + START_WAIT_MS };
@@ -1997,7 +2048,7 @@ export function initOrca() {
   initPaneTree($("orca-panes"), {
     plus: (anchor, pane) => {
       focusPane(pane);
-      openStartMenu(anchor);
+      void openStartMenu(anchor);
     },
     files: toggleFilesAndDraw,
     list: toggleList,
