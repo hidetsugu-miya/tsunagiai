@@ -2,7 +2,7 @@
 // A file is saved by itself: once the typing has stopped for the time of the settings, the text goes to Rust with the signature of the text that was read, and Orca writes only if the disk still holds it.
 // When it does not (the file was changed elsewhere, or is gone), nothing is written and the heading says so; the text stays in the editor and is not tried again until the tab is opened anew.
 // Typing that still waits for its timer when the window is closed is sent at once (`pagehide`).
-// A file that a pane shows is read again by the clock of the Orca screen (whether the file pane is shown or not), and when it is shown again after it was out of the page (`refreshEditors`, `showEditors`): only a file with no typing that waits for the disk, and its text is replaced, with the caret and the scroll kept, only when the disk holds another text than the one that was read. A read that fails says nothing.
+// A file that a pane shows is read again at once when the watch of the disk tells a change (`rereadEditors`, A-18), by the clock of the Orca screen where the disk is not watched (whether the file pane is shown or not), and when it is shown again after it was out of the page (`refreshEditors`, `showEditors`): only a file with no typing that waits for the disk, and its text is replaced, with the caret and the scroll kept, only when the disk holds another text than the one that was read. A read that fails says nothing.
 // A file whose language a language server takes asks for its definitions (A-34): the right button with the Command key on a name sends the editor's text, with the place of the character under the mouse, to the screen (`definition`), which shows the answer in the definition tab under the pane of the editor. A file the definition put outside the worktree (a gem) is a file of this editor too, read only (`outside`: its `relative` is the server's absolute path, Rust reads it by `lsp_read_outside`, and nothing is saved), and a place of a definition is gone to by `goTo`.
 // While the Command key is down and the mouse stays on a name for LINK_WAIT_MS, the editor asks whether the name has a definition (`lsp_definition_exists`, only of a server that is running) and draws an underline under it in the accent color, in the box of the text under the layer of colors, with the pointer for the cursor (A-34, `showLink`, `hideLink`). The answer is kept by the name's range until the text changes; the key's release, the mouse leaving the editor, typing and the scroll take the underline away.
 // The line of the caret (the source) and the paragraph of the caret (the rich view) have a faint band under the text, drawn here (A-18, A-26): `placeBand` and `placeRichBand`, called for each file at each change of the selection of the page and by the events of the text area.
@@ -70,6 +70,8 @@ interface EditorFile {
   held: boolean;
   // The quiet read (`reread`) is on its way; the file was put in a pane once, and was taken out of the page after that (it is read again when it is put back).
   rereading: boolean;
+  // A change that the watch of the disk told (A-18) came while the quiet read was on its way: it is read once more when that ends.
+  again: boolean;
   placed: boolean;
   out: boolean;
   // Focus the text when it is first shown.
@@ -828,8 +830,13 @@ const canReread = (f: EditorFile) => f.read === "ready" && !f.outside && !f.imag
 
 // Reads the file again without a word (the clock, and a tab shown again). The signature of the read says whether the disk still holds the text that was read: when it does, nothing is drawn. Another text takes the place of the one shown, with the caret, the selection and the scroll where they were (the rich view of a Markdown file is drawn again and keeps its scroll).
 // Typing that came while the read was on its way keeps the text as it is, saved by then or not, and a failure keeps what is shown.
-async function reread(f: EditorFile) {
-  if (f.rereading || !canReread(f)) return;
+// `again` (a change that the watch of the disk told) makes a read that is on its way be followed by one more, so that a change that came meanwhile is not lost.
+async function reread(f: EditorFile, again = false) {
+  if (f.rereading) {
+    f.again ||= again;
+    return;
+  }
+  if (!canReread(f)) return;
   const relative = f.relative;
   // A save that ends while the read is on its way gives the file another signature: the answer is then older than the disk.
   const signature = f.signature;
@@ -863,6 +870,10 @@ async function reread(f: EditorFile) {
     // What is shown stays.
   } finally {
     f.rereading = false;
+    if (f.again) {
+      f.again = false;
+      void reread(f);
+    }
   }
 }
 
@@ -941,7 +952,7 @@ function create(id: string, target: string | null, project: string, path: string
   const html = !outside && /\.html$/i.test(nameOf(relative));
   const image = !outside && IMAGE_NAME.test(nameOf(relative));
   body.hidden = image;
-  const f: EditorFile = { id, target, project, path, relative, outside, language: "", server, jump: null, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, rereading: false, placed: false, out: false, wantFocus: true, highlight: null, cancelPaint: null, band, richBand, bandLine: 0, bandCaret: -1, bandEdits: 0, edits: 0, bandMetrics: null, richFrame: null, markdown: false, mode: html ? "preview" : "rich", modes, sourceButton, richButton, html, image, picture, previewButton, reloadButton, preview, previewTurn: 0, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, area, code, nums, numbers, gutter, lines: 1, state, where, note, link, hover: null, linkTimer: null, linkSeq: 0, linkBox: null, known: new Map(), knownEdits: 0 };
+  const f: EditorFile = { id, target, project, path, relative, outside, language: "", server, jump: null, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, rereading: false, again: false, placed: false, out: false, wantFocus: true, highlight: null, cancelPaint: null, band, richBand, bandLine: 0, bandCaret: -1, bandEdits: 0, edits: 0, bandMetrics: null, richFrame: null, markdown: false, mode: html ? "preview" : "rich", modes, sourceButton, richButton, html, image, picture, previewButton, reloadButton, preview, previewTurn: 0, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, area, code, nums, numbers, gutter, lines: 1, state, where, note, link, hover: null, linkTimer: null, linkSeq: 0, linkBox: null, known: new Map(), knownEdits: 0 };
   area.oninput = () => {
     f.edits++;
     hideLink(f);
@@ -1096,9 +1107,20 @@ export async function holdFiles(target: string | null, project: string, path: st
   };
 }
 
-// Reads again, without a word, the files that the panes show now (the clock of the Orca screen, and a branch that changed).
-export function refreshEditors() {
-  for (const f of files.values()) if (f.el.isConnected) void reread(f);
+// Reads again, without a word, the files that the panes show now (the clock of the Orca screen, and a branch that changed), except those of the worktrees that `skip` names: their disk is watched (A-18).
+export function refreshEditors(skip: (target: string | null, path: string) => boolean = () => false) {
+  for (const f of files.values()) if (f.el.isConnected && !skip(f.target, f.path)) void reread(f);
+}
+
+// The worktrees (target and path) whose files the panes show now, whose disk the watch of Orca tells about (A-18).
+export function editorWorktrees() {
+  return [...files.values()].filter((f) => f.el.isConnected && !f.outside).map((f) => ({ target: f.target, path: f.path }));
+}
+
+// Reads again, without a word, the files of the worktree that the panes show now and that `touched` names (it is given the absolute path of each), because the watch of the disk told a change (A-18).
+export function rereadEditors(target: string | null, path: string, touched: (absolute: string) => boolean) {
+  const root = path.replace(/\/+$/, "");
+  for (const f of files.values()) if (f.el.isConnected && f.target === target && f.path === path && touched(`${root}/${f.relative}`)) void reread(f, true);
 }
 
 // Shows each file of `placements` in its host element and takes every other file out of the page (it keeps its text). A file that was out of the page and is put back is read again.

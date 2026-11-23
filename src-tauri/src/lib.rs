@@ -427,6 +427,8 @@ pub fn run() {
             orca_stream::orca_stream_close,
             orca_stream::orca_stream_terminal,
             orca_stream::orca_stream_terminal_close,
+            orca_stream::orca_stream_files,
+            orca_stream::orca_stream_files_close,
             orca_stream::orca_stream_viewport,
             orca_stream::orca_stream_input,
             orca_panes::orca_panes,

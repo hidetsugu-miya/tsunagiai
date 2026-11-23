@@ -1,6 +1,6 @@
 // The diff tab of the Orca screen (A-24): the difference of a file of a worktree from HEAD, as a tab of the work pane, side by side (HEAD on the left, the working tree on the right, the numbers of the lines between them) or in one column. A file of a commit in the history (A-27) opens the same tab: the parent on the left, the commit on the right, and the short id of the commit in the heading.
 // Rust reads the two texts and compares them (`orca_file_diff`, and `orca_commit_file_diff` for a commit): the rows of both views, the blocks of changes and the language to color by; this module draws them, colors the text with the highlighter of the editor (A-21), and takes the presses of the buttons of the tab.
-// A tab of a difference from HEAD that a pane shows is read again by the clock of the Orca screen (whether the file pane is shown or not), and when it is shown again after it was out of the page (`refreshDiffs`, `showDiffs`): the rows are drawn again only when the answer is not the one held, and a read that fails keeps what is shown. A file of a commit does not change and is not read again.
+// A tab of a difference from HEAD that a pane shows is read again by the clock of the Orca screen (whether the file pane is shown or not), at once when the watch of the disk tells a change of its worktree (`rereadDiffs`, A-24), and when it is shown again after it was out of the page (`refreshDiffs`, `showDiffs`): the rows are drawn again only when the answer is not the one held, and a read that fails keeps what is shown. A file of a commit does not change and is not read again.
 // The tabs are kept in memory only, by target and project, as the tabs of the work pane (their ids are `diff:{n}`), as the files of the editor are (`file:{n}`). The view chosen (side by side or in one column) is one choice for all the tabs.
 import type { OrcaDiffRow } from "./bindings/OrcaDiffRow";
 import type { OrcaFileDiff } from "./bindings/OrcaFileDiff";
@@ -40,6 +40,8 @@ interface DiffTab {
   seq: number;
   // The quiet read (`reread`) is on its way; the tab was put in a pane once, and was taken out of the page after that (it is read again when it is put back).
   rereading: boolean;
+  // A change that the watch of the disk told (A-24) came while the quiet read was on its way: it is read once more when that ends.
+  again: boolean;
   placed: boolean;
   out: boolean;
   cancelColor: (() => void) | null;
@@ -200,8 +202,12 @@ function adopt(d: DiffTab, diff: OrcaFileDiff, first: boolean) {
 }
 
 // Reads the difference from HEAD again without a word (the clock, and a tab shown again): an answer that is the one held draws nothing, another is drawn in place, and a failure keeps what is shown. Nothing is asked for a file of a commit, while a read of the tab is on its way, or twice at once; an answer that a later read of the tab overtook is dropped.
-async function reread(d: DiffTab) {
-  if (d.commit !== null || d.read === "loading" || d.rereading) return;
+async function reread(d: DiffTab, again = false) {
+  if (d.commit !== null || d.read === "loading") return;
+  if (d.rereading) {
+    d.again ||= again;
+    return;
+  }
   const mine = d.seq;
   d.rereading = true;
   try {
@@ -213,6 +219,10 @@ async function reread(d: DiffTab) {
     // What is shown stays.
   } finally {
     d.rereading = false;
+    if (d.again) {
+      d.again = false;
+      void reread(d);
+    }
   }
 }
 
@@ -266,7 +276,7 @@ function create(id: string, target: string | null, project: string, path: string
   const rows = tag("div", "orca-diff-rows");
   rows.hidden = true;
   el.append(head, note, rows);
-  const d: DiffTab = { id, target, project, path, relative, commit, read: "loading", diff: null, oldHtml: [], newHtml: [], current: -1, scroll: 0, stale: false, pending: false, seq: 0, rereading: false, placed: false, out: false, cancelColor: null, el, note, count, rows, previous, next, view, reload };
+  const d: DiffTab = { id, target, project, path, relative, commit, read: "loading", diff: null, oldHtml: [], newHtml: [], current: -1, scroll: 0, stale: false, pending: false, seq: 0, rereading: false, again: false, placed: false, out: false, cancelColor: null, el, note, count, rows, previous, next, view, reload };
   previous.onclick = () => goTo(d, d.current - 1);
   next.onclick = () => goTo(d, d.current + 1);
   reload.onclick = () => void load(d);
@@ -317,6 +327,16 @@ export function closeDiff(id: string) {
 // Reads again, without a word, the differences that the panes show now (the clock of the Orca screen, and a branch that changed).
 export function refreshDiffs() {
   for (const d of diffs.values()) if (d.el.isConnected) void reread(d);
+}
+
+// The worktrees (target and path) whose differences the panes show now, whose disk the watch of Orca tells about (A-24). A difference of a commit does not change.
+export function diffWorktrees() {
+  return [...diffs.values()].filter((d) => d.el.isConnected && d.commit === null).map((d) => ({ target: d.target, path: d.path }));
+}
+
+// Reads again, without a word, the differences of the worktree that the panes show now, because the watch of the disk told a change (A-24).
+export function rereadDiffs(target: string | null, path: string) {
+  for (const d of diffs.values()) if (d.el.isConnected && d.target === target && d.path === path) void reread(d, true);
 }
 
 // Shows each diff of `placements` in its host element and takes every other diff out of the page (it keeps its rows). A diff that was out of the page and is put back is read again.
