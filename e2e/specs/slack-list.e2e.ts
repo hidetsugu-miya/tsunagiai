@@ -2167,17 +2167,18 @@ describe("slack list: the history of a channel (S-20)", () => {
       const rows = () => [timelineMessage(oldTs, "Bob Example", "dev", "old"), ...reacted()];
       const sectionNames = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>(".emoji-pop .emoji-sec")].filter((s) => !s.hidden).map((s) => s.querySelector("h3")!.textContent));
       // `frequent`: what slack_emoji_frequent answers, mocked after the history is open (booting reloads the page and clears an earlier mock); `extra` is the number of cells of the section that this makes.
-      const openPicker = async (row: number, extra = 0, frequent?: string[]) => {
+      // `list` is the catalog the picker reads, and `base` the number of cells it makes without よく使う.
+      const openPicker = async (row: number, extra = 0, frequent?: string[], list = catalog(), base = 4) => {
         const history = await openHistory(rows());
         await pressChannel();
         await waitForCalls(history);
         await waitForCount("#sc-feed .reaction", 2);
-        const list = await mock("slack_emoji_catalog", catalog());
+        const listed = await mock("slack_emoji_catalog", list);
         const used = frequent ? await mock("slack_emoji_frequent", frequent) : "slack_emoji_frequent";
         await addButton(row);
         await expect($(".emoji-pop")).toBeDisplayed();
-        await waitForCount(".emoji-pop .emoji-cell", 4 + extra);
-        return { history, list, used };
+        await waitForCount(".emoji-pop .emoji-cell", base + extra);
+        return { history, list: listed, used };
       };
 
       it("opens from the button of a message with reactions and of one without, asks for the list of the workspace, and does not open the row's thread", async () => {
@@ -2203,6 +2204,14 @@ describe("slack list: the history of a channel (S-20)", () => {
         // The section narrows with the text, like the others.
         await $(".emoji-pop input").setValue("EYE");
         expect(await cellNames()).toEqual(["eyes", "eyes"]);
+      });
+
+      it("leaves out the names the list lacks before it cuts よく使う at 24, so that the section keeps 24 cells", async () => {
+        const known = Array.from({ length: 30 }, (_, i) => `e${i}`);
+        const lacking = Array.from({ length: 10 }, (_, i) => `gone${i}::skin-tone-2`);
+        // The names Rust gives are the lacking ones first, then the known ones: all of them, more than 24.
+        await openPicker(1, 24, [...lacking, ...known], emojiCatalog(known.map((n) => [n, "🎉"] as [string, string]), [["partyparrot", "https://emoji.slack-edge.com/T1/partyparrot/abc.gif"]]), 31);
+        expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>(".emoji-pop .emoji-sec")[0].querySelectorAll<HTMLElement>(".emoji-cell")].map((c) => c.dataset.name))).toEqual(known.slice(0, 24));
       });
 
       it("has no よく使う when Rust gives no name or fails, and the other sections are still listed", async () => {

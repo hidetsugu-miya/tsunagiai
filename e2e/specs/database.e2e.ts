@@ -3451,6 +3451,47 @@ describe("database: terminal pane, terminals", () => {
     expect((await callsOf("orca_terminal_read"))[0]).toEqual({ handle: zsh });
   });
 
+  it("sends a file: link ⌘+clicked in the terminal to orca_open_url, and asks Rust for no path inside the worktree (A-8)", async () => {
+    await openPane();
+    const create = await mock("orca_terminal_create", created);
+    const fileUri = `file://${apiPath}/tmp/page.html`;
+    await mock("orca_terminal_read", ["$ open", `\x1b]8;;${fileUri}\x1b\\pagelink\x1b]8;;\x1b\\`]);
+    await pick(apiPath);
+    await waitForCalls(create);
+    await waitScreen("pagelink");
+    const relative = await mock("orca_link_relative", "tmp/page.html");
+    const browserOpen = await mock("orca_file_open_in_browser", null);
+    const open = await mock("orca_open_url", null);
+    const at = await browser.execute((text) => {
+      const walker = document.createTreeWalker(document.querySelector(".database-terminal-term .xterm-rows")!, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const found = node.textContent!.indexOf(text);
+        if (found < 0) continue;
+        const range = document.createRange();
+        range.setStart(node, found);
+        range.setEnd(node, found + text.length);
+        const box = range.getBoundingClientRect();
+        return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+      }
+      throw new Error(`no "${text}" on the screen`);
+    }, "pagelink");
+    const mouse = (type: string) =>
+      browser.execute(
+        (t, point) => {
+          document.querySelector(".database-terminal-term .xterm-screen")!.dispatchEvent(new MouseEvent(t, { clientX: point.x, clientY: point.y, button: 0, metaKey: true, bubbles: true, cancelable: true }));
+        },
+        type,
+        at,
+      );
+    await mouse("mousemove");
+    await browser.pause(100);
+    await mouse("mousedown");
+    await mouse("mouseup");
+    expect(await waitForCalls(open)).toEqual([{ url: fileUri }]);
+    expect(await callsOf(relative)).toEqual([]);
+    expect(await callsOf(browserOpen)).toEqual([]);
+  });
+
   it("streams the terminal of a saved environment and draws what Orca sends", async () => {
     await openPane(placedOverview([], worktreesOf(), studio));
     await waitForCalls("orca_stream_open");

@@ -136,6 +136,8 @@ const shown = new Set<string>();
 // The owner of each terminal shown: the Orca screen, or a pane of A-9.
 const owners = new Map<string, string>();
 const ORCA_SCREEN = "orca";
+// The owners that show a terminal on the development screen (A-8): the Orca screen, the modal of A-40 (`ts/orca-peek.ts`) and the panes of the formations (A-37, `ts/formation.ts` and `ts/formation-flow.ts`). A `file:` link opens a file there only, as the editor of that screen is where it goes.
+const DEVELOPMENT_OWNERS = new Set([ORCA_SCREEN, "orca-peek", "formation-screen", "formation-session"]);
 let focusedId: string | null = null;
 // The host elements that are watched for their size.
 const watched = new Set<HTMLElement>();
@@ -144,7 +146,7 @@ let streamSeq = 0;
 // The host elements that take files already.
 const listening = new WeakSet<HTMLElement>();
 let onError: (e: unknown) => void = () => {};
-// What a ⌘+click on a `file:` link does (A-8): the Orca screen opens the file of the terminal's worktree (`initOrcaTerminal`).
+// What a ⌘+click on a `file:` link does (A-8): the development screen opens the file of the terminal's worktree (`initOrcaTerminal`).
 let onFileLink: (source: TermSource, uri: string) => void = () => {};
 // Ghostty's settings as imported, null before the first import.
 let settings: TerminalSettings | null = null;
@@ -319,10 +321,10 @@ function newInstance(source: TermSource, owner: string): Instance {
   el.className = "orca-term-box";
   el.hidden = true;
   stash().append(el);
-  // The click on a link: only ⌘ with the left button opens it, and the selection goes. A `file:` link of a terminal that has a worktree goes to the Orca screen (A-8); any other link goes to Rust, which opens http and https URLs and refuses the others (an OSC 8 link may name any: xterm.js drops a non-http one before this unless `allowNonHttpProtocols` is set, as Orca sets it).
+  // The click on a link: only ⌘ with the left button opens it, and the selection goes. A `file:` link of a terminal that has a worktree and is shown on the development screen goes to that screen (A-8, `DEVELOPMENT_OWNERS`); any other link, a `file:` link of a terminal of another screen (the database screen's, say) included, goes to Rust, which opens http and https URLs and refuses the others (an OSC 8 link may name any: xterm.js drops a non-http one before this unless `allowNonHttpProtocols` is set, as Orca sets it).
   const open = (event: MouseEvent, uri: string) => {
     if (!event.metaKey || event.ctrlKey || event.altKey || event.button !== 0) return;
-    if (FILE_LINK.test(uri) && instance.source.path !== "") onFileLink(instance.source, uri);
+    if (FILE_LINK.test(uri) && instance.source.path !== "" && DEVELOPMENT_OWNERS.has(instance.owner)) onFileLink(instance.source, uri);
     else invoke("orca_open_url", { url: uri }).catch(onError);
     term.clearSelection();
   };

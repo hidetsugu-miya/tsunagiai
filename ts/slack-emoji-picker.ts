@@ -20,6 +20,9 @@ export type PickerOptions = {
 // How long a workspace's list is kept (Rust keeps the custom emoji for as long).
 const CATALOG_TTL = 60 * 60 * 1000;
 
+// How many cells よく使う holds (8 in a row, 3 rows).
+const FREQUENT_MAX = 24;
+
 // The cells of one section: the grid, which is moved from one picker to the next, and the cells with their names in lower case.
 type Cell = { name: string; node: HTMLElement };
 type Part = { grid: HTMLElement; cells: Cell[] };
@@ -184,13 +187,13 @@ export function openEmojiPicker(anchor: Element, teamId: string, options: Picker
   showMenu(anchor, pop);
   input.focus();
   status.textContent = "読み込んでいます…";
-  // The names Rust gives are the most used first; one that the list no longer has (a custom emoji that was deleted) is left out, and a failed read leaves the section out.
+  // The names Rust gives are the most used first, all of them; one that the list does not hold (a skin tone name, a custom emoji that was deleted) is left out before the cut at 24, and a failed read leaves the section out.
   const used = invoke("slack_emoji_frequent", { teamId }).catch((): string[] => []);
   Promise.all([catalogOf(teamId), used]).then(
     ([built, names]) => {
       if (!pop.isConnected) return;
       status.hidden = true;
-      fill(frequent, partOf(names.flatMap((n) => built.byName.get(n) ?? [])));
+      fill(frequent, partOf(names.flatMap((n) => built.byName.get(n) ?? []).slice(0, FREQUENT_MAX)));
       fill(custom, built.custom);
       fill(standard, built.standard);
       filter();
