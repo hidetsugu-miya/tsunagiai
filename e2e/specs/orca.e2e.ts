@@ -3414,6 +3414,37 @@ describe("orca: split panes (A-17)", () => {
     expect((await callsOf(panes)).filter((c) => (c as { op: { kind: string } | null }).op?.kind === "select")).toEqual([]);
   });
 
+  it("makes the iframe of an HTML preview take no pointer while a tab or a divider is dragged, and again when the drag ends", async () => {
+    const page: OrcaFileText = { content: "<h1>見出し</h1>\n", crlf: false, signature: "sig-1", language: "html", highlight: null };
+    const preview = "file:1";
+    await openSplit(overview(), layout(row(pane("p1", [claude, bash, preview], preview), pane("p2", [zsh])), "p1"), {
+      orca_files_list: { entries: [], total: 0 },
+      orca_files_ignored: [],
+      orca_file_read: page,
+      orca_file_preview_url: "http://127.0.0.1:12345/tok/page.html",
+      orca_preview_check: null,
+    });
+    expect(await askScreen("write", "preview-open", { path: "/work/example-app", relative: "page.html" })).toEqual({ ok: true });
+    await waitForCount(".orca-edit-preview iframe", 1);
+    const pointer = () => browser.execute(() => getComputedStyle(document.querySelector(".orca-edit-preview iframe")!).pointerEvents);
+    expect(await pointer()).toBe("auto");
+    // A tab held over another pane: the page in the frame is of another origin, so a release over it would never reach this document.
+    await drag(preview, "p2", [0.5, 0.5], true);
+    await expect($(".orca-drop")).toBeDisplayed();
+    expect(await pointer()).toBe("none");
+    await browser.execute(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    await waitForCount(".orca-drop", 0);
+    expect(await pointer()).toBe("auto");
+    // A divider held, and its cancel.
+    await onDivider(0, 0.1, ["pointerdown", "pointermove"]);
+    expect(await pointer()).toBe("none");
+    await onDivider(0, 0.1, ["pointercancel"]);
+    expect(await pointer()).toBe("auto");
+    // A divider released.
+    await onDivider(0, 0.1, ["pointerdown", "pointermove", "pointerup"]);
+    expect(await pointer()).toBe("auto");
+  });
+
   it("selects a tab of a pane by pressing it, and gives a pane the focus by pressing it", async () => {
     await openSplit();
     const panes = await mock("orca_panes", focusedOn("p1", bash));
