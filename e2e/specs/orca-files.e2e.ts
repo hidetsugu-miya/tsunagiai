@@ -4911,7 +4911,7 @@ describe("orca: files and editor (A-18)", () => {
       await expect($(CARDS)).not.toExist();
     });
 
-    it("reads of the tree only the folders that hold a path that changed and are not in an ignored folder, and the changes of one second together (A-18)", async () => {
+    it("reads of the tree only the folders that hold a path that changed or lie above it, not those in an ignored folder, and the changes of one second together (A-18)", async () => {
       await openStreamed();
       await waitForCalls("orca_stream_files");
       await sendFiles({ kind: "ready" });
@@ -4923,24 +4923,61 @@ describe("orca: files and editor (A-18)", () => {
       await mock("orca_files_list", dirOf("target", [["debug", true, true]]));
       await row("target").click();
       await waitForCount("#orca-files-tree .orca-file", 6);
-      const list = await mock("orca_files_list", dirOf("src", [["lib.rs", false], ["new.rs", false]]));
+      const entries = dirOf("src", [["lib.rs", false], ["new.rs", false]]);
+      const list = await mock("orca_files_list", entries);
       const folders = async () => (await callsOf(list)).map((call) => (call as { dir: string }).dir).sort();
-      // A change in an ignored folder, and in a folder that was never read, reads nothing.
-      await changed(`${WORK}/target/x.o`, `${WORK}/other/deep.rs`);
+      // A change in an ignored folder reads nothing, the folders above it either.
+      await changed(`${WORK}/target/x.o`);
       await browser.pause(1300);
       expect(await callsOf(list)).toEqual([]);
-      // A change in a folder that was read reads that folder alone.
-      await changed(`${WORK}/src/new.rs`);
+      // A change in a folder that was never read reads the nearest folders above it that were read: here the root.
+      await changed(`${WORK}/other/deep.rs`);
       await waitForCalls(list);
-      expect(await folders()).toEqual(["src"]);
+      await browser.pause(1300);
+      expect(await folders()).toEqual([""]);
+      // A change in a folder that was read reads that folder and the folders above it.
+      await mock("orca_files_list", entries);
+      await changed(`${WORK}/src/new.rs`);
+      await waitForCalls(list, 2);
+      expect(await folders()).toEqual(["", "src"]);
       // The changes that come in the next second wait and are read together, each folder once.
       await changed(`${WORK}/x.rs`);
       await changed(`${WORK}/src/y.rs`, `${WORK}/src/z.rs`);
       await browser.pause(250);
-      expect(await folders()).toEqual(["src"]);
-      await waitForCalls(list, 3);
+      expect(await folders()).toEqual(["", "src"]);
+      await waitForCalls(list, 4);
       await browser.pause(300);
-      expect(await folders()).toEqual(["", "src", "src"]);
+      expect(await folders()).toEqual(["", "", "src", "src"]);
+    });
+
+    it("reads the root for a file that changed in an open folder or in a folder never read, so that the row of the folder gets its mark (A-18, A-39)", async () => {
+      await openStreamed();
+      await waitForCalls("orca_stream_files");
+      await sendFiles({ kind: "ready" });
+      await browser.pause(500);
+      const mark = () => browser.execute(() => document.querySelector<HTMLElement>('.orca-file[data-path="src"]')?.dataset.change ?? null);
+      // The folder src is closed and was never read: a file deep in it changes, and the root is read, with the question of its marks.
+      const list = await mock("orca_files_list", root());
+      const asked = await mock("orca_files_changes", [change("src", "changed")]);
+      await changed(`${WORK}/src/deep/x.rs`);
+      await waitForCalls(list);
+      await browser.waitUntil(async () => (await mark()) === "changed", { timeoutMsg: "the closed folder never got its mark" });
+      expect(await callsOf(list)).toEqual([{ path: WORK, dir: "", ignored: false, environment: "Studio" }]);
+      expect(((await callsOf(asked)) as { paths: string[] }[])[0].paths).toContain("src");
+      // The folder src is open and read: a file in it changes, and src and the root are read, so the mark of src is asked again and goes.
+      await mock("orca_files_list", dirOf("src", [["lib.rs", false]]));
+      await row("src").click();
+      await browser.pause(1300);
+      const again = await mock("orca_files_list", holds);
+      await mock("orca_files_changes", []);
+      await changed(`${WORK}/src/lib.rs`);
+      // The root is read first, alone, and then src.
+      await waitForCalls(again);
+      await release(again, root());
+      await waitForCalls(again, 2);
+      await release(again, dirOf("src", [["lib.rs", false]]));
+      expect((await callsOf(again)).map((call) => (call as { dir: string }).dir)).toEqual(["", "src"]);
+      await browser.waitUntil(async () => (await mark()) === null, { timeoutMsg: "the mark of the folder never went" });
     });
 
     it("reads by the clock a file under node_modules and the tree while a folder of node_modules is open, though the watch is ready (A-18)", async () => {
