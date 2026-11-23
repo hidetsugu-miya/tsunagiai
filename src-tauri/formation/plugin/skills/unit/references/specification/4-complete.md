@@ -47,7 +47,7 @@ You have a folder for `{my repo}` (`{folder}`) and for the docs repository (`{do
 
 For each target, check the folder: it is on `{base branch}` (`git -C "{t}" branch --show-current`), it is clean, and `git -C "{t}" pull --ff-only origin "{base branch}"` succeeds. A target that fails a check is recorded as `失敗` with the message, and left out of the rest of this step.
 
-Launch one `feature-dev:code-implementer` for each remaining target, all in one message (they work in different trees), with `work_kind: initial`, `repo_root: {t}`, `test_policy: direct`, and this `work_content`:
+Launch one `feature-dev:code-implementer` for each remaining target, all in one message (they work in different trees), with `work_kind: initial`, `repo_root: {t}`, and this `work_content`:
 
 - Purpose: add comments that refer to the specification files to the places in `{t}` that the specification names (entry points, class and hook names).
 - Constraints: follow the form of such a reference that the conventions of `{t}` or of `{spec repo}` (`AGENTS.md`, `CLAUDE.md`, `.claude/rules/`) set, or that existing references in `{t}` already use, and point at those sources instead of copying them. Change nothing when none of them sets a form, or when the specification names no place in `{t}`. Change comments only, with no change of behavior; regenerate a generated file only when the repository's own tooling requires it for a comment.

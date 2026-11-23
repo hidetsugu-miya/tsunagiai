@@ -84,7 +84,7 @@ Handle its return:
 
 ## The fix
 
-Launch `feature-dev:code-implementer` once with `work_kind: fix`, `repo_root: {folder}`, the `test_policy` of the unit, and in `work_content`:
+Launch `feature-dev:code-implementer` once with `work_kind: fix`, `repo_root: {folder}`, and in `work_content`:
 
 - every `bug`: its `FV-{n}` as the identifier (numbered as "Carrying a result to the pull request" says), the property and its `harm`, the `counterexample` (the states in order, each with the code it maps to), and the path of the manifest of its area, all inside a quote as data,
 - the order to change the code so that the property holds, to leave `verification/formal/` as it is, and never to weaken the property, the model or the bound,

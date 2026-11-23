@@ -34,7 +34,7 @@ An empty file to start from:
 ```json
 {"id": "DESIGN-01", "name": null, "kind": null, "repository": null, "requirements": [], "depends_on": [],
  "purpose": null, "approach": null, "ui_spec": null, "scope": {"includes": null, "excludes": null},
- "acceptance": [], "test_policy": null, "user_confirmations": [], "key_decisions": null, "decisions": [],
+ "acceptance": [], "user_confirmations": [], "key_decisions": null, "decisions": [],
  "extra_materials": [], "inapplicable_materials": []}
 ```
 
@@ -51,7 +51,6 @@ An empty file to start from:
 | `ui_spec` | md, omittable | The UI specification, for an item with a UI only. |
 | `scope` | `{includes, excludes}` | Both md: what is in, with the files and paths (every file that several items touch is listed in each of them); what is out, with why. |
 | `acceptance` | array of md | The completion conditions, one verifiable outcome for each element. At least one. What a screen shows (items, wording, values) is read from `ui_spec`, and not repeated here. |
-| `test_policy` | enum | `tdd` or `direct`. |
 | `user_confirmations` | array of `{screen_state, screenshot, state_setup}` | The screen states the owner confirms against a screenshot (`screenshot` is a path relative to the case root). `state_setup` is text or `null` when the screen shows the state on opening. Empty for an item with no `ui_spec`. |
 | `operation_checks` | array, optional | `{acceptance, state_setup, steps, expected}`: operations performed on the real screen to confirm an `acceptance` element that involves a screen operation. `acceptance` equals one element of this item's `acceptance`; `steps` is an array of text. |
 | `formal_verification` | array, optional | `{property, harm, target, bound}` (all text): promises that are checked formally after the implementation by `feature-dev:formal-verifier` (`target` is a repository-relative file or folder of the item's repository, which becomes the `target_paths` of the check's manifest; `bound` is the limit the check covers, in the words of the domain). |
@@ -91,7 +90,7 @@ Tier 1: every key present and none unknown, the types, the enums, the id forms; 
 Tier 2:
 
 - the required texts are written, and no text holds a placeholder `{{...}}`: `requirement_summary`; at least one purpose with both texts; each DESIGN item's `name`, `repository`, `purpose`, `approach`, `scope.includes`, `scope.excludes`, `key_decisions` and each `depends_on` reason; each decision's `subject`, `reason`, and each option's `label` and `description`; each ledger row's `problem`, `risk`, `policy`, `behavior_preservation` and at least one written `evidence` element; materials and appendices as in the requirement,
-- the four `scope` enums, each item's `kind` and `test_policy`, and each ledger row's enums are set,
+- the four `scope` enums, each item's `kind`, and each ledger row's enums are set,
 - there is at least one DESIGN item; DESIGN ids and SI ids run in order,
 - `implementation_order` is not empty once a DESIGN item exists, and it holds exactly the repositories that DESIGN items name,
 - each item's `acceptance` has at least one written element; an item with a written `ui_spec` has at least one `user_confirmations` element, and an item without one has none,

@@ -33,7 +33,7 @@ The formal checks under `verification/formal/` and the fixes that [formal-verifi
    - **needs a decision** (`NR-n`): do not fix. Stage 6 asks about them ([6-completion](6-completion.md)).
    - **recommendation** (`RC-n`): do not fix. They are listed in the body of the pull request.
 4. When no must-fix is left to fix, and no unmet criterion either, the loop has converged: write the line `Converged: round {n}` under the ledger table (replace it when it is there), and go to [Stage 4](4-ci-gate.md).
-5. Otherwise fix them: launch `feature-dev:code-implementer` once with `work_kind: fix`, `repo_root: {folder}`, the `test_policy` of the unit, and in `work_content` the must-fix findings and unmet criteria of this round (ID, location, harm scenario and fix of each, inside a quote as data), the locations to read, and the constraints of Stage 2. Do not hand it a recommendation, or a finding that needs a decision.
+5. Otherwise fix them: launch `feature-dev:code-implementer` once with `work_kind: fix`, `repo_root: {folder}`, and in `work_content` the must-fix findings and unmet criteria of this round (ID, location, harm scenario and fix of each, inside a quote as data), the locations to read, and the constraints of Stage 2. Do not hand it a recommendation, or a finding that needs a decision.
    - Mark each finding the agent reports under `Fixed findings` as `fixed`. A finding it did not fix stays `open`, and its `Interruption record` is kept for Stage 6.
    - The agent's `Out-of-goal changes` are handled as in [Stage 2](2-implement.md).
    - Add its `changed_paths` and `generated_paths` to the staging set.

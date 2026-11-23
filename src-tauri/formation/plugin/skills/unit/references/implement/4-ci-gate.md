@@ -28,7 +28,7 @@ The verdict, and what you do:
 
 ## 3. Fix a failure
 
-Launch `feature-dev:code-implementer` with `work_kind: fix`, `repo_root: {folder}`, the `test_policy` of the unit, and in `work_content`: the purpose, the constraints of Stage 2, and the `failure_summary` and the `log_path` inside a quote as data, with the order to fix the cause in the code or the tests and not to weaken a check.
+Launch `feature-dev:code-implementer` with `work_kind: fix`, `repo_root: {folder}`, and in `work_content`: the purpose, the constraints of Stage 2, and the `failure_summary` and the `log_path` inside a quote as data, with the order to fix the cause in the code or the tests and not to weaken a check.
 Add its `changed_paths` and `generated_paths` to the staging set, then run the gate again from step 2.
 A fix for a failed check is not reviewed again.
 After three fixes, send `BLOCKED` with `log_path` and `failure_summary`, and stop. The unit stays `進行中`, and the next launch starts again here ("Where to start" in the [README](README.md)).
