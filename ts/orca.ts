@@ -298,6 +298,12 @@ let redrawing = false;
 const claudeTabId = (paneKey: string) => `claude:${paneKey}`;
 const plainTabId = (handle: string) => `orca:${handle}`;
 
+// Whether a row is a Claude session (A-8): another AI's row, and one of no known type, is a terminal tab, never a Claude one.
+const isClaudeRow = (r: OrcaRow) => r.agent === "claude";
+
+// The id of the tab of a row that has a pane key: a Claude session's, else the plain terminal's of its handle (a row of another AI with no handle has no tab: null).
+const rowTabId = (r: OrcaRow) => (isClaudeRow(r) ? claudeTabId(r.paneKey!) : r.handle === null ? null : plainTabId(r.handle));
+
 // The handles of the terminals that a stream's end or a refusal of keys (`terminal_not_writable`) found ended, which the list may not say yet: a terminal of them is an ended one until it leaves the list (`forgetGone`).
 const endedHandles = new Set<string>();
 
@@ -334,6 +340,13 @@ function tabsOf(key: string): Tab[] {
   const tabs: Tab[] = [];
   for (const r of mix.rows) {
     if (r.projectKey !== key || r.paneKey === null || isChildSession(r)) continue;
+    if (!isClaudeRow(r)) {
+      if (r.handle === null) continue;
+      const fixed = fixedTitle(placeOf(r), r.handle);
+      const ended = endedHandles.has(r.handle);
+      tabs.push({ id: plainTabId(r.handle), kind: "plain", status: ended ? "interrupted" : r.status, label: ended ? "終了" : STATUS_LABELS[r.status], ended, title: fixed ?? (r.line || "ターミナル"), titleKey: r.handle, fixed: fixed !== undefined, latest: null, subagents: 0, agents: [], shell: null, handle: r.handle, path: r.path, where: worktreeLabel(r), branch: rowBranch(r), environment: placeOf(r) });
+      continue;
+    }
     const fixed = fixedTitle(placeOf(r), r.paneKey);
     tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: fixed ?? (r.line || "（題名なし）"), titleKey: r.paneKey, fixed: fixed !== undefined, latest: r.latest, prompt: r.promptLine ?? null, answer: r.answerLine ?? null, subagents: r.subagents, agents: r.subagentList ?? [], shell: r.shell ?? null, handle: r.handle, path: r.path, where: worktreeLabel(r), branch: rowBranch(r), environment: placeOf(r) });
   }
@@ -733,7 +746,7 @@ function trackWorking() {
   workingIds = now;
   const known = new Set(mix.projects.map((p) => p.key));
   for (const k of opened) if (!known.has(k)) opened.delete(k);
-  const live = new Set(mix.rows.flatMap((r) => (r.paneKey === null ? [] : [claudeTabId(r.paneKey)])));
+  const live = new Set(mix.rows.flatMap((r) => (r.paneKey === null || !isClaudeRow(r) ? [] : [claudeTabId(r.paneKey)])));
   for (const id of worksOpen) if (!live.has(id)) worksOpen.delete(id);
 }
 
@@ -1551,7 +1564,7 @@ export function openInOrca(paneKey: string | null, environment: string | null, f
   const row = paneKey === null ? null : (mix.rows.find((r) => r.paneKey === paneKey && placeOf(r) === environment) ?? null);
   if (row) {
     setProject(row.projectKey);
-    chooseTab(claudeTabId(row.paneKey!));
+    chooseTab(rowTabId(row) ?? claudeTabId(row.paneKey!));
   } else if (follow !== undefined && (paneKey !== null || follow.handle !== null)) {
     started = { kind: "claude", paneKey, handle: follow.handle, target: environment, until: Date.now() + START_WAIT_MS };
     claimStarted();
@@ -1692,7 +1705,7 @@ function focusPane(pane: string) {
 // Makes the row's project and tab the selection (the row has a pane key).
 function pickRow(r: OrcaRow) {
   setProject(r.projectKey);
-  chooseTab(claudeTabId(r.paneKey!));
+  chooseTab(rowTabId(r) ?? claudeTabId(r.paneKey!));
 }
 
 // Makes the plain terminal's project and tab the selection.

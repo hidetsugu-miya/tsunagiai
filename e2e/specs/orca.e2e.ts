@@ -620,6 +620,31 @@ describe("orca", () => {
     await expect($(".toast")).not.toBeDisplayed();
   });
 
+  it("follows what another AI CLI started as a row of that AI, whose tab is a terminal tab of its handle", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()), { orca_agents_installed: [antigravity] });
+    const launch = await mock("orca_agent_launch", reply);
+    await mock("orca_overview", orcaOverview(sample(), worktrees()));
+    await plus("example-api", ANTIGRAVITY);
+    await waitForCalls(launch);
+    await mock("orca_terminal_read", ["$ antigravity"]);
+    await mock("orca_overview", orcaOverview([...sample(), { ...startedRow(), agent: "antigravity" }], worktrees()));
+    await showAgain();
+    await expect($('.orca-tabs [data-tab="orca:term_new"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
+    expect(await count('.orca-tabs [data-tab="claude:tab_new:leaf_1"]')).toBe(0);
+    await expect($(".toast")).not.toBeDisplayed();
+  });
+
+  it("shows a row of another AI than Claude, or of no known AI, as a terminal tab and not as a Claude session", async () => {
+    const rows = [orcaRow("example-app", "feat/a", "Write the docs", { agent: "codex" }), orcaRow("example-app", "feat/a", "Ask the cat", { agent: null, handle: "term_none", paneKey: "tab_none:leaf_1" })];
+    await openOrca(orcaOverview(rows, worktrees()));
+    await mock("orca_terminal_read", ["$ codex"]);
+    await project("example-app").click();
+    expect(await tabTitles()).toEqual(["Write the docs", "Ask the cat"]);
+    await expect(tabOf("orca:term_example-app")).toBeDisplayed();
+    await expect(tabOf("orca:term_none")).toBeDisplayed();
+    expect(await count('.orca-tabs [data-tab^="claude:"]')).toBe(0);
+  });
+
   it("shows the message on a card when starting another AI CLI fails, and can be pressed again", async () => {
     await openOrca(orcaOverview(sample(), worktrees()), { orca_agents_installed: [antigravity] });
     const launch = await mock("orca_agent_launch", rejects("Unknown TUI agent: antigravity"));
