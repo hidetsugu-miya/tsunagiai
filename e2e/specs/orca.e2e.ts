@@ -129,6 +129,12 @@ const dragDivider = (fraction: number) =>
     document.dispatchEvent(new PointerEvent("pointerup", at(f)));
   }, fraction);
 
+// The page's clock a little over the minute that a list of the AI CLIs is trusted (A-16): showing the screen again reads it then.
+const aMinutePasses = () => {
+  const later = new Date(Date.now() + 61_000);
+  return setClock(`${isoDate(later)}T${later.toTimeString().slice(0, 8)}`);
+};
+
 describe("orca", () => {
   it("shows the count of what needs the user on the sidebar, and the projects in the list", async () => {
     await boot({ inbox: inbox(), orca_overview: orcaOverview(sample(), worktrees()) });
@@ -553,6 +559,7 @@ describe("orca", () => {
     expect(await menuItems()).toEqual([TERMINAL, SCRATCHPAD, ANTIGRAVITY]);
     await browser.keys("Escape");
     await mock("orca_agents_installed", []);
+    await aMinutePasses();
     await showAgain();
     await waitForCalls("orca_agents_installed");
     await pickProject("example-api");
@@ -646,6 +653,7 @@ describe("orca", () => {
     // example-api is a project of Studio; example-app is on this machine.
     await openOrca(onThisMachine(orcaOverview(sample(), worktrees(), studio), "example-app"));
     const read = await mock("orca_agents_installed", holds);
+    await aMinutePasses();
     await showAgain();
     // This machine's first, then the target's; the clock asks for no more.
     expect(await waitForCalls(read, 2)).toEqual([{ environment: null }, { environment: "Studio" }]);
@@ -685,7 +693,7 @@ describe("orca", () => {
     await expect($(".menu")).not.toExist();
   });
 
-  it("reads the AI CLIs when the screen is shown, and neither by the clock nor while another screen is shown", async () => {
+  it("reads the AI CLIs when the screen is shown, and neither by the clock nor while another screen is shown, nor again within a minute", async () => {
     await openOrca(orcaOverview(sample(), worktrees()), timers({ orcaClock: 1000 }));
     await waitForCalls("orca_agents_installed");
     // The clock reads the list a few times: no read of the AI CLIs comes with it.
@@ -694,9 +702,28 @@ describe("orca", () => {
     await $("#nav-mail").click();
     await browser.pause(2500);
     expect(await callsOf("orca_agents_installed")).toHaveLength(1);
+    // Shown again within the minute: the list that was read is trusted.
+    await $("#nav-orca").click();
+    await expect($("#orca")).toBeDisplayed();
+    await browser.pause(500);
+    expect(await callsOf("orca_agents_installed")).toHaveLength(1);
+    // A minute later it is read again.
+    await $("#nav-mail").click();
+    await aMinutePasses();
     await $("#nav-orca").click();
     await expect($("#orca")).toBeDisplayed();
     expect(await waitForCalls("orca_agents_installed", 2)).toEqual([{ environment: null }, { environment: null }]);
+  });
+
+  it("reads again at once when the screen is shown after a list that could not be read", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()), { orca_agents_installed: rejects("orca agent installed: 読めません") });
+    await waitForCalls("orca_agents_installed");
+    await mock("orca_agents_installed", [antigravity]);
+    await showAgain();
+    await waitForCalls("orca_agents_installed");
+    await pickProject("example-api");
+    await pressPlus();
+    expect(await menuItems()).toEqual([TERMINAL, SCRATCHPAD, ANTIGRAVITY]);
   });
 
   it("drops a read of the AI CLIs that ends after the screen was left, and reads again when the screen is shown", async () => {

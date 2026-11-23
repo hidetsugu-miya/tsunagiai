@@ -133,8 +133,11 @@ let busy = false;
 let started: { kind: StartKind; paneKey: string | null; handle: string | null; target: string | null; until: number } | null = null;
 type StartKind = "claude" | "terminal" | "agent";
 const START_WAIT_MS = 30_000;
-// The AI CLIs that each place can start (A-16), by place (null: this machine, else the name of a saved environment): the list, or null when it could not be read. Held only for the places of the screen's lists, and read when the screen is shown, not by the clock.
+// The AI CLIs that each place can start (A-16), by place (null: this machine, else the name of a saved environment): the list, or null when it could not be read. Held only for the places of the screen's lists, and read when the screen is shown (a list read less than a minute ago is trusted), not by the clock.
 const agentLists = new Map<string | null, OrcaAgent[] | null>();
+// When each list of `agentLists` was read, and how long a list that was read is trusted when the screen is shown again.
+const agentReadAt = new Map<string | null, number>();
+const AGENTS_TRUST_MS = 60_000;
 // The reads on their way, by place: the plus waits for the one of its place when that place was never read, and a read that is not in this map any more (its place left the lists, or a newer read took its turn) is dropped when it ends.
 const agentReads = new Map<string | null, Promise<void>>();
 // The streams of the lists, by place: the name of the saved environment that is the target, and null for this machine's Orca (once it is paired, whatever the target is). A place with none has its list read by the clock.
@@ -1731,16 +1734,18 @@ function openTabMenu(anchor: Element, tab: string, pane: string) {
 }
 
 // Reads the AI CLIs of the places of the lists (A-16): this machine, and the target when it is a saved environment that is listed. A place that left the lists is forgotten and its read is dropped; nothing is read while another screen is shown, or the command is missing.
-// A place that was read (well or not) is read again only by `force` (the screen being shown), never by the clock.
+// A place that was read (well or not) is read again only by `force` (the screen being shown), never by the clock, and then only when its list could not be read or was read a minute ago or more.
 function readAgents(force: boolean) {
   const want = view === null || view.state === "missing" ? [] : [null, ...(view.target !== null && view.environments.includes(view.target) ? [view.target] : [])];
   for (const place of [...agentLists.keys(), ...agentReads.keys()]) {
     if (want.includes(place)) continue;
     agentLists.delete(place);
+    agentReadAt.delete(place);
     agentReads.delete(place);
   }
   if (!listShown()) return;
-  for (const place of want) if (!agentReads.has(place) && (force || !agentLists.has(place))) readAgentsOf(place);
+  const stale = (place: string | null) => agentLists.get(place) === null || Date.now() - agentReadAt.get(place)! >= AGENTS_TRUST_MS;
+  for (const place of want) if (!agentReads.has(place) && (!agentLists.has(place) || (force && stale(place)))) readAgentsOf(place);
 }
 
 function readAgentsOf(place: string | null) {
@@ -1751,6 +1756,7 @@ function readAgentsOf(place: string | null) {
     // The screen was left meanwhile: nothing is kept or shown.
     if (!listShown()) return;
     agentLists.set(place, agents);
+    agentReadAt.set(place, Date.now());
     if (agents === null) showFailure("orca", error);
   };
   const read: Promise<void> = invoke("orca_agents_installed", { environment: place }).then(
