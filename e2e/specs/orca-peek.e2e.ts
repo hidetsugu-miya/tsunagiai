@@ -1,20 +1,23 @@
-// A-40: the modal of the terminal of a session, opened by a right click on a session row of the Orca list.
-import { callsOf, mock, orcaRow, sendStream, sendTerm, timers, waitForCalls } from "../support";
-import { claudeTab, openOrca, orcaOverview, project, sample, selectedTab, streamList, worktrees } from "../orca-support";
+// A-40: the modal of the terminal of a session, opened by a right click on a worktree row of the Orca list (its newest session) or on a project row (its first session).
+import { callsOf, mock, orcaRow, orcaWorktree, sendStream, sendTerm, timers, waitForCalls } from "../support";
+import { openOrca, orcaOverview, project, sample, selectedTab, streamList, worktrees } from "../orca-support";
 
 const studioOnly = { target: "Studio", environments: ["Studio"] };
-const arrow = (repo: string) => $(`#orca-feed .orca-arrow[data-key="arrow:proj_${repo}"]`);
-const sessionOf = (repo: string) => $(`#orca-feed .orca-session[data-session="${claudeTab(repo)}"]`);
+// The row of the worktree of `repo` (the sample's: `/work/{repo}`), which holds its newest session.
+const sessionOf = (repo: string) => $(`#orca-feed .orca-worktree[data-worktree="/work/${repo}"]`);
 // The text of the terminal of the modal.
 const peekText = () => $("#orca-peek-term .orca-term-box:not([hidden]) .xterm-rows").getText();
 
-// The page's own right click on the session row of `repo`; says whether the page cancelled the default menu.
+// The page's own right click on the worktree row of `repo`; says whether the page cancelled the default menu.
 const rightClick = (repo: string) =>
-  browser.execute((tab) => {
+  browser.execute((path) => {
     const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
-    document.querySelector(`#orca-feed .orca-session[data-session="${tab}"]`)!.dispatchEvent(event);
+    document.querySelector(`#orca-feed .orca-worktree[data-worktree="${path}"]`)!.dispatchEvent(event);
     return event.defaultPrevented;
-  }, claudeTab(repo));
+  }, `/work/${repo}`);
+
+// The sample's worktrees, and one for example-lib, whose session the sample lists too.
+const trees = () => [...worktrees(), orcaWorktree("example-lib", "feature/x")];
 
 // The page's own right click on the project row of `repo`; says whether the page cancelled the default menu.
 const rightClickProject = (repo: string) =>
@@ -24,9 +27,8 @@ const rightClickProject = (repo: string) =>
     return event.defaultPrevented;
   }, `proj_${repo}`);
 
-// Opens the project of `repo` in the list (its sessions under it) without selecting it.
+// The worktree row of `repo` is in the list, which the right click needs.
 async function openList(repo: string) {
-  if ((await arrow(repo).getAttribute("aria-expanded")) !== "true") await arrow(repo).click();
   await expect(sessionOf(repo)).toBeDisplayed();
 }
 
@@ -38,7 +40,7 @@ async function openStudio(fixtures: Record<string, unknown> = {}) {
 }
 
 describe("orca: peek at a session in a modal (A-40)", () => {
-  it("opens the modal for the right clicked session of a project that is not selected, with the head and its terminal mirrored, and leaves the work pane as it was", async () => {
+  it("opens the modal for the newest session of the right clicked worktree of a project that is not selected, with the head and its terminal mirrored, and leaves the work pane as it was", async () => {
     await openOrca();
     await mock("orca_terminal_read", ["$ claude", "> Fix the parser"]);
     await openList("example-api");
@@ -111,7 +113,7 @@ describe("orca: peek at a session in a modal (A-40)", () => {
     expect((await callsOf("orca_stream_input")).every((c) => (c as { handle: string }).handle === "term_example-app")).toBe(true);
   });
 
-  it("opens nothing on a session of the selected project, and nothing on a session with no terminal, and cancels the default menu for both", async () => {
+  it("opens nothing on a worktree of the selected project, and nothing on a worktree whose session has no terminal, and cancels the default menu for both", async () => {
     const rows = [orcaRow("example-app", "feat/a", "Write the docs"), orcaRow("example-api", "main", "Fix the parser", { group: "waiting", handle: null })];
     await openOrca(orcaOverview(rows, worktrees()));
     await mock("orca_terminal_read", ["$"]);
@@ -138,7 +140,7 @@ describe("orca: peek at a session in a modal (A-40)", () => {
     await browser.keys(["Escape"]);
     await expect($("#orca-peek")).not.toBeDisplayed();
     // The focus is back on the row.
-    expect(await browser.execute(() => (document.activeElement as HTMLElement).dataset.session)).toBe(claudeTab("example-api"));
+    expect(await browser.execute(() => (document.activeElement as HTMLElement).dataset.key)).toBe("worktree::/work/example-api");
     // The Escape was the modal's: the session got no key.
     expect(await callsOf(input)).toEqual([]);
     // The work pane is as it was.
@@ -152,7 +154,7 @@ describe("orca: peek at a session in a modal (A-40)", () => {
   });
 
   it("closes with the cross, and can be opened again for another session", async () => {
-    await openOrca(orcaOverview(sample(), worktrees()));
+    await openOrca(orcaOverview(sample(), trees()));
     await mock("orca_terminal_read", ["$"]);
     await openList("example-api");
     await openList("example-lib");

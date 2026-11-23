@@ -111,7 +111,8 @@ Add more accounts from "Add account" in the Google tab of the settings screen.
 ### MCP server
 
 `tsunagiai-mcp` reads the same `client_secret.json`, `accounts.json` and keychain entries as the app, and it never logs in.
-Install it with `cargo install --path src-tauri --bin tsunagiai-mcp --locked`.
+On macOS, the release app carries it: link `/Applications/tsunagiai.app/Contents/MacOS/tsunagiai-mcp` into a directory on the `PATH` (`ln -sf /Applications/tsunagiai.app/Contents/MacOS/tsunagiai-mcp ~/.local/bin/tsunagiai-mcp`), so no build is needed and an app update renews the linked binary.
+To try the code under development (and on Windows), install it with `cargo install --path src-tauri --bin tsunagiai-mcp --locked`.
 The setup is in `docs/mcp.md`.
 The tools, and the arguments that start it for one use with fewer tools or for another job (`--formation`, `--calendar`, `--todo-draft`, `--preview`, `--formation-start`, `--formation-message`, `--preview-plugin`, `--serve`), are in `src-tauri/AGENTS.md`.
 

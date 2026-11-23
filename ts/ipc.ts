@@ -412,7 +412,7 @@ export interface Commands {
   // A-37 (#893): takes the consent of `environment` back: stops the server on its PC, deletes what was put there and forgets its key. The answer is the consents that are left. A PC that still has a formation is refused with the reason and nothing is changed; an environment gone from Orca loses only its consent.
   formation_consent_revoke: { args: { environment: string }; result: FormationConsent[] };
   // A-17: the layout of the work pane of the project `project` of `environment` (null: this machine): the saved one, mended against the tabs the screen shows now (`tabs`), after `op` when there is one. Rust saves it.
-  orca_panes: { args: { environment: string | null; project: string; tabs: string[]; handles: Record<string, string>; was: Record<string, string>; op: PaneOp | null }; result: PaneLayout };
+  orca_panes: { args: { environment: string | null; project: string; tabs: string[]; away: string[]; handles: Record<string, string>; was: Record<string, string>; op: PaneOp | null }; result: PaneLayout };
   // A-18: the entries of the folder `dir` (relative to the worktree; "" is its own folder) of the worktree at `path` of the target `environment`: the folders first, each with whether git ignores it. Not tried again: a failure carries its message.
   orca_files_list: { args: { path: string; dir: string; ignored: boolean; environment: string | null }; result: OrcaDir };
   orca_files_ignored: { args: { path: string; paths: string[]; environment: string | null }; result: string[] };

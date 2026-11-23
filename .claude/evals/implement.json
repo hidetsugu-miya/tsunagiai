@@ -83,6 +83,20 @@
         "提案の各項目が、番号、題、緊急度、重要度、ポイント、一行の理由を持ち、優先度の列や語が無い",
         "どの issue も自分では始めず、オーナーが名指すのを待って止まる"
       ]
+    },
+    {
+      "id": 7,
+      "name": "failed-spec-fix-may-run-only-spec",
+      "prompt": "あなたは implement の実行の手順 3 にいるリードです。`.claude/skills/implement/SKILL.md` の手順 3 を読み、`.claude/evals/files/implement/spec-failed-after-bundle.md` の記録について、落ちた spec を直すために、#1700 の担当を起動する `code-implementer` の prompt を書き出してください。あわせて、この束の中の初回の起動の prompt が `run-e2e.sh` について何を言うはずだったかも一行で書いてください。この記録が、あなたの持つ実行の文脈です。起動はせず、コマンドも実行しないでください。",
+      "expected_output": "差し戻しの起動の prompt が、その担当だけを起動し、落ちた spec の `run-e2e.sh --only orca-sort` を担当が自分で回してよいと許す。初回の起動の prompt は、`run-ci.sh` も `run-e2e.sh` も回させないままである。",
+      "files": [
+        ".claude/evals/files/implement/spec-failed-after-bundle.md"
+      ],
+      "assertions": [
+        "差し戻しの prompt が、担当に `run-e2e.sh --only orca-sort` を自分で回してよいと許している（原因を読みで推測させて終わらせていない）",
+        "差し戻しの prompt が、全件の `run-e2e.sh` と `run-ci.sh` を許していない",
+        "初回の起動の prompt については、`run-ci.sh` も `run-e2e.sh` も回させないと書いている"
+      ]
     }
   ]
 }

@@ -1,4 +1,4 @@
-// The Orca screen (A-6, A-8, A-12, A-16, A-17, A-18, A-27): two panes, and the file pane on the right (orca-files.ts, with the history of A-27 in orca-history.ts) when it is shown. The list pane is the projects (a repository of this machine or of a saved environment);
+// The Orca screen (A-6, A-8, A-12, A-16, A-17, A-18, A-27): two panes, and the file pane on the right (orca-files.ts, with the history of A-27 in orca-history.ts) when it is shown. The list pane is the projects (a repository of this machine or of a saved environment), each with the rows of its worktrees;
 // the work pane has the sessions of the selected project as tabs, and each tab is a terminal (orca-terminal.ts). The work pane is split into panes (A-17), each with its tabs and its terminal; Rust holds how it is split for each project (orca-panes.ts), and the selected tab is the one shown in the pane that has the focus.
 // A file opened from the file pane is a tab of the strip too, with its editor (orca-editor.ts) in the pane where a terminal would be, and so is the difference of a file from HEAD (A-24, orca-diff.ts), from the menu of the file's row, or of a file of a commit (A-27), from the history, and the definition of a name of the editor (A-34, orca-definition.ts), one tab for a project, that opens in a pane under the pane of the editor, and so are a table and the SQL of a database from the database part of the file pane (A-43, orca-database-tabs.ts).
 // The plus right after the tabs of a pane's strip starts Claude or another AI CLI of the place (A-16), or opens a terminal, in a worktree of the selected project, and the new tab is selected once it is listed. Nothing about a session is kept here.
@@ -8,6 +8,7 @@
 // The sidebar button's count is the agents that wait for the user plus the notices: the agents that stopped (done, failed, interrupted) while the app ran, until their session is shown on this screen, they run again or they leave the list (the first read of a target only sets the base).
 // While an agent works, the button's icon is yellow and fades slowly; the number that work is only in the button's label.
 // A search field in the row of the heading 「プロジェクト」 (A-19), opened by the magnifier at the right end of the row or by ⌘J, narrows the projects by name.
+// The bell in that row (A-8) switches the list to the work: the sessions of every project, the newest change first, each with the pin and the pencil of its title; while a search text is typed the list is the projects again.
 // While the screen and the file pane are shown, the clock also reads again, every 10 seconds, what the file pane shows and the files and differences that the panes show (`rereadFiles`; A-18, A-24, A-27), without a word.
 // A read in the background swaps the rows in place: the selection and the scroll position stay, and `show()` is never called by it.
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
@@ -16,7 +17,6 @@ import type { OrcaLocal } from "./bindings/OrcaLocal";
 import type { OrcaOverview } from "./bindings/OrcaOverview";
 import type { OrcaProject } from "./bindings/OrcaProject";
 import type { OrcaRow } from "./bindings/OrcaRow";
-import type { OrcaSubagent } from "./bindings/OrcaSubagent";
 import type { OrcaStarted } from "./bindings/OrcaStarted";
 import type { OrcaStatus } from "./bindings/OrcaStatus";
 import type { OrcaStreamEvent } from "./bindings/OrcaStreamEvent";
@@ -106,20 +106,23 @@ let listOpen = true;
 let query = "";
 // Whether the projects that are not running are listed under the link that follows the running ones (A-8). The search lists them all whatever this is, and clearing it leaves this as it was; in memory only.
 let stoppedOpen = false;
+// Whether the bell of the heading is pressed (A-8): the list is the work and not the projects. Held in memory only, off at each start of the app.
+let activeOnly = false;
+// The number of the bell: the sidebar button's count, as `drawBadge` found it.
+let badgeCount = 0;
+// The session whose title is being typed in its row (A-8) and the text typed so far: a redraw of the list keeps the field.
+let editing: { id: string; value: string } | null = null;
+// The field of `editing`: a draw of the list moves this very element into the new row, so that the caret, the selection and the focus stay. `redrawing` is true while the list is being drawn: a blur then is the move and no cancel.
+let titleField: HTMLInputElement | null = null;
+let redrawing = false;
 // Whether the search field (A-19) is open: it takes the place of the heading's row. It is closed again when its text is empty and the focus leaves it, or with Escape; while text is kept it stays open.
 let searchOpen = false;
 let cursor: string | null = null;
 // The project selected (its key; null: none). Its tab selected is the one shown in the pane of its layout that has the focus (`selectedTab`).
 let projectKey: string | null = null;
-// The projects open in the list (their sessions under them), by key, kept in memory only. Each has its own state: selecting a project opens it, its arrow opens and closes it, and a project that starts to work opens again.
-const opened = new Set<string>();
-// The sessions whose breakdown (the subagents and the command at work) is open under their row, by tab id, kept in memory only. A session starts closed, and one that left the list is forgotten.
-const worksOpen = new Set<string>();
 // The projects with a working session, in the order they entered that group. A read does not reorder them (the project list of the read is newest first by activity, which moves with the work); one that starts to work is put first, one that stops leaves the group.
 let workingOrder: string[] = [];
-// The sessions that worked at the last read that worked, by project (the pane keys of the rows): a project opens when a read has one that was not here.
-let workingIds = new Map<string, Set<string>>();
-// The target `workingOrder`, `workingIds` and `opened` were made for: the keys of another target are not these.
+// The target `workingOrder` was made for: the keys of another target are not these.
 let workingTarget: string | null = null;
 // The host element of each pane drawn, by pane id: the terminals are placed in them.
 let paneHosts = new Map<string, HTMLElement>();
@@ -167,9 +170,6 @@ export const redrawOrca = () => draw();
 
 export const worktreeLabel = (w: { repo: string; branch: string }) => `${w.repo} ・ ${w.branch}`;
 
-// The name a session row of the list shows (A-8): the git branch of the worktree the item is in, and the worktree's name (the right side of `worktreeLabel`) when it has no branch.
-const rowBranch = (item: { path: string; environment?: string | null; branch: string }) => mix.worktrees.find((w) => w.path === item.path && placeOf(w) === placeOf(item))?.gitBranch || item.branch;
-
 // How long ago `ms` was: running and waiting agents show the time since their state began ("2 分"), a done one how long ago it ended ("18 分前").
 export function elapsed(ms: number, now: number, done: boolean) {
   if (!ms) return "";
@@ -185,7 +185,9 @@ const isStopped = (r: OrcaRow) => r.group === "done" || r.status === "failed" ||
 // The pane of the session this screen shows now: the screen is shown, the window is not hidden, and the session is the selected tab (the side pane of A-9 does not count).
 const viewedPane = () => {
   const tab = selectedTab();
-  return shown() && !document.hidden && tab?.startsWith("claude:") ? tab.slice("claude:".length) : null;
+  if (tab === null || tab === undefined || !shown() || document.hidden) return null;
+  // The tab of another AI's row is its handle's (`rowTabId`): the pane is the one of the row that has that tab.
+  return mix.rows.find((r) => r.paneKey !== null && rowTabId(r) === tab)?.paneKey ?? null;
 };
 
 // Takes the rows of a read as the one the count follows (the rows of one read, whatever its scope). The first read of a target is only the base: a notice is made for a row that went from not stopped to stopped,
@@ -243,15 +245,6 @@ interface Tab {
   title: string;
   // The first line of the newer of a Claude session's prompt and last answer, which the modal of A-40 shows in place of the title (the tab shows the title); null for the rest, and for a session whose newer message has no text.
   latest: string | null;
-  // The first line of a Claude session's last prompt and of its last answer, which the lines 「あなた」 and 「AI」 of its row in the list show (the tab shows neither); null for the rest, and for a message that has no text (the row draws no line then).
-  prompt?: string | null;
-  answer?: string | null;
-  // How many subagents of a Claude session are at work, which the toggle under its row in the list counts (the tab shows none); 0 for the rest.
-  subagents: number;
-  // The subagents at work with their names and tasks, which the breakdown of its row in the list shows (the tab shows none); empty for the rest.
-  agents: OrcaSubagent[];
-  // The command of the shell a Claude session is running (empty when Orca gave none), which the toggle under its row in the list counts and its breakdown shows (the tab shows none); null when it runs none, and for the rest.
-  shell: string | null;
   // The Orca terminal's handle (a Claude session may have none: it shows no terminal and cannot be closed).
   handle: string | null;
   // A plain terminal that ended (A-8): the list says so, or its stream ended, or Orca refused its keys as not writable. It is drawn with a mark that is not green and the label 「終了」, and takes no key.
@@ -260,8 +253,6 @@ interface Tab {
   path: string;
   // The worktree's name, "{repo} ・ {branch}", which the heading of the file pane shows.
   where: string;
-  // The name a session row of the list shows (A-8): the git branch of its worktree, else the worktree's name (`rowBranch`). Only a Claude session and a plain terminal have one; the rest show `where`.
-  branch?: string;
   // The key a session's title is kept under (A-8): a Claude session's pane key, a plain terminal's handle. Only a Claude session and a plain terminal have one.
   titleKey?: string;
   // Whether `title` is one the owner fixed (A-8): the row draws a pin.
@@ -289,14 +280,15 @@ function projectPlace(key: string): string | null {
 let titles: Record<string, Record<string, string>> = {};
 const titleTarget = (environment: string | null) => environment ?? THIS_MACHINE;
 const fixedTitle = (environment: string | null, key: string): string | undefined => titles[titleTarget(environment)]?.[key];
-// The session whose title is being typed in its row (A-8) and the text typed so far: a redraw of the list keeps the field.
-let editing: { id: string; value: string } | null = null;
-// The field of `editing`: a draw of the list moves this very element into the new row, so that the caret, the selection and the focus stay. `redrawing` is true while the list is being drawn: a blur then is the move and no cancel.
-let titleField: HTMLInputElement | null = null;
-let redrawing = false;
 
 const claudeTabId = (paneKey: string) => `claude:${paneKey}`;
 const plainTabId = (handle: string) => `orca:${handle}`;
+
+// Whether a row is a Claude session (A-8): another AI's row, and one of no known type, is a terminal tab, never a Claude one.
+const isClaudeRow = (r: OrcaRow) => r.agent === "claude";
+
+// The id of the tab of a row that has a pane key: a Claude session's, else the plain terminal's of its handle (a row of another AI with no handle has no tab: null).
+const rowTabId = (r: OrcaRow) => (isClaudeRow(r) ? claudeTabId(r.paneKey!) : r.handle === null ? null : plainTabId(r.handle));
 
 // The handles of the terminals that a stream's end or a refusal of keys (`terminal_not_writable`) found ended, which the list may not say yet: a terminal of them is an ended one until it leaves the list (`forgetGone`).
 const endedHandles = new Set<string>();
@@ -334,32 +326,39 @@ function tabsOf(key: string): Tab[] {
   const tabs: Tab[] = [];
   for (const r of mix.rows) {
     if (r.projectKey !== key || r.paneKey === null || isChildSession(r)) continue;
+    if (!isClaudeRow(r)) {
+      if (r.handle === null) continue;
+      const fixed = fixedTitle(placeOf(r), r.handle);
+      const ended = endedHandles.has(r.handle);
+      tabs.push({ id: plainTabId(r.handle), kind: "plain", status: ended ? "interrupted" : r.status, label: ended ? "終了" : STATUS_LABELS[r.status], ended, title: fixed ?? (r.line || "ターミナル"), titleKey: r.handle, fixed: fixed !== undefined, latest: null, handle: r.handle, path: r.path, where: worktreeLabel(r), environment: placeOf(r) });
+      continue;
+    }
     const fixed = fixedTitle(placeOf(r), r.paneKey);
-    tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: fixed ?? (r.line || "（題名なし）"), titleKey: r.paneKey, fixed: fixed !== undefined, latest: r.latest, prompt: r.promptLine ?? null, answer: r.answerLine ?? null, subagents: r.subagents, agents: r.subagentList ?? [], shell: r.shell ?? null, handle: r.handle, path: r.path, where: worktreeLabel(r), branch: rowBranch(r), environment: placeOf(r) });
+    tabs.push({ id: claudeTabId(r.paneKey), kind: "claude", status: r.status, label: STATUS_LABELS[r.status], title: fixed ?? (r.line || "（題名なし）"), titleKey: r.paneKey, fixed: fixed !== undefined, latest: r.latest, handle: r.handle, path: r.path, where: worktreeLabel(r), environment: placeOf(r) });
   }
   for (const t of mix.terminals) {
     if (t.projectKey !== key || isChildSession(t)) continue;
     const repo = mix.worktrees.find((w) => w.path === t.path && placeOf(w) === placeOf(t))?.repo ?? mix.projects.find((p) => p.key === t.projectKey)?.name ?? "";
     const ended = t.ended || endedHandles.has(t.handle);
     const fixed = fixedTitle(placeOf(t), t.handle);
-    tabs.push({ id: plainTabId(t.handle), kind: "plain", status: ended ? "interrupted" : "done", label: ended ? "終了" : "起動中", ended, title: fixed ?? (t.title || "ターミナル"), titleKey: t.handle, fixed: fixed !== undefined, latest: null, subagents: 0, agents: [], shell: null, handle: t.handle, path: t.path, where: worktreeLabel({ repo, branch: t.branch }), branch: rowBranch(t), environment: placeOf(t) });
+    tabs.push({ id: plainTabId(t.handle), kind: "plain", status: ended ? "interrupted" : "done", label: ended ? "終了" : "起動中", ended, title: fixed ?? (t.title || "ターミナル"), titleKey: t.handle, fixed: fixed !== undefined, latest: null, handle: t.handle, path: t.path, where: worktreeLabel({ repo, branch: t.branch }), environment: placeOf(t) });
   }
   const place = projectPlace(key);
   for (const f of filesOf(place, key)) {
     const where = tabs.find((t) => t.path === f.path)?.where ?? mix.worktrees.find((w) => w.path === f.path && placeOf(w) === f.target) ?? gitWorktrees.get(gitKey(f.target, f.path))?.label;
-    tabs.push({ id: f.id, kind: "file", status: "done", label: "", title: nameOf(f.relative), latest: null, subagents: 0, agents: [], shell: null, handle: null, path: f.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: f.target, outside: f.outside, gem: f.outside && f.language === "ruby" });
+    tabs.push({ id: f.id, kind: "file", status: "done", label: "", title: nameOf(f.relative), latest: null, handle: null, path: f.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: f.target, outside: f.outside, gem: f.outside && f.language === "ruby" });
   }
   for (const d of diffsOf(place, key)) {
     const where = tabs.find((t) => t.path === d.path)?.where ?? mix.worktrees.find((w) => w.path === d.path && placeOf(w) === d.target) ?? gitWorktrees.get(gitKey(d.target, d.path))?.label;
-    tabs.push({ id: d.id, kind: "diff", status: "done", label: "", title: d.commit === null ? nameOf(d.relative) : `${nameOf(d.relative)} ${d.commit.shortId}`, latest: null, subagents: 0, agents: [], shell: null, handle: null, path: d.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: d.target });
+    tabs.push({ id: d.id, kind: "diff", status: "done", label: "", title: d.commit === null ? nameOf(d.relative) : `${nameOf(d.relative)} ${d.commit.shortId}`, latest: null, handle: null, path: d.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: d.target });
   }
   for (const d of definitionsOf(place, key)) {
     const where = tabs.find((t) => t.path === d.query.path)?.where ?? mix.worktrees.find((w) => w.path === d.query.path && placeOf(w) === d.target) ?? gitWorktrees.get(gitKey(d.target, d.query.path))?.label;
-    tabs.push({ id: d.id, kind: "definition", status: "done", label: "", title: `定義 ・ ${d.query.word}`, latest: null, subagents: 0, agents: [], shell: null, handle: null, path: d.query.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: d.target });
+    tabs.push({ id: d.id, kind: "definition", status: "done", label: "", title: `定義 ・ ${d.query.word}`, latest: null, handle: null, path: d.query.path, where: where === undefined ? "" : typeof where === "string" ? where : worktreeLabel(where), environment: d.target });
   }
   const main = mix.worktrees.find((w) => w.projectKey === key && w.isMain);
   for (const d of databaseTabsOf(place, key)) {
-    tabs.push({ id: d.id, kind: "database", status: "done", label: "", title: d.title, latest: null, subagents: 0, agents: [], shell: null, handle: null, path: main?.path ?? "", where: main === undefined ? "" : worktreeLabel(main), environment: d.target });
+    tabs.push({ id: d.id, kind: "database", status: "done", label: "", title: d.title, latest: null, handle: null, path: main?.path ?? "", where: main === undefined ? "" : worktreeLabel(main), environment: d.target });
   }
   // A Claude row that got its handle after it was first seen keeps the place it had under its id.
   for (const t of tabs) if (!seen.has(keyOfTab(t))) seen.set(keyOfTab(t), seen.get(t.id) ?? seen.size);
@@ -382,6 +381,8 @@ function drawBadge() {
   if (viewed !== null) notified.delete(viewed);
   const waiting = waitingCount + notified.size;
   setNavCount("nav-orca", waiting, "開発", "確認待ち");
+  badgeCount = waiting;
+  drawBell();
   // The number that work is not drawn: the button's icon is yellow and fades, and the label says it (read aloud, and in the tooltip on hover).
   const nav = $("nav-orca");
   const working = workingCount + hereWorking;
@@ -426,8 +427,23 @@ function drawNotice() {
   );
 }
 
+// Whether the list is the work: the bell is pressed and no search text is typed (A-8).
+const activeShown = () => activeOnly && needle() === "";
+
+// The bell of the heading (A-8): pressed while the list is the work, with the number of the sidebar button, and the heading names the list.
+function drawBell() {
+  const bell = $("orca-bell");
+  bell.setAttribute("aria-pressed", String(activeOnly));
+  bell.setAttribute("aria-label", badgeCount === 0 ? "作業中" : `作業中（確認待ち ${badgeCount} 件）`);
+  const count = $("orca-bell-count");
+  count.hidden = badgeCount === 0;
+  count.textContent = String(badgeCount);
+  $("orca-projects-title").textContent = activeShown() ? "作業中" : "プロジェクト";
+}
+
 // The heading's row or the search field shows (A-19), and the clear button of the field shows while something is typed.
 function drawSearch() {
+  drawBell();
   $("orca-projects-head").hidden = searchOpen;
   $("orca-search").hidden = !searchOpen;
   $("orca-search-clear").hidden = query === "";
@@ -451,60 +467,67 @@ function countNode(className: string, icon: string, n: number, label: string) {
   return badge;
 }
 
-// The small tag at the start of a line of a session: 「あなた」, 「AI」, 「サブ」 or 「シェル」 (`kind` is the part of its class that gives the color).
-const tagNode = (kind: string, text: string) => tag("span", `orca-tag orca-tag-${kind}`, text);
-
-// A line of a session that begins with a tag and goes on as text. Everything comes from outside, so the text is text and never markup.
-function lineNode(className: string, tagged: HTMLElement, text: string) {
-  const line = tag("span", `orca-line ${className}`);
-  line.append(tagged, tag("span", "orca-line-text", text));
-  return line;
+// The worktrees of the project `key` that the list draws a row for (A-8): the ones that are not archived and not a launched child's, the repository's own folder first and then in the order Orca lists them.
+function worktreesOf(key: string, environment: string | null) {
+  const own = mix.worktrees.filter((w) => w.projectKey === key && placeOf(w) === environment && !w.archived && !inChildWorktree(w));
+  return [...own.filter((w) => w.isMain), ...own.filter((w) => !w.isMain)];
 }
 
-// A line of the breakdown of a session: the tag of its kind, then the name and the task of a subagent, or the command. Everything comes from outside, so it is text and never markup.
-function workNode(className: string, tagged: HTMLElement, text: string, task: string | null = null) {
-  const line = tag("div", `orca-work ${className}`);
-  const name = tag("span", "orca-work-name", text);
-  name.title = task === null ? text : `${text}: ${task}`;
-  line.append(tagged, name);
-  if (task !== null) line.append(tag("span", "orca-work-task", task));
-  return line;
+// The newest session of a worktree that has a tab (A-8): the rows are newest first, and a formation child's session and a row with no tab are left out.
+const newestRow = (w: OrcaWorktree) => mix.rows.find((r) => r.path === w.path && placeOf(r) === placeOf(w) && r.paneKey !== null && !isChildSession(r) && rowTabId(r) !== null);
+
+// The newest session of each worktree, found once for the drawing that is under way (null: none is: `newestRow` answers).
+let newestDrawn = null as Map<OrcaWorktree, OrcaRow | undefined> | null;
+const newestOf = (w: OrcaWorktree) => {
+  const drawn = newestDrawn;
+  return drawn?.has(w) ? drawn.get(w) : newestRow(w);
+};
+
+// The worktree the selected tab is in (null: no project is selected, or the selected tab is a file, a diff, a definition or a database, whose worktree is not marked). Found once for each drawing.
+let pickedAt: { path: string; environment: string | null } | null = null;
+function findPickedAt() {
+  const id = selectedTab();
+  const tab = id === null || projectKey === null || pickedProject() === null ? undefined : tabsOf(projectKey).find((x) => x.id === id);
+  pickedAt = tab === undefined || isDocument(tab) ? null : { path: tab.path, environment: tab.environment };
 }
 
-// The toggle under the row of a session that has work in it: the arrow, then the tag and the number of each kind of work (none for a kind that is 0). A session runs at most one command (`shell`), so its number is 1.
-function worksToggle(t: Tab, open: boolean) {
-  const toggle = tag("button", "orca-works-toggle");
-  toggle.type = "button";
-  toggle.dataset.key = `works:${t.id}`;
-  toggle.setAttribute("aria-expanded", String(open));
-  const arrow = tag("span", "orca-works-arrow");
-  arrow.innerHTML = CHEVRON_SVG;
-  toggle.append(arrow);
-  if (t.subagents > 0) toggle.append(tagNode("sub", "サブ"), tag("b", "orca-works-n", String(t.subagents)));
-  if (t.shell !== null) toggle.append(tagNode("shell", "シェル"), tag("b", "orca-works-n", "1"));
-  toggle.onclick = () => toggleWorks(t.id);
-  return toggle;
+// The icon of the AI of a session: Claude's own mark in its color, the general mark for every other AI. `agent` comes from Orca (its `agentType`), so it is only ever an attribute.
+function agentIcon(agent: string | null | undefined) {
+  const claude = agent === "claude";
+  const icon = tag("span", claude ? "orca-worktree-agent claude" : "orca-worktree-agent");
+  icon.setAttribute("role", "img");
+  icon.setAttribute("aria-label", claude ? "Claude" : (agent ?? "AI"));
+  icon.innerHTML = claude ? CLAUDE_SVG : AGENT_SVG;
+  return icon;
 }
 
-// A session of the open project and, when it has work in it, the toggle under its row and the breakdown under that while the toggle is open.
-function sessionWithWorks(t: Tab, key: string) {
-  const wrap = tag("div", "orca-sess");
-  wrap.append(sessionNode(t, key));
-  if (t.subagents === 0 && t.agents.length === 0 && t.shell === null) return wrap;
-  const open = worksOpen.has(t.id);
-  wrap.append(worksToggle(t, open));
-  if (open) {
-    const list = tag("div", "orca-works");
-    list.append(...t.agents.map((a) => workNode("orca-work-agent", tagNode("sub", "サブ"), a.name === "" ? "サブエージェント" : a.name, a.task ?? null)));
-    if (t.shell !== null) list.append(workNode("orca-work-shell", tagNode("shell", "シェル"), t.shell === "" ? "シェルを実行中" : t.shell));
-    wrap.append(list);
-  }
-  return wrap;
+// A worktree's row under its project (A-8): its status icon, the name of its git branch (the worktree's name when it is on none) and, at the right end, the icon of the AI of its newest session (none when it has no session). Pressing it selects the project and the tab of that session, or the project alone when there is none.
+function worktreeNode(key: string, w: OrcaWorktree) {
+  const row = tag("button", "orca-worktree");
+  row.type = "button";
+  const rowKey = `worktree:${placeOf(w) ?? ""}:${w.path}`;
+  row.dataset.key = rowKey;
+  row.dataset.worktree = w.path;
+  row.setAttribute("aria-pressed", String(pickedAt !== null && pickedAt.path === w.path && pickedAt.environment === placeOf(w)));
+  const session = newestOf(w);
+  row.append(statusIcon(w.status), tag("span", "orca-worktree-branch", w.gitBranch || w.branch));
+  if (session !== undefined) row.append(agentIcon(session.agent));
+  row.onclick = () => (session === undefined ? selectProject(key) : selectSession(key, rowTabId(session)!));
+  row.oncontextmenu = (e) => {
+    e.preventDefault();
+    // The newest session of the worktree (A-40), read at the press. A selected project's terminal is in the work pane, and a session with no terminal has none to show.
+    const now = newestRow(w);
+    const tab = now === undefined ? undefined : tabsOf(key).find((x) => x.id === rowTabId(now));
+    if (key === pickedProject() || tab === undefined || tab.handle === null) return;
+    openPeek(key, tab.id, rowKey);
+    syncPeek();
+  };
+  return row;
 }
 
 // The pencil of a row (A-8): it turns the title into a field. It is in the row's button, so its press does not reach the row.
 function editButton(t: Tab) {
-  const edit = tag("button", "orca-session-edit", "✎");
+  const edit = tag("button", "orca-active-edit", "✎");
   edit.type = "button";
   edit.dataset.key = `title-edit:${t.id}`;
   edit.setAttribute("aria-label", "題名を変える");
@@ -522,7 +545,7 @@ function editButton(t: Tab) {
 // The field that the title of a row is typed in (A-8): Enter saves it (an empty text gives the automatic title back), Escape and the focus leaving cancel it. Its keys and presses do not reach the row (the selection, the menu of the peek).
 function titleInput(id: string, key: string, environment: string | null, value: string) {
   if (titleField?.dataset.key === `title:${id}`) return titleField;
-  const input = tag("input", "orca-session-title-input");
+  const input = tag("input", "orca-active-title-input");
   titleField = input;
   input.type = "text";
   input.value = value;
@@ -573,6 +596,80 @@ async function saveTitle(environment: string | null, key: string, title: string)
   stopEditing();
 }
 
+// A session of the work and the tab it is (A-8).
+interface Active {
+  row: OrcaRow;
+  tab: Tab;
+}
+
+// The sessions of the work (A-8): every session of the list that has a tab and is not a launched child's, whatever its state (working, waiting, done or failed), the newest change first and across the projects. A session whose time is unknown goes last.
+function activeSessions(): Active[] {
+  const tabs = new Map<string, Tab[]>();
+  const found: Active[] = [];
+  for (const row of mix.rows) {
+    const id = row.paneKey === null || isChildSession(row) ? null : rowTabId(row);
+    if (id === null) continue;
+    if (!tabs.has(row.projectKey)) tabs.set(row.projectKey, ownTabs(row.projectKey));
+    const tab = tabs.get(row.projectKey)!.find((t) => t.id === id);
+    if (tab !== undefined) found.push({ row, tab });
+  }
+  return found.sort((a, b) => b.row.atMs - a.row.atMs);
+}
+
+// The name of the project of a row, and the branch of its worktree (the worktree's name when it is on none).
+const projectNameOf = (r: OrcaRow) => mix.projects.find((p) => p.key === r.projectKey)?.name ?? r.repo;
+const branchOf = (r: OrcaRow) => mix.worktrees.find((w) => w.path === r.path && placeOf(w) === placeOf(r))?.gitBranch || r.branch;
+
+// The time a session's row shows: since its state began, and for a stopped one how long ago it ended.
+const activeTime = (r: OrcaRow, now: number) => elapsed(r.atMs, now, isStopped(r));
+
+// A session of the work, in three lines (A-8): its status icon, its title (with the pin when the owner fixed it, and the pencil that types a new one) and its time; its latest message; then the icon of its AI, its project and its branch. It is selected when it is the tab selected. Everything that comes from outside is text.
+function activeNode({ row: r, tab: t }: Active, now: number) {
+  const key = r.projectKey;
+  const row = tag("button", "orca-active");
+  row.type = "button";
+  row.dataset.key = `tab:${t.id}`;
+  // Not `data-tab`: that names a tab of the work pane, which the pane tree looks for with `closest`.
+  row.dataset.session = t.id;
+  row.setAttribute("aria-pressed", String(key === pickedProject() && t.id === selectedTab()));
+  const head = tag("span", "orca-active-head");
+  head.append(statusIcon(t.status, t.label));
+  if (editing?.id === t.id && t.titleKey !== undefined) head.append(titleInput(t.id, t.titleKey, t.environment, editing.value));
+  else {
+    head.append(tag("span", "orca-active-title", t.title));
+    if (t.fixed) {
+      const pin = tag("span", "orca-active-pin", "📌");
+      pin.setAttribute("role", "img");
+      pin.setAttribute("aria-label", "固定");
+      head.append(pin);
+    }
+    if (t.titleKey !== undefined) head.append(editButton(t));
+  }
+  head.append(tag("span", "orca-active-time", activeTime(r, now)));
+  row.append(head);
+  if (r.latest) row.append(tag("span", "orca-active-latest", r.latest));
+  const foot = tag("span", "orca-active-foot");
+  foot.append(agentIcon(r.agent), tag("span", "orca-active-project", projectNameOf(r)), tag("span", "orca-active-branch", branchOf(r)));
+  row.append(foot);
+  row.onclick = () => selectSession(key, t.id);
+  row.oncontextmenu = (e) => {
+    e.preventDefault();
+    // A terminal is shown in one place at a time: the selected project's is in the work pane, and a session with no terminal has none to show.
+    if (key === pickedProject() || (tabsOf(key).find((x) => x.id === t.id)?.handle ?? null) === null) return;
+    openPeek(key, t.id, `tab:${t.id}`);
+    syncPeek();
+  };
+  return row;
+}
+
+// The list of the work (A-8): the rows one step in from the heading, or the line that says there are none.
+function activeNodes(sessions: Active[], now: number): HTMLElement[] {
+  if (sessions.length === 0) return [emptyNode("作業中のセッションがありません")];
+  const list = tag("div", "orca-actives");
+  list.append(...sessions.map((s) => activeNode(s, now)));
+  return [list];
+}
+
 // Whether the titles of sessions that a list read well no longer holds are being taken out.
 let forgettingTitles = false;
 // The titles (target and key) whose taking out failed: they are not sent again until the screen is shown again (`showOrca`), so a write that keeps failing is not made at every read of the list.
@@ -585,7 +682,7 @@ async function forgetTitles() {
   for (const [target, keyed] of Object.entries(titles)) {
     const environment = target === THIS_MACHINE ? null : target;
     if (!listRead(environment)) continue;
-    const live = new Set<string | null>([...mix.rows.filter((r) => placeOf(r) === environment).map((r) => r.paneKey), ...mix.terminals.filter((t) => placeOf(t) === environment).map((t) => t.handle)]);
+    const live = new Set<string | null>([...mix.rows.filter((r) => placeOf(r) === environment).map((r) => (isClaudeRow(r) ? r.paneKey : r.handle)), ...mix.terminals.filter((t) => placeOf(t) === environment).map((t) => t.handle)]);
     const keys = Object.keys(keyed).filter((key) => !live.has(key) && !forgetFailed.has(`${target}\0${key}`));
     if (keys.length > 0) gone.set(environment, keys);
   }
@@ -616,44 +713,8 @@ async function loadTitles() {
   draw();
 }
 
-// A session of the open project, in three lines (A-8): its status icon, the name of its worktree's branch and the title of its tab (with the pin when the owner fixed it, and the pencil that types a new one), then the tag 「あなた」 with its last prompt and the tag 「AI」 with its last answer (a line whose text is missing is not drawn; the tag of the answer has the color of a question while the session waits for an input). It is selected when it is the tab selected.
-function sessionNode(t: Tab, key: string) {
-  const row = tag("button", "orca-session");
-  row.type = "button";
-  row.dataset.key = `tab:${t.id}`;
-  // Not `data-tab`: that names a tab of the work pane, which the pane tree looks for with `closest`.
-  row.dataset.session = t.id;
-  row.setAttribute("aria-pressed", String(key === pickedProject() && t.id === selectedTab()));
-  // The branch of the worktree the session works in, else the worktree's name (the `branch` of its tab).
-  const head = tag("span", "orca-session-head");
-  head.append(statusIcon(t.status, t.label), tag("span", "orca-session-branch", t.branch ?? t.where));
-  if (editing?.id === t.id && t.titleKey !== undefined) head.append(titleInput(t.id, t.titleKey, t.environment, editing.value));
-  else {
-    head.append(tag("span", "orca-session-title", t.title));
-    if (t.fixed) {
-      const pin = tag("span", "orca-session-pin", "📌");
-      pin.setAttribute("role", "img");
-      pin.setAttribute("aria-label", "固定");
-      head.append(pin);
-    }
-    if (t.titleKey !== undefined) head.append(editButton(t));
-  }
-  row.append(head);
-  if (t.prompt) row.append(lineNode("orca-session-prompt", tagNode("you", "あなた"), t.prompt));
-  if (t.answer) row.append(lineNode("orca-session-answer", tagNode(t.status === "question" ? "question" : "ai", "AI"), t.answer));
-  row.onclick = () => selectSession(key, t.id);
-  row.oncontextmenu = (e) => {
-    e.preventDefault();
-    // A terminal is shown in one place at a time: the selected project's is in the work pane, and a session with no terminal has none to show.
-    if (key === pickedProject() || (tabsOf(key).find((x) => x.id === t.id)?.handle ?? null) === null) return;
-    openPeek(key, t.id, `tab:${t.id}`);
-    syncPeek();
-  };
-  return row;
-}
-
-// A project: its name, and at the right end the chip of its saved environment and the mark of the formations with the number of their worktrees (it shows no status: the sessions under it do). A project with sessions has the arrow at its left, and while it is open its sessions are under it, in the order of the tabs (`tabs`: its tabs other than files).
-function projectNode(key: string, name: string, environment: string | null, tabs: Tab[], onCursor: boolean, re: RegExp | null) {
+// A project: its name as a heading, and at the right end the chip of its saved environment and the mark of the formations with the number of their worktrees (it shows no status: the rows of its worktrees do). Under it are the rows of its worktrees (A-8).
+function projectNode(key: string, name: string, environment: string | null, onCursor: boolean, re: RegExp | null) {
   const wrap = tag("div", "orca-proj");
   const row = tag("button", "orca-project");
   row.type = "button";
@@ -677,23 +738,7 @@ function projectNode(key: string, name: string, environment: string | null, tabs
     openPeek(key, first.id, key);
     syncPeek();
   };
-  wrap.append(row);
-  // A row of Orca with no pane gives no tab, so the arrow follows the tabs and not the number.
-  if (!tabs.length) return wrap;
-  const open = opened.has(key);
-  const arrow = tag("button", "icon-btn orca-arrow");
-  arrow.type = "button";
-  arrow.dataset.key = `arrow:${key}`;
-  arrow.setAttribute("aria-expanded", String(open));
-  arrow.setAttribute("aria-label", open ? "セッションを閉じる" : "セッションを開く");
-  arrow.innerHTML = CHEVRON_SVG;
-  arrow.onclick = () => toggleProject(key);
-  wrap.append(arrow);
-  if (open) {
-    const list = tag("div", "orca-sessions");
-    list.append(...tabs.map((t) => sessionWithWorks(t, key)));
-    wrap.append(list);
-  }
+  wrap.append(row, ...worktreesOf(key, environment).map((w) => worktreeNode(key, w)));
   return wrap;
 }
 
@@ -706,35 +751,18 @@ function emptyNode(text: string) {
   return view.state === "ready" ? tag("div", "feed-empty", text) : tag("div");
 }
 
-// Keeps `workingOrder` and `opened` in step with the sessions of a read that worked. A project is in the working group when a session of it works (its own status may be a question, which outranks working), or when its icon works with no working Claude row (another agent, or a worktree's status). One that works and was not in the group enters it at the front (the newest first among those that enter together, as the read lists them); one that does not work leaves it. A project opens when work appears in it that the last read did not have (a working session, or the project's own work with no such session), also when the user closed it; work that went on leaves it as the user left it. The first read of a target puts all that work in, so they all open. A read that failed, or the first one of a new target, says nothing. A project the list no longer holds is forgotten by `opened`.
+// Keeps `workingOrder` in step with the sessions of a read that worked. A project is in the working group when a session of it works (its own status may be a question, which outranks working), or when its icon works with no working Claude row (another agent, or a worktree's status). One that works and was not in the group enters it at the front (the newest first among those that enter together, as the read lists them); one that does not work leaves it. A read that failed, or the first one of a new target, says nothing.
 function trackWorking() {
   if (view === null || (view.state !== "ready" && here?.state !== "ready")) return;
   if (view.target !== workingTarget) {
     workingTarget = view.target;
     workingOrder = [];
-    workingIds = new Map();
-    opened.clear();
-    // The project chosen before the first read of this target (A-9) stays open.
-    if (projectKey !== null) opened.add(projectKey);
   }
-  const now = new Map<string, Set<string>>();
-  for (const r of mix.rows) {
-    if (r.status !== "working") continue;
-    const ids = now.get(r.projectKey) ?? new Set<string>();
-    ids.add(r.paneKey ?? `${r.repo}/${r.branch}`);
-    now.set(r.projectKey, ids);
-  }
-  // A project whose icon works with no working Claude row: its own id, which no pane key is.
-  for (const p of mix.projects) if (p.status === "working" && !now.has(p.key)) now.set(p.key, new Set([`project:${p.key}`]));
-  const keys = mix.projects.map((p) => p.key).filter((k) => now.has(k));
+  const working = new Set(mix.rows.filter((r) => r.status === "working").map((r) => r.projectKey));
+  for (const p of mix.projects) if (p.status === "working") working.add(p.key);
+  const keys = mix.projects.map((p) => p.key).filter((k) => working.has(k));
   const kept = workingOrder.filter((k) => keys.includes(k));
-  for (const k of keys) if ([...now.get(k)!].some((id) => !workingIds.get(k)?.has(id))) opened.add(k);
   workingOrder = [...keys.filter((k) => !kept.includes(k)), ...kept];
-  workingIds = now;
-  const known = new Set(mix.projects.map((p) => p.key));
-  for (const k of opened) if (!known.has(k)) opened.delete(k);
-  const live = new Set(mix.rows.flatMap((r) => (r.paneKey === null ? [] : [claudeTabId(r.paneKey)])));
-  for (const id of worksOpen) if (!live.has(id)) worksOpen.delete(id);
 }
 
 // The projects that work with nothing but a launched child's sessions (A-8): a working session, every working session a child's, and no session of the owner's that has not stopped (it may ask a question or wait). Found once for each drawing.
@@ -782,10 +810,10 @@ function visibleRows(re: RegExp | null) {
 }
 
 // The rows of the region at the bottom of the list: the projects that are not running, while the link is open (none while a search text is typed, which lists them in the list itself).
-const stoppedRows = () => (stoppedOpen && needle() === "" ? projectRows().filter(isNotRunning) : []);
+const stoppedRows = () => (stoppedOpen && needle() === "" && !activeOnly ? projectRows().filter(isNotRunning) : []);
 
-// How many projects are not running, which the link counts (none while a search text is typed, which has no link).
-const stoppedCount = () => (needle() === "" ? mix.projects.filter(isNotRunning).length : 0);
+// How many projects are not running, which the link counts (none while a search text is typed, which has no link, and none while the list is the work).
+const stoppedCount = () => (needle() === "" && !activeOnly ? mix.projects.filter(isNotRunning).length : 0);
 
 // The link at the bottom of the list (A-8): "› 起動していない N 件" while the others are closed, "起動していないものを隠す" while they are listed under it.
 function stoppedToggle(count: number) {
@@ -812,14 +840,14 @@ function cursorKey(rows = visibleRows(matcher())) {
   return cursor !== null && keys.includes(cursor) ? cursor : (keys[0] ?? null);
 }
 
-// `openTabs`: the tabs other than files of the open projects, found once for the drawing; the others are found here. A list with no running project says it has none only when no project is left out under the link either.
-function projectNodes(re: RegExp | null, rows: ReturnType<typeof visibleRows>, on: string | null, openTabs: Map<string, Tab[]>): HTMLElement[] {
-  const nodes = rows.map((r) => projectNode(r.key, r.name, placeOf(r), openTabs.get(r.key) ?? ownTabs(r.key), r.key === on, re));
+// The projects of `rows`, each with the rows of its worktrees. A list with no running project says it has none only when no project is left out under the link either.
+function projectNodes(re: RegExp | null, rows: ReturnType<typeof visibleRows>, on: string | null): HTMLElement[] {
+  const nodes = rows.map((r) => projectNode(r.key, r.name, placeOf(r), r.key === on, re));
   return nodes.length || stoppedCount() > 0 ? nodes : [emptyNode(needle() === "" ? "プロジェクトがありません" : "一致するプロジェクトがありません")];
 }
 
 // The region at the bottom of the list (A-8): the link, and under it the projects that are not running while it is open. Its scroll position stays.
-function drawStopped(openTabs: Map<string, Tab[]>) {
+function drawStopped() {
   const count = stoppedCount();
   const box = $("orca-stopped");
   box.hidden = count === 0;
@@ -828,24 +856,37 @@ function drawStopped(openTabs: Map<string, Tab[]>) {
   list.hidden = rows.length === 0;
   const top = list.scrollTop;
   $("orca-stopped-bar").replaceChildren(...(count === 0 ? [] : [stoppedToggle(count)]));
-  list.replaceChildren(...rows.map((r) => projectNode(r.key, r.name, placeOf(r), openTabs.get(r.key) ?? ownTabs(r.key), false, null)));
+  list.replaceChildren(...rows.map((r) => projectNode(r.key, r.name, placeOf(r), false, null)));
   list.scrollTop = top;
 }
 
 // Draws the list where it is: the scroll position and the focused row stay, and nothing is drawn when nothing changed.
 function drawFeed() {
+  newestDrawn = new Map(mix.worktrees.map((w) => [w, newestRow(w)]));
+  try {
+    drawFeedNow();
+  } finally {
+    newestDrawn = null;
+  }
+}
+
+function drawFeedNow() {
   trackWorking();
   trackChildOnly();
-  // The sessions under the open projects: what is drawn of them.
-  const openTabs = new Map([...opened].map((k): [string, Tab[]] => [k, ownTabs(k)]));
-  const sessions = [...openTabs].map(([k, tabs]) => [k, tabs.map((t) => [t.id, t.status, t.label, t.title, t.prompt, t.answer, t.where, t.branch, t.subagents, t.agents, t.shell, t.environment, worksOpen.has(t.id), t.fixed ?? false])]);
+  findPickedAt();
   // Only what is drawn: a project's time of activity moves with the work and would redraw the list (and restart the working mark) for nothing.
   const rowOf = (p: OrcaProject) => [p.key, p.name, p.status, p.sessions, placeOf(p), childFolderCount(p.key), childOnly.has(p.key)];
+  // The rows of the worktrees: their status, their branch and the AI of their newest session.
+  const worktreeOf = (w: OrcaWorktree) => [w.path, w.projectKey, placeOf(w), w.branch, w.gitBranch, w.status, w.archived, w.isMain, inChildWorktree(w), newestOf(w)?.agent ?? null, newestOf(w) !== undefined];
   // The rows of the projects, the search expression and the row the keys are on: found once for this drawing.
   const re = matcher();
   const rows = visibleRows(re);
   const on = cursorKey(rows);
-  const key = JSON.stringify([view?.state ?? null, mix.projects.map(rowOf), needle(), on, pickedProject(), sessions, selectedTab(), stoppedOpen, editing?.id ?? null]);
+  // The sessions of the work, with what is drawn of each (the time moves by the minute, so it is part of the key).
+  const now = Date.now();
+  const sessions = activeShown() ? activeSessions() : [];
+  const sessionOf = ({ row: r, tab: t }: Active) => [t.id, t.status, t.label, t.title, t.fixed ?? false, r.latest, activeTime(r, now), r.agent ?? null, projectNameOf(r), branchOf(r), r.projectKey];
+  const key = JSON.stringify([view?.state ?? null, mix.projects.map(rowOf), mix.worktrees.map(worktreeOf), needle(), on, pickedProject(), pickedAt, stoppedOpen, activeShown(), sessions.map(sessionOf), selectedTab(), editing?.id ?? null]);
   if (key === feedKey) return;
   feedKey = key;
   const box = feed();
@@ -856,9 +897,9 @@ function drawFeed() {
   const selected = field === null ? null : { start: field.selectionStart, end: field.selectionEnd, direction: field.selectionDirection };
   redrawing = true;
   try {
-    box.replaceChildren(...projectNodes(re, rows, on, openTabs));
+    box.replaceChildren(...(activeShown() ? activeNodes(sessions, now) : projectNodes(re, rows, on)));
     box.scrollTop = top;
-    drawStopped(openTabs);
+    drawStopped();
   } finally {
     redrawing = false;
   }
@@ -957,7 +998,7 @@ function treeOf(node: PaneNode, tabs: Tab[], focus: string | null, plusDisabled:
   const tab = mine.find((t) => t.id === selected?.id);
   const pane: PaneModel = {
     id: node.id,
-    key: JSON.stringify([mine.map(({ latest, prompt, answer, subagents, agents, shell, ...t }) => t), node.selected, [...closing], mine.filter((t) => dirty.has(t.id)).map((t) => t.id)]),
+    key: JSON.stringify([mine.map(({ latest, ...t }) => t), node.selected, [...closing], mine.filter((t) => dirty.has(t.id)).map((t) => t.id)]),
     tabs: () => mine.map((t) => tabNode(t, t.id === tab?.id)),
     focused: node.id === focus,
     empty: emptyText(tabs, tab),
@@ -1499,6 +1540,8 @@ function refresh() {
   // The terminals are shown only while the screen is shown.
   if (!shown()) syncTerminal();
   syncPeek();
+  // The time of the rows of the work moves by the minute, with no read of the list (a streamed list is read by no clock).
+  if (listShown() && activeShown() && !document.hidden) drawFeed();
   // The files are read again every period while the screen, the window and the file pane are shown, whatever the list does (streamed or being read).
   if (!shown() || document.hidden || !filesShown()) filesAt = Date.now();
   else if (Date.now() - filesAt >= shownMs()) {
@@ -1551,7 +1594,7 @@ export function openInOrca(paneKey: string | null, environment: string | null, f
   const row = paneKey === null ? null : (mix.rows.find((r) => r.paneKey === paneKey && placeOf(r) === environment) ?? null);
   if (row) {
     setProject(row.projectKey);
-    chooseTab(claudeTabId(row.paneKey!));
+    chooseTab(rowTabId(row) ?? claudeTabId(row.paneKey!));
   } else if (follow !== undefined && (paneKey !== null || follow.handle !== null)) {
     started = { kind: "claude", paneKey, handle: follow.handle, target: environment, until: Date.now() + START_WAIT_MS };
     claimStarted();
@@ -1609,36 +1652,21 @@ export function openWorktreeDialog(anchor: Element, worktrees: OrcaWorktree[], c
 
 // ---- selecting and closing ----
 
-// Makes `key` the selected project, open in the list (the others stay as they are).
+// Makes `key` the selected project.
 function setProject(key: string | null) {
   projectKey = key;
-  if (key !== null) {
-    opened.add(key);
-    // A project or a session is selected: no formation is.
-    deselectFormation();
-  }
+  // A project or a session is selected: no formation is.
+  if (key !== null) deselectFormation();
 }
 
-// Selects the project and, in it, the tab last selected there, else the first. The project opens.
+// Selects the project and, in it, the tab last selected there, else the first.
 function selectProject(key: string) {
   started = null;
   setProject(key);
   draw();
 }
 
-// The arrow of a project: opens or closes its sessions in the list, and only that (the selection, the tabs and the work pane stay as they are).
-function toggleProject(key: string) {
-  if (!opened.delete(key)) opened.add(key);
-  draw();
-}
-
-// The arrow of a session: opens or closes its breakdown, and only that.
-function toggleWorks(id: string) {
-  if (!worksOpen.delete(id)) worksOpen.add(id);
-  draw();
-}
-
-// A session of an open project: selects the project and its tab.
+// A session: selects its project and its tab.
 function selectSession(key: string, id: string) {
   started = null;
   setProject(key);
@@ -1660,7 +1688,7 @@ function runPaneOp(op: PaneOp | null) {
   const tabs = (): PaneTabs | null => {
     if (view === null || view.target !== target || view.state === "missing") return null;
     const now = tabsOf(key);
-    return { ids: now.map((t) => t.id), handles: Object.fromEntries(now.flatMap((t) => (t.handle === null ? [] : [[t.id, t.handle]]))) };
+    return { ids: now.map((t) => t.id), away: [], handles: Object.fromEntries(now.flatMap((t) => (t.handle === null ? [] : [[t.id, t.handle]]))) };
   };
   syncPanes(place, key, tabs, op, () => draw(), (e) => showFailure("orca", e));
 }
@@ -1692,7 +1720,7 @@ function focusPane(pane: string) {
 // Makes the row's project and tab the selection (the row has a pane key).
 function pickRow(r: OrcaRow) {
   setProject(r.projectKey);
-  chooseTab(claudeTabId(r.paneKey!));
+  chooseTab(rowTabId(r) ?? claudeTabId(r.paneKey!));
 }
 
 // Makes the plain terminal's project and tab the selection.
@@ -1978,6 +2006,11 @@ function initSearch() {
       if (searchOpen && input.value === "" && document.activeElement !== input) closeSearch();
     }, 0);
   $("orca-search-open").onclick = openSearch;
+  $("orca-bell").onclick = () => {
+    activeOnly = !activeOnly;
+    drawBell();
+    drawFeed();
+  };
   $("orca-search-clear").onclick = () => {
     clearSearch();
     input.focus();

@@ -1,5 +1,5 @@
 // The layouts of the work pane of the Orca screen (A-17): for each project, kept under where the project's row is (`environment`: null for this machine, else the name of the saved environment), the panes with their tabs, as Rust holds and saves them (`orca_panes`).
-// This module keeps what Rust answered, so the screen draws at once; it sends the tabs the screen shows with every call (Rust mends the saved layout against them), and an operation of the user.
+// This module keeps what Rust answered, so the screen draws at once; it sends the tabs the screen shows (and, apart, the ones it has in a window of its own) with every call (Rust mends the saved layout against them), and an operation of the user.
 // With the tabs it sends the Orca handle of each tab that has a terminal, and the handles of the tabs of the call before that worked: a terminal that changed kind (a plain one where Claude starts, or the other way round) has a new tab id and the same handle, and Rust keeps its place.
 // The calls go one at a time, in the order they were made, and only the latest answer of a project is taken, so an older answer never replaces a newer one.
 // Selecting a tab, pressing a pane or releasing a divider is also made here at once, before Rust's answer, so the screen follows the press and a divider does not go back while Rust answers.
@@ -11,9 +11,10 @@ import { invoke } from "./ipc.js";
 // A pane with its tabs in order and the one selected, as the layout holds it.
 export type PaneInfo = Extract<PaneNode, { kind: "pane" }>;
 
-// The tabs a project shows: their ids, and the Orca handle of each one that has a terminal.
+// The tabs a project shows: their ids, the ids of its tabs that are in a window of their own (they keep their place in the saved layout and are left out of the layout answered), and the Orca handle of each one that has a terminal.
 export interface PaneTabs {
   ids: string[];
+  away: string[];
   handles: Record<string, string>;
 }
 
@@ -100,10 +101,10 @@ export function syncPanes(environment: string | null, project: string, tabs: () 
   chain = chain.then(async () => {
     const next = tabs();
     if (next === null) return;
-    const { ids, handles } = next;
+    const { ids, away, handles } = next;
     asked.set(key, ids.join("\n"));
     try {
-      const layout = await invoke("orca_panes", { environment, project, tabs: ids, handles, was: known.get(key) ?? {}, op });
+      const layout = await invoke("orca_panes", { environment, project, tabs: ids, away, handles, was: known.get(key) ?? {}, op });
       known.set(key, handles);
       if (latest.get(key) === mine) {
         layouts.set(key, layout);
@@ -111,8 +112,9 @@ export function syncPanes(environment: string | null, project: string, tabs: () 
       }
     } catch (e) {
       if (latest.get(key) === mine) {
-        const first = ids[0];
-        layouts.set(key, { root: first === undefined ? null : { kind: "pane", id: "p1", tabs: ids, selected: first }, focus: first === undefined ? null : "p1" });
+        const shown = ids.filter((id) => !away.includes(id));
+        const first = shown[0];
+        layouts.set(key, { root: first === undefined ? null : { kind: "pane", id: "p1", tabs: shown, selected: first }, focus: first === undefined ? null : "p1" });
         done();
       }
       fail(e);
