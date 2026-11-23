@@ -26,11 +26,29 @@ Todo 画面の Claude のペインと、カレンダー画面の Claude のペ�
 - `tsunagiai-mcp` はログインを行いません。アカウントの追加と再ログインは、アプリで行います。
 - データベースの接続のツールは、アプリと同じ設定フォルダの `database-profiles.json` を読み書きし、パスワードはアプリと同じ資格情報の保管場所の項目（サービス名 `jp.mysis.tsunagiai.database`）から読みます（接続先やユーザーを変える保存では、その項目を消します）。パスワードを登録するのは、アプリの接続の編集ペインだけです。
 - 言語サーバーのツールは、アプリと同じ設定フォルダの `lsp-settings.json` を読み書きします。保存の確かめ方と断り方は、アプリの保存と同じです。`--lsp` で起動した `tsunagiai-mcp` は、その PC のファイルには書かず、つなぎAIアプリに頼んで、アプリの設定を読み書きします。頼めないときは、その PC には何も書かずに断ります。
-- `~/.cargo/bin`（Windows では `%USERPROFILE%\.cargo\bin`）が `PATH` に入っていること。
+- `tsunagiai-mcp` を置くディレクトリが `PATH` に入っていること。
+  macOS でアプリ同梱のバイナリへリンクする場合は `~/.local/bin` など、`cargo install` で入れる場合は `~/.cargo/bin`（Windows では `%USERPROFILE%\.cargo\bin`）です。
 
 ## 手順
 
 ### 1. インストールする
+
+#### macOS では、アプリに同梱のバイナリへリンクする（基本）
+
+リリース版のつなぎAIアプリには、`tsunagiai-mcp` が入っています。
+ビルドは要りません。
+`PATH` の通ったディレクトリへ、シンボリックリンクを置きます。
+
+```sh
+mkdir -p ~/.local/bin
+ln -sf /Applications/tsunagiai.app/Contents/MacOS/tsunagiai-mcp ~/.local/bin/tsunagiai-mcp
+```
+
+リンクの置き場所（例では `~/.local/bin`）は、`PATH` に入っているディレクトリにします。
+アプリを更新すると、リンク先のバイナリも一緒に新しくなるので、入れ直しは要りません。
+`command -v tsunagiai-mcp` で、パスが出ることを確かめます。
+
+#### 開発中のコードで試す場合と Windows の場合
 
 リポジトリのルートで実行します。
 
@@ -41,6 +59,7 @@ cargo install --path src-tauri --bin tsunagiai-mcp --locked
 `~/.cargo/bin/tsunagiai-mcp` ができれば完了です（Windows では `%USERPROFILE%\.cargo\bin\tsunagiai-mcp.exe`）。
 `command -v tsunagiai-mcp`（Windows の PowerShell では `Get-Command tsunagiai-mcp`）で、パスが出ることを確かめます。
 コードを更新したときも、同じコマンドで入れ直します。
+`~/.cargo/bin` が `PATH` の前にあると、同梱のバイナリへのリンクより先に、こちらが使われます。
 
 ### 2. Claude Code に登録する
 
@@ -88,7 +107,7 @@ Claude Desktop の設定ファイルの `mcpServers` に、`tsunagiai-mcp` の�
 }
 ```
 
-macOS では `command` に `/Users/{ユーザー名}/.cargo/bin/tsunagiai-mcp` を指定します。
+macOS では `command` に `/Applications/tsunagiai.app/Contents/MacOS/tsunagiai-mcp` を指定します（`cargo install` で入れたものを使うなら `/Users/{ユーザー名}/.cargo/bin/tsunagiai-mcp`）。
 
 ### 3. 読み取りのツールだけを許可する
 

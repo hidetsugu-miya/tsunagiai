@@ -1276,6 +1276,23 @@ mod tests {
     }
 
     #[test]
+    fn a_tab_of_another_agent_is_a_row_with_the_kind_its_status_says() {
+        let mut tab = claude_tab("t1", Some("term_c"), "working", 2_000);
+        tab["agentStatus"]["agentType"] = json!("antigravity");
+        let tabs = held(&snapshots(&[("r1::/w/a", vec![tab])]));
+        let OrcaStreamEvent::List {
+            rows, terminals, ..
+        } = list_of(&ps(), &tabs)
+        else {
+            panic!()
+        };
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].agent.as_deref(), Some("antigravity"));
+        assert_eq!(rows[0].handle.as_deref(), Some("term_c"));
+        assert!(terminals.is_empty());
+    }
+
+    #[test]
     fn a_claude_tab_without_a_status_stays_a_row_of_its_pane() {
         // Orca drops `agentStatus` for a moment while the pane keeps its terminal: the tab must not leave the list.
         let mut tab = claude_tab("t1", Some("term_c"), "done", 2_000);
@@ -1361,7 +1378,7 @@ mod tests {
 
     #[test]
     fn a_terminal_tab_is_in_exactly_one_kind_whatever_its_status_and_launch() {
-        // The kind comes from the row that holds the handle, so a tab whose `agentStatus` or `launchAgent` says Claude but that makes no row is still a plain terminal.
+        // The kind comes from the row that holds the handle (an agent of any kind makes one), so a tab whose `agentStatus` or `launchAgent` says Claude but that makes no row is still a plain terminal.
         let with = |status: Value, launch: Value, leaf: Value| {
             let mut tab = shell_tab("t1", "term_c", "x");
             tab["agentStatus"] = status;
@@ -1389,12 +1406,12 @@ mod tests {
             (
                 "a status of another agent",
                 with(status(json!("codex")), Value::Null, json!("l2")),
-                (0, 1),
+                (1, 0),
             ),
             (
                 "a status of no agent",
                 with(status(Value::Null), Value::Null, json!("l2")),
-                (0, 1),
+                (1, 0),
             ),
             (
                 "a status of no agent, Claude launched",

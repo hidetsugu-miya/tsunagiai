@@ -102,6 +102,9 @@ pub struct OrcaSubagent {
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
 pub struct OrcaRow {
+    /// Which AI it is: the agent's `agentType` (`claude`, `codex`, `antigravity` and so on); `None` when Orca gave none. Only `claude` is a Claude session; every other value, and none, is another agent (A-8).
+    #[cfg_attr(test, ts(optional = nullable))]
+    pub agent: Option<String>,
     pub group: OrcaGroup,
     pub repo: String,
     pub branch: String,
@@ -229,6 +232,10 @@ pub struct OrcaWorktree {
     pub project_key: String,
     /// Whether it is the repository's own folder (`isMainWorktree` of Orca), which the file pane shows for a project with no tab (A-18).
     pub is_main: bool,
+    /// The icon of its row in the project list (A-8): the highest rank among the worktree's own status (`worktree_status`) and its agents' (top-level, with a live pty), as a project takes it (`projects_of`).
+    pub status: OrcaStatus,
+    /// Whether Orca archived it (`isArchived`): the project list draws no row for it (A-8), and a launch can still name it.
+    pub archived: bool,
     /// Where it is: `None` for this machine, else the name of the saved environment.
     #[cfg_attr(test, ts(optional = nullable))]
     pub environment: Option<String>,
@@ -650,6 +657,17 @@ fn worktree_status(worktree: &Value) -> OrcaStatus {
     status_of(word, OrcaStatus::Idle)
 }
 
+/// The icon of a worktree's row in the project list (A-8): the highest rank among the worktree's own status and its agents' (top-level, with a live pty).
+fn worktree_rank(worktree: &Value) -> OrcaStatus {
+    let mut status = worktree_status(worktree);
+    for agent in worktree["agents"].as_array().into_iter().flatten() {
+        if agent["parentPaneKey"].is_null() && agent["hasLivePty"] == true {
+            status = status.min(agent_status(agent));
+        }
+    }
+    status
+}
+
 const LOCAL_HOST: &str = "local";
 
 /// The id of the host a worktree is on; one with none is this machine's.
@@ -705,7 +723,7 @@ fn running_shell(agent: &Value) -> Option<String> {
     Some(command.map(plain_line).unwrap_or_default())
 }
 
-/// The rows of `orca worktree ps` (`ps`, its `result`) with the terminals of `orca terminal list` (`terminals`, its `result`): the top-level Claude agents of a live terminal, newest first. The worktrees of an SSH host have no row (A-6 counts none of their sessions).
+/// The rows of `orca worktree ps` (`ps`, its `result`) with the terminals of `orca terminal list` (`terminals`, its `result`): the top-level agents of a live terminal, whatever AI each is (`OrcaRow::agent`), newest first. The worktrees of an SSH host have no row (A-6 counts none of their sessions).
 /// A field that is absent or of another type is left out, not an error.
 pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
     // The pane of an agent is "{tabId}:{leafId}" of its terminal. A terminal that lost its tab is orphaned and still runs:
@@ -748,10 +766,7 @@ pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
         .filter(|w| host_of(w) == LOCAL_HOST)
     {
         for agent in worktree["agents"].as_array().into_iter().flatten() {
-            if !agent["parentPaneKey"].is_null()
-                || agent["hasLivePty"] != true
-                || agent["agentType"] != "claude"
-            {
+            if !agent["parentPaneKey"].is_null() || agent["hasLivePty"] != true {
                 continue;
             }
             let group = group_of(agent["state"].as_str().unwrap_or_default());
@@ -771,6 +786,7 @@ pub fn rows_of(ps: &Value, terminals: &Value) -> Vec<OrcaRow> {
             rows.push((
                 updated,
                 OrcaRow {
+                    agent: text_of(agent, "agentType").map(str::to_owned),
                     group,
                     repo: text_of(worktree, "repo").unwrap_or_default().to_owned(),
                     branch: text_of(worktree, "displayName")
@@ -824,6 +840,8 @@ pub fn worktrees_of(ps: &Value) -> Vec<OrcaWorktree> {
                 git_branch: git_branch_of(w),
                 project_key: project_key_of(w).unwrap_or_default(),
                 is_main: w["isMainWorktree"] == true,
+                status: worktree_rank(w),
+                archived: w["isArchived"] == true,
                 environment: None,
             })
         })
@@ -876,7 +894,7 @@ fn ended_of(terminal: &Value) -> bool {
         || (terminal["connected"] == false && terminal["writable"] == false)
 }
 
-/// The plain terminals of `orca terminal list` (`terminals`, its `result`): every terminal that no Claude row of the same read holds (`rows`, from `rows_of` of the same two documents; a shell, or another agent), still attached to its tab,
+/// The plain terminals of `orca terminal list` (`terminals`, its `result`): every terminal that no row of the same read holds (`rows`, from `rows_of` of the same two documents; a shell, or an agent that has no row yet), still attached to its tab,
 /// in a worktree of `ps` that is listed. The floating terminal has no worktree path and is left out. A terminal that ended stays in the list, as ended (`ended_of`), until its tab is closed.
 /// The kind is the one `rows_of` gives, never `agentIdentity`: Orca takes that from the process or the title before `worktree ps` has the agent, so a terminal would be in neither list for a moment.
 pub fn plain_terminals_of(ps: &Value, terminals: &Value, rows: &[OrcaRow]) -> Vec<OrcaTerminal> {
@@ -911,16 +929,11 @@ pub fn plain_terminals_of(ps: &Value, terminals: &Value, rows: &[OrcaRow]) -> Ve
 }
 
 /// The project list from `ps` (its `result`), the rows and the plain terminals: the repositories (the working ones first, then the rest, each newest activity first). The worktrees of an SSH host make no project.
-/// A project has the highest rank among its agents (top-level, with a live pty), its worktrees' status and its plain terminals that have not ended (a green dot), and as sessions its Claude rows and all its plain terminals.
+/// A project has the highest rank among its agents (top-level, with a live pty), its worktrees' status and its plain terminals that have not ended (a green dot), and as sessions its rows and all its plain terminals.
 pub fn projects_of(ps: &Value, rows: &[OrcaRow], plain: &[OrcaTerminal]) -> Vec<OrcaProject> {
     let mut projects: Vec<OrcaProject> = Vec::new();
     for (worktree, key) in live_worktrees(ps) {
-        let mut status = worktree_status(worktree);
-        for agent in worktree["agents"].as_array().into_iter().flatten() {
-            if agent["parentPaneKey"].is_null() && agent["hasLivePty"] == true {
-                status = status.min(agent_status(agent));
-            }
-        }
+        let status = worktree_rank(worktree);
         let at_ms = ms_of(worktree, "lastActivityAt");
         if let Some(project) = projects.iter_mut().find(|p| p.key == key) {
             project.status = project.status.min(status);
@@ -2962,6 +2975,7 @@ mod tests {
         assert_eq!(
             rows,
             [OrcaRow {
+                agent: Some("claude".into()),
                 group: OrcaGroup::Working,
                 repo: "example".into(),
                 branch: "feat/a".into(),
@@ -3855,6 +3869,7 @@ mod tests {
         assert_eq!(
             rows,
             [OrcaRow {
+                agent: Some("claude".into()),
                 group: OrcaGroup::Working,
                 repo: String::new(),
                 branch: String::new(),
@@ -3877,14 +3892,68 @@ mod tests {
     }
 
     #[test]
-    fn only_claude_agents_are_rows() {
+    fn every_top_level_agent_of_a_live_terminal_is_a_row_with_its_kind() {
         let mut codex = agent("tabA:leaf1", "working");
         codex["agentType"] = json!("codex");
-        let mut unknown = agent("tabB:leaf2", "working");
+        let mut antigravity = agent("tabB:leaf2", "working");
+        antigravity["agentType"] = json!("antigravity");
+        let mut unknown = agent("tabC:leaf3", "working");
         unknown.as_object_mut().unwrap().remove("agentType");
-        let mut typed = agent("tabB:leaf2", "working");
+        let mut typed = agent("tabD:leaf4", "working");
         typed["agentType"] = json!(4);
-        assert!(rows_of(&ps(&[codex, unknown, typed]), &terminals()).is_empty());
+        let mut blank = agent("tabE:leaf5", "working");
+        blank["agentType"] = json!(" ");
+        let rows = rows_of(
+            &ps(&[
+                agent("tabF:leaf6", "working"),
+                codex,
+                antigravity,
+                unknown,
+                typed,
+                blank,
+            ]),
+            &terminals(),
+        );
+        let kinds: Vec<_> = rows.iter().map(|r| r.agent.as_deref()).collect();
+        assert_eq!(
+            kinds,
+            [
+                Some("claude"),
+                Some("codex"),
+                Some("antigravity"),
+                None,
+                None,
+                None
+            ]
+        );
+        // A sub-agent of another agent and an agent with no live pty are no row, whatever the kind.
+        let mut sub = agent("tabA:leaf1", "working");
+        sub["agentType"] = json!("codex");
+        sub["parentPaneKey"] = json!("tabA:leaf0");
+        let mut dead = agent("tabB:leaf2", "working");
+        dead["agentType"] = json!("antigravity");
+        dead["hasLivePty"] = json!(false);
+        assert!(rows_of(&ps(&[sub, dead]), &terminals()).is_empty());
+    }
+
+    #[test]
+    fn an_agent_that_is_not_claude_holds_the_terminal_of_its_pane() {
+        let mut codex = agent("tabA:leaf1", "waiting");
+        codex["agentType"] = json!("codex");
+        let doc = ps(&[codex]);
+        let terms = terminals();
+        let rows = rows_of(&doc, &terms);
+        assert_eq!(rows[0].handle.as_deref(), Some("term_1"));
+        assert_eq!(rows[0].group, OrcaGroup::Waiting);
+        // The terminal that a row holds is not a plain one.
+        let plain = plain_terminals_of(
+            &doc,
+            &json!({"terminals": [
+                {"handle": "term_1", "tabId": "tabA", "leafId": "leaf1", "worktreePath": "/work/example"},
+            ]}),
+            &rows,
+        );
+        assert!(plain.is_empty());
     }
 
     #[test]
@@ -3916,6 +3985,8 @@ mod tests {
                     git_branch: "main".into(),
                     project_key: "repo-a".into(),
                     is_main: true,
+                    status: OrcaStatus::Idle,
+                    archived: false,
                     environment: None,
                 },
                 OrcaWorktree {
@@ -3925,6 +3996,8 @@ mod tests {
                     git_branch: String::new(),
                     project_key: String::new(),
                     is_main: false,
+                    status: OrcaStatus::Idle,
+                    archived: false,
                     environment: None,
                 },
                 OrcaWorktree {
@@ -3934,6 +4007,8 @@ mod tests {
                     git_branch: "feat/dev".into(),
                     project_key: "ssh:box".into(),
                     is_main: false,
+                    status: OrcaStatus::Idle,
+                    archived: false,
                     environment: None,
                 },
                 // A worktree made with a name keeps it as `displayName`, so the git branch is read from `branch`.
@@ -3944,6 +4019,8 @@ mod tests {
                     git_branch: "feat/x".into(),
                     project_key: String::new(),
                     is_main: false,
+                    status: OrcaStatus::Idle,
+                    archived: false,
                     environment: None,
                 },
                 // A `branch` that is not `refs/heads/...` is not a local branch.
@@ -3954,6 +4031,8 @@ mod tests {
                     git_branch: String::new(),
                     project_key: String::new(),
                     is_main: false,
+                    status: OrcaStatus::Idle,
+                    archived: false,
                     environment: None,
                 },
             ]
@@ -6016,6 +6095,31 @@ mod tests {
             OrcaStatus::Idle
         );
         assert_eq!(status(json!({})), OrcaStatus::Idle);
+    }
+
+    #[test]
+    fn a_listed_worktree_has_the_highest_rank_of_itself_and_its_live_top_level_agents() {
+        let doc = json!({"worktrees": [
+            {"path": "/w/a", "sidebarStatus": "working", "agents": [
+                {"state": "waiting", "hasLivePty": true, "parentPaneKey": null},
+                {"state": "failed", "hasLivePty": true, "parentPaneKey": "t:l"}]},
+            {"path": "/w/b", "sidebarStatus": "inactive", "agents": [
+                {"state": "done", "hasLivePty": false, "parentPaneKey": null}]},
+            {"path": "/w/c", "isArchived": true, "sidebarStatus": "done", "agents": []},
+        ]});
+        let listed: Vec<(OrcaStatus, bool)> = worktrees_of(&doc)
+            .iter()
+            .map(|w| (w.status, w.archived))
+            .collect();
+        // A sub-agent and an agent with no live pty count for nothing; an archived worktree is kept for a launch and says so.
+        assert_eq!(
+            listed,
+            [
+                (OrcaStatus::Question, false),
+                (OrcaStatus::Idle, false),
+                (OrcaStatus::Done, true)
+            ]
+        );
     }
 
     #[test]

@@ -6,7 +6,11 @@ import type { OrcaSubagent } from "./OrcaSubagent";
 /**
  * One top-level agent of a live terminal.
  */
-export type OrcaRow = { group: OrcaGroup, repo: string, branch: string, 
+export type OrcaRow = { 
+/**
+ * Which AI it is: the agent's `agentType` (`claude`, `codex`, `antigravity` and so on); `None` when Orca gave none. Only `claude` is a Claude session; every other value, and none, is another agent (A-8).
+ */
+agent?: string | null, group: OrcaGroup, repo: string, branch: string, 
 /**
  * The one line of the row: the first line of the conversation's name, else of the prompt, the task, or the title of the pane's terminal; only what the owner or Claude wrote, never a message of the harness, data or the output of a process.
  */

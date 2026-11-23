@@ -2,6 +2,7 @@
 import type { CalendarChoices } from "../../ts/bindings/CalendarChoices";
 import type { Info } from "../../ts/bindings/Info";
 import type { OrcaRow } from "../../ts/bindings/OrcaRow";
+import type { OrcaStatus } from "../../ts/bindings/OrcaStatus";
 import type { TaskItem } from "../../ts/bindings/TaskItem";
 import type { OrcaWorktree } from "../../ts/bindings/OrcaWorktree";
 import type { SideChannel } from "../../ts/bindings/SideChannel";
@@ -100,7 +101,12 @@ const specs: Spec[] = [
 const rows = () =>
   specs.map(([repo, branch, line, extra], i) => orcaRow(repo, branch, line, { handle: `term_${i}`, paneKey: `tab_${i}:leaf_1`, path: path(repo, branch), atMs: minutesAgo(extra.minutes ?? 2) - 5_000, ...extra }));
 // The worktree of `main` is the project's own folder (`isMain`), which a handoff without 新規作成 starts in (A-9).
-const worktreeOf = (repo: string, branch: string): OrcaWorktree => ({ path: path(repo, branch), repo, branch, gitBranch: branch, projectKey: `proj_${repo}`, isMain: branch === "main" });
+// Its `status` is the icon of its row in the list (A-8): its session's, and idle when it has none; none is archived.
+const STATUS_OF: Record<OrcaRow["group"], OrcaStatus> = { waiting: "question", working: "working", done: "done" };
+const worktreeOf = (repo: string, branch: string): OrcaWorktree => {
+  const session = specs.find(([r, b]) => r === repo && b === branch);
+  return { path: path(repo, branch), repo, branch, gitBranch: branch, projectKey: `proj_${repo}`, isMain: branch === "main", status: session === undefined ? "idle" : STATUS_OF[session[3].group ?? "working"], archived: false };
+};
 const worktreeList = (): OrcaWorktree[] => [
   ...specs.map(([repo, branch]) => worktreeOf(repo, branch)),
   ...["billing-api", "shop-web", "mobile-api", "admin-console", "design-docs", "auth-service", "notify-worker", "data-batch", "ops-scripts", "landing-page"].map((repo) => worktreeOf(repo, "main")),
