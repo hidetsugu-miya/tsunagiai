@@ -200,48 +200,18 @@ impl ModelSettings {
 enum ModelPurpose {
     SlackSummary,
     MailSummary,
-    PromptChat,
-    Proofread,
-    SlackReply,
     OrcaHandoff,
-    TodoChat,
-    SlackChat,
 }
 
 impl ModelPurpose {
-    const ALL: [Self; 8] = [
-        Self::SlackSummary,
-        Self::MailSummary,
-        Self::PromptChat,
-        Self::Proofread,
-        Self::SlackReply,
-        Self::OrcaHandoff,
-        Self::TodoChat,
-        Self::SlackChat,
-    ];
+    const ALL: [Self; 3] = [Self::SlackSummary, Self::MailSummary, Self::OrcaHandoff];
 
     /// The names the screen sends and the settings file uses as keys.
     fn as_str(self) -> &'static str {
         match self {
             Self::SlackSummary => "slackSummary",
             Self::MailSummary => "mailSummary",
-            Self::PromptChat => "promptChat",
-            Self::Proofread => "proofread",
-            Self::SlackReply => "slackReply",
             Self::OrcaHandoff => "orcaHandoff",
-            Self::TodoChat => "todoChat",
-            Self::SlackChat => "slackChat",
-        }
-    }
-
-    /// What a purpose uses when nothing valid is saved for it: Sonnet and medium, and for the Slack thread conversation Sonnet and high.
-    fn default_settings(self) -> ModelSettings {
-        match self {
-            Self::SlackReply => ModelSettings {
-                model: Model::Sonnet,
-                effort: Effort::High,
-            },
-            _ => ModelSettings::default(),
         }
     }
 
@@ -259,26 +229,16 @@ impl ModelPurpose {
 pub struct ClaudeSettings {
     pub slack_summary: ModelSettings,
     pub mail_summary: ModelSettings,
-    pub prompt_chat: ModelSettings,
-    pub proofread: ModelSettings,
-    pub slack_reply: ModelSettings,
     pub orca_handoff: ModelSettings,
-    pub todo_chat: ModelSettings,
-    pub slack_chat: ModelSettings,
 }
 
 impl Default for ClaudeSettings {
     fn default() -> Self {
-        let of = ModelPurpose::default_settings;
+        let of = ModelSettings::default();
         Self {
-            slack_summary: of(ModelPurpose::SlackSummary),
-            mail_summary: of(ModelPurpose::MailSummary),
-            prompt_chat: of(ModelPurpose::PromptChat),
-            proofread: of(ModelPurpose::Proofread),
-            slack_reply: of(ModelPurpose::SlackReply),
-            orca_handoff: of(ModelPurpose::OrcaHandoff),
-            todo_chat: of(ModelPurpose::TodoChat),
-            slack_chat: of(ModelPurpose::SlackChat),
+            slack_summary: of,
+            mail_summary: of,
+            orca_handoff: of,
         }
     }
 }
@@ -288,12 +248,7 @@ impl ClaudeSettings {
         match purpose {
             ModelPurpose::SlackSummary => self.slack_summary,
             ModelPurpose::MailSummary => self.mail_summary,
-            ModelPurpose::PromptChat => self.prompt_chat,
-            ModelPurpose::Proofread => self.proofread,
-            ModelPurpose::SlackReply => self.slack_reply,
             ModelPurpose::OrcaHandoff => self.orca_handoff,
-            ModelPurpose::TodoChat => self.todo_chat,
-            ModelPurpose::SlackChat => self.slack_chat,
         }
     }
 
@@ -302,12 +257,7 @@ impl ClaudeSettings {
         match purpose {
             ModelPurpose::SlackSummary => self.slack_summary = settings,
             ModelPurpose::MailSummary => self.mail_summary = settings,
-            ModelPurpose::PromptChat => self.prompt_chat = settings,
-            ModelPurpose::Proofread => self.proofread = settings,
-            ModelPurpose::SlackReply => self.slack_reply = settings,
             ModelPurpose::OrcaHandoff => self.orca_handoff = settings,
-            ModelPurpose::TodoChat => self.todo_chat = settings,
-            ModelPurpose::SlackChat => self.slack_chat = settings,
         }
         self
     }
@@ -814,25 +764,21 @@ fn parse_entry(entry: &Value, default: ModelSettings) -> ModelSettings {
 }
 
 /// The settings a settings file holds, one entry per purpose. A purpose without an entry takes the top-level `model` and `effort` of the old one-pair form,
-/// so a choice made before the purposes were split is kept; a value the pair lacks gives the purpose's own default. A file that cannot be read gives the defaults.
+/// so a choice made before the purposes were split is kept; a value the pair lacks gives the default. A file that cannot be read gives the defaults.
+/// An entry of a purpose that is gone (`promptChat`, `proofread`, `slackReply`, `todoChat`, `slackChat`) is not read, and is no error.
 fn parse_settings(text: &str) -> ClaudeSettings {
     let file: Value = serde_json::from_str(text).unwrap_or_default();
     let entry = |purpose: ModelPurpose| {
         let entry = &file[purpose.as_str()];
         parse_entry(
             if entry.is_object() { entry } else { &file },
-            purpose.default_settings(),
+            ModelSettings::default(),
         )
     };
     ClaudeSettings {
         slack_summary: entry(ModelPurpose::SlackSummary),
         mail_summary: entry(ModelPurpose::MailSummary),
-        prompt_chat: entry(ModelPurpose::PromptChat),
-        proofread: entry(ModelPurpose::Proofread),
-        slack_reply: entry(ModelPurpose::SlackReply),
         orca_handoff: entry(ModelPurpose::OrcaHandoff),
-        todo_chat: entry(ModelPurpose::TodoChat),
-        slack_chat: entry(ModelPurpose::SlackChat),
     }
 }
 
@@ -3127,12 +3073,7 @@ mod tests {
         ClaudeSettings::default()
             .with(ModelPurpose::SlackSummary, settings)
             .with(ModelPurpose::MailSummary, settings)
-            .with(ModelPurpose::PromptChat, settings)
-            .with(ModelPurpose::Proofread, settings)
-            .with(ModelPurpose::SlackReply, settings)
             .with(ModelPurpose::OrcaHandoff, settings)
-            .with(ModelPurpose::TodoChat, settings)
-            .with(ModelPurpose::SlackChat, settings)
     }
 
     #[test]
@@ -3172,33 +3113,27 @@ mod tests {
             parse_settings(r#"{"model":"fable","effort":"high"}"#),
             all(settings(Model::Sonnet, Effort::High))
         );
-        let read = parse_settings(r#"{"slackReply":{"model":"fable","effort":"max"}}"#);
-        assert_eq!(read.slack_reply, settings(Model::Sonnet, Effort::Max));
+        let read = parse_settings(r#"{"orcaHandoff":{"model":"fable","effort":"max"}}"#);
+        assert_eq!(read.orca_handoff, settings(Model::Sonnet, Effort::Max));
     }
 
     #[test]
     fn a_settings_file_reads_each_valid_value_of_each_purpose_and_defaults_the_rest() {
         let read = parse_settings(
             r#"{"slackSummary":{"model":"opus","effort":"max"},"mailSummary":{"model":"haiku","effort":"low"},
-                "promptChat":{"model":"sonnet","effort":"xhigh"},"proofread":{"model":"sonnet","effort":"high"},
-                "slackReply":{"model":"opus","effort":"low"}}"#,
+                "orcaHandoff":{"model":"sonnet","effort":"xhigh"}}"#,
         );
         assert_eq!(read.slack_summary, settings(Model::Opus, Effort::Max));
         assert_eq!(read.mail_summary, settings(Model::Haiku, Effort::Low));
-        assert_eq!(read.prompt_chat, settings(Model::Sonnet, Effort::Xhigh));
-        assert_eq!(read.proofread, settings(Model::Sonnet, Effort::High));
-        assert_eq!(read.slack_reply, settings(Model::Opus, Effort::Low));
+        assert_eq!(read.orca_handoff, settings(Model::Sonnet, Effort::Xhigh));
         // One bad value does not spoil the other, and a bad purpose does not spoil the others.
         let read = parse_settings(
             r#"{"slackSummary":{"model":"opus","effort":"ultra"},"mailSummary":{"model":"gpt","effort":"low"},
-                "promptChat":{"model":1},"proofread":"max","slackReply":{"model":"gpt"}}"#,
+                "orcaHandoff":"max"}"#,
         );
         assert_eq!(read.slack_summary, settings(Model::Opus, Effort::Medium));
         assert_eq!(read.mail_summary, settings(Model::Sonnet, Effort::Low));
-        assert_eq!(read.prompt_chat, ModelSettings::default());
-        assert_eq!(read.proofread, ModelSettings::default());
-        // A bad value of the fifth purpose gives its own default: high, not medium.
-        assert_eq!(read.slack_reply, settings(Model::Sonnet, Effort::High));
+        assert_eq!(read.orca_handoff, ModelSettings::default());
         for text in [
             "",
             "{",
@@ -3220,46 +3155,67 @@ mod tests {
             parse_settings(r#"{"model":"opus","effort":"high"}"#),
             all(old)
         );
-        // A bad value of the old pair gives the default for that value, in every purpose (high for the Slack reply).
+        // A bad value of the old pair gives the default for that value, in every purpose.
         let read = parse_settings(r#"{"model":"opus","effort":"ultra"}"#);
-        assert_eq!(
-            read,
-            all(settings(Model::Opus, Effort::Medium)).with(
-                ModelPurpose::SlackReply,
-                settings(Model::Opus, Effort::High)
-            )
-        );
+        assert_eq!(read, all(settings(Model::Opus, Effort::Medium)));
         // A purpose that has its own entry does not take the old pair.
         let read = parse_settings(
             r#"{"model":"opus","effort":"high","mailSummary":{"model":"haiku","effort":"low"}}"#,
         );
         assert_eq!(read.mail_summary, settings(Model::Haiku, Effort::Low));
         assert_eq!(read.slack_summary, old);
-        assert_eq!(read.prompt_chat, old);
-        assert_eq!(read.proofread, old);
-        assert_eq!(read.slack_reply, old);
+        assert_eq!(read.orca_handoff, old);
     }
 
     #[test]
-    fn the_slack_reply_defaults_to_sonnet_and_high_and_the_others_to_sonnet_and_medium() {
+    fn every_purpose_defaults_to_sonnet_and_medium() {
         let d = ClaudeSettings::default();
-        assert_eq!(d.slack_reply, settings(Model::Sonnet, Effort::High));
-        for p in [
-            ModelPurpose::SlackSummary,
-            ModelPurpose::MailSummary,
-            ModelPurpose::PromptChat,
-            ModelPurpose::Proofread,
-            ModelPurpose::OrcaHandoff,
-            ModelPurpose::TodoChat,
-            ModelPurpose::SlackChat,
-        ] {
+        for p in ModelPurpose::ALL {
             assert_eq!(d.for_purpose(p), settings(Model::Sonnet, Effort::Medium));
         }
-        // A file written before the fifth purpose existed gives it the default, not the others' medium.
-        let read = parse_settings(r#"{"proofread":{"model":"opus","effort":"low"}}"#);
-        assert_eq!(read.slack_reply, settings(Model::Sonnet, Effort::High));
-        assert_eq!(read.proofread, settings(Model::Opus, Effort::Low));
-        assert_eq!(read.mail_summary, settings(Model::Sonnet, Effort::Medium));
+    }
+
+    #[test]
+    fn an_entry_of_a_purpose_that_is_gone_is_skipped_and_is_no_error() {
+        let read = parse_settings(
+            r#"{"promptChat":{"model":"opus","effort":"max"},"proofread":{"model":"opus","effort":"low"},
+                "slackReply":{"model":"haiku","effort":"high"},"todoChat":{"model":"opus","effort":"low"},
+                "slackChat":{"model":"opus","effort":"low"},"mailSummary":{"model":"haiku","effort":"low"}}"#,
+        );
+        assert_eq!(
+            read,
+            ClaudeSettings::default().with(
+                ModelPurpose::MailSummary,
+                settings(Model::Haiku, Effort::Low)
+            )
+        );
+        // The old entries do not come back through the old pair either: a file with the pair and the old entries gives the pair to the purposes left.
+        let read = parse_settings(
+            r#"{"model":"opus","effort":"high","slackReply":{"model":"haiku","effort":"low"}}"#,
+        );
+        assert_eq!(read, all(settings(Model::Opus, Effort::High)));
+        // A save keeps the three purposes only: the old entries are not written again.
+        let dir = temp_dir("settings-old-entries");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(SETTINGS_FILE),
+            r#"{"proofread":{"model":"opus","effort":"low"},"slackReply":{"model":"haiku","effort":"low"}}"#,
+        )
+        .unwrap();
+        let saved = save_settings(&dir, "mailSummary", "opus", Some("high")).unwrap();
+        assert_eq!(saved.mail_summary, settings(Model::Opus, Effort::High));
+        let text = std::fs::read_to_string(dir.join(SETTINGS_FILE)).unwrap();
+        for gone in [
+            "promptChat",
+            "proofread",
+            "slackReply",
+            "todoChat",
+            "slackChat",
+        ] {
+            assert!(!text.contains(gone), "{gone}");
+        }
+        assert_eq!(load_settings(&dir), saved);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -3271,9 +3227,14 @@ mod tests {
             "",
             "SlackSummary",
             "slack_summary",
-            " proofread",
+            " orcaHandoff",
             "all",
             "summary",
+            "promptChat",
+            "proofread",
+            "slackReply",
+            "todoChat",
+            "slackChat",
         ] {
             assert_eq!(ModelPurpose::parse(bad), None, "{bad}");
         }
@@ -3296,11 +3257,6 @@ mod tests {
             settings(Model::Haiku, Effort::Low),
             settings(Model::Opus, Effort::High),
             settings(Model::Sonnet, Effort::Max),
-            settings(Model::Sonnet, Effort::Xhigh),
-            settings(Model::Haiku, Effort::Max),
-            settings(Model::Opus, Effort::Low),
-            settings(Model::Haiku, Effort::High),
-            settings(Model::Opus, Effort::Max),
         ];
         for (p, s) in ModelPurpose::ALL.into_iter().zip(chosen) {
             all_set = all_set.with(p, s);
@@ -3311,23 +3267,18 @@ mod tests {
         let changed = all_set.with(ModelPurpose::MailSummary, ModelSettings::default());
         assert_eq!(changed.mail_summary, ModelSettings::default());
         assert_eq!(changed.slack_summary, chosen[0]);
-        assert_eq!(changed.prompt_chat, chosen[2]);
-        assert_eq!(changed.proofread, chosen[3]);
-        assert_eq!(changed.slack_reply, chosen[4]);
-        assert_eq!(changed.orca_handoff, chosen[5]);
-        assert_eq!(changed.todo_chat, chosen[6]);
-        assert_eq!(changed.slack_chat, chosen[7]);
+        assert_eq!(changed.orca_handoff, chosen[2]);
     }
 
     #[test]
     fn settings_load_gives_what_save_wrote_and_the_defaults_for_no_file() {
         let dir = temp_dir("settings");
         assert_eq!(load_settings(&dir), ClaudeSettings::default());
-        let saved = save_settings(&dir, "promptChat", "opus", Some("high")).unwrap();
+        let saved = save_settings(&dir, "slackSummary", "opus", Some("high")).unwrap();
         assert_eq!(
             saved,
             ClaudeSettings::default().with(
-                ModelPurpose::PromptChat,
+                ModelPurpose::SlackSummary,
                 settings(Model::Opus, Effort::High)
             )
         );
@@ -3349,16 +3300,13 @@ mod tests {
         )
         .unwrap();
         let old = settings(Model::Opus, Effort::High);
-        let saved = save_settings(&dir, "proofread", "haiku", Some("low")).unwrap();
-        assert_eq!(saved.proofread, settings(Model::Haiku, Effort::Low));
-        assert_eq!(
-            [saved.slack_summary, saved.mail_summary, saved.prompt_chat],
-            [old; 3]
-        );
+        let saved = save_settings(&dir, "orcaHandoff", "haiku", Some("low")).unwrap();
+        assert_eq!(saved.orca_handoff, settings(Model::Haiku, Effort::Low));
+        assert_eq!([saved.slack_summary, saved.mail_summary], [old; 2]);
         // The file now holds an entry per purpose, so the old pair no longer decides anything.
         let again = save_settings(&dir, "mailSummary", "opus", Some("max")).unwrap();
         assert_eq!(again.mail_summary, settings(Model::Opus, Effort::Max));
-        assert_eq!(again.proofread, settings(Model::Haiku, Effort::Low));
+        assert_eq!(again.orca_handoff, settings(Model::Haiku, Effort::Low));
         assert_eq!(again.slack_summary, old);
         assert_eq!(load_settings(&dir), again);
         let _ = std::fs::remove_dir_all(&dir);
@@ -3368,26 +3316,36 @@ mod tests {
     fn a_value_outside_the_lists_is_refused_in_japanese_and_nothing_is_written() {
         let dir = temp_dir("settings-refused");
         for (purpose, model, effort, message) in [
-            ("proofread", "gpt", Some("low"), "モデル"),
-            ("proofread", "fable", Some("low"), "モデル"),
-            ("proofread", "fable", None, "モデル"),
-            ("proofread", "sonnet", Some("none"), "effort"),
-            ("proofread", "", Some("medium"), "モデル"),
-            ("proofread", "sonnet", Some(""), "effort"),
-            ("proofread", "sonnet --tools Bash", Some("medium"), "モデル"),
+            ("mailSummary", "gpt", Some("low"), "モデル"),
+            ("mailSummary", "fable", Some("low"), "モデル"),
+            ("mailSummary", "fable", None, "モデル"),
+            ("mailSummary", "sonnet", Some("none"), "effort"),
+            ("mailSummary", "", Some("medium"), "モデル"),
+            ("mailSummary", "sonnet", Some(""), "effort"),
+            (
+                "mailSummary",
+                "sonnet --tools Bash",
+                Some("medium"),
+                "モデル",
+            ),
             ("", "sonnet", Some("medium"), "用途"),
             ("all", "sonnet", None, "用途"),
-            ("Proofread", "sonnet", Some("medium"), "用途"),
+            ("promptChat", "sonnet", Some("medium"), "用途"),
+            ("proofread", "sonnet", Some("medium"), "用途"),
+            ("slackReply", "sonnet", Some("medium"), "用途"),
+            ("todoChat", "sonnet", Some("medium"), "用途"),
+            ("slackChat", "sonnet", Some("medium"), "用途"),
+            ("MailSummary", "sonnet", Some("medium"), "用途"),
         ] {
             let e = save_settings(&dir, purpose, model, effort).unwrap_err();
             assert!(e.contains("不正です") && e.contains(message), "{e}");
         }
         assert!(!dir.join(SETTINGS_FILE).exists());
-        save_settings(&dir, "proofread", "haiku", Some("low")).unwrap();
-        assert!(save_settings(&dir, "proofread", "bad", Some("low")).is_err());
+        save_settings(&dir, "mailSummary", "haiku", Some("low")).unwrap();
+        assert!(save_settings(&dir, "mailSummary", "bad", Some("low")).is_err());
         assert!(save_settings(&dir, "bad", "haiku", Some("low")).is_err());
         assert_eq!(
-            load_settings(&dir).proofread,
+            load_settings(&dir).mail_summary,
             settings(Model::Haiku, Effort::Low)
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -4323,7 +4281,7 @@ mod tests {
         let d = ClaudeSettings::default();
         assert_eq!(d.orca_handoff, settings(Model::Sonnet, Effort::Medium));
         // A file written before this purpose existed gives it the default, and a saved entry is read.
-        let read = parse_settings(r#"{"proofread":{"model":"opus","effort":"low"}}"#);
+        let read = parse_settings(r#"{"mailSummary":{"model":"opus","effort":"low"}}"#);
         assert_eq!(read.orca_handoff, settings(Model::Sonnet, Effort::Medium));
         let read = parse_settings(r#"{"orcaHandoff":{"model":"haiku","effort":"max"}}"#);
         assert_eq!(read.orca_handoff, settings(Model::Haiku, Effort::Max));
@@ -4334,55 +4292,7 @@ mod tests {
         let dir = temp_dir("settings-handoff");
         let saved = save_settings(&dir, "orcaHandoff", "opus", Some("high")).unwrap();
         assert_eq!(saved.orca_handoff, settings(Model::Opus, Effort::High));
-        assert_eq!(saved.slack_reply, ClaudeSettings::default().slack_reply);
-        assert_eq!(load_settings(&dir), saved);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn the_todo_chat_has_its_own_purpose_that_defaults_to_sonnet_and_medium() {
-        assert_eq!(ModelPurpose::TodoChat.as_str(), "todoChat");
-        assert_eq!(
-            ModelPurpose::parse("todoChat"),
-            Some(ModelPurpose::TodoChat)
-        );
-        let d = ClaudeSettings::default();
-        assert_eq!(d.todo_chat, settings(Model::Sonnet, Effort::Medium));
-        // A file written before this purpose existed gives it the default, and a saved entry is read.
-        let read = parse_settings(r#"{"proofread":{"model":"opus","effort":"low"}}"#);
-        assert_eq!(read.todo_chat, settings(Model::Sonnet, Effort::Medium));
-        let read = parse_settings(r#"{"todoChat":{"model":"haiku","effort":"max"}}"#);
-        assert_eq!(read.todo_chat, settings(Model::Haiku, Effort::Max));
-        assert_eq!(read.for_purpose(ModelPurpose::TodoChat), read.todo_chat);
-        assert_eq!(read.orca_handoff, settings(Model::Sonnet, Effort::Medium));
-        let dir = temp_dir("settings-todo-chat");
-        let saved = save_settings(&dir, "todoChat", "opus", Some("high")).unwrap();
-        assert_eq!(saved.todo_chat, settings(Model::Opus, Effort::High));
-        assert_eq!(saved.orca_handoff, ClaudeSettings::default().orca_handoff);
-        assert_eq!(load_settings(&dir), saved);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn the_slack_chat_has_its_own_purpose_that_defaults_to_sonnet_and_medium() {
-        assert_eq!(ModelPurpose::SlackChat.as_str(), "slackChat");
-        assert_eq!(
-            ModelPurpose::parse("slackChat"),
-            Some(ModelPurpose::SlackChat)
-        );
-        let d = ClaudeSettings::default();
-        assert_eq!(d.slack_chat, settings(Model::Sonnet, Effort::Medium));
-        // A file written before this purpose existed gives it the default, and a saved entry is read.
-        let read = parse_settings(r#"{"proofread":{"model":"opus","effort":"low"}}"#);
-        assert_eq!(read.slack_chat, settings(Model::Sonnet, Effort::Medium));
-        let read = parse_settings(r#"{"slackChat":{"model":"haiku","effort":"max"}}"#);
-        assert_eq!(read.slack_chat, settings(Model::Haiku, Effort::Max));
-        assert_eq!(read.for_purpose(ModelPurpose::SlackChat), read.slack_chat);
-        assert_eq!(read.todo_chat, settings(Model::Sonnet, Effort::Medium));
-        let dir = temp_dir("settings-slack-chat");
-        let saved = save_settings(&dir, "slackChat", "opus", Some("high")).unwrap();
-        assert_eq!(saved.slack_chat, settings(Model::Opus, Effort::High));
-        assert_eq!(saved.slack_reply, ClaudeSettings::default().slack_reply);
+        assert_eq!(saved.mail_summary, ClaudeSettings::default().mail_summary);
         assert_eq!(load_settings(&dir), saved);
         let _ = std::fs::remove_dir_all(&dir);
     }

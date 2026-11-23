@@ -891,15 +891,8 @@ describe("settings: Claude model and effort", () => {
   const PURPOSES: [Purpose, string, string][] = [
     ["slackSummary", "Slack の要約", "Slack のメッセージから Todo を作るとき"],
     ["mailSummary", "メールの要約", "メール詳細の AI 要約"],
-    ["promptChat", "プロンプトの会話", "Todo の要約プロンプトを Claude と編集するとき"],
-    ["proofread", "Slack に貼る文章の校正", "どのペインも使っていません"],
-    ["slackReply", "Slack のスレッドの相談", "スレッド詳細の Claude 欄"],
     ["orcaHandoff", "Orca に渡す要約", "Orca に渡すペインで、渡す内容を要約するとき"],
-    ["todoChat", "Todo の相談", "Todo の Claude ペインで、タスクを頼むとき"],
-    ["slackChat", "Slack の相談", "どのペインも使っていません"],
   ];
-  // The default effort of a purpose: medium, and high for the Slack thread conversation.
-  const defaultEffort = (purpose: Purpose) => (purpose === "slackReply" ? "high" : "medium");
   const selectOf = (purpose: Purpose, kind: "model" | "effort") => $(`#claude-models select[data-purpose="${purpose}"][data-kind="${kind}"]`);
   // Sets a select as the user does (value, then change); the real WebView's select popup is not driven.
   const choose = (purpose: Purpose, kind: "model" | "effort", value: string) =>
@@ -919,19 +912,19 @@ describe("settings: Claude model and effort", () => {
   const drawnSelects = () => browser.execute(() => document.querySelectorAll("#claude-models select").length);
 
   for (const [state, status] of [["ready", claudeReady], ["loggedOut", claudeLoggedOut], ["missing", claudeMissing]] as const) {
-    it(`has its own card with the defaults selected for the eight purposes, while Claude is ${state}`, async () => {
+    it(`has its own card with the defaults selected for the three purposes, while Claude is ${state}`, async () => {
       await openSettings([], status, "claude");
       await expect($("#claude-models")).toBeDisplayed();
       await expect($("#claude-prompt .item-name")).toHaveText("Todo の要約プロンプト");
-      expect(await drawnSelects()).toBe(16);
+      expect(await drawnSelects()).toBe(6);
       for (const [purpose] of PURPOSES) {
         await expect(selectOf(purpose, "model")).toHaveValue("sonnet");
-        await expect(selectOf(purpose, "effort")).toHaveValue(defaultEffort(purpose));
+        await expect(selectOf(purpose, "effort")).toHaveValue("medium");
       }
     });
   }
 
-  it("names the eight purposes in order, each with where it is used, and labels its selects", async () => {
+  it("names the three purposes in order, each with where it is used, and labels its selects", async () => {
     await openSettings([], claudeReady, "claude");
     const whos = await textsOf("#claude-models .model-grid .who");
     expect(whos).toEqual(PURPOSES.map(([, name, meta]) => `${name}${meta}`));
@@ -949,10 +942,10 @@ describe("settings: Claude model and effort", () => {
     }
   });
 
-  it("heads the columns 用途, モデル and effort, and says once that the default is Sonnet and medium, and Sonnet and high for the Slack reply", async () => {
+  it("heads the columns 用途, モデル and effort, and says once that the default is Sonnet and medium", async () => {
     await openSettings([], claudeReady, "claude");
     expect(await textsOf("#claude-models .model-grid .th")).toEqual(["用途", "モデル", "effort"]);
-    await expect($("#claude-models .model-note")).toHaveText("次の呼び出しから使います。デフォルトは Sonnet と medium（Slack のスレッドの相談は Sonnet と high）");
+    await expect($("#claude-models .model-note")).toHaveText("次の呼び出しから使います。デフォルトは Sonnet と medium");
   });
 
   it("does not wrap the description of a purpose onto a second line", async () => {
@@ -960,7 +953,7 @@ describe("settings: Claude model and effort", () => {
     const wrapped = await browser.execute(() =>
       [...document.querySelectorAll<HTMLElement>("#claude-models .model-grid .who .item-meta")].map((e) => e.getBoundingClientRect().height > 20),
     );
-    expect(wrapped).toEqual([false, false, false, false, false, false, false, false]);
+    expect(wrapped).toEqual([false, false, false]);
   });
 
   it("shows the saved model and effort of each purpose", async () => {
@@ -971,32 +964,17 @@ describe("settings: Claude model and effort", () => {
       claude_model_settings: {
         slackSummary: { model: "opus", effort: "xhigh" },
         mailSummary: { model: "haiku", effort: "low" },
-        promptChat: { model: "opus", effort: "high" },
-        proofread: { model: "sonnet", effort: "max" },
-        slackReply: { model: "haiku", effort: "xhigh" },
         orcaHandoff: { model: "opus", effort: "low" },
-        todoChat: { model: "haiku", effort: "high" },
-        slackChat: { model: "opus", effort: "medium" },
       },
     });
     await $("#nav-settings").click();
     await openTab("claude");
-    await expect(selectOf("slackReply", "model")).toHaveValue("haiku");
-    await expect(selectOf("slackReply", "effort")).toHaveValue("xhigh");
     await expect(selectOf("slackSummary", "model")).toHaveValue("opus");
     await expect(selectOf("slackSummary", "effort")).toHaveValue("xhigh");
     await expect(selectOf("mailSummary", "model")).toHaveValue("haiku");
     await expect(selectOf("mailSummary", "effort")).toHaveValue("low");
-    await expect(selectOf("promptChat", "model")).toHaveValue("opus");
-    await expect(selectOf("promptChat", "effort")).toHaveValue("high");
-    await expect(selectOf("proofread", "model")).toHaveValue("sonnet");
-    await expect(selectOf("proofread", "effort")).toHaveValue("max");
     await expect(selectOf("orcaHandoff", "model")).toHaveValue("opus");
     await expect(selectOf("orcaHandoff", "effort")).toHaveValue("low");
-    await expect(selectOf("todoChat", "model")).toHaveValue("haiku");
-    await expect(selectOf("todoChat", "effort")).toHaveValue("high");
-    await expect(selectOf("slackChat", "model")).toHaveValue("opus");
-    await expect(selectOf("slackChat", "effort")).toHaveValue("medium");
   });
 
   for (const [purpose, name] of PURPOSES) {
@@ -1012,7 +990,7 @@ describe("settings: Claude model and effort", () => {
       await expect(selectOf(purpose, "effort")).toHaveValue("max");
       for (const [other] of PURPOSES.filter(([p]) => p !== purpose)) {
         await expect(selectOf(other, "model")).toHaveValue("sonnet");
-        await expect(selectOf(other, "effort")).toHaveValue(defaultEffort(other));
+        await expect(selectOf(other, "effort")).toHaveValue("medium");
       }
     });
   }
@@ -1028,7 +1006,7 @@ describe("settings: Claude model and effort", () => {
       await expect(selectOf("mailSummary", "effort")).toHaveAttribute("data-effort", effort);
     }
     // The other purposes keep their own effort.
-    await expect(selectOf("proofread", "effort")).toHaveValue("medium");
+    await expect(selectOf("orcaHandoff", "effort")).toHaveValue("medium");
   });
 
   it("puts the selection back and shows the error when it cannot be saved", async () => {
@@ -1052,16 +1030,16 @@ describe("settings: Claude model and effort", () => {
   it("disables every select while a save is on its way", async () => {
     await openSettings([], claudeReady, "claude");
     const save = await mock("claude_model_settings_save", holds);
-    await choose("proofread", "model", "opus");
+    await choose("slackSummary", "model", "opus");
     await waitForCalls(save);
     for (const [purpose] of PURPOSES) {
       await expect(selectOf(purpose, "model")).toBeDisabled();
       await expect(selectOf(purpose, "effort")).toBeDisabled();
     }
-    await release(save, { ...claudeSettings, proofread: { model: "opus", effort: "medium" } });
-    await expect(selectOf("proofread", "model")).toBeEnabled();
-    await expect(selectOf("proofread", "model")).toHaveValue("opus");
-    await expect(selectOf("slackSummary", "effort")).toBeEnabled();
+    await release(save, { ...claudeSettings, slackSummary: { model: "opus", effort: "medium" } });
+    await expect(selectOf("slackSummary", "model")).toBeEnabled();
+    await expect(selectOf("slackSummary", "model")).toHaveValue("opus");
+    await expect(selectOf("orcaHandoff", "effort")).toBeEnabled();
   });
 
   describe("effort colors", () => {
@@ -1076,20 +1054,14 @@ describe("settings: Claude model and effort", () => {
         claude_model_settings: {
           slackSummary: { model: "sonnet", effort: "low" },
           mailSummary: { model: "sonnet", effort: "medium" },
-          promptChat: { model: "sonnet", effort: "high" },
-          proofread: { model: "sonnet", effort: "xhigh" },
-          slackReply: { model: "sonnet", effort: "high" },
-          orcaHandoff: { model: "sonnet", effort: "medium" },
-          todoChat: { model: "sonnet", effort: "medium" },
-          slackChat: { model: "sonnet", effort: "medium" },
+          orcaHandoff: { model: "sonnet", effort: "xhigh" },
         },
       });
       await $("#nav-settings").click();
       await openTab("claude");
       await expect(selectOf("slackSummary", "effort")).toHaveAttribute("data-effort", "low");
       await expect(selectOf("mailSummary", "effort")).toHaveAttribute("data-effort", "medium");
-      await expect(selectOf("promptChat", "effort")).toHaveAttribute("data-effort", "high");
-      await expect(selectOf("proofread", "effort")).toHaveAttribute("data-effort", "xhigh");
+      await expect(selectOf("orcaHandoff", "effort")).toHaveAttribute("data-effort", "xhigh");
       // The model selects carry none.
       await expect(selectOf("slackSummary", "model")).not.toHaveAttribute("data-effort");
       // A change is followed at once, while the save is still on its way.
@@ -1115,12 +1087,7 @@ describe("settings: Claude model and effort", () => {
         claude_model_settings: {
           slackSummary: { model: "sonnet", effort: "low" },
           mailSummary: { model: "sonnet", effort: "medium" },
-          promptChat: { model: "sonnet", effort: "high" },
-          proofread: { model: "sonnet", effort: "max" },
-          slackReply: { model: "sonnet", effort: "high" },
-          orcaHandoff: { model: "sonnet", effort: "medium" },
-          todoChat: { model: "sonnet", effort: "medium" },
-          slackChat: { model: "sonnet", effort: "medium" },
+          orcaHandoff: { model: "sonnet", effort: "high" },
         },
       });
       await $("#nav-settings").click();
@@ -1132,21 +1099,21 @@ describe("settings: Claude model and effort", () => {
         expect(bg).not.toBe(fg);
         seen.add(`${bg}/${fg}`);
       }
-      expect(seen.size).toBe(4);
-      // xhigh differs from the four above (the Slack reply's high is promptChat's high).
-      const save = await mock("claude_model_settings_save", { ...claudeSettings, proofread: { model: "sonnet", effort: "xhigh" } });
-      await choose("proofread", "effort", "xhigh");
+      expect(seen.size).toBe(3);
+      // xhigh differs from the three above.
+      const save = await mock("claude_model_settings_save", { ...claudeSettings, orcaHandoff: { model: "sonnet", effort: "xhigh" } });
+      await choose("orcaHandoff", "effort", "xhigh");
       await waitForCalls(save);
-      seen.add(`${(await background("proofread")).value}/${(await colorOf("proofread")).value}`);
-      expect(seen.size).toBe(5);
+      seen.add(`${(await background("orcaHandoff")).value}/${(await colorOf("orcaHandoff")).value}`);
+      expect(seen.size).toBe(4);
     });
   });
 
-  it("says in the ? hint that each of the eight Claude calls has its own setting", async () => {
+  it("says in the ? hint that each of the three Claude calls has its own setting", async () => {
     await openSettings([], claudeReady, "claude");
     await $("#claude-help").click();
     await expect($('[role="dialog"][aria-label="Claude の使い方"] .foot')).toHaveText(
-      expect.stringContaining("Slack の要約、メールの要約、プロンプトの会話、Slack に貼る文章の校正、Slack のスレッドの相談、Orca に渡す要約、Todo の相談、Slack の相談のそれぞれに選べます"),
+      expect.stringContaining("Slack の要約、メールの要約、Orca に渡す要約のそれぞれに選べます"),
     );
   });
 });
