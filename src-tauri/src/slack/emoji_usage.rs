@@ -15,8 +15,6 @@ use crate::{accounts::write_atomic, auth::config_dir, gmail::log_failure};
 const USAGE_FILE: &str = "slack-emoji-usage.json";
 /// How many uses of a workspace are kept: the oldest go first.
 const USAGE_MAX: usize = 200;
-/// How many emoji `slack_emoji_frequent` answers (8 in a row, 3 rows).
-const FREQUENT_MAX: usize = 24;
 const BAD_EMOJI: &str = "絵文字の名前か貼り付け先が不正です";
 
 /// The uses of each workspace, by `team_id`, oldest first.
@@ -63,7 +61,7 @@ fn with_used(mut used: Vec<String>, name: &str) -> Vec<String> {
     used
 }
 
-/// The names of `used` (oldest first) by how many times each was used, most first; the same count puts the one used last first. At most `FREQUENT_MAX`.
+/// The names of `used` (oldest first) by how many times each was used, most first; the same count puts the one used last first. All of them: the screen leaves out the names it cannot show and cuts the rest at 24.
 fn frequent(used: &[String]) -> Vec<String> {
     // Name -> (uses, index of the last use).
     let mut stats: HashMap<&str, (usize, usize)> = HashMap::new();
@@ -76,7 +74,6 @@ fn frequent(used: &[String]) -> Vec<String> {
     ranked.sort_by_key(|a| std::cmp::Reverse(a.1));
     ranked
         .into_iter()
-        .take(FREQUENT_MAX)
         .map(|(name, _)| name.to_owned())
         .collect()
 }
@@ -115,7 +112,7 @@ pub async fn slack_emoji_used(
     .map_err(|e| log_failure(command, &team_id, e))
 }
 
-/// The emoji of the workspace `team_id` the user reacted with most (S-25), most first, at most 24. None for a workspace with no use.
+/// The emoji of the workspace `team_id` the user reacted with, most used first (S-25), every name kept (at most the last 200 uses). None for a workspace with no use.
 #[tauri::command]
 pub async fn slack_emoji_frequent(app: AppHandle, team_id: String) -> Result<Vec<String>, String> {
     let command = "slack_emoji_frequent";
@@ -170,13 +167,13 @@ mod tests {
     }
 
     #[test]
-    fn frequent_stops_at_24() {
+    fn frequent_answers_every_name_not_only_24() {
         let used: Vec<String> = (0..30).map(|i| format!("e{i}")).collect();
         let top = frequent(&used);
-        assert_eq!(top.len(), FREQUENT_MAX);
+        assert_eq!(top.len(), 30);
         // Every count is 1, so the newest come first.
         assert_eq!(top[0], "e29");
-        assert_eq!(top[23], "e6");
+        assert_eq!(top[29], "e0");
     }
 
     #[test]
