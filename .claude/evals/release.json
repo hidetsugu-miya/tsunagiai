@@ -19,13 +19,13 @@
     {
       "id": 2,
       "name": "lead-files-an-issue-for-an-unphotographed-screen",
-      "prompt": "あなたは implement の実行の手順 7 に来たリードで、release-preparer を起動したところです。`.claude/skills/release/SKILL.md` を読み、release-preparer が `.claude/evals/files/release/preparer-return.md` の JSON を返したときに、リードがすることを決めてください。コマンドは実行せず、打つはずのコマンドや呼ぶスキルを順に書いてください。GitHub には読み書きともに触れないでください。",
+      "prompt": "あなたは implement の実行の手順 7 に来たリードで、release-preparer を起動したところです。`.claude/skills/release/SKILL.md` を読み、release-preparer が `.claude/evals/files/release/preparer-return.md` の JSON を返したときに、リードがすることを決めてください。コマンドは実行せず、打つはずのコマンドや呼ぶスキルを順に書いてください。同じ画面の開いた issue を探すコマンドは空の一覧を返すものとします。GitHub には読み書きともに触れないでください。",
       "expected_output": "`merged` を確かめたあと、`unphotographed` の「Slack 一覧」について、リードが `issue-plan` で issue を立て（label `documentation`）、そのあと release-watcher を起動する。",
       "files": [
         ".claude/evals/files/release/preparer-return.md"
       ],
       "assertions": [
-        "`unphotographed` の「Slack 一覧」について、リード自身が `issue-plan` で issue を立てると書いている（label `documentation`）",
+        "同じ画面の開いた issue を探したうえで、`unphotographed` の「Slack 一覧」について、リード自身が `issue-plan` で issue を立てると書いている（label `documentation`）",
         "issue を立てたあとで release-watcher を起動すると書いている"
       ]
     },
@@ -42,6 +42,22 @@
         "`follow_up` が残っているので、release-watcher をもう一度起動すると書いている（`released` で終わらせない）",
         "その起動のあとにも同じ `follow_up` が出たらオーナーに伝えると書いている",
         "リード自身が `watch-ci.sh` やコメントの投稿を行わず、手でタグも打たない"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "lead-comments-on-the-open-issue-of-the-same-screen",
+      "prompt": "あなたは implement の実行の手順 7 に来たリードで、release-preparer を起動したところです。`.claude/skills/release/SKILL.md` を読み、release-preparer が `.claude/evals/files/release/preparer-return.md` の JSON を返し、リードが同じ画面の開いた issue を探すと `.claude/evals/files/release/open-issues-slack-list.md` の出力になったときに、リードがすることを決めてください。コマンドは実行せず、打つはずのコマンドや呼ぶスキルを順に書いてください。GitHub には読み書きともに触れないでください。",
+      "expected_output": "`merged` を確かめたあと、「Slack 一覧」の開いた issue（#1488）がすでにあるので、新しい issue は立てず、その issue にコメントを足す。そのあと release-watcher を起動する。",
+      "files": [
+        ".claude/evals/files/release/preparer-return.md",
+        ".claude/evals/files/release/open-issues-slack-list.md"
+      ],
+      "assertions": [
+        "同じ画面の開いた issue を探すコマンド（`gh issue list --state open --label documentation --search \"Slack 一覧 in:title\"` など）を打つと書いている",
+        "#1488 にコメントを足すと書いている",
+        "`issue-plan` で新しい issue を立てない",
+        "そのあとで release-watcher を起動すると書いている"
       ]
     }
   ]
