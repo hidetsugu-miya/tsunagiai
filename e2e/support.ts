@@ -823,7 +823,6 @@ export const decisionPage = (extra: Partial<DecisionPage> = {}): DecisionPage =>
   needsUserDecision: [],
   residualMustFix: [],
   structuralProposals: [],
-  adr: null,
   risks: null,
   settledDecisions: [],
   withdrawnNeedsUserDecision: [],

@@ -61,8 +61,7 @@ When two results contradict, read the cited ranges again, keep the conclusion th
 1. Write each conclusion that survived step 4 under the section of its perspective ([notes-template](notes-template.md)). Create the file from the template when it does not exist.
    `structure` and `consistency` have no section.
 2. Settle the change kind (new feature, change, bug fix, migration) from the request, and write it under "Settled investigation items". The other six items of that section come from the scope-design perspective.
-3. Search for the decision records of the repository (a folder such as `docs/adr` or `docs/decisions`). When one exists, check that nothing in the request contradicts an existing technical decision, and write the related ones (number, title, relation) under "Related ADRs". Otherwise write "none".
-4. Record `code-facts-base.json` beside the notes ([norms](norms.md), "Reusing confirmed facts").
+3. Record `code-facts-base.json` beside the notes ([norms](norms.md), "Reusing confirmed facts").
 
 A matter that a perspective left unsettled, and a point that could not be judged, goes on the open-question list (the form is in [norms](norms.md)). Write only what meets its definition.
 Do not write the list into the notes or into any deliverable. Keep it in your context.

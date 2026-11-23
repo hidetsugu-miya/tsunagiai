@@ -42,6 +42,19 @@
         "本文に背景、調べたこと、決定（案 A を選んだこと）、計画があり、末尾が `Created by Claude Code` である",
         "`gh issue create` が 1 件で、ラベルに `point:*` が 1 つあり、`documentation` は無い"
       ]
+    },
+    {
+      "id": 4,
+      "name": "owner-says-first-gets-no-priority-label",
+      "prompt": "あなたは issue を作るよう頼まれたリードです。`.claude/skills/issue-plan/SKILL.md` を読み、`.claude/evals/files/issue-plan/request-owner-says-first.md` の依頼について、手順 1 と 2 のとおりに issue を書いてください。この記録が、あなたの持つ文脈です。GitHub には読み書きともに触れないでください。`gh issue create` や `gh issue comment` は実行せずに、打つはずのコマンド、題、ラベル、本文、コメントをそのまま書き出してください。`guard-public.sh text` はそのまま実行して構いません。",
+      "expected_output": "オーナーが「先にやりたい」と言っても、優先度のラベルは使わない。`urgency:high` も付けない。`point:*` を 1 つ付ける。",
+      "files": [
+        ".claude/evals/files/issue-plan/request-owner-says-first.md"
+      ],
+      "assertions": [
+        "ラベルに `priority:1`、`priority:2`、`priority:3` のどれも無い",
+        "ラベルに `urgency:high` が無く、`point:1`、`point:2`、`point:3` のどれか 1 つがある"
+      ]
     }
   ]
 }

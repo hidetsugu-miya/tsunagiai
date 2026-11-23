@@ -41,10 +41,6 @@ const FIXED: Record<CardKind, Choice[]> = {
     { key: "reject", label: "却下" },
     { key: "hold", label: "保留" },
   ],
-  adr: [
-    { key: "keep", label: "残す" },
-    { key: "decline", label: "不要" },
-  ],
 };
 // The kinds whose free text sits in the row of `その他`; the others have a field of their own under the choices.
 const LETTERED = new Set<CardKind>(["question", "nr"]);
@@ -178,7 +174,7 @@ const UNANSWERED_AS: Partial<Record<CardKind, (card: Card) => string | null>> = 
 function verdictBox(root: HTMLElement, page: DecisionPage): Verdict {
   const group = `fp-verdict-${++cards}`;
   const cardOf = new Map<string, Card>(
-    [...page.needsUserDecision, ...page.residualMustFix, ...page.structuralProposals, ...(page.adr === null ? [] : [page.adr])].map((c) => [c.number, c]),
+    [...page.needsUserDecision, ...page.residualMustFix, ...page.structuralProposals].map((c) => [c.number, c]),
   );
   const node = section("あなたの判定", "fp-verdict", "verdict");
   const unit = approvalUnit(page);
@@ -381,7 +377,6 @@ function groups(page: DecisionPage): HTMLElement[] {
           ["判断が必要", page.needsUserDecision],
           ["未解消の必ず直す指摘", page.residualMustFix],
           ["構造改善の提案", page.structuralProposals],
-          ["ADR（設計判断の記録）", page.adr === null ? [] : [page.adr]],
         ];
   return list
     .filter(([, cardsOf]) => cardsOf.length > 0)

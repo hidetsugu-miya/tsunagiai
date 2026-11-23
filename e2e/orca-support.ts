@@ -69,12 +69,12 @@ export const tabTitles = () => textsOf(".orca-tabs .orca-tab-title");
 export const tabOf = (id: string) => $(`.orca-tabs [data-tab="${id}"]`);
 export const claudeTab = (repo: string) => `claude:tab_${repo}:leaf_1`;
 
-// The page's own press of an item of a menu (the driver's click focuses the button after the page's handler ran, which no real press does).
+// The page's own press of an item of a menu, found by its text, or by its aria-label for an icon button (the driver's click focuses the button after the page's handler ran, which no real press does).
 export async function pickItem(label: string) {
   await browser.execute(
     (id, text) => {
       if (!window.__e2e_once__(id)) return;
-      [...document.querySelectorAll<HTMLElement>('.menu[role="menu"] button')].find((b) => b.textContent === text)!.click();
+      [...document.querySelectorAll<HTMLElement>('.menu[role="menu"] button')].find((b) => (b.getAttribute("aria-label") ?? b.textContent) === text)!.click();
     },
     onceId(),
     label,

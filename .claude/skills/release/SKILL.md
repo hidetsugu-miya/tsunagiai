@@ -9,7 +9,6 @@ Two procedures, each run by a subagent of its own (at the owner's instruction, 2
 Procedure A prepares the Release PR when changes wait for the release, and merges it: `release-preparer` (Sonnet).
 Procedure B sees the release of a merged Release PR through: `release-watcher` (Haiku).
 The lead is the session that read this file. It launches the two agents, checks their returns and sorts a failed release run; it runs neither procedure itself.
-The rules of both are in "Rules" at the end of this file.
 Only a session prepares the Release PR, merges it and sees the release through, and it does not wait for the owner (at the owner's instruction, 2026-11-21; #1179: the night run is removed).
 Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.claude/tools/"`.
 
@@ -19,7 +18,7 @@ Tools are at `"$(git rev-parse --path-format=absolute --git-common-dir)/../.clau
 
 Give each launch the absolute path of the main checkout.
 
-1. Launch `release-preparer`. Check its return, with `gh pr view {pr} --json state` for `merged`. On `merged`, `merge-refused` and `blocked`, when `unphotographed` is not empty, file an issue with `issue-plan` for each screen in it (label `documentation`; `readme-product`), then:
+1. Launch `release-preparer`. Check its return, with `gh pr view {pr} --json state` for `merged`. On `merged`, `merge-refused` and `blocked`, for each screen in a non-empty `unphotographed`, look for an open issue of that screen with `gh issue list --state open --label documentation --search "{screen} in:title"`: comment on it when there is one, and otherwise file an issue with `issue-plan` (label `documentation`; `readme-product`). Then:
    - `merged`: go on to 2.
    - `nothing-to-prepare`: stop.
    - `in-use`: another session has `release/next` and is preparing the Release PR. Tell the owner and stop.
