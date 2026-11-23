@@ -1,0 +1,53 @@
+{
+  "free": [
+    {
+      "number": 61,
+      "title": "一覧の空の名前を直す",
+      "body": "ts/slack-list.ts の名前の描画を直す。",
+      "labels": [
+        "bug",
+        "point:1"
+      ],
+      "dependabot": false,
+      "urgency": "normal",
+      "importance": "normal",
+      "points": 1,
+      "parent": null,
+      "createdAt": "2026-11-10T00:00:00Z",
+      "blocked_by": []
+    },
+    {
+      "number": 62,
+      "title": "Todo の検索に履歴を足す",
+      "body": "ts/todo.ts に検索の履歴を足す。",
+      "labels": [
+        "point:3",
+        "importance:high"
+      ],
+      "dependabot": false,
+      "urgency": "normal",
+      "importance": "high",
+      "points": 3,
+      "parent": null,
+      "createdAt": "2026-11-09T00:00:00Z",
+      "blocked_by": []
+    },
+    {
+      "number": 63,
+      "title": "依存の更新 serde",
+      "body": "<!-- dependabot #900 -->\nserde を更新する。",
+      "labels": [
+        "dependencies",
+        "point:2"
+      ],
+      "dependabot": true,
+      "urgency": "normal",
+      "importance": "normal",
+      "points": 2,
+      "parent": null,
+      "createdAt": "2026-11-11T00:00:00Z",
+      "blocked_by": []
+    }
+  ],
+  "fixed": []
+}

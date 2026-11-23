@@ -126,20 +126,6 @@ def tier(issue):
     return (0 if urgent(issue) else 2) + (0 if has(issue, "importance:high") else 1)
 
 
-PRIORITIES = ("priority:1", "priority:2", "priority:3")
-NO_PRIORITY = len(PRIORITIES) + 1
-
-
-def priority(issue):
-    """The rank that the label `priority:1`, `priority:2` or `priority:3` gives within a tier (.claude/rules/issues.md), 1 first; an issue with none of them is after priority:3 (NO_PRIORITY).
-    An issue with more than one takes the first of them."""
-    return next((k for k, label in enumerate(PRIORITIES, 1) if has(issue, label)), NO_PRIORITY)
-
-
-def priority_label(issue):
-    return "no priority" if priority(issue) == NO_PRIORITY else PRIORITIES[priority(issue) - 1]
-
-
 def tier_label(issue):
     return f"urgency {'high' if urgent(issue) else 'low'}, importance {'high' if tier(issue) % 2 == 0 else 'low'}"
 
@@ -177,8 +163,8 @@ def parse_stream(text):
 # ---- pure: queue ----
 
 def base_key(i):
-    """The basic order (.claude/rules/issues.md, "Order the issues"): a Dependabot issue first, then the tier, then the priority (`priority:1` first, none last), then a bug of 1, 2 or 3 points first, then an issue without `importance:low` before one with it, then fewer points first, then the older issue first."""
-    return (not dependabot(i), tier(i), priority(i), not quick_bug(i), importance(i) == "low", points(i) or 99, i.created_at, i.number)
+    """The basic order (.claude/rules/issues.md, "Order the issues"): a Dependabot issue first, then the tier, then a bug of 1, 2 or 3 points first, then an issue without `importance:low` before one with it, then fewer points first, then the older issue first."""
+    return (not dependabot(i), tier(i), not quick_bug(i), importance(i) == "low", points(i) or 99, i.created_at, i.number)
 
 
 def base_order(free):
@@ -613,7 +599,6 @@ def issue_json(i):
         "dependabot": dependabot(i),
         "urgency": "high" if urgent(i) else "normal",
         "importance": importance(i),
-        "priority": None if priority(i) == NO_PRIORITY else priority(i),
         "points": points(i),
         "parent": i.parent,
         "createdAt": i.created_at,

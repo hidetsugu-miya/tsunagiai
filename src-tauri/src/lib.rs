@@ -405,6 +405,8 @@ pub fn run() {
             orca::orca_send,
             orca::orca_start,
             orca::orca_terminal_create,
+            orca::orca_agents_installed,
+            orca::orca_agent_launch,
             orca::orca_worktree_create,
             orca::orca_project_add,
             orca::orca_project_add_here,

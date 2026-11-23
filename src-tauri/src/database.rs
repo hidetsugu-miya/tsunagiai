@@ -272,12 +272,21 @@ fn view(
     })
 }
 
-/// The saved profiles, in the order they were made.
+/// The profiles by name, without regard to case. Equal names (which differ only in case or not at all in a file edited by hand) keep the order they were made in.
+fn sorted_by_name(mut profiles: Vec<DatabaseProfile>) -> Vec<DatabaseProfile> {
+    profiles.sort_by_cached_key(|p| p.name.to_lowercase());
+    profiles
+}
+
+/// The saved profiles, by name. The file keeps the order they were made in.
 pub fn list(
     dir: &Path,
     passwords: &impl PasswordStore,
 ) -> Result<Vec<DatabaseProfileView>, String> {
-    load(dir)?.into_iter().map(|p| view(passwords, p)).collect()
+    sorted_by_name(load(dir)?)
+        .into_iter()
+        .map(|p| view(passwords, p))
+        .collect()
 }
 
 /// Whether each connection has a saved password, remembered by its id for the login it was read for (#866: the screen reads the list every 2 seconds, and a read of the keychain for each connection each time is the cost).
@@ -325,7 +334,7 @@ fn list_marked(
 ) -> Result<Vec<DatabaseProfileView>, String> {
     let profiles = load(dir)?;
     marks.keep(&profiles);
-    profiles
+    sorted_by_name(profiles)
         .into_iter()
         .map(|profile| {
             let password_saved = match marks.of(&profile) {
@@ -1781,6 +1790,47 @@ mod tests {
             expected
         );
         assert_eq!(sessions.ids(&scripts).await, Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_names_are_ordered_without_regard_to_case_and_equal_names_keep_their_order() {
+        let at = |id: &str, name: &str| DatabaseProfile {
+            id: id.to_owned(),
+            ..direct(name)
+        };
+        let sorted = sorted_by_name(vec![
+            at("1", "banana"),
+            at("2", "Cherry"),
+            at("3", "apple"),
+            at("4", "Banana"),
+            at("5", "あ"),
+            at("7", "Apple"),
+        ]);
+        let ids: Vec<_> = sorted.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["3", "7", "1", "4", "2", "5"]);
+    }
+
+    #[test]
+    fn a_list_and_a_marked_list_are_in_the_order_of_the_names() {
+        let dir = temp_dir("by-name");
+        let passwords = Memory::default();
+        for name in ["delta", "Bravo", "charlie", "alpha"] {
+            save(&dir, &passwords, direct(name), None).unwrap();
+        }
+        let names = |views: Vec<DatabaseProfileView>| -> Vec<String> {
+            views.into_iter().map(|v| v.profile.name).collect()
+        };
+        let expected = ["alpha", "Bravo", "charlie", "delta"];
+        assert_eq!(names(list(&dir, &passwords).unwrap()), expected);
+        let marks = SavedMarks::default();
+        assert_eq!(
+            names(list_marked(&dir, &passwords, &marks).unwrap()),
+            expected
+        );
+        // The file keeps the order they were made in, so that a save finds a connection where it was.
+        let in_file: Vec<_> = load(&dir).unwrap().into_iter().map(|p| p.name).collect();
+        assert_eq!(in_file, ["delta", "Bravo", "charlie", "alpha"]);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

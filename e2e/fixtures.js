@@ -95,6 +95,8 @@ const answers = {
   orca_terminal_read: [],
   orca_terminal_input: null,
   orca_open_url: null,
+  // A-16: Claude alone is installed, so the plus has its row 「Claude を起動」; a spec that draws other agents of the plus menu mocks `orca_agents_installed`.
+  orca_agents_installed: [{ id: "claude", name: "Claude", default: true }],
   // M-12: a file may always be added; a spec that picks files mocks `mail_attach_pick`.
   mail_attach_check: null,
   mail_attach_pick: [],
@@ -180,7 +182,6 @@ const answers = {
     needsUserDecision: [],
     residualMustFix: [],
     structuralProposals: [],
-    adr: null,
     risks: null,
     settledDecisions: [],
     withdrawnNeedsUserDecision: [],

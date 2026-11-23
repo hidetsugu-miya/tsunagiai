@@ -74,8 +74,4 @@ Create it from the template below when it does not exist. Leave no `{{...}}` pla
 - External-system-integration expectation: {{settled value}} (basis: {{...}})
 - Operations expectation: {{settled value}} (basis: {{...}})
 - Non-functional expectation: {{settled value}} (basis: {{...}})
-
-## Related ADRs
-
-{{The number, title and relation to the requirement of each related decision record. "none" when there is no record or no folder of them.}}
 ```

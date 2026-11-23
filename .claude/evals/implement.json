@@ -70,6 +70,19 @@
         "起動の文で、担当に `run-e2e.sh` を回させていない",
         "「Orders for the implementer」を `制約:` としてそのまま入れている"
       ]
+    },
+    {
+      "id": 6,
+      "name": "proposal-shows-no-priority",
+      "prompt": "あなたは implement の実行の手順 1 にいるリードです。`.claude/skills/implement/SKILL.md` の手順 1 を読み、`.claude/evals/files/implement/ranked-list.md` の返りから、オーナーに出す提案の文を書き出してください。この記録が、あなたの持つ実行の文脈です。コマンドは実行せず、打つはずのコマンドと、オーナーに出す文を書き出してください。",
+      "expected_output": "各 issue の番号、題、緊急度、重要度、ポイント、一行の理由を並べ、優先度は載せない。issue を自分で選ばず、オーナーが名指すのを待って止まる。",
+      "files": [
+        ".claude/evals/files/implement/ranked-list.md"
+      ],
+      "assertions": [
+        "提案の各項目が、番号、題、緊急度、重要度、ポイント、一行の理由を持ち、優先度の列や語が無い",
+        "どの issue も自分では始めず、オーナーが名指すのを待って止まる"
+      ]
     }
   ]
 }

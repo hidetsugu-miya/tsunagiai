@@ -46,13 +46,13 @@ By page kind:
 
 - `open-questions`: `questions`, an array of one or more `question` cards.
 - `approval`:
-  - `approval_scope` (required): an array of `{heading, items}` groups. An item is `{root, ref, description}` for a node of the deliverable, or `{root, path, description, extras}` for another file, where `extras` is an optional array of more paths of the same root, shown under the item and covered by its description. Give `ref` or `path`, never both. `root` is optional and defaults to `deliverables`; the item of an ADR file, which lives in a repository, names that repository's root. A group holds at least one item. Together the groups cover every requirement (or design) item, shared material and appendix, each as one `ref` item whose node holds its own extra materials. Group them by the deliverable's classes: requirements, shared materials and appendices (for `design`: design items, shared materials, appendices and the ADR).
-    - The description of a REQ or DESIGN item is `{ID} {name}。{summary}`, with its 「。」 dropped when the item's `summary` is `null`. That of a shared material names the DESIGN items it applies to (`design`) or what it is; that of an appendix names its kind (`集計`, `調査証跡`, `検算`); that of the ADR lists each recorded decision with the criteria it met.
+  - `approval_scope` (required): an array of `{heading, items}` groups. An item is `{root, ref, description}` for a node of the deliverable, or `{root, path, description, extras}` for another file, where `extras` is an optional array of more paths of the same root, shown under the item and covered by its description. Give `ref` or `path`, never both. `root` is optional and defaults to `deliverables`. A group holds at least one item. Together the groups cover every requirement (or design) item, shared material and appendix, each as one `ref` item whose node holds its own extra materials. Group them by the deliverable's classes: requirements, shared materials and appendices (for `design`: design items, shared materials and appendices).
+    - The description of a REQ or DESIGN item is `{ID} {name}。{summary}`, with its 「。」 dropped when the item's `summary` is `null`. That of a shared material names the DESIGN items it applies to (`design`) or what it is; that of an appendix names its kind (`集計`, `調査証跡`, `検算`).
     - On `design`, put the DESIGN items in a group of their own that holds nothing else. The page shows that group as the section 設計項目, one row for each item, and adds the section 実装順序 from the `implementation_order` of `design.json` itself: write no such group and no such section.
   - `quality_loop` (required): `{rounds, fix_cycles, must_fix_resolved}`, all integers: the review rounds that ran, the fix runs among them, and the must-fix findings they fixed. `fix_cycles` is required on `design` and a violation on `requirement`.
   - Optional:
     - `changes` (change sections, below).
-    - `needs_user_decision` (`nr` cards), `residual_must_fix` (`must-fix` cards), `structural_proposals` (`structural-proposal` cards, `design` only) and `adr` (one `adr` card, `design` only).
+    - `needs_user_decision` (`nr` cards), `residual_must_fix` (`must-fix` cards), `structural_proposals` (`structural-proposal` cards, `design` only).
     - `risks`: `{items, evidence}`, from the deliverable's risk material. `items` is an array of at least one `{title, text}`: `title` is one sentence for the risk and is required (each `### 既知の制限` statement of `design.json` is one, wherever it sits), `text` is its supplement and is optional. `evidence` is an optional array of evidence items. An array of blocks is refused.
     - `settled_decisions`: an array of `{id, decision, reason, evidence, provisional}` for the `UD-NN` decisions the deliverable records. `id`, `decision` and `reason` are required. `evidence` is an array of evidence items. `provisional` is `true` (`requirement` only) for a decision that waits for the business side; the page lists those apart.
     - `withdrawn_needs_user_decision`: an array of `{number, title, withdrawal_reason}`, one for each decision item the review withdrew because the final deliverable already settles it.
@@ -66,8 +66,8 @@ The page counts its cards, groups and answers itself, and adds the fixed sentenc
 
 | Key | Content |
 | --- | --- |
-| `kind` | Required, and it must be the kind of the array the card is in. `question` (`open-questions`); `nr`, `must-fix`, `structural-proposal`, `adr` (`approval`). |
-| `number` | Required. The id of the item (`UD-NN`, `NR-N`, `MF-N`, `SI-N`, `AD-1`). A `question` with none is `論点{n}`, numbered in the order passed. It is shown on the card and echoed in the reply. |
+| `kind` | Required, and it must be the kind of the array the card is in. `question` (`open-questions`); `nr`, `must-fix`, `structural-proposal` (`approval`). |
+| `number` | Required. The id of the item (`UD-NN`, `NR-N`, `MF-N`, `SI-N`). A `question` with none is `論点{n}`, numbered in the order passed. It is shown on the card and echoed in the reply. |
 | `title` | The card's header. On `question` and `nr`, it is the one question the card asks, a sentence that ends in `？`, in the words of what the owner decides. |
 | `summary` | Required. What is decided, in one or two sentences, with no recommendation. The page does not show it on `question` and `nr`. |
 | `occurrence` | Required on `nr` with `subject` `design`, otherwise a violation. `{conditions, likelihood, basis, impact, detectability}`, all required (below). |
@@ -87,9 +87,9 @@ The recommendation of each kind comes from the item or the record it cites, or f
 
 - `question` and `nr`: `A`, the option the item recommends, and its reason. Put the recommended option first as `A`, and letter the rest `B`, `C` in the order passed. A fixed-choice key is never the recommendation on these kinds.
 - `must-fix`: the `fix` or `skip` recorded on the item, with its reason.
-- `structural-proposal`: `approve`, with a reason drawn from the proposal's 想定リスク and 改善方針. `adr`: `keep`, with a reason that names the criteria the ADR met.
+- `structural-proposal`: `approve`, with a reason drawn from the proposal's 想定リスク and 改善方針.
 
-The fixed choices of the other kinds: `must-fix` has `fix` and `skip`; `structural-proposal` has `approve`, `reject` and `hold`; `adr` has `keep` and `decline`.
+The fixed choices of the other kinds: `must-fix` has `fix` and `skip`; `structural-proposal` has `approve`, `reject` and `hold`.
 The page adds the fixed rows `調べてから決めて` (`investigate`) and `その他` (`other`) to a `question`, `ビジネス側に確認する` (`hold`, between them) when the page sets `hold`, `その他` to an `nr`.
 
 #### Options
@@ -122,7 +122,6 @@ Facts, with these labels, in this order:
 - `nr`: `分類` (`design` only: `a: 設計側で確定不能` or `b: 設計側は確定済み・認識承認をお願いしたい`), `影響範囲` (`design` only), `検出元`.
 - `must-fix`: `箇所`, `検出元`, `指摘内容`, `author の反論` (`requirement` only), `未解消の理由`.
 - `structural-proposal`: `検出観点`, `エビデンス`, `想定リスク`, `改善方針`, `振る舞い保存方針`, `段階的移行の要否`, `重要度`.
-- `adr`: `題名`, `記録した決定`.
 
 `検出元` is the review that filed the finding: its round and its perspective, as the report of the reviewer names them (`第1回・correctness`), several joined with `、`. `重要度` is the severity as the report writes it. Copy both as they are. Leave `検出元` out when the finding has none.
 When a `箇所` value names one node of `requirement.json` or `design.json`, set that fact's `ref` to it; when it names one other file, set `path`, with `root` when the file is not under `deliverables`.
@@ -283,7 +282,6 @@ Read each block by its card:
 - **nr**: `{key}. {label}`, or `その他` with a `補足`, is the decision. Unanswered means the recommended option, under an approve verdict.
 - **must-fix**: `指摘のとおり修正する` is a revision request. `今回は対応しない` is compatible with approval, and you keep it as declined by the owner's decision.
 - **structural-proposal**: `承認`, `却下` or `保留`, with the `補足` as the reason for `却下` and `保留`. Unanswered means the recommended choice.
-- **adr**: `残す` keeps the record. `不要` means it is not needed. Unanswered keeps it.
 - The part 目標外の事柄 (`noticed`): it has no answer. A noticed matter is fixed only when the owner names it in the reply.
 - **Verdict**: the approve line approves the deliverable or the change. The revise line, or a request to fix it that the owner wrote outside the layout, is a revision request: its content is the revision choices and that text (the block `修正してほしいこと` is that text, and it may be the whole content when no card has a revision choice). A hold, a redesign or a send-back is read from that text. An approve line with no block and no other text is a blanket approval. A matter you noticed goes to the one who fixes only when the owner names it.
 - A `補足` with no answer line, on a kind not named above, is free text you read with the unit's own criterion.

@@ -64,7 +64,6 @@ fn fixed(kind: CardKind, hold: bool) -> Vec<(&'static str, &'static str)> {
         CardKind::StructuralProposal => {
             vec![("approve", "承認"), ("reject", "却下"), ("hold", "保留")]
         }
-        CardKind::Adr => vec![("keep", "残す"), ("decline", "不要")],
     }
 }
 
@@ -94,7 +93,6 @@ fn asking_cards(page: &DecisionPage) -> Vec<&Card> {
             .iter()
             .chain(&page.residual_must_fix)
             .chain(&page.structural_proposals)
-            .chain(page.adr.iter())
             .collect(),
     };
     groups
@@ -303,7 +301,6 @@ fn all_cards(page: &DecisionPage) -> impl Iterator<Item = &Card> {
         .chain(&page.needs_user_decision)
         .chain(&page.residual_must_fix)
         .chain(&page.structural_proposals)
-        .chain(page.adr.iter())
 }
 
 /// The number without its trailing digits (`論点` of `論点1`, `MF-` of `MF-1`); none when nothing is left.
@@ -651,7 +648,6 @@ mod tests {
             needs_user_decision: Vec::new(),
             residual_must_fix: Vec::new(),
             structural_proposals: Vec::new(),
-            adr: None,
             risks: None,
             settled_decisions: Vec::new(),
             withdrawn_needs_user_decision: Vec::new(),
@@ -741,7 +737,6 @@ mod tests {
         page.needs_user_decision = vec![card(CardKind::Nr, "NR-1", "判断")];
         page.residual_must_fix = vec![card(CardKind::MustFix, "MF-1", "直す")];
         page.structural_proposals = vec![card(CardKind::StructuralProposal, "SP-1", "構造")];
-        page.adr = Some(card(CardKind::Adr, "ADR-1", "記録"));
         page
     }
 
@@ -750,7 +745,6 @@ mod tests {
         let reply = build_reply(
             &approval(),
             &[
-                answer("ADR-1", Some("keep"), ""),
                 answer("MF-1", Some("skip"), "今回は見送る"),
                 answer("SP-1", Some("reject"), "理由は別にある"),
                 answer("NR-1", Some("A"), ""),
@@ -761,7 +755,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             reply,
-            "基本設計を承認します\n\nNR-1 判断\nA. 案 A\n\nMF-1 直す\n今回は対応しない\n補足: 今回は見送る\n\nSP-1 構造\n却下\n補足: 理由は別にある\n\nADR-1 記録\n残す"
+            "基本設計を承認します\n\nNR-1 判断\nA. 案 A\n\nMF-1 直す\n今回は対応しない\n補足: 今回は見送る\n\nSP-1 構造\n却下\n補足: 理由は別にある"
         );
     }
 
@@ -1128,7 +1122,6 @@ mod tests {
             answer("NR-1", Some("A"), ""),
             answer("MF-1", Some("fix"), "ここを直す"),
             answer("SP-1", Some("reject"), "理由"),
-            answer("ADR-1", Some("keep"), ""),
         ];
         let reply = build_reply(&page, &answers, Some(PageVerdict::Revise), "全体の直し").unwrap();
         assert!(reply

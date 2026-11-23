@@ -51,7 +51,7 @@ Nothing here changes a file, except the reopen of the last section.
 
 Use it when the requirement is what has to change, and the change is approved: the leader answered your question `reopen requirement` (a design-scope item is not written, "Steps", 5), or the owner's own revision of stage 3 or stage 6 amounts to a requirement change. Never edit `requirement.json` in this unit.
 
-1. When the unit holds work in progress (`design.json`, `technical-notes.md`, `code-facts-base.json`, `creator-facts.md`, `{records}/`), commit it first, as a commit of its own, each path by itself ([branch-and-pr](../shared/branch-and-pr.md), "Commit the case root"). Say in the message that it is the design work in progress at the reopen. When an ADR was written in stage 6, delete its file first and leave it out of the commit.
+1. When the unit holds work in progress (`design.json`, `technical-notes.md`, `code-facts-base.json`, `creator-facts.md`, `{records}/`), commit it first, as a commit of its own, each path by itself ([branch-and-pr](../shared/branch-and-pr.md), "Commit the case root"). Say in the message that it is the design work in progress at the reopen.
 2. Run the `reopen` recipe of [case-json](../shared/case-json.md) for the unit `requirement`, with the reason: the owner's words word for word, or the sentence above. It reopens the design too, and copies `design.json` to `records/design-base.json`.
 3. Do not commit the reopen. The requirement unit's next commit of the case root takes `case.json`, the record and the base.
 4. Send `REOPENED requirement: {reason in one line}`, and stop.

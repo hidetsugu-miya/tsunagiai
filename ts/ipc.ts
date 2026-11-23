@@ -88,6 +88,7 @@ import type { OrcaPairing } from "./bindings/OrcaPairing";
 import type { OrcaRemoteBranch } from "./bindings/OrcaRemoteBranch";
 import type { OrcaSaved } from "./bindings/OrcaSaved";
 import type { OrcaScratchpad } from "./bindings/OrcaScratchpad";
+import type { OrcaAgent } from "./bindings/OrcaAgent";
 import type { OrcaStarted } from "./bindings/OrcaStarted";
 import type { OrcaViewport } from "./bindings/OrcaViewport";
 import type { PaneLayout } from "./bindings/PaneLayout";
@@ -323,6 +324,10 @@ export interface Commands {
   orca_start: { args: { path: string; environment: string | null }; result: OrcaStarted };
   // A-16: opens a plain terminal in the worktree at `path` (the plus of the work pane). The answer names its `handle` (`paneKey` is always null). Never run twice.
   orca_terminal_create: { args: { path: string; environment: string | null }; result: OrcaStarted };
+  // A-16: the AI CLIs that the place can start (`orca agent installed`; null: this machine, else a saved environment's name, checked against the saved ones), in the order Orca lists them. `default` marks Orca's default one.
+  orca_agents_installed: { args: { environment: string | null }; result: OrcaAgent[] };
+  // A-16: starts the AI CLI `agent` (an `OrcaAgent.id`; never `claude`, which `orca_start` starts) in a terminal of the worktree at `path`. The answer names its `handle` and `paneKey` (null when the reply lacks them). Never run twice.
+  orca_agent_launch: { args: { path: string; agent: string; environment: string | null }; result: OrcaStarted };
   // A-9: makes a new worktree named `name` in the project `project` (an `OrcaProject.key` of the destination's list, checked against it; the name is one plain line, trimmed) of the destination (null: this machine, else a saved environment's name). The answer is the new worktree's absolute path. Never run twice.
   orca_worktree_create: { args: { project: string; name: string; branch: string | null; base: string | null; environment: string | null }; result: string };
   // A-9: starts a session in a worktree with the instruction the owner wrote (`instruction`), the text of each file attached to it (`files`, A-10), the summary of the content (`summary`, empty without the content) and, when `context` is not null, the content quoted as data after them. Never run twice.

@@ -60,7 +60,7 @@ needsUserDecision: Array<Card>,
 /**
  * `must-fix` cards on `approval`.
  */
-residualMustFix: Array<Card>, structuralProposals: Array<Card>, adr: Card | null, risks: Risks | null, settledDecisions: Array<SettledDecision>, 
+residualMustFix: Array<Card>, structuralProposals: Array<Card>, risks: Risks | null, settledDecisions: Array<SettledDecision>, 
 /**
  * `approval`: the questions that the review withdrew because the final deliverable settles them.
  */

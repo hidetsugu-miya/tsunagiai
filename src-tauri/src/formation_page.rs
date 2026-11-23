@@ -82,7 +82,6 @@ pub enum CardKind {
     Nr,
     MustFix,
     StructuralProposal,
-    Adr,
 }
 
 impl CardKind {
@@ -92,7 +91,6 @@ impl CardKind {
             Self::Nr => "nr",
             Self::MustFix => "must-fix",
             Self::StructuralProposal => "structural-proposal",
-            Self::Adr => "adr",
         }
     }
 
@@ -108,7 +106,6 @@ impl CardKind {
             Self::Nr => &["other"],
             Self::MustFix => &["fix", "skip"],
             Self::StructuralProposal => &["approve", "reject", "hold"],
-            Self::Adr => &["keep", "decline"],
         }
     }
 
@@ -118,7 +115,6 @@ impl CardKind {
             Self::Question | Self::Nr => &["A"],
             Self::MustFix => &["fix", "skip"],
             Self::StructuralProposal => &["approve", "reject", "hold"],
-            Self::Adr => &["keep", "decline"],
         }
     }
 }
@@ -159,7 +155,6 @@ pub struct DecisionPage {
     /// `must-fix` cards on `approval`.
     pub residual_must_fix: Vec<Card>,
     pub structural_proposals: Vec<Card>,
-    pub adr: Option<Card>,
     pub risks: Option<Risks>,
     pub settled_decisions: Vec<SettledDecision>,
     /// `approval`: the questions that the review withdrew because the final deliverable settles them.
@@ -2733,7 +2728,6 @@ impl<'a> Walk<'a> {
                 "needs_user_decision",
                 "residual_must_fix",
                 "structural_proposals",
-                "adr",
                 "risks",
                 "settled_decisions",
                 "withdrawn_needs_user_decision",
@@ -2762,12 +2756,15 @@ impl<'a> Walk<'a> {
         let terms = self.terms(top);
         let hold = self.hold(top, kind, subject);
         let clarified_numbers = self.strings(top, "clarified_numbers", "$", false);
-        if subject != Subject::Design {
-            for key in ["structural_proposals", "adr"] {
-                if top.get(key).is_some_and(|v| !v.is_null()) {
-                    self.bad(&format!("$.{key}"), "design のページだけに付けられます");
-                }
-            }
+        if subject != Subject::Design
+            && top
+                .get("structural_proposals")
+                .is_some_and(|v| !v.is_null())
+        {
+            self.bad(
+                "$.structural_proposals",
+                "design のページだけに付けられます",
+            );
         }
         let mut page = DecisionPage {
             page_kind: kind,
@@ -2789,7 +2786,6 @@ impl<'a> Walk<'a> {
             needs_user_decision: Vec::new(),
             residual_must_fix: Vec::new(),
             structural_proposals: Vec::new(),
-            adr: None,
             risks: None,
             settled_decisions: Vec::new(),
             withdrawn_needs_user_decision: Vec::new(),
@@ -2821,7 +2817,6 @@ impl<'a> Walk<'a> {
                         CardKind::StructuralProposal,
                         false,
                     );
-                    page.adr = self.adr(top);
                 }
                 page.risks = self.risks(top);
                 page.settled_decisions = self.settled(top);
@@ -2833,11 +2828,6 @@ impl<'a> Walk<'a> {
             return None;
         }
         Some(page)
-    }
-
-    fn adr(&mut self, top: &Object) -> Option<Card> {
-        let value = top.get("adr").filter(|v| !v.is_null())?;
-        self.card(value, "$.adr", CardKind::Adr)
     }
 }
 
@@ -3448,6 +3438,8 @@ mod tests {
             .arg("-C")
             .arg(dir)
             .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            // The global config may sign every commit through a program that is not there.
+            .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
             .args(args)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -3695,7 +3687,24 @@ mod tests {
         let mut value = approval(&repo);
         value["subject"] = json!("requirement");
         value["quality_loop"]["fix_cycles"] = Value::Null;
-        value["adr"] = json!({"kind": "adr", "number": "AD-1", "title": "t", "summary": "s", "recommendation": "keep", "recommendation_reason": "r"});
+        value["structural_proposals"] = json!([{"kind": "structural-proposal", "number": "SP-1", "title": "t", "summary": "s", "recommendation": "approve", "recommendation_reason": "r"}]);
+        assert_eq!(
+            paths(&violations(&value, &repo)),
+            ["$.structural_proposals"]
+        );
+    }
+
+    #[test]
+    fn a_page_with_an_adr_is_refused_as_a_key_the_contract_does_not_name() {
+        let repo = repo("adr");
+        let adr = json!({"kind": "adr", "number": "AD-1", "title": "t", "summary": "s", "recommendation": "keep", "recommendation_reason": "r"});
+        let mut value = approval(&repo);
+        value["adr"] = adr.clone();
+        assert_eq!(paths(&violations(&value, &repo)), ["$.adr"]);
+        let mut value = approval(&repo);
+        value["subject"] = json!("requirement");
+        value["quality_loop"]["fix_cycles"] = Value::Null;
+        value["adr"] = adr;
         assert_eq!(paths(&violations(&value, &repo)), ["$.adr"]);
     }
 
@@ -5495,7 +5504,6 @@ mod tests {
             CardKind::Nr,
             CardKind::MustFix,
             CardKind::StructuralProposal,
-            CardKind::Adr,
         ]
         .into_iter()
         .map(|kind| {
@@ -5504,7 +5512,7 @@ mod tests {
             kind.name()
         })
         .collect();
-        assert_eq!(set.len(), 5);
+        assert_eq!(set.len(), 4);
     }
 
     // -- the items of the page that the earlier decision pages had (#1156) --

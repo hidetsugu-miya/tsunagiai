@@ -786,6 +786,8 @@ a.c-file:hover { background: var(--hover); }
 .menu button:disabled { opacity: .45; cursor: default; }
 .menu button:disabled:hover { background: transparent; }
 .menu-sep { flex: none; height: 1px; margin: 4px 6px; background: var(--chip-line); }
+.menu-icons { flex: none; display: flex; gap: 4px; }
+.menu .menu-icons button { justify-content: center; width: 36px; padding: 0; border-radius: 8px; color: var(--ink-soft); }
 .menu-searchable { box-sizing: border-box; overflow: hidden; }
 .menu-search { flex: none; box-sizing: border-box; width: 100%; height: 28px; margin: 0 0 4px; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 14px; outline: 0; background: var(--surface); font: inherit; color: inherit; }
 .menu-search:focus { border-color: var(--accent); }
@@ -1840,6 +1842,7 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .claude-code-pane { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
 .orca-drop { position: fixed; z-index: 30; box-sizing: border-box; border: 2px solid var(--accent); border-radius: 8px; background: var(--soft); opacity: .6; pointer-events: none; }
 body.orca-dragging { user-select: none; -webkit-user-select: none; cursor: grabbing; }
+body.orca-dragging .orca-edit-preview iframe, #orca-panes[data-resizing] .orca-edit-preview iframe { pointer-events: none; }
 .orca-dest-pop { width: 320px; max-height: calc(100vh - 32px); padding: 8px; gap: 8px; }
 .orca-dest-pop input { box-sizing: border-box; width: 100%; padding: 6px 8px; border: 1px solid var(--chip-line); border-radius: 8px; font: inherit; }
 .orca-dest-pop input:focus { outline: 2px solid var(--accent); border-color: transparent; }

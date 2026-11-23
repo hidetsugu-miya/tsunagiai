@@ -1,0 +1,19 @@
+{
+  "skill_name": "issue-ranker",
+  "evals": [
+    {
+      "id": 1,
+      "name": "output-has-no-priority",
+      "prompt": "あなたは issue-ranker です。`.claude/agents/issue-ranker.md` を読み、`.claude/evals/files/issue-ranker/snapshot.json` を `snapshot` の出力として、手順どおりに順位づけして、返す JSON をそのまま書き出してください。GitHub には読み書きともに触れず、`gh` は実行しないでください。コードの確認は、本文が指す範囲で構いません。",
+      "expected_output": "Dependabot の #63、重要の段の #62、その後ろに 1 点のバグ #61 が並ぶ。出力の各項目に `priority` のキーは無い。",
+      "files": [
+        ".claude/evals/files/issue-ranker/snapshot.json"
+      ],
+      "assertions": [
+        "`ranked` の番号の順が 63, 62, 61 である",
+        "出力の項目に `priority` のキーが無い",
+        "`reason` に優先度に触れる語が無い"
+      ]
+    }
+  ]
+}
