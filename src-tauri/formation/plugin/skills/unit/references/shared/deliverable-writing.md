@@ -37,6 +37,7 @@ jq -n --slurpfile a "{earlier design}" --slurpfile b "{design}" '
 Every change is one run of this frame, which writes a new file, checks it, and replaces `{file}` only when the check prints nothing.
 It checks tier 1, the schema, which is the one that blocks a write.
 A line starting with `REFUSED:` means nothing was written: fix the filter and run it again.
+When the check reports `unknown key test_policy` on a design written before the key was retired, apply `del(.designs[].test_policy)` once and write again.
 
 ```sh
 f="{case root}/{doc}.json"
