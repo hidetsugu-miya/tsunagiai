@@ -266,7 +266,7 @@ const browseTree = {
   "/srv": [],
 };
 
-// Commands whose base answer follows their arguments. `orca_panes` (A-17) answers as Rust does for a project that was never split: one pane with every tab, the tab last selected shown (kept between calls, as the saved layout is, else the first), and nothing else changed;
+// Commands whose base answer follows their arguments. `orca_panes` (A-17) answers as Rust does for a project that was never split: one pane with every tab that is not away (`away`: in a window of its own), the tab last selected shown (kept between calls, as the saved layout is, else the first), and nothing else changed;
 // a spec that splits mocks it with the layout it wants.
 const selectedIn = {};
 const computed = {
@@ -297,8 +297,9 @@ const computed = {
     if (!(resolvedPath in browseTree)) throw "Orca のフォルダの一覧を読めません";
     return { resolvedPath, folders: browseTree[resolvedPath] };
   },
-  orca_panes: ({ environment, project, tabs, op }) => {
+  orca_panes: ({ environment, project, tabs: all, away = [], op }) => {
     const key = JSON.stringify([environment, project]);
+    const tabs = all.filter((t) => !away.includes(t));
     if (op?.kind === "select" && tabs.includes(op.tab)) selectedIn[key] = op.tab;
     const first = tabs[0] ?? null;
     const selected = tabs.includes(selectedIn[key]) ? selectedIn[key] : first;

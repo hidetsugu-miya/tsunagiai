@@ -1670,7 +1670,7 @@ function runPaneOp(op: PaneOp | null) {
   const tabs = (): PaneTabs | null => {
     if (view === null || view.target !== target || view.state === "missing") return null;
     const now = tabsOf(key);
-    return { ids: now.map((t) => t.id), handles: Object.fromEntries(now.flatMap((t) => (t.handle === null ? [] : [[t.id, t.handle]]))) };
+    return { ids: now.map((t) => t.id), away: [], handles: Object.fromEntries(now.flatMap((t) => (t.handle === null ? [] : [[t.id, t.handle]]))) };
   };
   syncPanes(place, key, tabs, op, () => draw(), (e) => showFailure("orca", e));
 }

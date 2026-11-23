@@ -3526,7 +3526,7 @@ describe("orca: split panes (A-17)", () => {
   it("asks Rust for the layout of the project with its tabs, and draws the panes it answers, each with its tab strip and its plus", async () => {
     await openSplit();
     const [first] = await callsOf("orca_panes");
-    expect(first).toEqual({ environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], handles, was: {}, op: null });
+    expect(first).toEqual({ environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], away: [], handles, was: {}, op: null });
     expect(await paneTabs("p1")).toEqual(["Write the docs", "bash"]);
     expect(await paneTabs("p2")).toEqual(["zsh"]);
     expect(await count(".orca-plus")).toBe(2);
@@ -3599,7 +3599,7 @@ describe("orca: split panes (A-17)", () => {
     const panes = await mock("orca_panes", three([0.5, 1 / 6, 1 / 3]));
     await onDivider(0, 0.25, ["pointerup"]);
     const [call] = (await waitForCalls(panes)) as { op: { share: number } }[];
-    expect(call).toMatchObject({ environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], handles, was: handles, op: { kind: "resize", before: "p1", after: "p2" } });
+    expect(call).toMatchObject({ environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], away: [], handles, was: handles, op: { kind: "resize", before: "p1", after: "p2" } });
     expect(call.op.share).toBeCloseTo(0.75, 2);
     await browser.waitUntil(
       async () => {
@@ -3640,14 +3640,14 @@ describe("orca: split panes (A-17)", () => {
     expect(await count('.menu[role="menu"] .pdot')).toBe(0);
     expect(await count('.menu[role="menu"] > [role="separator"]')).toBe(0);
     await pickItem("右に分割");
-    expect(await waitForCalls(panes)).toEqual([{ environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], handles, was: handles, op: { kind: "move", tab: zsh, pane: "p1", edge: "right" } }]);
+    expect(await waitForCalls(panes)).toEqual([{ environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], away: [], handles, was: handles, op: { kind: "move", tab: zsh, pane: "p1", edge: "right" } }]);
     await waitForCount(".orca-pane", 2);
     expect(await paneTabs("p2")).toEqual(["zsh"]);
     // Below: the next answer is a column.
     const below = await mock("orca_panes", layout(column(pane("p1", [claude, zsh]), pane("p2", [bash])), "p2"));
     await rightClick(bash);
     await pickItem("下に分割");
-    expect(await waitForCalls(below)).toEqual([{ environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], handles, was: handles, op: { kind: "move", tab: bash, pane: "p1", edge: "bottom" } }]);
+    expect(await waitForCalls(below)).toEqual([{ environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], away: [], handles, was: handles, op: { kind: "move", tab: bash, pane: "p1", edge: "bottom" } }]);
     await browser.waitUntil(async () => (await browser.execute(() => document.querySelector(".orca-split-node")?.getAttribute("data-direction"))) === "column", { timeoutMsg: "the column never drew" });
   });
 
@@ -3686,7 +3686,7 @@ describe("orca: split panes (A-17)", () => {
       const before = (await moves()).length;
       await drag(bash, "p2", at);
       await browser.waitUntil(async () => (await moves()).length === before + 1, { timeoutMsg: `no move for ${edge}` });
-      expect((await moves()).at(-1)).toEqual({ environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], handles, was: handles, op: { kind: "move", tab: bash, pane: "p2", edge } });
+      expect((await moves()).at(-1)).toEqual({ environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], away: [], handles, was: handles, op: { kind: "move", tab: bash, pane: "p2", edge } });
     }
     expect(await count(".orca-drop")).toBe(0);
     // The edge of its own pane, which has another tab, splits it; its own strip or middle, and the edge of a pane it is alone in, change nothing.
@@ -3790,7 +3790,7 @@ describe("orca: split panes (A-17)", () => {
     // The shell of the second pane is closed in Orca: the list no longer has it (the clock reads it, every second here), and Rust answers a layout of one pane.
     const panes = await mock("orca_panes", layout(pane("p1", [claude, bash]), "p1"));
     await mock("orca_overview", orcaOverview(sample(), worktrees(), { terminals: [orcaTerminal("example-app", "bash")] }));
-    expect(await waitForCalls(panes)).toEqual([{ environment: null, project: "proj_example-app", tabs: [claude, bash], handles: { [claude]: handles[claude], [bash]: handles[bash] }, was: handles, op: null }]);
+    expect(await waitForCalls(panes)).toEqual([{ environment: null, project: "proj_example-app", tabs: [claude, bash], away: [], handles: { [claude]: handles[claude], [bash]: handles[bash] }, was: handles, op: null }]);
     await waitForCount(".orca-pane", 1);
     expect(await count(".orca-split-node")).toBe(0);
     expect(await paneTabs("p1")).toEqual(["Write the docs", "bash"]);
@@ -3812,7 +3812,7 @@ describe("orca: split panes (A-17)", () => {
     const sessions = [...sample(), orcaRow("example-app", "feat/a", "Run the tests", { paneKey: "tab_example-app_zsh:leaf_1", handle: "term_example-app_zsh" })];
     await mock("orca_overview", orcaOverview(sessions, worktrees(), { terminals: [orcaTerminal("example-app", "bash")] }));
     expect(await waitForCalls(started)).toEqual([
-      { environment: null, project: "proj_example-app", tabs: [claude, zshClaude, bash], handles: { [claude]: handles[claude], [zshClaude]: handles[zsh], [bash]: handles[bash] }, was: handles, op: null },
+      { environment: null, project: "proj_example-app", tabs: [claude, zshClaude, bash], away: [], handles: { [claude]: handles[claude], [zshClaude]: handles[zsh], [bash]: handles[bash] }, was: handles, op: null },
     ]);
     await browser.waitUntil(async () => (await paneTabs("p2")).join() === "Run the tests", { timeoutMsg: "the right pane did not draw the Claude tab" });
     expect(await count(".orca-pane")).toBe(2);
@@ -3823,7 +3823,7 @@ describe("orca: split panes (A-17)", () => {
     const ended = await mock("orca_panes", saved());
     await mock("orca_overview", overview());
     expect(await waitForCalls(ended)).toEqual([
-      { environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], handles, was: { [claude]: handles[claude], [zshClaude]: handles[zsh], [bash]: handles[bash] }, op: null },
+      { environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], away: [], handles, was: { [claude]: handles[claude], [zshClaude]: handles[zsh], [bash]: handles[bash] }, op: null },
     ]);
     await browser.waitUntil(async () => (await paneTabs("p2")).join() === "zsh", { timeoutMsg: "the right pane did not draw the plain tab" });
     expect(await count(".orca-pane")).toBe(2);
