@@ -61,7 +61,7 @@ Pass these to every `code-implementer` launch as `制約:`, word for word (at th
 - A process that reads at an interval (polling, a mirror) stops when its target is gone from the list.
 - On a feature branch, do not change `README.md`, `docs/` or `CHANGELOG.md`: only the Release PR writes them.
 - When E2E fails, check the requirement first and suspect the product before the test. Change only the test when the premise of the requirement changed, and then change the requirement's section too.
-- Change the section of the requirement in the same branch.
+- Change the section of the requirement in the same branch. When you change a type in `ts/bindings/`, also pass `npx tsc --noEmit -p .claude/skills/readme-product/shots/tsconfig.json`, because the spec of the README photos uses those types.
 - A screen shows no text that explains what to type or what a button does (`.claude/rules/frontend.md`).
 
 ## Stop
