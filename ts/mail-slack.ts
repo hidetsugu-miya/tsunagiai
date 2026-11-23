@@ -5,6 +5,7 @@
 import type { Channel } from "./bindings/Channel";
 import type { Workspace } from "./bindings/Workspace";
 import { $, composing, isMac, partMatcher, tag } from "./dom.js";
+import { DOWN_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, showMenu } from "./menu.js";
 import { setScreen } from "./nav.js";
@@ -40,7 +41,7 @@ function draw() {
   const button = $<HTMLButtonElement>("mail-slack-channel");
   const name = tag("span", "name", chosen ? `#${chosen.name}` : "#");
   const chevron = document.createElement("span");
-  chevron.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
+  chevron.innerHTML = DOWN_SVG;
   button.replaceChildren(name, chevron.firstElementChild!);
   button.setAttribute("aria-label", chosen ? `投稿先: #${chosen.name}` : "投稿先のチャンネル");
   button.disabled = posting;

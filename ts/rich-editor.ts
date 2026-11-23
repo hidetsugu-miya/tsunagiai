@@ -2,7 +2,7 @@
 // The owner puts `el` in its pane and keeps the text itself (the Markdown of the field, `markdown()`); Rust turns it into mrkdwn (`markdown: true` of `slack_channel_post`, S-21) or into the HTML of a mail (`markdown: true` of `send_mail`, M-10) when it sends.
 // Milkdown is read the first time `ensure()` is called. Until it is there the frame is drawn with the field off and the arrow off, and `ensure()` says when it is ready. The field has no placeholder (`.claude/rules/frontend.md`).
 import { composing, isMac, tag } from "./dom.js";
-import { SEND_SVG, svgOf } from "./icons.js";
+import { BOLD_SVG, BULLET_LIST_SVG, CODE_BLOCK_SVG, FORMAT_LINK_SVG, INLINE_CODE_SVG, ITALIC_SVG, ORDERED_LIST_SVG, QUOTE_SVG, SEND_SVG, STRIKE_SVG } from "./icons.js";
 import { loadMilkdown } from "./vendor-load.js";
 
 export interface RichEditorOptions {
@@ -39,17 +39,17 @@ export interface RichEditor {
 }
 
 const TOOLS: { name: MilkdownCommand | null; label: string; svg: string }[] = [
-  { name: "bold", label: "太字", svg: svgOf('<path d="M7 5h6a3.5 3.5 0 0 1 0 7H7zM7 12h7a3.5 3.5 0 0 1 0 7H7z"/>') },
-  { name: "italic", label: "斜体", svg: svgOf('<path d="M14 5h-4M14 19h-4M14 5l-4 14"/>') },
-  { name: "strike", label: "取り消し線", svg: svgOf('<path d="M5 12h14M16 7a4 3 0 0 0-8 0c0 4 8 2 8 7a4 3 0 0 1-8 0"/>') },
+  { name: "bold", label: "太字", svg: BOLD_SVG },
+  { name: "italic", label: "斜体", svg: ITALIC_SVG },
+  { name: "strike", label: "取り消し線", svg: STRIKE_SVG },
   { name: null, label: "", svg: "" },
-  { name: "link", label: "リンク", svg: svgOf('<path d="M10 14a4 4 0 0 0 6 0l3-3a4 4 0 0 0-6-6l-1 1M14 10a4 4 0 0 0-6 0l-3 3a4 4 0 0 0 6 6l1-1"/>') },
-  { name: "orderedList", label: "番号付きリスト", svg: svgOf('<path d="M10 6h10M10 12h10M10 18h10M4 6h1v4M4 18h2l-2-2"/>') },
-  { name: "bulletList", label: "箇条書き", svg: svgOf('<path d="M10 6h10M10 12h10M10 18h10M5 6h.01M5 12h.01M5 18h.01"/>') },
+  { name: "link", label: "リンク", svg: FORMAT_LINK_SVG },
+  { name: "orderedList", label: "番号付きリスト", svg: ORDERED_LIST_SVG },
+  { name: "bulletList", label: "箇条書き", svg: BULLET_LIST_SVG },
   { name: null, label: "", svg: "" },
-  { name: "quote", label: "引用", svg: svgOf('<path d="M5 5v14M10 7h9M10 12h9M10 17h6"/>') },
-  { name: "code", label: "コード", svg: svgOf('<path d="M9 8l-4 4 4 4M15 8l4 4-4 4"/>') },
-  { name: "codeBlock", label: "コードブロック", svg: svgOf('<rect x="4" y="5" width="16" height="14" rx="2"/><path d="M9 10l-2 2 2 2M15 10l2 2-2 2"/>') },
+  { name: "quote", label: "引用", svg: QUOTE_SVG },
+  { name: "code", label: "コード", svg: INLINE_CODE_SVG },
+  { name: "codeBlock", label: "コードブロック", svg: CODE_BLOCK_SVG },
 ];
 
 export function createRichEditor({ prefix, label, arrow = true, sendLabel = "投稿", onChange, onSubmit }: RichEditorOptions): RichEditor {

@@ -6,7 +6,7 @@ import type { TaskHit } from "./bindings/TaskHit";
 import type { TaskItem } from "./bindings/TaskItem";
 import { $, composing, tag } from "./dom.js";
 import { confirmDelete } from "./hint.js";
-import { CHEVRON_SVG, DATE_SVG, DAY_SVG, DELETE_SVG, EDIT_SVG, FOLDER_SVG, GRIP_SVG, INBOX_SVG, MAIL_SVG, OPEN_SVG, OUTDENT_SVG, SUB_SVG, svgOf, TAG_SVG } from "./icons.js";
+import { ARCHIVE_SVG, CHEVRON_SVG, DATE_SVG, DAY_SVG, DELETE_SVG, EDIT_SVG, FOLDER_SVG, GRIP_SVG, INBOX_SVG, MAIL_SVG, OPEN_SVG, OUTDENT_SVG, SUB_SVG, TAG_SVG } from "./icons.js";
 import { rowButton, rows } from "./inbox-rows.js";
 import { invoke } from "./ipc.js";
 import { type MenuItem, openMenu } from "./menu.js";
@@ -40,8 +40,6 @@ function projectButton(view: string, icon: string, name: string, count: number) 
   };
   return b;
 }
-
-const ARCHIVE_SVG = svgOf('<rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>');
 
 // The places the project `p` may be moved to (T-8): the top level, then the projects `moveTargets` leaves. The pick makes it the last sub-project there.
 function movePlaces(p: ProjectItem) {

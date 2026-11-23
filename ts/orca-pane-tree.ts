@@ -7,11 +7,10 @@
 import type { Direction } from "./bindings/Direction";
 import type { Edge } from "./bindings/Edge";
 import { tag } from "./dom.js";
-import { FOLDER_SVG } from "./icons.js";
+import { FOLDER_SVG, PLUS_SVG } from "./icons.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
 import { MIN_SHARE } from "./orca-panes.js";
 
-const PLUS_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
 // How far from an edge of a pane's body a tab dropped there splits the pane (a share of the body's size), and how far the pointer goes before a press is a drag (px).
 const EDGE_SHARE = 0.25;
 const DRAG_PX = 5;
