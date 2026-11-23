@@ -64,8 +64,8 @@ When the change description or the criteria make a factual claim ("the repositor
 
 ### Tests
 
-- A new public function or a bug fix has a test, and a bug fix has a regression test that fails without the fix.
-- Boundary values, every kind of input, the error paths, and every branch have a test of their own, with a concrete expected value. An assertion that cannot fail (`not nil`, no check of the value, no check of the side effect) is a defect. A test that distinguishes entities by identifier, not by count.
+- A change that adds or alters behavior (a bug fix included) has a test that fails without the change, on an assertion about the intended behavior.
+- Boundary values, every kind of input, the error paths, and every branch have a test of their own, with a concrete expected value. An assertion that cannot fail (`not nil`, no check of the value, no check of the side effect) is a defect. So is a tautological test: one that asserts a constant's literal value, restates the implementation's own expression, or passes with or without the change. A test that distinguishes entities by identifier, not by count.
 - Independence: no dependence on order, on shared state, on the clock or on randomness, and safe to run in parallel.
 - Mocks: an external dependency is replaced, but the code under test is not. A mock returns a realistic value. The mock target is the one the code uses.
 - A value that crosses a serialization boundary is tested through the boundary, not by calling past it, and the receiving side is tested with the real shape of the input.

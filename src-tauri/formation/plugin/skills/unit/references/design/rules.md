@@ -22,7 +22,7 @@ A piece of content
 ```
 
 - Document level: `requirement_summary`, `purposes`, `scope`, `implementation_order`, `structural_improvements`.
-- A DESIGN item: its `requirements`, `depends_on`, `purpose`, `approach`, `ui_spec`, `scope`, `acceptance`, `test_policy`, `user_confirmations`, `operation_checks`, `formal_verification`, `key_decisions`, `decisions` and its own materials.
+- A DESIGN item: its `requirements`, `depends_on`, `purpose`, `approach`, `ui_spec`, `scope`, `acceptance`, `user_confirmations`, `operation_checks`, `formal_verification`, `key_decisions`, `decisions` and its own materials.
 - A shared material: data model (`data-model`), common components (`components`), technology-stack dependencies (`tech-stack`), deploy and operations impact (`deployment`), risk analysis that spans items (`risk-analysis`), and every other material that several items rely on as one source of truth.
 - An appendix: aggregations and cross-checks (`change-summary`, category `集計`), the inbound scan trace (`inbound-impact`, category `調査証跡`), and other material that binds nothing.
 
@@ -33,7 +33,7 @@ Rules of placement:
 - A final judgment that binds the implementation is never only in an appendix. Put the conclusion in the owning item or shared material, and keep only its grounds in the appendix.
 - A `topic` is lowercase kebab-case. Do not add an element with no content. A conditional material that does not apply to an item is a row of that item's `inapplicable_materials` with its reason, so that an omitted investigation is told apart from "does not apply".
 - A field that is omittable (`ui_spec`, and the `body` of a shared material that owns a decision) is `null` when it does not apply. An array with no entry is `[]`. Neither is written as "none".
-- Units and their progress live in `case.json`. The design holds up to the dependency graph, the order of repositories and each item's completion criteria and test policy. It holds no link to a ticket or a pull request.
+- Units and their progress live in `case.json`. The design holds up to the dependency graph, the order of repositories and each item's completion criteria. It holds no link to a ticket or a pull request.
 - A DESIGN item does not hold which implementation carries it. That is derived into `case.json` ([7-implementations](7-implementations.md)).
 
 ## What the design must not hold
@@ -71,7 +71,6 @@ Every field that stage 4 requires ([design-json](../shared/design-json.md), "Wha
 - `ui_spec`: only for an item with a UI, transcribed from the UI reference of `technical-notes.md` (below). `null` otherwise.
 - `scope.includes`, `scope.excludes`: the features, routes and files the item touches, and what is out with the reason. A file that several items touch is listed in each of them. `scope.includes` is the only stored list of the files a change touches.
 - `acceptance`: one verifiable outcome per element, stating how a feature or behavior of `scope.includes` is verified as a behavior (an action, a response, a rejection). A file entry is covered by the element that verifies the behavior it carries, with no element per file. An element that says only that a deliverable exists is not acceptance. Each element can be verified from this item's deliverables and those of the items it depends on. An item with `ui_spec` has an element that refers to it for display items, wording, conditions and values, without repeating them.
-- `test_policy`: `tdd` or `direct`, from `approach`, `scope`, `key_decisions` and the precedent in the repository.
 - `user_confirmations`: one element per screen and state whose completion criteria and `ui_spec` are verified from a capture: `screen_state`, `screenshot` (a path relative to the case root, reading material and not a criterion), and `state_setup` (the data or response the app must receive and the operations to reach the state, `null` for the state the screen shows on opening). Every screenshot the `ui_spec` lists appears in at least one element. A dimension the screen must match is a value in `ui_spec`. `[]` for an item with no `ui_spec`.
 - `operation_checks`: one element per `acceptance` element that involves an operation on a screen: `acceptance` (that element, verbatim), `state_setup`, `steps` (the operations in order, written now so that the verification infers nothing at run time) and `expected`. Leave the key out when no element involves one.
 - `formal_verification`: one element per promise that [Promises to verify formally](#promises-to-verify-formally) selects. Leave the key out when none qualifies.
@@ -226,7 +225,7 @@ The ledger `structural_improvements` records requirement-independent structural 
 - Detection viewpoints (`viewpoint`): `神クラス`, `モジュール間重複`, `レイヤ違反`, `循環依存`, `過度な密結合`.
 - File only a proposal that meets all of: (a) design altitude; (b) it is next to the region the current requirement or an item touches (never an inventory of the whole code base); (c) it has concrete evidence, one `path:line` per element, with the grounds of the structural problem, and no large number of low-importance findings; (d) it is not already rejected or held in the existing ledger, unless the conditions changed (new structural grounds).
 - Minimum criteria of a refactoring: behavior preservation is the premise (inputs, outputs and side effects stay equivalent); migration can be staged (not a bulk rewrite); the impact stays inside the four settled scope items. When it exceeds them, it is a decision for the owner.
-- A new row is `発議中`. The owner decides on the approval page ([6-approval](6-approval.md)). An approved row is `承認`, and its `disposition.design` names the independent `前提改修` item it became (added to `designs[]` as a complete element with `requirements` `[]`, with `acceptance` and `test_policy` written, and `implementation_order` extended when its repository is new). A rejected or held row records the reason, which keeps it from being filed again unless the conditions change.
+- A new row is `発議中`. The owner decides on the approval page ([6-approval](6-approval.md)). An approved row is `承認`, and its `disposition.design` names the independent `前提改修` item it became (added to `designs[]` as a complete element with `requirements` `[]`, with `acceptance` written, and `implementation_order` extended when its repository is new). A rejected or held row records the reason, which keeps it from being filed again unless the conditions change.
 - A proposal that matches a viewpoint goes through this ledger. Other room for improvement in the design is a recommendation of the review, not a row.
 
 ## Writing the Japanese text
@@ -246,7 +245,7 @@ On a correction, confirm the blast radius beyond the corrected node.
 1. First re-verify every statement about existing code, existing specifications or existing behavior that the item holding the corrected node makes, against primary sources, even when no finding names it.
 2. Then check these nodes, where they exist, by reading them with `jq`:
    - Document level: `requirement_summary`, `purposes`, `scope`, `implementation_order`, `structural_improvements`.
-   - The item: `approach`, `ui_spec`, `scope.includes`, `acceptance`, `test_policy`, `user_confirmations`, `decisions[].impact`, its related materials.
+   - The item: `approach`, `ui_spec`, `scope.includes`, `acceptance`, `user_confirmations`, `decisions[].impact`, its related materials.
    - A shared material: `applies_to` and the body (data model, common components, risk analysis).
    - An appendix: the aggregates derived from `scope.includes`, and the list of referrers of the inbound scan.
 3. By kind of correction:

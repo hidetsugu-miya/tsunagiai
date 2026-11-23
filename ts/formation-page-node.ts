@@ -219,7 +219,7 @@ function designItem(v: Obj): HTMLElement {
   root.append(titled(str(v.id) ?? "", v.name), tag("p", "fp-muted", meta.join(" / ")), sub("目的"), md(v.purpose), sub("アプローチ"), md(v.approach));
   if (str(v.ui_spec) !== null) root.append(sub("UI 仕様"), md(v.ui_spec));
   root.append(sub("対象スコープ"), tag("h5", "fp-doc-sub", "含む"), md(scope.includes), tag("h5", "fp-doc-sub", "含まない"), md(scope.excludes));
-  root.append(sub("完了条件"), orderedList(list(v.acceptance)), sub("テスト方針"), plain(v.test_policy));
+  root.append(sub("完了条件"), orderedList(list(v.acceptance)));
   const confirmations = list(v.user_confirmations);
   if (confirmations.length > 0) {
     root.append(

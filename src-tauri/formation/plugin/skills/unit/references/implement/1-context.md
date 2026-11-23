@@ -55,7 +55,7 @@ Its parts:
 3. `## Completion criteria`: the `acceptance` elements of each DESIGN item, word for word. Do not transcribe them by hand:
 
    ```sh
-   jq -r --argjson ids "$ids" '.designs[] | select(.id as $i | $ids | index($i)) | "### \(.id) \(.name // "")\n- test policy: \(.test_policy)\n" + (.acceptance | map("- " + .) | join("\n")) + "\n"' "$d"
+   jq -r --argjson ids "$ids" '.designs[] | select(.id as $i | $ids | index($i)) | "### \(.id) \(.name // "")\n" + (.acceptance | map("- " + .) | join("\n")) + "\n"' "$d"
    ```
 
 4. `## Scope`: `scope.includes` and `scope.excludes` of each DESIGN item, with the files they list (read them with `jq` and copy the files list).

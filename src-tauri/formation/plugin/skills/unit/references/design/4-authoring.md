@@ -34,8 +34,8 @@ One node a run. Examples of the filters, with their options:
 (.designs[] | select(.id == $id) | .approach) = ($v | sub("\n$"; ""))
 
 # set a value that is not a long text (an enum, an array, null)
-# options: --arg id DESIGN-02 --argjson v '"tdd"'
-(.designs[] | select(.id == $id) | .test_policy) = $v
+# options: --arg id DESIGN-02 --argjson v '"機能"'
+(.designs[] | select(.id == $id) | .kind) = $v
 
 # add an element: write the whole element as JSON to {scratch}/e.json first
 # options: --slurpfile e "{scratch}/e.json"
@@ -85,7 +85,7 @@ Set each item's fields with the notes as the source. Beyond [rules](rules.md), "
 - For a branch that settles a database constraint, a name, a file placement or a layer responsibility, write the result of the convention cross-check of the notes as the ground.
 - A background job: each required decision is a `decisions` element, or a reference to the shared material that holds it.
 - Write the UI reference of the notes into `ui_spec`, as [rules](rules.md), "UI specifications", says.
-- Write `acceptance`, `user_confirmations` and `operation_checks` against the settled `scope.includes` and `ui_spec`, and settle `test_policy`.
+- Write `acceptance`, `user_confirmations` and `operation_checks` against the settled `scope.includes` and `ui_spec`.
 - Write `formal_verification` for each promise that selects, and leave the key out otherwise.
 - For each behavior that branches on a value that may not arrive, write the `acceptance` elements and the `key_decisions` ground that "Branch points and decisions" requires.
 - For an item that adds or changes an endpoint, record the contract where "API contracts" places it, and account for the schema consistency with the other endpoints of the same resource.
@@ -121,7 +121,7 @@ Apply the rule of [rules](rules.md), "Branch points and decisions", on personal 
 ### 8. The structural improvements
 
 From the candidates of the notes, apply "Structural improvements" of [rules](rules.md), and add each proposal that passes to `/structural_improvements`, numbered `SI-01`, `SI-02`, … in array order, with `disposition.status` `発議中`. When none passes, the ledger stays `[]`.
-For the kind `structural`: set the approved row's status to `承認` with the new `前提改修` item in `disposition.design`, add that item (independent, `requirements` `[]`, no dependency, with `acceptance` and `test_policy` written) to `/designs`, and extend `/implementation_order` when its repository is new. Write the reason in `disposition.reason` of each rejected or held row. Do not touch `case.json`: stage 7 derives the implementations from the approved design.
+For the kind `structural`: set the approved row's status to `承認` with the new `前提改修` item in `disposition.design`, add that item (independent, `requirements` `[]`, no dependency, with `acceptance` written) to `/designs`, and extend `/implementation_order` when its repository is new. Write the reason in `disposition.reason` of each rejected or held row. Do not touch `case.json`: stage 7 derives the implementations from the approved design.
 
 ### 9. The shared materials and the appendices
 
