@@ -1134,6 +1134,14 @@ async function openCheckedPreview(path: string, relative: string, environment: s
   draw();
 }
 
+// A `file:` link ⌘+clicked in a terminal (A-8, #1304): Rust gives its path inside the worktree of the terminal (and refuses one outside it), then an HTML file of this machine opens in the default browser (A-31) and any other file is a tab of the project in the editor, where an HTML file shows its preview (A-18, A-42; the HTML of another PC is shown there too).
+async function openTerminalLink(source: TermSource, uri: string) {
+  const { path, environment } = source;
+  const relative = await invoke("orca_link_relative", { uri, path });
+  if (environment === null && /\.html$/i.test(relative)) await invoke("orca_file_open_in_browser", { path, relative, environment });
+  else await openCheckedPreview(path, relative, environment);
+}
+
 registerDraftTarget("preview-open", {
   names: ["path", "relative", "environment"],
   isOpen: () => true,
@@ -1988,7 +1996,7 @@ function initSearch() {
 }
 
 export function initOrca() {
-  initOrcaTerminal((e) => showFailure("orca", e));
+  initOrcaTerminal((e) => showFailure("orca", e), (source, uri) => void openTerminalLink(source, uri).catch((e) => showFailure("orca", e)));
   initPeek(statusIcon, selectSession);
   initSplit($("orca"), $("orca-split"), { side: "left", min: 0.15, max: 0.5, initial: 0.19, property: "--list-w" });
   initSplit($("orca"), $("orca-files-split"), { side: "right", min: 0.15, max: 0.4, initial: 0.22, property: "--files-w" });
