@@ -61,8 +61,8 @@ The recipes. Each is a `{filter}` with its `{options}`.
 - Set a value that is not a long text (an enum, a number, `null`, an array):
 
   ```sh
-  # options: --arg id DESIGN-02 --argjson v '"tdd"'
-  (.designs[] | select(.id == $id) | .test_policy) = $v
+  # options: --arg id DESIGN-02 --argjson v '"機能"'
+  (.designs[] | select(.id == $id) | .kind) = $v
   ```
 
 - Add an element. Write the whole element as JSON to a scratch file first.
@@ -151,7 +151,7 @@ def spec_design: O({
   implementation_order: A(S),
   designs: A(O({id: ID(idre("DESIGN")), name: T, kind: E(["機能", "前提改修"]), repository: T, "release?": {posint: true},
     requirements: A(ID(idre("REQ"))), depends_on: A(O({id: ID(idre("DESIGN")), reason: T})),
-    purpose: T, approach: T, ui_spec: T, scope: O({includes: T, excludes: T}), acceptance: A(S), test_policy: E(["tdd", "direct"]),
+    purpose: T, approach: T, ui_spec: T, scope: O({includes: T, excludes: T}), acceptance: A(S),
     user_confirmations: A(O({screen_state: T, screenshot: T, state_setup: T})),
     "operation_checks?": A(O({acceptance: T, state_setup: T, steps: A(S), expected: T})),
     "formal_verification?": A(O({property: T, harm: T, target: T, bound: T})),
@@ -303,7 +303,7 @@ def tier2_design($req):
       | w($x.name; "\($p)/name"), w($x.repository; "\($p)/repository"), w($x.purpose; "\($p)/purpose"), w($x.approach; "\($p)/approach"),
         w($x.scope.includes; "\($p)/scope/includes"), w($x.scope.excludes; "\($p)/scope/excludes"), w($x.key_decisions; "\($p)/key_decisions"),
         om($x.ui_spec; "\($p)/ui_spec"),
-        (if $x.kind == null then "\($p)/kind: not set" else empty end), (if $x.test_policy == null then "\($p)/test_policy: not set" else empty end),
+        (if $x.kind == null then "\($p)/kind: not set" else empty end),
         (if ($x.acceptance | length) == 0 then "\($p)/acceptance: at least one element" else empty end),
         ($x.acceptance | to_entries[] | w(.value; "\($p)/acceptance/\(.key)")),
         (if (($x.ui_spec | blank | not) and ($x.user_confirmations | length) == 0) then "\($p)/user_confirmations: a DESIGN with a ui_spec needs at least one" elif (($x.ui_spec | blank) and ($x.user_confirmations | length) > 0) then "\($p)/user_confirmations: a DESIGN with no ui_spec has none" else empty end),

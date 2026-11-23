@@ -312,7 +312,7 @@ function risks(items: { title: string; text: string | null }[], evidence: Parame
 const APPROVAL_UNIT: Partial<Record<DecisionPage["subject"], string>> = {
   requirement: "承認単位は requirement.json の全体です（technical-notes.md は内部調査資料のため承認対象外）。",
   design:
-    "承認された時点で design.json の概要・設計項目（完了条件・テスト方針・ユーザー確認を含む）・実装順序・共有設計資料は「契約」として凍結されます（補足資料は承認済み証跡として同じ提示単位に含まれます）。実装は本承認の後にこの計画書から導出するため、別途の承認依頼は行いません（本承認が最後の承認です）。",
+    "承認された時点で design.json の概要・設計項目（完了条件・ユーザー確認を含む）・実装順序・共有設計資料は「契約」として凍結されます（補足資料は承認済み証跡として同じ提示単位に含まれます）。実装は本承認の後にこの計画書から導出するため、別途の承認依頼は行いません（本承認が最後の承認です）。",
 };
 
 function approvalUnit(page: DecisionPage): string | null {

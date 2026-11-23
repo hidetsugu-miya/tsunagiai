@@ -2817,7 +2817,6 @@ describe("orchestration mode: the decision page of a child", () => {
               ui_spec: null,
               scope: { includes: "- 認証", excludes: "なし" },
               acceptance: ["5 回で止まる"],
-              test_policy: "単体",
               user_confirmations: [],
               key_decisions: "回数は定数にする",
               decisions: [{ subject: "回数", recommended: "A", reason: "短い", options: [{ label: "5 回", description: "今のまま" }, { label: "10 回", description: "緩める" }], impact: ["api", "web"] }],
@@ -2888,7 +2887,7 @@ describe("orchestration mode: the decision page of a child", () => {
     const node = `${more} [data-evidence="node"]`;
     expect(await textsOf(`${node} .fp-doc > .fp-doc-title`)).toEqual(["DESIGN-01: 認証の上限"]);
     expect(await textsOf(`${node} .fp-doc > .fp-muted`)).toEqual(["種別: api / 対象リポジトリ: api / リリース: 1 / 要件: REQ-01 / 依存先: DESIGN-02"]);
-    expect(await textsOf(`${node} .fp-doc-sub`)).toEqual(["目的", "アプローチ", "対象スコープ", "含む", "含まない", "完了条件", "テスト方針", "主要な設計判断", "選択肢と推奨案: 回数", "関連設計資料"]);
+    expect(await textsOf(`${node} .fp-doc-sub`)).toEqual(["目的", "アプローチ", "対象スコープ", "含む", "含まない", "完了条件", "主要な設計判断", "選択肢と推奨案: 回数", "関連設計資料"]);
     expect(await textsOf(`${node} .fp-md strong`)).toEqual(["回数"]);
     expect(await textsOf(`${node} .fp-doc-block .fp-doc-list > li strong`)).toEqual(["(A) 5 回", "(B) 10 回"]);
     expect(await textsOf(`${node} .fp-doc-block > .fp-doc-text`)).toEqual(["推奨案は (A) 5 回（採択）、推奨理由は次のとおり。", "選択肢:", "影響範囲: api（主区分） / web"]);

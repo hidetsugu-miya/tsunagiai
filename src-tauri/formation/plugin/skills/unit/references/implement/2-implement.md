@@ -10,7 +10,6 @@ The agent reads `design.json` itself, so give it locations, not copies.
 
 - `work_kind`: `initial`. For a redo after a reopen, still `initial`, with the reopen record as below.
 - `repo_root`: `{folder}`.
-- `test_policy`: the `test_policy` of the DESIGN item. The items of one launch share a policy.
 - `work_content`, in this order:
   1. The purpose, from the contract.
   2. The constraints: the repository's rules that bind the work ("Constraints" of `{contract}`), the `scope.excludes` of the item, and the instruction not to run the aggregate check, a whole-suite run, an end-to-end run or a full build.
@@ -21,7 +20,6 @@ The agent reads `design.json` itself, so give it locations, not copies.
 
 A unit with one DESIGN item takes one launch.
 A unit with several takes one launch for each item, one after another in id order, never together: they share one tree.
-Items with different test policies are launched in separate launches for the same reason.
 
 Keep for Stage 4 and Stage 5, from each report:
 
