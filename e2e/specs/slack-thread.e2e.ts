@@ -1587,15 +1587,25 @@ describe("slack thread: Claude Code", () => {
     await browser.waitUntil(async () => (await starts()).length >= n, { timeoutMsg: `claude_code_start of slack-thread was not called ${n} times` });
     return starts();
   };
+  // The pane is closed when a thread is opened and shows the question; 相談する opens it and starts the process.
+  const consult = () => $("#reply-claude-open").click();
 
-  // What the owner sees of the pane: the tabs and やり直す in the header, the terminal under it, none of the conversation of `claude -p`, and no help text.
-  it("has the Claude and Orca tabs and やり直す in the header and the terminal under it, and none of the conversation, with no placeholder and no note", async () => {
+  // What the owner sees of the pane: the question while it is closed; open, the tabs and やり直す in the header, the terminal under it, none of the conversation of `claude -p`, and no help text.
+  it("has the Claude and Orca tabs in the header and, closed, the question with 相談する under it; open, やり直す and the terminal, and none of the conversation, with no placeholder and no note", async () => {
     await openDetail();
     await expect($("#reply-chat")).toHaveAttribute("aria-label", "Claude");
     expect(await browser.execute(() => [...document.querySelectorAll("#reply-chat .chat-head > *")].map((e) => e.id))).toEqual(["reply-tabs", "reply-restart"]);
-    expect(await textsOf("#reply-chat .chat-head > #reply-restart")).toEqual(["やり直す"]);
     expect(await textsOf("#reply-chat .chat-head [role=tab]")).toEqual(["Claude", "Orca"]);
     expect(await count("#reply-chat .chat-head svg")).toBe(2);
+    // Closed: the question and the button, and nothing of the open pane.
+    await expect($("#reply-claude-ask p")).toHaveText("Claude に相談しますか？");
+    await expect($("#reply-claude-open")).toHaveText("相談する");
+    await expect($("#reply-claude-open")).toHaveElementClass("text-btn");
+    await expect($("#reply-restart")).not.toBeDisplayed();
+    await expect($(term)).not.toBeDisplayed();
+    await consult();
+    await expect($("#reply-claude-ask")).not.toBeDisplayed();
+    expect(await textsOf("#reply-chat .chat-head > #reply-restart")).toEqual(["やり直す"]);
     await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
     await expect($("#reply-restart")).toBeEnabled();
     expect(await count("#reply-log, #reply-input, #reply-form, #reply-send, #reply-model, #reply-clear, #reply-chat-note")).toBe(0);
@@ -1605,6 +1615,7 @@ describe("slack thread: Claude Code", () => {
   it("starts Claude Code with the tools of tsunagiai-mcp only and a first instruction that tells the work, the tools and the target, with nothing of the thread or the reply", async () => {
     await openDetail();
     await write("My secret reply");
+    await consult();
     const [start] = await waitForStarts();
     expect(start).toMatchObject({ id: "slack-thread", builtinTools: false, permissionMode: "manual", skill: null });
     const { prompt, viewport } = start as { prompt: string; viewport: { cols: number; rows: number } };
@@ -1617,7 +1628,37 @@ describe("slack thread: Claude Code", () => {
     for (const command of ["orca_stream_terminal", "orca_terminal_read"]) expect(await callsOf(command)).toEqual([]);
   });
 
-  it("starts nothing before a thread is opened, keeps the process while the thread is left and opened again, and ends it for another thread", async () => {
+  it("starts nothing when a thread is opened, the tabs are switched or the window changes its visibility, and starts once when 相談する is pressed, with the focus in the terminal", async () => {
+    await openDetail();
+    await expect($("#reply-claude-ask")).toBeDisplayed();
+    const middle = await browser.execute(() => {
+      const box = document.querySelector("#reply-chat")!.getBoundingClientRect();
+      const ask = document.querySelector("#reply-claude-ask")!.getBoundingClientRect();
+      const button = document.querySelector("#reply-claude-open")!.getBoundingClientRect();
+      return { height: ask.height > 100, centered: Math.abs(button.left + button.width / 2 - (box.left + box.width / 2)) < 2 };
+    });
+    expect(middle).toEqual({ height: true, centered: true });
+    await $("#reply-tab-orca").click();
+    await expect($("#reply-claude-ask")).not.toBeDisplayed();
+    await $("#reply-tab-claude").click();
+    await expect($("#reply-claude-ask")).toBeDisplayed();
+    await browser.execute(() => document.dispatchEvent(new Event("visibilitychange")));
+    await browser.pause(500);
+    expect(await starts()).toEqual([]);
+    await browser.action("pointer").move({ origin: $("#reply-claude-open") }).down().up().perform();
+    await waitForStarts();
+    await expect($(`${term} .xterm-helper-textarea`)).toBeFocused();
+    await expect($("#reply-claude-ask")).not.toBeDisplayed();
+    // The Orca tab and back keeps the terminal and starts nothing more.
+    await $("#reply-tab-orca").click();
+    await expect($(term)).not.toBeDisplayed();
+    await $("#reply-tab-claude").click();
+    await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
+    await browser.pause(500);
+    expect(await starts()).toHaveLength(1);
+  });
+
+  it("starts nothing before a thread is opened, keeps the process while the thread is left and opened again, and ends it and closes the pane for another thread", async () => {
     const other = slackTs(20, 3);
     const messages = [listMessage(), timelineMessage(other, "Carol Example", "general", "Another thread")];
     await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline(messages), claude_status: claudeReady });
@@ -1626,6 +1667,7 @@ describe("slack thread: Claude Code", () => {
     await waitForCount("#slack-feed .feed-row", 2);
     expect(await starts()).toEqual([]);
     await $$("#slack-feed .feed-open")[0].click();
+    await consult();
     await waitForStarts();
     const close = await mock("claude_code_close", null);
     await $("#st-back").click();
@@ -1635,16 +1677,23 @@ describe("slack thread: Claude Code", () => {
     await browser.pause(500);
     expect((await starts()).length).toBe(1);
     expect(await callsOf(close)).toEqual([]);
-    // Another thread: the talk was about the one before, so the process ends and a new one starts.
+    // Another thread: the talk was about the one before, so the process ends and the pane is closed; a new process starts only when 相談する is pressed.
     await $("#st-back").click();
     await mock("slack_thread", slackThread([threadMessage(other, "Carol Example", "Another thread")]));
     await $$("#slack-feed .feed-open")[1].click();
     await waitForCalls(close);
+    await expect($("#reply-claude-ask")).toBeDisplayed();
+    await expect($(term)).not.toBeDisplayed();
+    await expect($("#reply-restart")).not.toBeDisplayed();
+    await browser.pause(500);
+    expect(await starts()).toHaveLength(1);
+    await consult();
     await waitForStarts(2);
   });
 
   it("ends the process and starts a new one with やり直す", async () => {
     await openDetail();
+    await consult();
     await waitForStarts();
     const close = await mock("claude_code_close", null);
     await $("#reply-restart").click();
@@ -1795,16 +1844,19 @@ describe("slack thread: the lines of the two sides", () => {
   beforeEach(() => resize(WIDE));
   after(() => resize(NARROW));
   const edge = (selector: string, side: "top" | "bottom") => browser.execute((s, k) => document.querySelector(s)!.getBoundingClientRect()[k], selector, side);
-  // The line under the headers is one, and the terminal starts under it and goes down to the bottom with the reply field.
-  const aligned = async () => {
+  // The line under the headers is one, and what is under it (the question while the pane is closed, the terminal once it is open) starts there and goes down to the bottom with the reply field.
+  const aligned = async (body: string) => {
     expect(await edge("#reply-chat .chat-head", "bottom")).toBe(await edge("#st-head", "bottom"));
-    expect(await edge("#reply-term", "top")).toBe(await edge("#st-head", "bottom"));
-    expect(await edge("#reply-term", "bottom")).toBe(await edge("#st-reply", "bottom"));
+    expect(await edge(body, "top")).toBe(await edge("#st-head", "bottom"));
+    expect(await edge(body, "bottom")).toBe(await edge("#st-reply", "bottom"));
   };
 
-  it("puts the line under the headers at the same height, and the terminal from it to the bottom", async () => {
+  it("puts the line under the headers at the same height, and the question and then the terminal from it to the bottom", async () => {
     await openDetail();
-    await aligned();
+    await aligned("#reply-claude-ask");
+    await $("#reply-claude-open").click();
+    await expect($("#reply-term")).toBeDisplayed();
+    await aligned("#reply-term");
   });
 
   it("keeps them there when the reply field grows", async () => {
@@ -1812,7 +1864,10 @@ describe("slack thread: the lines of the two sides", () => {
     const before = await edge("#st-reply", "top");
     await lines(12);
     expect(await edge("#st-reply", "top")).toBeLessThan(before);
-    await aligned();
+    await aligned("#reply-claude-ask");
+    await $("#reply-claude-open").click();
+    await expect($("#reply-term")).toBeDisplayed();
+    await aligned("#reply-term");
   });
 });
 
@@ -1906,8 +1961,11 @@ describe("slack thread: the pane under the thread", () => {
     await expect(split).toHaveAttribute("aria-valuemax", "50");
     await expect(split).toHaveAttribute("aria-valuenow", "33");
     await expect($("#slack-claude")).not.toExist();
-    // The pane is whole: the tabs and やり直す in its header, and the terminal under it down to the bottom.
+    // The pane is whole: the tabs in its header, the question under it, and, once 相談する is pressed, やり直す and the terminal down to the bottom.
     await expect($("#reply-chat .chat-head")).toBeDisplayed();
+    await expect($("#reply-claude-ask")).toBeDisplayed();
+    await $("#reply-claude-open").click();
+    await expect($("#reply-restart")).toBeDisplayed();
     await expect($(`#reply-term.claude-code-pane`)).toBeDisplayed();
     const bottom = await browser.execute(() => Math.abs(document.getElementById("reply-term")!.getBoundingClientRect().bottom - document.getElementById("reply-chat")!.getBoundingClientRect().bottom) <= 1);
     expect(bottom).toBe(true);
@@ -1955,6 +2013,7 @@ describe("slack thread: the pane under the thread", () => {
 
   it("goes under the thread and back to the right with the width of the window, keeping the process of the thread", async () => {
     await openDetail();
+    await $("#reply-claude-open").click();
     await browser.waitUntil(async () => ((await callsOf("claude_code_start")) as { id: string }[]).filter((c) => c.id === "slack-thread").length === 1);
     const close = await mock("claude_code_close", null);
     await resize(WIDE);

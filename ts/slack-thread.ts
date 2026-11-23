@@ -1,7 +1,7 @@
 // The Slack thread (S-6, S-7, S-11, S-22): the messages of a thread with their senders' icons, attached images, blocks and attachments (slack-blocks.ts), reactions, a rich field to reply in (rich-editor.ts), a card to make a Todo from the message,
 // and, in the pane at the right, Claude Code in a terminal (A-36, ts/claude-code.ts) to ask about the thread and the reply: proofread it, summarise the thread, write a reply. Claude Code reads the thread and the reply field's text, and writes the reply field,
 // through the target "slack-thread" of ts/screen-bridge.ts (the field `thread` is only read, and the field `reply` is read and written). What it writes goes into the reply field as it is, and 「元に戻す」 (`st-undo`) takes it back. It never sends: only the reply button does.
-// The thread is read when it is opened and after a reply, not on a timer. The reply is kept per thread in memory until the app quits. The process of Claude Code goes on while the pane is hidden (the Orca tab, another screen); a thread of another key ends it, and 「やり直す」 ends it and starts a new one.
+// The thread is read when it is opened and after a reply, not on a timer. The reply is kept per thread in memory until the app quits. The pane is closed at first and shows the question 「Claude に相談しますか？」 with 「相談する」; nothing starts while it is closed (S-7). Open, the process of Claude Code goes on while the pane is hidden (the Orca tab, another screen); a thread of another key ends it and closes the pane, and 「やり直す」 ends it and starts a new one.
 import type { SlackThread } from "./bindings/SlackThread";
 import type { ThreadFile } from "./bindings/ThreadFile";
 import type { ThreadMessage } from "./bindings/ThreadMessage";
@@ -42,6 +42,8 @@ let current: Open | null = null;
 const isOpen = (open: Open) => current?.key === open.key;
 // The right pane is Claude Code (S-7) or the handoff to Orca (A-9), by tab; Claude is the first and the one selected at first.
 let assistant: "claude" | "orca" = "claude";
+// Whether the Claude tab is open: 「相談する」 was pressed for the thread shown, in memory only. While it is closed no show, hide or visibilitychange starts Claude Code.
+let consulting = false;
 let handoff: HandoffPane;
 
 // The thread as last read for `current`, and why the last read failed (null when it did not).
@@ -370,8 +372,10 @@ export function openSlackThread(m: TimelineMessage) {
     blockImages.clear();
     closeCard();
     endPending = false;
-    // The talk was about the thread before: the process and what it started end, and this thread starts a new one.
+    // The talk was about the thread before: the process and what it started end, and the pane is closed again.
     closeClaudeCode(ID, OWNER);
+    consulting = false;
+    drawThreadClaude();
   }
   note(null);
   $("st-error").hidden = true;
@@ -495,8 +499,16 @@ function firstPrompt() {
   ].join("\n");
 }
 
-// Shows the terminal while the pane is in view, and hides it (the process goes on) while it is not: the Orca tab, another view or screen, or the window is hidden. The first show starts Claude Code.
+// Draws the Claude tab: the question while it is closed, the terminal and 「やり直す」 once it is open, and none of them on the Orca tab.
+function drawThreadClaude() {
+  const claude = assistant === "claude";
+  $("reply-claude-ask").hidden = !claude || consulting;
+  for (const el of [$("reply-term"), $("reply-restart")]) el.hidden = !claude || !consulting;
+}
+
+// While the Claude tab is open, shows the terminal while the pane is in view, and hides it (the process goes on) while it is not: the Orca tab, another view or screen, or the window is hidden. The first show starts Claude Code.
 function syncThreadClaude() {
+  if (!consulting) return;
   const host = $("reply-term");
   if (document.hidden || host.getClientRects().length === 0) return hideClaudeCode(OWNER);
   if (!isClaudeCodeShowing(host, ID, OWNER)) showClaudeCode(host, { id: ID, prompt: firstPrompt() }, OWNER);
@@ -538,7 +550,7 @@ function writeFields(fields: Fields) {
 function selectAssistant(tab: "claude" | "orca") {
   assistant = tab;
   for (const [id, name] of [["reply-tab-claude", "claude"], ["reply-tab-orca", "orca"]] as const) $(id).setAttribute("aria-selected", String(name === tab));
-  for (const el of [$("reply-term"), $("reply-restart")]) el.hidden = tab === "orca";
+  drawThreadClaude();
   $("st-orca").hidden = tab !== "orca";
   $("slack-thread").classList.toggle("assist-orca", tab === "orca");
   syncThreadClaude();
@@ -580,6 +592,12 @@ export function initSlackThread() {
     closeClaudeCode(ID, OWNER);
     syncThreadClaude();
     void claudeCodeStarted(ID).then(() => (restart.disabled = false));
+  };
+  // Opens the Claude tab: shows the terminal, which starts the process and takes the keyboard because it is new.
+  $("reply-claude-open").onclick = () => {
+    consulting = true;
+    drawThreadClaude();
+    syncThreadClaude();
   };
   document.addEventListener("visibilitychange", syncThreadClaude);
   // Puts back the text that the newest write of Claude Code replaced.

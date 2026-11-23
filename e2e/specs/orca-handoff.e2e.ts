@@ -1219,12 +1219,15 @@ describe("orca handoff", () => {
     expect(await textsOf("#reply-tabs [role=tab]")).toEqual(["Claude", "Orca"]);
     await expect($("#reply-tab-claude")).toHaveAttribute("aria-selected", "true");
     await expect($("#reply-tab-orca")).toHaveAttribute("aria-selected", "false");
-    await expect($("#reply-term")).toBeDisplayed();
+    // The Claude tab is closed at first (S-7): the question, and no terminal.
+    await expect($("#reply-claude-ask")).toBeDisplayed();
+    await expect($("#reply-term")).not.toBeDisplayed();
     await expect($("#st-orca")).not.toBeDisplayed();
     const handoff = await mock("orca_handoff", started);
     await $("#reply-tab-orca").click();
     await expect($("#reply-tab-orca")).toHaveAttribute("aria-selected", "true");
     await expect($("#reply-tab-claude")).toHaveAttribute("aria-selected", "false");
+    await expect($("#reply-claude-ask")).not.toBeDisplayed();
     await expect($("#reply-term")).not.toBeDisplayed();
     await expect($("#reply-restart")).not.toBeDisplayed();
     await listRead(SLACK);
@@ -1244,9 +1247,10 @@ describe("orca handoff", () => {
     expect(call.context.body).toContain("Looks fine to me.");
     await backTo(SLACK);
     await expect($(`${SLACK.pane} .ho-session-card`)).toBeDisplayed();
-    // Back to Claude: its pane is as it was.
+    // Back to Claude: its pane is as it was, closed.
     await $("#reply-tab-claude").click();
-    await expect($("#reply-term")).toBeDisplayed();
+    await expect($("#reply-claude-ask")).toBeDisplayed();
+    await expect($("#reply-term")).not.toBeDisplayed();
     await expect($("#st-orca")).not.toBeDisplayed();
     // The Orca tab again: the card of the session is shown.
     await $("#reply-tab-orca").click();
