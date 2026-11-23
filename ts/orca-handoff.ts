@@ -919,8 +919,8 @@ export class HandoffPane {
       this.sync();
       this.update();
       this.el?.input.focus();
-      // The hand-over moves to the Orca screen and selects the session there (A-9), unless the item or its screen was left while it ran (the pane is not in view): the screen the owner went to is not taken from them.
-      if (follow !== null && this.itemKey === key && this.host.root.getClientRects().length > 0) openInOrca(follow.paneKey, { handle: follow.handle, environment });
+      // The hand-over moves to the Orca screen and selects the session there (A-9), unless the item was left while it ran: `sync()` above asks the host again, and the host has no item once its thread or task, or its screen, is not shown (`host.current()`), so the screen the owner went to is not taken from them.
+      if (follow !== null && this.itemKey === key) openInOrca(follow.paneKey, { handle: follow.handle, environment });
     }
   }
 }
