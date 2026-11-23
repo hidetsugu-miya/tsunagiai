@@ -147,6 +147,8 @@ const answers = {
   orca_stream_close: null,
   orca_stream_terminal: null,
   orca_stream_terminal_close: null,
+  orca_stream_files: null,
+  orca_stream_files_close: null,
   orca_stream_viewport: null,
   orca_stream_input: null,
   // A-36: a Claude Code pane's process; a spec that checks the calls reads them with `callsOf`.

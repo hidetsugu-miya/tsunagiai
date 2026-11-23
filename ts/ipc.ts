@@ -368,6 +368,10 @@ export interface Commands {
   orca_stream_terminal: { args: { environment: string | null; handle: string; generation: number; viewport: OrcaViewport; channel: unknown }; result: null };
   // A-12, A-17: shows the terminal `handle` no more; Orca gives it back its own size.
   orca_stream_terminal_close: { args: { environment: string | null; handle: string; generation: number }; result: null };
+  // A-12, A-18: watches the files of the worktree at `path` on the stream of `environment` (the place of the tab): an `OrcaFilesEvent` at a time goes to `channel` (`ready` once the watch is set, `changed` with the paths, `ended`). Where no stream runs the call fails with 「接続先につながっていません」 and the channel gets `ended`.
+  orca_stream_files: { args: { environment: string | null; path: string; generation: number; channel: unknown }; result: null };
+  // A-12, A-18: watches the files of that worktree no more (only the watch of this `generation` ends).
+  orca_stream_files_close: { args: { environment: string | null; path: string; generation: number }; result: null };
   // A-12, A-17: claims the size the pane of the terminal `handle` fits (`viewport`), so Orca sizes the terminal to it.
   orca_stream_viewport: { args: { environment: string | null; handle: string; viewport: OrcaViewport }; result: null };
   // A-12: types `text` into the terminal `handle` shown as it is (no Enter is added); the answer says whether Orca took it. `viewport` is the size the pane fits as the keys are typed (null for a terminal that is not shown), which the send claims.

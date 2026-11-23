@@ -14,7 +14,7 @@ import { logError } from "./error-card.js";
 import { closeHint, confirmDiscardChanges } from "./hint.js";
 import { invoke } from "./ipc.js";
 import { pauseLsp } from "./orca-lsp.js";
-import { showOrca } from "./orca.js";
+import { showOrca, watchFiles } from "./orca.js";
 import { loadSettings, selectSettingsTab, type SettingsTab } from "./settings.js";
 import { hideSkillClaude } from "./skill-settings.js";
 import { showSlackList } from "./slack-list.js";
@@ -102,6 +102,7 @@ export function setScreen(name: Screen, tab?: SettingsTab) {
     hideFormation();
     // The language server's settings are read by the clock only while the Orca screen is shown (A-34).
     pauseLsp();
+    watchFiles();
   }
   markNav(name);
   syncTrays();
