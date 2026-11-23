@@ -185,7 +185,9 @@ const isStopped = (r: OrcaRow) => r.group === "done" || r.status === "failed" ||
 // The pane of the session this screen shows now: the screen is shown, the window is not hidden, and the session is the selected tab (the side pane of A-9 does not count).
 const viewedPane = () => {
   const tab = selectedTab();
-  return shown() && !document.hidden && tab?.startsWith("claude:") ? tab.slice("claude:".length) : null;
+  if (tab === null || tab === undefined || !shown() || document.hidden) return null;
+  // The tab of another AI's row is its handle's (`rowTabId`): the pane is the one of the row that has that tab.
+  return mix.rows.find((r) => r.paneKey !== null && rowTabId(r) === tab)?.paneKey ?? null;
 };
 
 // Takes the rows of a read as the one the count follows (the rows of one read, whatever its scope). The first read of a target is only the base: a notice is made for a row that went from not stopped to stopped,
@@ -474,6 +476,13 @@ function worktreesOf(key: string, environment: string | null) {
 // The newest session of a worktree that has a tab (A-8): the rows are newest first, and a formation child's session and a row with no tab are left out.
 const newestRow = (w: OrcaWorktree) => mix.rows.find((r) => r.path === w.path && placeOf(r) === placeOf(w) && r.paneKey !== null && !isChildSession(r) && rowTabId(r) !== null);
 
+// The newest session of each worktree, found once for the drawing that is under way (null: none is: `newestRow` answers).
+let newestDrawn = null as Map<OrcaWorktree, OrcaRow | undefined> | null;
+const newestOf = (w: OrcaWorktree) => {
+  const drawn = newestDrawn;
+  return drawn?.has(w) ? drawn.get(w) : newestRow(w);
+};
+
 // The worktree the selected tab is in (null: no project is selected, or the selected tab is a file, a diff, a definition or a database, whose worktree is not marked). Found once for each drawing.
 let pickedAt: { path: string; environment: string | null } | null = null;
 function findPickedAt() {
@@ -500,7 +509,7 @@ function worktreeNode(key: string, w: OrcaWorktree) {
   row.dataset.key = rowKey;
   row.dataset.worktree = w.path;
   row.setAttribute("aria-pressed", String(pickedAt !== null && pickedAt.path === w.path && pickedAt.environment === placeOf(w)));
-  const session = newestRow(w);
+  const session = newestOf(w);
   row.append(statusIcon(w.status), tag("span", "orca-worktree-branch", w.gitBranch || w.branch));
   if (session !== undefined) row.append(agentIcon(session.agent));
   row.onclick = () => (session === undefined ? selectProject(key) : selectSession(key, rowTabId(session)!));
@@ -673,7 +682,7 @@ async function forgetTitles() {
   for (const [target, keyed] of Object.entries(titles)) {
     const environment = target === THIS_MACHINE ? null : target;
     if (!listRead(environment)) continue;
-    const live = new Set<string | null>([...mix.rows.filter((r) => placeOf(r) === environment).map((r) => r.paneKey), ...mix.terminals.filter((t) => placeOf(t) === environment).map((t) => t.handle)]);
+    const live = new Set<string | null>([...mix.rows.filter((r) => placeOf(r) === environment).map((r) => (isClaudeRow(r) ? r.paneKey : r.handle)), ...mix.terminals.filter((t) => placeOf(t) === environment).map((t) => t.handle)]);
     const keys = Object.keys(keyed).filter((key) => !live.has(key) && !forgetFailed.has(`${target}\0${key}`));
     if (keys.length > 0) gone.set(environment, keys);
   }
@@ -853,13 +862,22 @@ function drawStopped() {
 
 // Draws the list where it is: the scroll position and the focused row stay, and nothing is drawn when nothing changed.
 function drawFeed() {
+  newestDrawn = new Map(mix.worktrees.map((w) => [w, newestRow(w)]));
+  try {
+    drawFeedNow();
+  } finally {
+    newestDrawn = null;
+  }
+}
+
+function drawFeedNow() {
   trackWorking();
   trackChildOnly();
   findPickedAt();
   // Only what is drawn: a project's time of activity moves with the work and would redraw the list (and restart the working mark) for nothing.
   const rowOf = (p: OrcaProject) => [p.key, p.name, p.status, p.sessions, placeOf(p), childFolderCount(p.key), childOnly.has(p.key)];
   // The rows of the worktrees: their status, their branch and the AI of their newest session.
-  const worktreeOf = (w: OrcaWorktree) => [w.path, w.projectKey, placeOf(w), w.branch, w.gitBranch, w.status, w.archived, w.isMain, inChildWorktree(w), newestRow(w)?.agent ?? null, newestRow(w) !== undefined];
+  const worktreeOf = (w: OrcaWorktree) => [w.path, w.projectKey, placeOf(w), w.branch, w.gitBranch, w.status, w.archived, w.isMain, inChildWorktree(w), newestOf(w)?.agent ?? null, newestOf(w) !== undefined];
   // The rows of the projects, the search expression and the row the keys are on: found once for this drawing.
   const re = matcher();
   const rows = visibleRows(re);
@@ -1523,7 +1541,7 @@ function refresh() {
   if (!shown()) syncTerminal();
   syncPeek();
   // The time of the rows of the work moves by the minute, with no read of the list (a streamed list is read by no clock).
-  if (listShown() && activeShown()) drawFeed();
+  if (listShown() && activeShown() && !document.hidden) drawFeed();
   // The files are read again every period while the screen, the window and the file pane are shown, whatever the list does (streamed or being read).
   if (!shown() || document.hidden || !filesShown()) filesAt = Date.now();
   else if (Date.now() - filesAt >= shownMs()) {

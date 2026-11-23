@@ -304,6 +304,14 @@ describe("orca", () => {
     await expectCount(1);
   });
 
+  it("drops the notice of another AI's session when its terminal tab is opened on the screen", async () => {
+    await openOrca(orcaOverview([working("example-app", { agent: "codex" }), working("example-api")], worktrees()));
+    await reread([finished("example-app", { agent: "codex" }), finished("example-api")]);
+    await expectCount(2);
+    await select("example-app");
+    await expectCount(1);
+  });
+
   it("gives no notice to the session shown when it finishes", async () => {
     await openOrca(orcaOverview([working("example-app"), working("example-api")], worktrees()));
     await select("example-app");
@@ -1799,6 +1807,13 @@ describe("orca: projects", () => {
         await $(field).setValue("Codex work");
         await browser.keys("Enter");
         expect(await waitForCalls(set)).toEqual([{ target: THIS, key: "term_example-app", title: "Codex work" }]);
+      });
+
+      it("keeps the title of a terminal of another AI, held under its handle, when the list is read", async () => {
+        const held = { [THIS]: { "term_example-app": "Codex work", "tab_gone:leaf_1": "Old" } };
+        await openWork(orcaOverview([orcaRow("example-app", "feat/a", "Write the docs", { agent: "codex" })], worktrees()), { orca_titles: held, orca_titles_forget: { [THIS]: { "term_example-app": "Codex work" } } });
+        expect(await waitForCalls("orca_titles_forget")).toEqual([{ target: THIS, keys: ["tab_gone:leaf_1"] }]);
+        expect(await textsOf(`#orca-feed .orca-active[data-session="orca:term_example-app"] .orca-active-title`)).toEqual(["Codex work"]);
       });
 
       it("cancels with Escape and when the focus leaves the field, and saves nothing", async () => {
