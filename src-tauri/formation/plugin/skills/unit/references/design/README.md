@@ -27,14 +27,13 @@ A later stage sends you back to an earlier one in the cases it names.
 | 3 | [3-open-questions](3-open-questions.md) | The owner's decisions on those questions, on a decision page. |
 | 4 | [4-authoring](4-authoring.md) | `design.json`, written and checked. Also the fixes of the later stages. |
 | 5 | [5-review](5-review.md) | The review by the design reviewer, and the fix of what it finds. |
-| 6 | [6-approval](6-approval.md) | The ADR, the owner's approval on a decision page, or a revision. |
+| 6 | [6-approval](6-approval.md) | The owner's approval on a decision page, or a revision. |
 | 7 | [7-implementations](7-implementations.md) | The implementations of `case.json`, derived from the approved design. |
 | 8 | [8-completion](8-completion.md) | Status `完了`, the commits, the aggregate pull request, and `DONE`. |
 
 The files that the stages share:
 
 - [rules](rules.md): what the design holds, where each piece goes, and how to word it. Read it before stage 2 and again before stage 4.
-- [adr](adr.md): which decisions are recorded as an architecture decision record, and how it is written.
 - [diagram](diagram.md): the architecture diagram of the approval page.
 
 The route in short:

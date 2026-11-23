@@ -1,17 +1,13 @@
 # Stage 6: Approval
 
-Record the decisions worth an architecture decision record, put the design to the owner on one approval page, and read the answer.
+Put the design to the owner on one approval page, and read the answer.
 The approval of this stage lasts until the design changes: a revision that goes back to [4-authoring](4-authoring.md) ends it, and so does a failure of stage 7 on the design side.
 
 The owner's approval and every decision of the owner come only through the page. The page is always written, even when it would hold no card to answer, because the verdict line of the owner is what approves.
 
 ## Steps
 
-### 1. The ADR
-
-Run the determination of [adr](adr.md). It leaves `{ADR path}`: the file it wrote, or empty when it found nothing to record or when the owner declined the record earlier in this run (then do not scan, and leave `{ADR path}` empty).
-
-### 2. Write the page
+### 1. Write the page
 
 Write an `approval` page ([decision-page](../shared/decision-page.md), "The page"). Read the latest state of the design from the disk with `jq`.
 
@@ -25,7 +21,6 @@ Write an `approval` page ([decision-page](../shared/decision-page.md), "The page
   - `options` `A`, `B`, … in the words of what the owner decides, the recommended one as `A`; each option has a `diagram` of its own flow, and an `image` or a `sample` where the options differ in how something looks. `recommendation` `A`, `recommendation_reason`, `evidence`.
 - `residual_must_fix`: one `must-fix` card for each residual must-fix finding. `number` `MF-n`, `title`, `summary`, `facts`: `箇所` (the node, in words), `検出元`, `指摘内容` (the finding of the reviewer, and the objection of the fix with its grounds when there is one: both positions), `未解消の理由`. `recommendation` is `fix` or `skip` (the one you recorded in stage 5), with `recommendation_reason`.
 - `structural_proposals`: one `structural-proposal` card for each row of `structural_improvements` whose status is `発議中`. `number` `SI-n`, `facts`: `検出観点`, `エビデンス`, `想定リスク`, `改善方針`, `振る舞い保存方針`, `段階的移行の要否`, `重要度`. `recommendation` is `approve`, `reject` or `hold`, with `recommendation_reason`.
-- `adr`: one `adr` card when `{ADR path}` is not empty. `number` `AD-1`, `title`, `summary`, `facts`: `題名`, `記録した決定`. `recommendation` `keep`, with `recommendation_reason` (the criteria the decisions met). Cite the file with an `excerpt` evidence item (the root of the docs repository).
 - `risks`, optional: `{items, evidence}`, with `items` the risks of the `risk-analysis` material, one `{title, text}` each (one sentence for the risk, and its supplement). Leave it out when the design has no such material.
 - `withdrawn_needs_user_decision`, optional: one `{number, title, withdrawal_reason}` for each decision that stage 5 set to `withdrawn`, with the location in the final design that settles it as the reason.
 - `noticed`, optional: one `{title, text, evidence}` for each matter you noticed that the request did not present and that you did not reflect.
@@ -35,21 +30,18 @@ Write the text of every card in plain Japanese, as [decision-page](../shared/dec
 
 Polish, write `{records}/page-{nn}.json`, and send `PAGE`, as [decision-page](../shared/decision-page.md) says. Then stop.
 
-### 3. Read the reply
+### 2. Read the reply
 
 When `REPLY` comes, read it as [decision-page](../shared/decision-page.md), "Reading the reply", says. A reply that asks for a clearer explanation is handled as that file says: a new page with the same items and the owner's reply as `previous_reply`.
 
-First apply these two answers, which do not change the design:
-
-- `今回は対応しない` on a residual must-fix finding is compatible with approval. Keep its id as declined by the owner's decision, and list it in your `DONE` summary.
-- `不要` on the ADR card ("AD-1 is not needed") is not a revision request. Delete the ADR file, empty `{ADR path}`, and remember that the owner declined it, for the rest of this run.
+First apply this answer, which does not change the design: `今回は対応しない` on a residual must-fix finding is compatible with approval. Keep its id as declined by the owner's decision, and list it in your `DONE` summary.
 
 Then take the first condition that matches.
 
 | The reply | Do |
 | --- | --- |
 | It approves one or more structural proposals | Run [4-authoring](4-authoring.md) with the kind `structural`, passing the approved ids, the rejected and held ones with their reasons, and the matters the reply names. When the reply also carries a revision request, make it in the same run (kind `revision`). Then run the pass of [5-review](5-review.md) ("The pass that stage 6 sends back"), and present again from step 1. |
-| It asks for a substantive fix of the approach, the structure or the content (`fix` on a residual finding, the revise verdict line, or text outside the layout asking for it) | Keep the request. When it holds a Figma URL or the path of an image, take it in first ([figma](../requirement/figma.md), "A revision that brings a design reference"). When it amounts to a requirement change (adding requirements, or changing existing ones), go to "Send the case back to the requirement" of [1-context](1-context.md), after you delete the ADR file and empty `{ADR path}`. Otherwise run [4-authoring](4-authoring.md) with the kind `revision`, with the request as it is and the matters it names (the investigation of a new fact is the authoring's own: do not go back to stage 2). Then run the pass of [5-review](5-review.md), and present again from step 1. |
+| It asks for a substantive fix of the approach, the structure or the content (`fix` on a residual finding, the revise verdict line, or text outside the layout asking for it) | Keep the request. When it holds a Figma URL or the path of an image, take it in first ([figma](../requirement/figma.md), "A revision that brings a design reference"). When it amounts to a requirement change (adding requirements, or changing existing ones), go to "Send the case back to the requirement" of [1-context](1-context.md). Otherwise run [4-authoring](4-authoring.md) with the kind `revision`, with the request as it is and the matters it names (the investigation of a new fact is the authoring's own: do not go back to stage 2). Then run the pass of [5-review](5-review.md), and present again from step 1. |
 | It settles the design as it stands: the approve verdict line, with or without answers to decisions, `今回は対応しない` on residual findings, or only rejections and holds of proposals | "Approved" below. |
 
 A matter on the page as `noticed` is fixed only when the reply names it: then it is part of the revision request of the second row. Otherwise it stays unreflected, and goes in your `DONE` summary.

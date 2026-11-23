@@ -34,7 +34,6 @@ When you write the notes (below), append `git -C {root} rev-parse HEAD` to the `
 
 - `requirement.json`: by `jq` ([deliverable-writing](../shared/deliverable-writing.md), "Read"), the nodes this stage needs. Not the whole file.
 - `design.json`, when it exists: its nodes, one by one. Read its `structural_improvements` ledger: the proposals already rejected or held, and their reasons, are decided and are not filed again. Write them in the notes ("Settled earlier").
-- `{docs worktree}/docs/adr/`, when it exists: take every record whose frontmatter says `status: Accepted` as a constraint and a premise. Note its path and the constraint it puts on the design.
 - The notes the requirement stage wrote, and the UI reference (`ui-references/`, read as images with `Read`).
 
 ### 2. Find the conventions
@@ -108,8 +107,8 @@ Each entry has:
 
 - The baseline is the approach the investigation points to with no alternative weighed: extending the existing components on every axis, or, where nothing exists to extend, what the established conventions dictate.
 - "Alternative exists": a realistic alternative exists on the axis. Give at most one, the one that differs most from the baseline. Under it, give both trade-offs, one line each, each citing the primary source it rests on. When a trade-off turns on information outside every source you can reach (data volume, an external contract), name that information in place of the citation.
-- "No alternative": none exists. The reason cites the primary source that forces the baseline: a convention, an accepted ADR, a filing condition of [rules](rules.md), or the requirement.
-- A realistic alternative meets all of these: it satisfies every requirement without adding a requirement, a screen or a behavior; it contradicts no binding convention, accepted ADR or filing condition; it differs from the baseline in the decision the axis makes, not only in naming.
+- "No alternative": none exists. The reason cites the primary source that forces the baseline: a convention, a filing condition of [rules](rules.md), or the requirement.
+- A realistic alternative meets all of these: it satisfies every requirement without adding a requirement, a screen or a behavior; it contradicts no binding convention or filing condition; it differs from the baseline in the decision the axis makes, not only in naming.
 - On a revision, the baseline is the approach already adopted in `design.json`. An alternative that `design.json` records as rejected is not entered again, unless this run found primary-source evidence that overturns the recorded reason. Cite that evidence in the entry.
 - Every axis has one of the two marks. An axis with a missing entry or citation, an "alternative exists" without both trade-off lines, or an empty execution-comparison line is incomplete: put it on the list of unscanned ranges with the axis as the affected perspective and the missing piece as the reason.
 
@@ -157,7 +156,7 @@ Add `code-facts-base.json` as described above.
 
 ### Settled earlier
 
-{{The proposals of the ledger that were rejected or held and why. The accepted ADRs and the constraint each puts on the design. "none" when there is none.}}
+{{The proposals of the ledger that were rejected or held and why. "none" when there is none.}}
 
 ### Settled by the investigation
 
