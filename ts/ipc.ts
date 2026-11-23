@@ -348,6 +348,8 @@ export interface Commands {
   orca_terminal_input: { args: { handle: string; text: string; environment?: string }; result: null };
   // A-8, A-12: opens `url` in the default browser, for a link ⌘+clicked in a terminal. Only an http or https URL is opened; any other fails with the message.
   orca_open_url: { args: { url: string }; result: null };
+  // A-8: the path inside the worktree `path` that the `file:` link `uri` of a terminal names (the host part is ignored, percent escapes are decoded). Fails with the message when the link is no `file:` link or names a file outside the worktree, a `..` or a control character. The file system is not looked at.
+  orca_link_relative: { args: { uri: string; path: string }; result: string };
   // A-12: whether this machine's Orca is paired (the pairing is in the keychain, never returned). Asks Orca nothing.
   orca_pairing_status: { args: undefined; result: OrcaPairing };
   // A-12: keeps the pairing of a link that Orca made for "This computer" (the token is exchanged with Orca, which must run, and stored in the keychain); answers whether a pairing is kept.
