@@ -1,5 +1,6 @@
 import type { HandoffSummary } from "../../ts/bindings/HandoffSummary";
 import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
+import { streamList as streamedList } from "../orca-support";
 import { boot, callsOf, claudeReady, claudeSettings, composerLayout, count, fire, formationEntry, formationList, handoffSummary, heightOf, holds, huge, image, inbox, listedChild, mock, note, onceId, orcaOverview, orcaRow, orcaWorktree, PNG, rejects, release, slackLoad, sendStream, sendTerm, slackThread, slackTs, streamList, textsOf, threadMessage, timeline, timelineMessage, todoData, waitForCalls, waitForCount, CARDS } from "../support";
 
 // A waiting, a working and a done agent (all have a terminal), and a working one with no terminal. The pane lists none of them (it hands over to a new session only), but the Orca screen does.
@@ -1146,7 +1147,8 @@ describe("orca handoff", () => {
     const studio = { target: "Studio", environments: ["Studio"] };
     await openSlack({ orca_overview: orcaOverview(sample(), worktrees(), studio) });
     await waitForCalls("orca_stream_open");
-    await sendStream(streamList(sample(), worktrees()));
+    // Every item of the stream is put in the environment that streams it, as Rust does.
+    await sendStream(streamedList(sample(), worktrees()));
     await mock("orca_handoff", started);
     await openPane(SLACK);
     await chooseProject(SLACK, "example-app");
@@ -1155,11 +1157,11 @@ describe("orca handoff", () => {
     await expect($("#orca")).toBeDisplayed();
     // The list that the stream gave has no such session yet: nothing is selected.
     expect(await count('.orca-tabs [data-tab="claude:tab_new:leaf_9"] [role="tab"]')).toBe(0);
-    await sendStream(streamList([...sample(), newRow()], worktrees()));
+    await sendStream(streamedList([...sample(), newRow()], worktrees()));
     await expect($('.orca-tabs [data-tab="claude:tab_new:leaf_9"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
   });
 
-  it("moves to the Orca screen and selects nothing when the session started in a saved environment that the screen does not list", async () => {
+  it("moves to the Orca screen and selects nothing when the session started in a saved environment that the screen does not list, even if this machine's list holds a row with the same pane key", async () => {
     await openSlack({ orca_overview: orcaOverview(sample(), worktrees(), { environments: ["Lab"] }) });
     await mock("orca_destination", orcaOverview([], [orcaWorktree("example-lab", "main")], { target: "Lab", environments: ["Lab"], known: false }));
     await mock("orca_handoff", started);

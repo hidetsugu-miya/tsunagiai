@@ -1256,8 +1256,9 @@ function claimStarted() {
     return;
   }
   if (place.state !== "ready") return;
-  const row = wait.kind !== "terminal" ? mix.rows.find((r) => (wait.paneKey !== null && r.paneKey === wait.paneKey) || (wait.handle !== null && r.handle === wait.handle)) : undefined;
-  const terminal = wait.kind !== "claude" && wait.handle !== null ? mix.terminals.find((t) => t.handle === wait.handle) : undefined;
+  // Only an item of the place the start was made in: the list holds this machine's items beside the target's, and a pane key or a handle of another place is another session.
+  const row = wait.kind !== "terminal" ? mix.rows.find((r) => placeOf(r) === wait.target && ((wait.paneKey !== null && r.paneKey === wait.paneKey) || (wait.handle !== null && r.handle === wait.handle))) : undefined;
+  const terminal = wait.kind !== "claude" && wait.handle !== null ? mix.terminals.find((t) => placeOf(t) === wait.target && t.handle === wait.handle) : undefined;
   if (row?.paneKey) pickRow(row);
   if (terminal) pickTerminal(terminal);
   if (row || terminal) started = null;
@@ -1534,16 +1535,17 @@ export async function readDestination(environment: string | null, force: boolean
 }
 
 // Selects the session of the pane `paneKey` on the Orca screen and shows the screen ("Orca の画面で開く"). A session the list does not hold yet leaves the project and the tab as they are, and the work pane is shown all the same: no formation stays selected.
-// `launched` is the answer of the launch of a hand-over (A-9: its terminal's handle, and the place it started in, null for this machine): a session that the list does not hold yet is followed as the plus follows its start, so once the list holds it, its project and tab are selected.
+// `environment` is where the session runs (null: this machine, else the name of the saved environment), and only a row of that place is the session: the list holds the rows of this machine beside the target's (A-33), and the same pane key in another place is another session.
+// `follow` is given by a hand-over (A-9) with the handle its launch answered: a session that the list does not hold yet is followed as the plus follows its start, so once the list holds it, its project and tab are selected.
 // A place that is neither the target nor this machine is not in the list, so the screen is shown with the selection as it is.
-export function openInOrca(paneKey: string | null, launched?: { handle: string | null; environment: string | null }) {
+export function openInOrca(paneKey: string | null, environment: string | null, follow?: { handle: string | null }) {
   deselectFormation();
-  const row = paneKey === null ? null : (mix.rows.find((r) => r.paneKey === paneKey) ?? null);
+  const row = paneKey === null ? null : (mix.rows.find((r) => r.paneKey === paneKey && placeOf(r) === environment) ?? null);
   if (row) {
     setProject(row.projectKey);
     chooseTab(claudeTabId(row.paneKey!));
-  } else if (launched !== undefined && (paneKey !== null || launched.handle !== null)) {
-    started = { kind: "claude", paneKey, handle: launched.handle, target: launched.environment, until: Date.now() + START_WAIT_MS };
+  } else if (follow !== undefined && (paneKey !== null || follow.handle !== null)) {
+    started = { kind: "claude", paneKey, handle: follow.handle, target: environment, until: Date.now() + START_WAIT_MS };
     claimStarted();
   }
   setScreen("orca");

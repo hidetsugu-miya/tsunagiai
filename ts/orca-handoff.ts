@@ -609,7 +609,7 @@ export class HandoffPane {
   private buildSession() {
     const title = tag("div", "ho-session-title");
     const open = iconButton("Orca の画面で開く", OPEN_SVG);
-    open.onclick = () => openInOrca(this.session() ? this.paneKeyOf(this.session()!) : null);
+    open.onclick = () => openInOrca(this.session() ? this.paneKeyOf(this.session()!) : null, this.session()?.environment ?? null);
     const close = iconButton("閉じる", CLOSE_SVG);
     close.onclick = () => this.forget();
     const head = tag("div", "ho-head ho-session-head");
@@ -920,7 +920,7 @@ export class HandoffPane {
       this.update();
       this.el?.input.focus();
       // The hand-over moves to the Orca screen and selects the session there (A-9), unless the item was left while it ran: `sync()` above asks the host again, and the host has no item once its thread or task, or its screen, is not shown (`host.current()`), so the screen the owner went to is not taken from them.
-      if (follow !== null && this.itemKey === key) openInOrca(follow.paneKey, { handle: follow.handle, environment });
+      if (follow !== null && this.itemKey === key) openInOrca(follow.paneKey, environment, { handle: follow.handle });
     }
   }
 }
