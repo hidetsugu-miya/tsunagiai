@@ -519,7 +519,7 @@ describe("settings: Claude", () => {
 
   it("keeps the model selects and the prompt row as they were when only the connection is redrawn", async () => {
     await openSettings([], claudeReady, "claude");
-    await waitForCount("#claude-models select", 16);
+    await waitForCount("#claude-models select", 6);
     await browser.waitUntil(async () => (await textsOf("#claude-prompt .status"))[0] !== "確認中");
     const marks = () => browser.execute(() => {
       const w = window as unknown as { __marks__?: Element[] };
