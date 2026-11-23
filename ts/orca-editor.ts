@@ -1107,9 +1107,9 @@ export async function holdFiles(target: string | null, project: string, path: st
   };
 }
 
-// Reads again, without a word, the files that the panes show now (the clock of the Orca screen, and a branch that changed), except those of the worktrees that `skip` names: their disk is watched (A-18).
-export function refreshEditors(skip: (target: string | null, path: string) => boolean = () => false) {
-  for (const f of files.values()) if (f.el.isConnected && !skip(f.target, f.path)) void reread(f);
+// Reads again, without a word, the files that the panes show now (the clock of the Orca screen, and a branch that changed), except those that `skip` names (the worktree and the path of the file from it): their disk is watched (A-18).
+export function refreshEditors(skip: (target: string | null, path: string, relative: string) => boolean = () => false) {
+  for (const f of files.values()) if (f.el.isConnected && !skip(f.target, f.path, f.relative)) void reread(f);
 }
 
 // The worktrees (target and path) whose files the panes show now, whose disk the watch of Orca tells about (A-18).

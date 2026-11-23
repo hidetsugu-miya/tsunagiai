@@ -581,6 +581,17 @@ impl Stream {
     }
 }
 
+/// The stream ends (the screen closed it, or opened another in its place and aborted this one): every watch of files is told, so that the screen reads by the clock again instead of waiting for a change that no longer comes.
+impl Drop for Stream {
+    fn drop(&mut self) {
+        for watch in self.files.values_mut() {
+            let _ = (watch.sink)(OrcaFilesEvent::Ended {
+                message: NOT_CONNECTED.into(),
+            });
+        }
+    }
+}
+
 const NOT_CONNECTED: &str = "接続先につながっていません";
 const NOT_LISTED: &str = "入力したターミナルは Orca の一覧にないため、送りませんでした";
 
@@ -2383,6 +2394,51 @@ mod tests {
         assert!(stream.watches_later("/w/a", 1));
         assert!(!stream.watches_later("/w/a", 2));
         assert!(!stream.watches_later("/w/b", 1));
+    }
+
+    #[test]
+    fn the_end_of_a_stream_tells_every_watch_of_files_that_it_ended() {
+        let (a, a_events) = files_watch("/w/a", 1);
+        let (b, b_events) = files_watch("/w/b", 1);
+        let mut stream = Stream {
+            client: "tsunagiai-test".into(),
+            watches: HashMap::new(),
+            files: HashMap::new(),
+            attempt: 0,
+        };
+        stream.files.insert("/w/a".into(), a);
+        stream.files.insert("/w/b".into(), b);
+        drop(stream);
+        let ended = OrcaFilesEvent::Ended {
+            message: NOT_CONNECTED.into(),
+        };
+        assert_eq!(*a_events.lock().unwrap(), vec![ended.clone()]);
+        assert_eq!(*b_events.lock().unwrap(), vec![ended]);
+    }
+
+    #[tokio::test]
+    async fn a_stream_that_is_stopped_while_it_waits_to_connect_ends_the_watches_of_files() {
+        let (commands, receiver) = unbounded_channel();
+        let task = tokio::spawn(run_loop(
+            || async { Err::<WsLink, String>("down".into()) },
+            receiver,
+            |_| {},
+            "tsunagiai-test".into(),
+        ));
+        // The first connection failed and the next is a second away: the watch is held for it.
+        let (watch, events) = files_watch("/w/a", 1);
+        commands.send(StreamCommand::Files(watch)).ok().unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(events.lock().unwrap().is_empty());
+        // The stream is replaced by another (`orca_stream_open` aborts it): the watch is told.
+        task.abort();
+        let _ = task.await;
+        assert_eq!(
+            events.lock().unwrap().clone(),
+            [OrcaFilesEvent::Ended {
+                message: NOT_CONNECTED.into()
+            }]
+        );
     }
 
     #[tokio::test]

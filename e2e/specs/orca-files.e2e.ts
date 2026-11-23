@@ -4797,14 +4797,14 @@ describe("orca: files and editor (A-18)", () => {
       browser.execute((c) => ((window as unknown as { __e2e_calls__: Record<string, { channel?: unknown }[]> }).__e2e_calls__[c] ?? []).map((call) => ({ ...call, channel: !!call.channel })), command);
     const changed = (...paths: string[]) => sendFiles({ kind: "changed", paths, directories: [] });
     // The app with Studio as the target and its list streamed, the example-app project selected and the file pane open with its root read.
-    async function openStreamed(fixtures: Record<string, unknown> = {}) {
+    async function openStreamed(fixtures: Record<string, unknown> = {}, rows = 4) {
       await openOrca(orcaOverview([], [], { target: "Studio", environments: ["Studio"] }), { orca_terminal_read: ["$"], orca_files_list: root(), orca_files_ignored: rootIgnored, editor_settings: { autosaveMs: 60000 }, ...fixtures });
       await waitForCalls("orca_stream_open");
       await sendStream(streamList(sample(), worktrees()));
       await project("example-app").click();
       await expect(selectedTab()).toBeDisplayed();
       await filesToggle().click();
-      await waitForCount("#orca-files-tree .orca-file", 4);
+      await waitForCount("#orca-files-tree .orca-file", rows);
     }
 
     it("watches the worktree of the tree and of the file shown once, lets it go when the screen is left, and again when no tab and no tree shows it (A-18, A-12)", async () => {
@@ -4871,7 +4871,7 @@ describe("orca: files and editor (A-18)", () => {
       await expect($(".orca-edit-area")).toHaveValue("by the clock again\n", { trim: false });
     });
 
-    it("reads the diff shown at once for a change of its worktree, and by the clock as well while the watch is ready (A-24)", async () => {
+    it("reads the diff shown at once for a change that names its file and not for another, and by the clock as well while the watch is ready (A-24)", async () => {
       await openStreamed(timers({ orcaClock: 1000 }));
       await mock("orca_file_diff", diffOfA());
       expect(await rightClickRow("a.rs")).toBe(true);
@@ -4879,9 +4879,12 @@ describe("orca: files and editor (A-18)", () => {
       await waitForCount(".orca-diff-rows .odf-row", 7);
       await waitForCalls("orca_stream_files");
       await sendFiles({ kind: "ready" });
-      // A change of the worktree reads it at once, whichever file it names.
+      // A change that names another file leaves it alone, and one that names its file reads it at once.
       const diff = await mock("orca_file_diff", many());
       await changed(`${WORK}/b.log`);
+      await browser.pause(500);
+      expect(await callsOf(diff)).toEqual([]);
+      await changed(`${WORK}/a.rs`);
       await waitForCount(".orca-diff-rows .odf-row", 200);
       expect((await callsOf(diff))[0]).toEqual({ path: WORK, relative: "a.rs", environment: "Studio" });
       // A commit moves HEAD and Orca says nothing: the clock reads the diff all the same.
@@ -4906,6 +4909,56 @@ describe("orca: files and editor (A-18)", () => {
       await browser.waitUntil(async () => (await names()).join() === "by-watch.rs", { timeoutMsg: "the change never read the tree" });
       expect((await callsOf(tree))[0]).toEqual({ path: WORK, dir: "", ignored: false, environment: "Studio" });
       await expect($(CARDS)).not.toExist();
+    });
+
+    it("reads of the tree only the folders that hold a path that changed and are not in an ignored folder, and the changes of one second together (A-18)", async () => {
+      await openStreamed();
+      await waitForCalls("orca_stream_files");
+      await sendFiles({ kind: "ready" });
+      await browser.pause(500);
+      // The folder src is open, and so is target, which the list marked as ignored.
+      await mock("orca_files_list", dirOf("src", [["lib.rs", false]]));
+      await row("src").click();
+      await waitForCount("#orca-files-tree .orca-file", 5);
+      await mock("orca_files_list", dirOf("target", [["debug", true, true]]));
+      await row("target").click();
+      await waitForCount("#orca-files-tree .orca-file", 6);
+      const list = await mock("orca_files_list", dirOf("src", [["lib.rs", false], ["new.rs", false]]));
+      const folders = async () => (await callsOf(list)).map((call) => (call as { dir: string }).dir).sort();
+      // A change in an ignored folder, and in a folder that was never read, reads nothing.
+      await changed(`${WORK}/target/x.o`, `${WORK}/other/deep.rs`);
+      await browser.pause(1300);
+      expect(await callsOf(list)).toEqual([]);
+      // A change in a folder that was read reads that folder alone.
+      await changed(`${WORK}/src/new.rs`);
+      await waitForCalls(list);
+      expect(await folders()).toEqual(["src"]);
+      // The changes that come in the next second wait and are read together, each folder once.
+      await changed(`${WORK}/x.rs`);
+      await changed(`${WORK}/src/y.rs`, `${WORK}/src/z.rs`);
+      await browser.pause(250);
+      expect(await folders()).toEqual(["src"]);
+      await waitForCalls(list, 3);
+      await browser.pause(300);
+      expect(await folders()).toEqual(["", "src", "src"]);
+    });
+
+    it("reads by the clock a file under node_modules and the tree while a folder of node_modules is open, though the watch is ready (A-18)", async () => {
+      await openStreamed({ ...timers({ orcaClock: 1000 }), orca_files_list: dirOf("", [["node_modules", true, true], ["a.rs", false]]), editor_settings: { autosaveMs: 60000 } }, 2);
+      await waitForCalls("orca_stream_files");
+      await mock("orca_files_list", dirOf("node_modules", [["x.js", false]]));
+      await row("node_modules").click();
+      await waitForCount("#orca-files-tree .orca-file", 3);
+      await mock("orca_file_read", text("in node_modules\n", "sig-1"));
+      await doublePress("node_modules/x.js");
+      await expect($(".orca-edit-area")).toHaveValue("in node_modules\n", { trim: false });
+      await sendFiles({ kind: "ready" });
+      await browser.pause(300);
+      // Orca watches nothing in it, so the clock reads the tree and the file all the same.
+      const list = await mock("orca_files_list", dirOf("node_modules", [["x.js", false]]));
+      await mock("orca_file_read", text("by the clock\n", "sig-2"));
+      await expect($(".orca-edit-area")).toHaveValue("by the clock\n", { trim: false });
+      await waitForCalls(list);
     });
 
     it("watches nothing where the list is not streamed, and reads the file by the clock (A-18)", async () => {

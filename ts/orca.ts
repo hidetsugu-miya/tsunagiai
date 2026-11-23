@@ -39,8 +39,8 @@ import { initOrcaDatabase } from "./orca-database.js";
 import { closeDiff, type DiffCommit, diffsOf, hasDiffIn, openDiff as openDiffTab, refreshDiffs, showDiffs } from "./orca-diff.js";
 import { closeFile, dirtyIds, discardFiles, filesOf, goTo, hasFileIn, holdFiles, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, refreshEditors, resolveServers, showEditors } from "./orca-editor.js";
 import { ensureServer, initLsp, mayAsk, pauseLsp, syncServers } from "./orca-lsp.js";
-import { filesShown, initOrcaFiles, refreshFiles, rereadScratchpad, syncFiles, toggleFiles, treeWatch } from "./orca-files.js";
-import { syncFileWatches, watchReady } from "./orca-watch.js";
+import { filesShown, initOrcaFiles, openFolders, refreshFiles, rereadScratchpad, syncFiles, toggleFiles, treeWatch } from "./orca-files.js";
+import { syncFileWatches, unwatched, watchReady } from "./orca-watch.js";
 import { type PaneModel, drawTree, editorHostOf, initPaneTree, type TreeModel } from "./orca-pane-tree.js";
 import { applyLocal, findTab, focusedTab, layoutOf, needsSync, type PaneTabs, panesOf, syncPanes } from "./orca-panes.js";
 import { closePeek, drawPeek, initPeek, openPeek, peeking } from "./orca-peek.js";
@@ -1537,11 +1537,11 @@ function rereadTabs() {
 }
 
 // The clock's read of the files (A-18, A-24, A-27): the tabs of files and differences that the panes show, and, while the file pane is shown, what it shows (the tree, or the history). Each skips what is still being read.
-// The files and the tree of a worktree whose disk is watched and ready are read when the watch tells a change, so the clock leaves them; the differences and the history stay (a commit is no change that Orca tells).
+// The files and the tree of a worktree whose disk is watched and ready are read when the watch tells a change, so the clock leaves them; the differences and the history stay (a commit is no change that Orca tells). Orca does not watch `.git` and `node_modules`, so the clock reads a file in them, and the tree while one of their folders is open.
 function rereadFiles() {
   const tree = treeWatch();
-  if (filesShown() && !(tree !== null && watchReady(tree.target, tree.path))) refreshFiles(true);
-  refreshEditors(watchReady);
+  if (filesShown() && !(tree !== null && watchReady(tree.target, tree.path) && !openFolders().some(unwatched))) refreshFiles(true);
+  refreshEditors((target, path, relative) => watchReady(target, path) && !unwatched(relative));
   refreshDiffs();
 }
 

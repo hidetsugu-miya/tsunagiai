@@ -1,5 +1,5 @@
 // The file pane of the Orca screen (A-18): the files of the worktree of the selected tab (with no tab, the main worktree of the selected project), as a tree on the right of the work pane. Rust reads a folder (`orca_files_list`: its entries sorted) and, after it, which of them git ignores (`orca_files_ignored`) and which differ from HEAD (`orca_files_changes`, A-39); this module draws the folder at once, marks the ignored and the changed entries when the answers come, and takes the presses.
-// A folder is read the first time it is opened and drawn from what was read after that, and the root and then the open folders are read again, side by side (at most `reads()` at a time), when the window gets the focus back and, while the pane is shown, by the clock of the Orca screen (`refreshFiles`, called by orca.ts), after the app's own create, delete and move, and after a switch of the branch, the app's own or one the list of Orca shows (`syncFiles`). A read by the clock or for a branch that changed outside the app says nothing when it fails (what is shown stays). Where the Orca screen streams (A-12), the disk is watched (`orca-watch.ts`, Orca's `files.watch`) and the tree is read again at once when it changes (`rereadTree`), and the clock does not read it while its worktree is watched; elsewhere nothing watches the disk. A press on a row selects it (with ⌘ it adds the row to the selection or takes it off, with Shift it selects the rows from the one pressed before), and the selected rows are drawn in the accent color. A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path (and, on a file, downloads it; on a folder, first makes a new file or folder in it, as the right button on the empty part of the tree does in the root; on a row that differs from HEAD, after a line, stages it, unstages it and puts it back, which asks first, A-44; last, after a line, 「移動・名前の変更」, which turns the row into a field with its path from the worktree, and the delete, which asks first and deletes for good, A-18; on several selected rows the menu is the delete alone, as the Delete key is, A-18). A row is also moved by dragging it onto a folder's row or onto the empty part of the tree (the root of the worktree). The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
+// A folder is read the first time it is opened and drawn from what was read after that, and the root and then the open folders are read again, side by side (at most `reads()` at a time), when the window gets the focus back and, while the pane is shown, by the clock of the Orca screen (`refreshFiles`, called by orca.ts), after the app's own create, delete and move, and after a switch of the branch, the app's own or one the list of Orca shows (`syncFiles`). A read by the clock or for a branch that changed outside the app says nothing when it fails (what is shown stays). Where the Orca screen streams (A-12), the disk is watched (`orca-watch.ts`, Orca's `files.watch`) and the folders that hold a path that changed (read ones, not in an ignored folder) are read again at once (`rereadTree`), and the clock does not read the tree while its worktree is watched, unless a folder of `node_modules` or `.git` is open (Orca does not watch them); elsewhere nothing watches the disk. A press on a row selects it (with ⌘ it adds the row to the selection or takes it off, with Shift it selects the rows from the one pressed before), and the selected rows are drawn in the accent color. A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path (and, on a file, downloads it; on a folder, first makes a new file or folder in it, as the right button on the empty part of the tree does in the root; on a row that differs from HEAD, after a line, stages it, unstages it and puts it back, which asks first, A-44; last, after a line, 「移動・名前の変更」, which turns the row into a field with its path from the worktree, and the delete, which asks first and deletes for good, A-18; on several selected rows the menu is the delete alone, as the Delete key is, A-18). A row is also moved by dragging it onto a folder's row or onto the empty part of the tree (the root of the worktree). The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
 // The tree belongs to one worktree of one target: another tab's worktree gives a new tree (nothing is kept of the old one, and an answer that comes late for the old one is dropped).
 // The top row also has the three buttons that choose what the pane shows under the heading, the files, the history of the worktree (A-27, orca-history.ts) or the language server of the worktree (A-34, orca-lsp.ts), and a fourth for the connections of the database screen (A-43, orca-database.ts), which belong to no worktree and hide the heading; the choice is kept in memory only, and the heading serves the files, the history and the language server, and so do the reads at the return of the focus and by the clock (`refreshFiles`), which the language server and the connections have none of.
 import type { OrcaDeleteEntry } from "./bindings/OrcaDeleteEntry";
@@ -277,15 +277,15 @@ async function readDir(dir: string, quiet = false, clock = false, pending?: List
 // How many folders a read of the open folders takes at once, as Orca's own window does: 16 on this machine, 8 on a saved environment (its connection is a paired server's).
 const reads = (here: FilesContext) => (here.target === null ? 16 : 8);
 
-// Reads the root, and when it is read the folders that are open again, side by side. The root goes first alone, so that the check of the worktree that its read may start is done once, not once for each folder read at the same time. A folder that was read and is closed is dropped, so that it is read when it is opened next. Another worktree's tree ends it. `quiet` and `clock`: see `readDir`.
-async function reload(quiet = false, clock = false) {
+// Reads the root, and when it is read the folders that are open again, side by side (with `only`, the folders it names alone). The root goes first alone, so that the check of the worktree that its read may start is done once, not once for each folder read at the same time. A folder that was read and is closed is dropped, so that it is read when it is opened next. Another worktree's tree ends it. `quiet` and `clock`: see `readDir`.
+async function reload(quiet = false, clock = false, only?: string[]) {
   const here = context;
   if (here === null) return;
   const mine = generation;
-  const queue = [...expanded];
-  for (const dir of [...listings.keys()]) if (dir !== "" && !queue.includes(dir)) listings.delete(dir);
+  const queue = only === undefined ? [...expanded] : only.filter((dir) => dir !== "");
+  for (const dir of [...listings.keys()]) if (dir !== "" && !expanded.has(dir)) listings.delete(dir);
   const pending: Listed[] = [];
-  await readDir("", quiet, clock, pending);
+  if (only === undefined || only.includes("")) await readDir("", quiet, clock, pending);
   const worker = async () => {
     for (let dir = queue.shift(); dir !== undefined; dir = queue.shift()) {
       if (mine !== generation) return;
@@ -315,11 +315,23 @@ export function refreshFiles(clock = false) {
 // The worktree whose tree the pane shows now (null: none), whose disk the watch of Orca tells about (A-18): the history, the language server and the connections have no tree.
 export const treeWatch = () => (shown && context !== null && shownPart() === "files" ? { target: context.target, path: context.path } : null);
 
-// Reads the tree again, without a word, because the watch of the disk told a change (A-18): the root and the open folders, as the clock reads them. A read that is on its way is followed by one more.
-export function rereadTree() {
+// Whether the folder `dir`, or a folder it lies in, was marked as ignored by the list: Orca's watch tells of what changes there (a build writes there without a pause), and it is not read.
+function inIgnored(dir: string) {
+  for (let up = dir; up !== ""; up = parentOf(up)) if (ignoredDir(up)) return true;
+  return false;
+}
+
+// The folders that are open (a folder of `node_modules` or `.git` among them is read by the clock, because Orca does not watch it).
+export const openFolders = () => [...expanded];
+
+// Reads the tree again, without a word, because the watch of the disk told a change (A-18), as the clock reads it. `relatives` are the paths that changed, from the worktree: only the folders that hold one of them and that were read (the root, and the open folders) are read, and not the ones in an ignored folder; null reads the root and the open folders. A read that is on its way is followed by a read of all of them.
+export function rereadTree(relatives: string[] | null) {
   if (treeWatch() === null) return;
-  if ([...listings.values()].some((l) => l.busy)) treeAgain = true;
-  else void reload(true, true);
+  const dirs = relatives === null ? null : [...new Set(relatives.map(parentOf))].filter((dir) => listings.has(dir) && !inIgnored(dir));
+  const read = dirs === null ? [...listings.keys()] : dirs;
+  if (read.some((dir) => listings.get(dir)?.busy)) treeAgain = true;
+  else if (dirs === null) void reload(true, true);
+  else if (dirs.length > 0) void reload(true, true, dirs);
 }
 
 // A scratchpad file was made in `.orca/scratchpad` of the worktree at `path` (A-29): when the tree is that worktree's, the folders on the way to it that it has read are read again, the root first, so that a folder that was not there shows now.
