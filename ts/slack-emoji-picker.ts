@@ -1,5 +1,6 @@
-// The emoji picker under the "add a reaction" button of a message (S-25): a search field, then the emoji used in this run (最近), the workspace's custom emoji (S-26) and the standard emoji.
+// The emoji picker under the "add a reaction" button of a message (S-25): a search field, then the emoji the user reacted with most (よく使う), the workspace's custom emoji (S-26) and the standard emoji.
 // Rust lists the emoji (`slack_emoji_catalog`); the list is kept here per workspace for an hour, in memory only, so it is not asked for again each time the picker opens.
+// Rust gives the names of the most used ones (`slack_emoji_frequent`) at each opening, and the cells of that section are made from the list with them.
 // The images of the custom emoji are fetched for the cells that are in view only, as they scroll in.
 // The cells of a workspace are made once with its list and kept with it, so that opening the picker again makes none.
 import type { EmojiCatalog } from "./bindings/EmojiCatalog";
@@ -18,17 +19,13 @@ export type PickerOptions = {
 
 // How long a workspace's list is kept (Rust keeps the custom emoji for as long).
 const CATALOG_TTL = 60 * 60 * 1000;
-// How many recent emoji a workspace remembers.
-const RECENT_MAX = 24;
 
 // The cells of one section: the grid, which is moved from one picker to the next, and the cells with their names in lower case.
 type Cell = { name: string; node: HTMLElement };
 type Part = { grid: HTMLElement; cells: Cell[] };
-type Built = { custom: Part; standard: Part };
+type Built = { custom: Part; standard: Part; byName: Map<string, PickedEmoji> };
 
 const catalogs = new Map<string, { at: number; got: Promise<Built> }>();
-// The emoji added in this run, newest first, by workspace. Memory only.
-const recents = new Map<string, PickedEmoji[]>();
 
 function partOf(list: PickedEmoji[]): Part {
   const grid = tag("div", "emoji-grid");
@@ -44,10 +41,11 @@ function catalogOf(teamId: string) {
   const entry = {
     at: Date.now(),
     got: invoke("slack_emoji_catalog", { teamId }).then(
-      (catalog: EmojiCatalog): Built => ({
-        custom: partOf(catalog.custom.map((c) => ({ name: c.name, emoji: `:${c.name}:`, image: c.image }))),
-        standard: partOf(catalog.standard.map((e) => ({ name: e.name, emoji: e.emoji, image: null }))),
-      }),
+      (catalog: EmojiCatalog): Built => {
+        const custom = catalog.custom.map((c): PickedEmoji => ({ name: c.name, emoji: `:${c.name}:`, image: c.image }));
+        const standard = catalog.standard.map((e): PickedEmoji => ({ name: e.name, emoji: e.emoji, image: null }));
+        return { custom: partOf(custom), standard: partOf(standard), byName: new Map([...standard, ...custom].map((e) => [e.name, e])) };
+      },
     ),
   };
   catalogs.set(teamId, entry);
@@ -66,12 +64,6 @@ function catalogOf(teamId: string) {
 // Forgets the lists of every workspace: a token was pasted again or a workspace was removed, so what Rust lists may differ now.
 export function forgetEmojiCatalogs() {
   catalogs.clear();
-}
-
-// Remembers `picked` as the newest recent emoji of the workspace, once the reaction was added.
-export function rememberEmoji(teamId: string, picked: PickedEmoji) {
-  const list = (recents.get(teamId) ?? []).filter((e) => e.name !== picked.name);
-  recents.set(teamId, [picked, ...list].slice(0, RECENT_MAX));
 }
 
 function cellOf(picked: PickedEmoji) {
@@ -114,10 +106,10 @@ export function openEmojiPicker(anchor: Element, teamId: string, options: Picker
   input.autocomplete = "off";
   input.spellcheck = false;
   const scroll = tag("div", "emoji-scroll");
-  const recent = sectionOf("最近");
+  const frequent = sectionOf("よく使う");
   const custom = sectionOf("カスタム");
   const standard = sectionOf("標準");
-  const sections = [recent, custom, standard];
+  const sections = [frequent, custom, standard];
   const status = tag("p", "emoji-status");
   const none = tag("div", "menu-empty", "該当する絵文字がありません");
   none.hidden = true;
@@ -191,12 +183,14 @@ export function openEmojiPicker(anchor: Element, teamId: string, options: Picker
 
   showMenu(anchor, pop);
   input.focus();
-  fill(recent, partOf(recents.get(teamId) ?? []));
   status.textContent = "読み込んでいます…";
-  catalogOf(teamId).then(
-    (built) => {
+  // The names Rust gives are the most used first; one that the list no longer has (a custom emoji that was deleted) is left out, and a failed read leaves the section out.
+  const used = invoke("slack_emoji_frequent", { teamId }).catch((): string[] => []);
+  Promise.all([catalogOf(teamId), used]).then(
+    ([built, names]) => {
       if (!pop.isConnected) return;
       status.hidden = true;
+      fill(frequent, partOf(names.flatMap((n) => built.byName.get(n) ?? [])));
       fill(custom, built.custom);
       fill(standard, built.standard);
       filter();

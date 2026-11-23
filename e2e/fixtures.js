@@ -73,6 +73,9 @@ const answers = {
   slack_icons: [],
   slack_socket_status: [],
   slack_file_images: {},
+  // S-25: no emoji has been used, so the picker has no "よく使う"; a spec of the picker mocks `slack_emoji_frequent` with the names it should list.
+  slack_emoji_frequent: [],
+  slack_emoji_used: null,
   // D-1: no connection saved; a spec that saves or deletes one mocks `database_profiles` with the list it should read next, and `database_profile_save` or `database_profile_delete`; `database_test` (D-2) is mocked by the spec that tests a connection.
   database_profiles: [],
   // D-3: a connection opens with no database and a database with no table, nothing is open to ask about, and a disconnect succeeds; a spec that opens a tree mocks `database_connect` and `database_tables`.

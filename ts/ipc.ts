@@ -282,6 +282,10 @@ export interface Commands {
   slack_react: { args: { teamId: string; channel: string; ts: string; name: string; add: boolean }; result: boolean };
   // What the emoji picker (S-25) lists for the workspace: the standard emoji (Slack's name and the Unicode emoji, no skin tone variant) and the custom emoji with an image (S-26; an `alias:` is not listed again). Nothing is saved.
   slack_emoji_catalog: { args: { teamId: string }; result: EmojiCatalog };
+  // Notes that the user added the reaction `name` in the workspace (S-25), for `slack_emoji_frequent`. Called after an add that succeeded, never for a take-off. Saved in `slack-emoji-usage.json`.
+  slack_emoji_used: { args: { teamId: string; name: string }; result: null };
+  // The names of the emoji the user reacted with most in the workspace, most first, at most 24 (S-25). Empty for a workspace with no use.
+  slack_emoji_frequent: { args: { teamId: string }; result: string[] };
   // The attached images (a thread file's `thumbUrl`) as data: URIs by URL; the token goes to files.slack.com only. What cannot be fetched is not in the map.
   slack_file_images: { args: { teamId: string; urls: string[] }; result: Record<string, string> };
   // The user's own icon in each workspace.
