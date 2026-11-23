@@ -41,7 +41,7 @@ function draw(source, root) {
 }
 
 // The look of a code block, and only that: the document is the same, so the export and the text that is saved are the same. A `mermaid` block shows its diagram in place of its text (the text stays in the block, hidden, and is what the source shows);
-// a diagram that cannot be drawn leaves the block as it is for any other language.
+// a diagram that cannot be drawn leaves the block as it is for any other language. The diagram is drawn when the block is made (when the view is drawn) and never again: once the text of the block changes (a key typed in it, a paragraph joined to it) the diagram goes and the block is code, which can be edited, until the view is drawn again.
 const isDiagram = (node) => node.attrs.language === "mermaid";
 function diagramView(root) {
   return $view(codeBlockSchema.node, () => (initial) => {
@@ -50,28 +50,24 @@ function diagramView(root) {
     const figure = document.createElement("div");
     figure.className = "orca-diagram";
     figure.contentEditable = "false";
-    const paint = () => {
-      const svg = isDiagram(node) ? draw(node.textContent, root) : null;
-      figure.replaceChildren(...(svg ? [svg] : []));
-      if (svg) {
-        dom.dataset.diagram = "drawn";
-        dom.contentEditable = "false";
-      } else {
-        delete dom.dataset.diagram;
-        dom.removeAttribute("contenteditable");
-      }
-    };
-    if (isDiagram(node)) {
+    const svg = isDiagram(node) ? draw(node.textContent, root) : null;
+    if (svg) {
+      figure.append(svg);
       dom.prepend(figure);
-      paint();
+      dom.dataset.diagram = "drawn";
+      dom.contentEditable = "false";
     }
     return {
       dom,
       contentDOM,
       update: (next) => {
         if (next.type !== node.type || next.attrs.language !== node.attrs.language) return false;
+        if (next.textContent !== node.textContent && figure.isConnected) {
+          figure.remove();
+          delete dom.dataset.diagram;
+          dom.removeAttribute("contenteditable");
+        }
         node = next;
-        if (isDiagram(node)) paint();
         return true;
       },
       ignoreMutation: (mutation) => mutation.type !== "selection" && !contentDOM.contains(mutation.target),

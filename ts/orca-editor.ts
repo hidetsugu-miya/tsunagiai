@@ -464,7 +464,7 @@ async function drawRich(f: EditorFile) {
   try {
     const [{ body }] = await Promise.all([invoke("markdown_split", { text }), loadMilkdown()]);
     // A mermaid block is drawn as a diagram (A-26): Pele is read before the view is drawn, so the diagrams are in it when it is (the scroll that a redraw keeps is not moved by a diagram that comes later). A file that has none does not read it, and one that fails to read leaves the block as code.
-    if (/(```|~~~)\s*mermaid\b/.test(body)) await loadPele().catch(() => {});
+    if (/^ {0,3}(```|~~~)[ \t]*mermaid\b/m.test(body)) await loadPele().catch(() => {});
     if (turn !== f.richTurn) return;
     const host = tag("div");
     f.rich.append(host);

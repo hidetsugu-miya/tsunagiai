@@ -382,6 +382,54 @@ describe("orca: files and editor (A-18)", () => {
     expect(check.before).toContain(fence(bad));
   });
 
+  // The caret at the start (`start`) or the end of the first element `selector` of the rich view, which gets the focus; the window of the E2E build has no focus, so the script puts it there and the keys are real.
+  const caretIn = (selector: string, start: boolean) =>
+    browser.execute(
+      (s, atStart) => {
+        const view = document.querySelector<HTMLElement>(".orca-edit-rich .ProseMirror")!;
+        view.focus();
+        const range = document.createRange();
+        range.selectNodeContents(view.querySelector(s)!);
+        range.collapse(atStart);
+        const selection = getSelection()!;
+        selection.removeAllRanges();
+        selection.addRange(range);
+      },
+      selector,
+      start,
+    );
+
+  it("keeps a mermaid block typed in the rich view as code that can be edited, also when its text could be drawn (A-26)", async () => {
+    await openFiles();
+    await openMarkdown(`# 図\n\n${fence("")}\n\n末尾\n`);
+    await browser.waitUntil(() => browser.execute("return typeof pele !== 'undefined'"), { timeoutMsg: "Pele was never read" });
+    expect(await count(".orca-edit-rich pre[data-diagram]")).toBe(0);
+    await caretIn("pre > code", false);
+    await browser.keys("graph");
+    await browser.keys(" TD");
+    // The text is a diagram that Pele draws, and the block is still the code that is being typed.
+    await browser.waitUntil(async () => (await rich("pre > code")).join("") === "graph TD", { timeoutMsg: "the typing never reached the block" });
+    expect(await count(".orca-edit-rich pre[data-diagram]")).toBe(0);
+    expect(await count(".orca-edit-rich .orca-diagram")).toBe(0);
+    await expect($(".orca-edit-rich pre > code")).toBeDisplayed();
+    expect(await browser.execute(() => document.querySelector(".orca-edit-rich pre")!.hasAttribute("contenteditable"))).toBe(false);
+    // What the editor exports is the typed text (the patch is sent after the wait for more changes).
+    await browser.waitUntil(async () => ((await callsOf("markdown_patch")) as PatchCall[]).some((c) => c.after.includes(fence("graph TD"))), { timeoutMsg: "the typed block never reached markdown_patch" });
+  });
+
+  it("turns a drawn diagram into code that holds the text of the paragraph that Backspace joined to it (A-26)", async () => {
+    await openFiles();
+    await openMarkdown(`# 図\n\n${fence(flow)}\n\n末尾\n`);
+    await $(diagramBox).waitForExist({ timeoutMsg: "the diagram was never drawn" });
+    await caretIn(":scope > p:last-child", true);
+    await browser.keys("Backspace");
+    await browser.waitUntil(async () => (await count(".orca-edit-rich pre[data-diagram]")) === 0, { timeoutMsg: "the diagram never went" });
+    expect(await count(".orca-edit-rich .orca-diagram")).toBe(0);
+    await expect($(".orca-edit-rich pre > code")).toBeDisplayed();
+    expect((await rich("pre > code"))[0]).toContain("末尾");
+    expect((await rich("pre > code"))[0]).toContain("flowchart LR");
+  });
+
   it("draws the diagram again when the rich view is drawn again by the clock, and keeps the scroll (A-18, A-26)", async () => {
     const first = `# 図\n\n${fence(flow)}\n${"\n行\n".repeat(60)}`;
     const next = `# 図\n\n${fence("flowchart LR\n  A[再読] --> B[完了]")}\n${"\n行\n".repeat(60)}`;
