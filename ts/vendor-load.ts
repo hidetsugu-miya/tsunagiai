@@ -65,5 +65,5 @@ export const highlightReady = () => loaded.has("highlight");
 // Milkdown (the rich view of a Markdown file in the editor, A-26): one file that scripts/build-milkdown.mjs bundles.
 export const loadMilkdown = () => once("milkdown", MILKDOWN);
 
-// Pele (the diagrams of a decision page, A-41): one file, read only when a page has a diagram.
+// Pele (the diagrams of a decision page, A-41, and of a mermaid block in the rich view of a Markdown file, A-26): one file, read only when a page or a file has a diagram.
 export const loadPele = () => once("pele", PELE);

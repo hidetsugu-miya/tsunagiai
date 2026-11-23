@@ -42,7 +42,7 @@ declare const TsunagiaiMilkdown: {
   normalize(markdown: string): Promise<string>;
   compose(root: HTMLElement, onChange: () => void): Promise<MilkdownComposer>;
 };
-// Pele (src/vendor/pele.global.js, A-41): only `render`, which gives the SVG of one diagram and its size, and throws a `PeleError` when the text cannot be drawn. It makes no HTML label and no script, and the options here cut the links and the images.
+// Pele (src/vendor/pele.global.js, A-41 and A-26; the rich view reads it through the bundle of Milkdown, scripts/milkdown-entry.js): only `render`, which gives the SVG of one diagram and its size, and throws a `PeleError` when the text cannot be drawn. It makes no HTML label and no script, and the options here cut the links and the images.
 declare const pele: {
   render(source: string, options?: { fontFamily?: string; idPrefix?: string; links?: boolean; images?: boolean }): { svg: string; width: number; height: number };
 };

@@ -323,6 +323,84 @@ describe("orca: files and editor (A-18)", () => {
     expect(await browser.execute(() => document.querySelector(".orca-edit-rich")!.textContent)).not.toContain("title");
   });
 
+  // A-26: a code block of the language `mermaid` is drawn as the diagram that Pele makes, in its place; the document is the same, so what is saved is the same.
+  const fence = (source: string) => `\`\`\`mermaid\n${source}\n\`\`\``;
+  const flow = "flowchart LR\n  A[開始] --> B[終了]";
+  const diagramBox = ".orca-edit-rich pre[data-diagram='drawn']";
+  const diagramText = () => browser.execute((s) => document.querySelector(`${s} svg`)?.textContent ?? null, diagramBox);
+
+  it("draws a mermaid block as a diagram in place of its code, reads Pele only for such a file, and sends the same text to markdown_patch (A-26)", async () => {
+    const content = `# 図\n\n${fence(flow)}\n\n末尾\n`;
+    await openFiles();
+    expect(await browser.execute("return typeof pele")).toBe("undefined");
+    await openMarkdown(content);
+    await $(diagramBox).waitForExist({ timeoutMsg: "the diagram was never drawn" });
+    expect(await count(`${diagramBox} svg.pele`)).toBe(1);
+    expect(await diagramText()).toContain("開始");
+    expect(await count(".orca-edit-rich .orca-diagram svg")).toBe(1);
+    expect(await browser.execute(() => document.querySelectorAll('script[src$="pele.global.js"]').length)).toBe(1);
+    // The code is not shown: the block is the diagram alone.
+    await expect($(`${diagramBox} > code`)).not.toBeDisplayed();
+    expect(await browser.execute(() => (document.querySelector(".orca-edit-rich") as HTMLElement).innerText)).not.toContain("flowchart");
+    // The document is the text of the file: the export and the patch are what they are without a diagram.
+    const calls = (await callsOf("markdown_patch")) as PatchCall[];
+    const check = calls[calls.length - 1];
+    expect(check.original).toBe(content);
+    expect(check.before).toContain(fence(flow));
+    expect(check.after).toBe(check.before);
+    // Typing elsewhere in the view sends the diagram's text as it was.
+    await mock("markdown_patch", patched(`${content}X`));
+    await typeRich("X");
+    const [call] = (await waitForCalls("markdown_patch")) as PatchCall[];
+    expect(call.before).toBe(check.before);
+    expect(call.after).toContain(fence(flow));
+    expect(call.after).toContain("末尾X");
+    // The source is the text, with the diagram's text to edit.
+    await modeButton("ソース").click();
+    await expect($(".orca-edit-area")).toHaveValue(`${content}X`, { trim: false });
+  });
+
+  it("does not read Pele for a Markdown file with no mermaid block (A-26)", async () => {
+    await openFiles();
+    await openMarkdown(mdSample);
+    expect(await rich("h1")).toEqual(["見出し"]);
+    expect(await browser.execute("return typeof pele")).toBe("undefined");
+    expect(await browser.execute(() => document.querySelectorAll('script[src$="pele.global.js"]').length)).toBe(0);
+  });
+
+  it("leaves a mermaid block that Pele cannot draw as a code block with its text (A-26)", async () => {
+    const bad = "flowchart TD\n  A[開始 --> ((";
+    await openFiles();
+    await openMarkdown(`# 図\n\n${fence(bad)}\n`);
+    await browser.waitUntil(() => browser.execute("return typeof pele !== 'undefined'"), { timeoutMsg: "Pele was never read" });
+    await browser.pause(300);
+    expect(await count(".orca-edit-rich pre[data-diagram]")).toBe(0);
+    expect(await count(".orca-edit-rich .orca-diagram svg")).toBe(0);
+    await expect($(".orca-edit-rich pre > code")).toBeDisplayed();
+    expect(await rich("pre > code")).toEqual([bad]);
+    const [check] = (await callsOf("markdown_patch")) as PatchCall[];
+    expect(check.before).toContain(fence(bad));
+  });
+
+  it("draws the diagram again when the rich view is drawn again by the clock, and keeps the scroll (A-18, A-26)", async () => {
+    const first = `# 図\n\n${fence(flow)}\n${"\n行\n".repeat(60)}`;
+    const next = `# 図\n\n${fence("flowchart LR\n  A[再読] --> B[完了]")}\n${"\n行\n".repeat(60)}`;
+    await openFiles({ ...timers({ orcaClock: 1000 }), editor_settings: { autosaveMs: 60000 } });
+    await openMarkdown(first);
+    await $(diagramBox).waitForExist({ timeoutMsg: "the diagram was never drawn" });
+    expect(await diagramText()).toContain("開始");
+    await browser.execute(() => {
+      document.querySelector(".orca-edit-rich")!.scrollTop = 300;
+    });
+    await mock("markdown_split", parts(next));
+    await mock("markdown_patch", patched(next));
+    await mock("orca_file_read", text(next, "sig-2", "markdown", "markdown"));
+    await browser.waitUntil(async () => ((await diagramText()) ?? "").includes("再読"), { timeoutMsg: "the diagram was never drawn again" });
+    expect(await diagramText()).not.toContain("開始");
+    expect(await count(".orca-edit-rich .orca-diagram svg")).toBe(1);
+    expect(await browser.execute(() => document.querySelector(".orca-edit-rich")!.scrollTop)).toBe(300);
+  });
+
   // A-26: the band under the paragraph of the caret (`.orca-edit-rich-band`).
   const richBand = () =>
     browser.execute(() => {

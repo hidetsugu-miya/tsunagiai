@@ -1755,6 +1755,10 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-edit-rich code { font-family: var(--editor-family, ui-monospace, Menlo, monospace); font-size: .9em; padding: .1em .3em; border-radius: 4px; background: var(--soft); }
 .orca-edit-rich pre { margin: .7em 0; padding: 10px 12px; border-radius: 8px; background: var(--soft); overflow-x: auto; white-space: pre; }
 .orca-edit-rich pre code { padding: 0; background: transparent; font-size: .9em; }
+/* A-26: a mermaid block drawn as a diagram (the colors are `.pele`, A-41). The text stays in the block, hidden; a diagram that Pele cannot draw leaves the block as the other code blocks are. */
+.orca-edit-rich pre[data-diagram="drawn"] { padding: 8px; border: 1px solid var(--line); background: var(--surface); white-space: normal; }
+.orca-edit-rich pre[data-diagram="drawn"] > code { display: none; }
+.orca-diagram svg { display: block; width: 100%; max-width: 100%; height: auto; margin: 0 auto; fill: var(--_fg); stroke: none; stroke-width: initial; stroke-linecap: initial; stroke-linejoin: initial; }
 .orca-edit-rich table { border-collapse: collapse; margin: .7em 0; }
 .orca-edit-rich th, .orca-edit-rich td { padding: 4px 10px; border: 1px solid var(--line); }
 .orca-edit-rich th { background: var(--soft); }

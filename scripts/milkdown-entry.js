@@ -3,6 +3,7 @@
 import { defaultValueCtx, Editor, editorViewCtx, editorViewOptionsCtx, rootCtx } from "@milkdown/kit/core";
 import { history } from "@milkdown/kit/plugin/history";
 import {
+  codeBlockSchema,
   commonmark,
   createCodeBlockCommand,
   toggleEmphasisCommand,
@@ -14,10 +15,71 @@ import {
   wrapInOrderedListCommand,
 } from "@milkdown/kit/preset/commonmark";
 import { gfm, toggleStrikethroughCommand } from "@milkdown/kit/preset/gfm";
+import { DOMSerializer } from "@milkdown/kit/prose/model";
 import { Plugin } from "@milkdown/kit/prose/state";
-import { $prose, callCommand, getMarkdown, replaceAll } from "@milkdown/kit/utils";
+import { $prose, $view, callCommand, getMarkdown, replaceAll } from "@milkdown/kit/utils";
 
-function make(root, markdown, state, editable = false) {
+// The diagram of a `mermaid` code block (A-26): the SVG that Pele draws (the page's `pele` and `DOMPurify`, read before the file is drawn), or null when Pele is not there or cannot draw the text.
+// Pele makes no HTML label and no script, and draws with no link and no image; its SVG goes through DOMPurify's SVG profile all the same, as the diagrams of a decision page do (ts/formation-page-blocks.ts).
+let drawn = 0;
+function draw(source, root) {
+  const { pele, DOMPurify } = globalThis;
+  if (!pele || !DOMPurify) return null;
+  try {
+    const { svg, width } = pele.render(source, { fontFamily: getComputedStyle(root).fontFamily, idPrefix: `md-pele-${++drawn}`, links: false, images: false });
+    const holder = document.createElement("div");
+    holder.innerHTML = DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true } });
+    const el = holder.querySelector("svg");
+    if (!el) return null;
+    el.setAttribute("role", "img");
+    el.setAttribute("aria-label", "図");
+    el.style.maxWidth = `${width}px`;
+    return el;
+  } catch {
+    return null;
+  }
+}
+
+// The look of a code block, and only that: the document is the same, so the export and the text that is saved are the same. A `mermaid` block shows its diagram in place of its text (the text stays in the block, hidden, and is what the source shows);
+// a diagram that cannot be drawn leaves the block as it is for any other language.
+const isDiagram = (node) => node.attrs.language === "mermaid";
+function diagramView(root) {
+  return $view(codeBlockSchema.node, () => (initial) => {
+    let node = initial;
+    const { dom, contentDOM } = DOMSerializer.renderSpec(document, node.type.spec.toDOM(node));
+    const figure = document.createElement("div");
+    figure.className = "orca-diagram";
+    figure.contentEditable = "false";
+    const paint = () => {
+      const svg = isDiagram(node) ? draw(node.textContent, root) : null;
+      figure.replaceChildren(...(svg ? [svg] : []));
+      if (svg) {
+        dom.dataset.diagram = "drawn";
+        dom.contentEditable = "false";
+      } else {
+        delete dom.dataset.diagram;
+        dom.removeAttribute("contenteditable");
+      }
+    };
+    if (isDiagram(node)) {
+      dom.prepend(figure);
+      paint();
+    }
+    return {
+      dom,
+      contentDOM,
+      update: (next) => {
+        if (next.type !== node.type || next.attrs.language !== node.attrs.language) return false;
+        node = next;
+        if (isDiagram(node)) paint();
+        return true;
+      },
+      ignoreMutation: (mutation) => mutation.type !== "selection" && !contentDOM.contains(mutation.target),
+    };
+  });
+}
+
+function make(root, markdown, state, editable = false, diagrams = false) {
   // Tells the page, at once and without the text, that the document changed (the page asks for the text when it needs it).
   const watch = $prose(
     () =>
@@ -29,7 +91,7 @@ function make(root, markdown, state, editable = false) {
         }),
       }),
   );
-  return Editor.make()
+  const editor = Editor.make()
     .config((ctx) => {
       ctx.set(rootCtx, root);
       ctx.set(defaultValueCtx, markdown);
@@ -38,14 +100,16 @@ function make(root, markdown, state, editable = false) {
     .use(commonmark)
     .use(gfm)
     .use(history)
-    .use(watch)
-    .create();
+    .use(watch);
+  // Only the rich view of a file draws diagrams: the second editor of `normalize` is drawn nowhere, and the posting fields (`compose`) show a mermaid block as code.
+  if (diagrams) editor.use(diagramView(root));
+  return editor.create();
 }
 
 // Draws `markdown` in `root`, read only. `markdown()` is what the editor exports now, `edit(onEdit)` makes it editable and calls `onEdit` after each change of the document, and `destroy` takes the editor out of `root`.
 export async function mount(root, markdown) {
   const state = { onEdit: null };
-  const editor = await make(root, markdown, state);
+  const editor = await make(root, markdown, state, false, true);
   return {
     destroy: () => editor.destroy(),
     markdown: () => editor.action(getMarkdown()),
