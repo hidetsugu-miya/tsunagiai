@@ -320,6 +320,24 @@ const computed = {
   lsp_settings: ({ environment, project }) => ({ environment, project, sshHost: null, servers: [] }),
   lsp_settings_set: ({ settings }) => settings,
   ssh_hosts: () => [],
+  // J-2: the tickets of a sprint, from the fixture `jira_issues_of` ({ "{sprintId}": the answer of `jira_sprint_issues` }); a sprint it does not hold fails as Jira's refusal does. A spec that wants one answer for every sprint mocks `jira_sprint_issues`.
+  jira_sprint_issues: ({ sprintId }) => {
+    const held = fixtures.jira_issues_of?.[sprintId];
+    if (held === undefined) throw `Jira が 404 を返しました: no sprint ${sprintId}`;
+    return held;
+  },
+  // J-2 (#871): a ticket for its tab, from the fixture `jira_details` ({ "{key}": the answer of `jira_issue` }); a ticket it does not hold fails as Jira's refusal does. A spec that wants one answer for every ticket mocks `jira_issue`.
+  jira_issue: ({ key }) => {
+    const held = fixtures.jira_details?.[key];
+    if (held === undefined) throw `Jira が 404 を返しました: no ticket ${key}`;
+    return held;
+  },
+  // J-2 (#874): the issue types of a project, from the fixture `jira_types_of` ({ "{projectId}": the answer of `jira_issue_types` }); a project it does not hold fails as Jira's refusal does. A spec that wants one answer for every project mocks `jira_issue_types`.
+  jira_issue_types: ({ projectId }) => {
+    const held = fixtures.jira_types_of?.[projectId];
+    if (held === undefined) throw `Jira が 404 を返しました: no project ${projectId}`;
+    return held;
+  },
   // A-8: the titles as Rust answers a save of one title alone (the one saved, or none for an empty title); a spec that holds more mocks `orca_title_set`.
   orca_title_set: ({ target, key, title }) => (title.trim() === "" ? {} : { [target]: { [key]: title.trim() } }),
   // A-8: the titles left once the keys are taken out, as Rust answers when it held no other title.

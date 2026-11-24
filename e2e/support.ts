@@ -32,6 +32,13 @@ import type { GhosttyImport } from "../ts/bindings/GhosttyImport";
 import type { HandoffSummary } from "../ts/bindings/HandoffSummary";
 import type { Inbox } from "../ts/bindings/Inbox";
 import type { Info } from "../ts/bindings/Info";
+import type { JiraBoard } from "../ts/bindings/JiraBoard";
+import type { JiraIssue } from "../ts/bindings/JiraIssue";
+import type { JiraIssueDetail } from "../ts/bindings/JiraIssueDetail";
+import type { JiraIssues } from "../ts/bindings/JiraIssues";
+import type { JiraIssueType } from "../ts/bindings/JiraIssueType";
+import type { JiraProject } from "../ts/bindings/JiraProject";
+import type { JiraSprint } from "../ts/bindings/JiraSprint";
 import type { LogEntry } from "../ts/bindings/LogEntry";
 import type { OrcaOverview } from "../ts/bindings/OrcaOverview";
 import type { OrcaProject } from "../ts/bindings/OrcaProject";
@@ -593,6 +600,17 @@ export const databaseProfile = (id: string, name: string, extra: Partial<Databas
 });
 
 // A table of a database as `database_tables` answers it (D-3): the row count, the size and the engine as Rust words them.
+// The Jira data of J-2 as the commands answer it: a board, a sprint (the dates are none), a ticket and the tickets of a sprint or of the backlog.
+export const jiraBoard = (id: number, name: string, type = "scrum"): JiraBoard => ({ id, name, type });
+export const jiraSprint = (id: number, name: string, state = "active"): JiraSprint => ({ id, name, state, startDate: null, endDate: null });
+export const jiraIssue = (key: string, summary: string, status: string, statusCategory = "new", extra: Partial<JiraIssue> = {}): JiraIssue => ({ key, summary, status, statusCategory, assignee: null, priority: null, ...extra });
+export const jiraIssues = (issues: JiraIssue[], truncated = false): JiraIssues => ({ issues, truncated });
+// A project and an issue type as `jira_projects` and `jira_issue_types` answer them (#874).
+export const jiraProject = (id: string, key: string, name: string): JiraProject => ({ id, key, name });
+export const jiraIssueType = (id: string, name: string): JiraIssueType => ({ id, name });
+// A ticket as `jira_issue` answers it for the tab (#871): a ticket with nothing but its key, summary and status, and `extra` for the rest.
+export const jiraDetail = (key: string, extra: Partial<JiraIssueDetail> = {}): JiraIssueDetail => ({ key, summary: `Summary of ${key}`, description: "", status: "To Do", statusCategory: "new", assignee: null, priority: null, sprint: null, labels: [], parent: null, comments: [], commentsTruncated: false, ...extra });
+
 export const databaseTable = (name: string, extra: Partial<DatabaseTable> = {}): DatabaseTable => ({ name, engine: "InnoDB", rows: "1,200", size: "1.5 MB", ...extra });
 
 // A value as `database_records` answers it (D-4): Rust has made the text and told how to draw it.

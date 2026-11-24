@@ -4,7 +4,7 @@ Before the first launch of a run, tell the owner in two or three lines: the case
 Then go on without waiting.
 
 You launch exactly one working child for the unit, with `formation_launch`, unless the unit's standby is there to do it ([Standbys](#standbys)).
-`environment` is always `local`.
+`environment` is `local`, the PC you run on: the decision page of a child is a file that `formation_page` reads on your PC, so the child of a unit stays here. `formation_launch` takes a saved environment too, for work that has no page ([messages](messages.md#a-child-of-another-pc)).
 A child runs the plugin skill `feature-dev:unit`, which holds the procedure of every unit.
 Write the prompt and every later message to a child in English.
 

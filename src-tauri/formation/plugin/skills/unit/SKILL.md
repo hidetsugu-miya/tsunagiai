@@ -103,6 +103,7 @@ EOF
 ```
 
 With no `--to`, a message goes to the leader.
+When the text in front of your first instruction says that your leader runs on another PC, you are no Dispatch and cannot send: answer the leader's newest message with `orca orchestration reply --id {id} --body-file -`, as that text says, with the tag line as the first line of the body.
 The first line, the tag, is the subject. Put it in single quotes; a single quote in it is written `'\''`.
 The lines after it are the body. Leave out `--body-file - <<'EOF'` and what follows when there are none. Write the heredoc word as shown, so that the shell reads nothing in the text.
 Each message is plain text, and its first line starts with a tag.
