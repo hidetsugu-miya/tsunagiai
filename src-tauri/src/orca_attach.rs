@@ -1,18 +1,19 @@
 //! A-10: a file pasted or dropped on a terminal of the Orca screen or in the pane of A-9. The file is put in `.orca/drops/` of the worktree of the session through Orca's runtime (`files.*`), on this machine over its unix socket and on a paired server over its WebSocket,
 //! under its own name, and the screen types the path of the file in the terminal, or adds it to the instruction, so Claude reads the file from that path.
+//! A-47 puts a file in a folder of the worktree that the file pane names (`orca_drop_file`, with `orca_drop_taken` and `orca_drop_dir`), by the same upload.
 //! The `files.*` calls are not a public interface of Orca: this was written against Orca 1.4.248, and the names and the typed text follow Orca 1.4.253. A token is in no log line, no error text and no return value; the file is in no log line either.
 
 use std::collections::HashSet;
 
 use base64::{engine::general_purpose::STANDARD, Engine};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 #[cfg(test)]
 use ts_rs::TS;
 
 use crate::{
-    orca::{check_path, worktree_host},
-    orca_files::{parse_dir, LIST_LIMIT},
+    orca::{check_path, worktree_host, worktree_host_cached},
+    orca_files::{check_written, make_parents, parse_dir, LIST_LIMIT},
     orca_link::{CallError, Connection},
 };
 
@@ -29,6 +30,16 @@ const COPIES: usize = 9999;
 /// The characters a shell reads as more than a name: Orca's own paste of an image path (`shared/image-path-paste.js`) escapes the same ones.
 const SHELL_SPECIAL: &str = " \"'`$;&|<>(){}[]*?!#\\";
 const NAME_TOO_LONG: &str = "ファイル名が長すぎます（255 バイトまで）";
+/// A-47: how many names one `orca_drop_taken` asks about (the most files one drop holds).
+const MAX_DROP_NAMES: usize = 1000;
+
+/// A-47: what a drop on the file pane does with a name that is taken: put the file over it (the old one is deleted just before the new one is committed), or under the first free name of `first_free`.
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum OnTaken {
+    Overwrite,
+    Copy,
+}
 
 /// What the screen types for a file put in the worktree: the text, and whether the terminal gets it as a bracketed paste (an image path, which a program like Claude reads as an attachment) or as typed text.
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -67,8 +78,13 @@ fn image_ext(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
-/// The decoded file: base64 that is not too long, decoded, not empty, not over the limit.
+/// The decoded file of A-10: base64 that is not too long, decoded, not empty, not over the limit.
 fn decode(data: &str) -> Result<Vec<u8>, String> {
+    decode_bytes(data, false)
+}
+
+/// `decode`; with `allow_empty` a file of no bytes is a file (A-47 puts the empty files of a dropped folder too).
+fn decode_bytes(data: &str, allow_empty: bool) -> Result<Vec<u8>, String> {
     let too_large = || format!("ファイルは {} MiB までです", MAX_FILE / 1024 / 1024);
     // Four characters are three bytes: refuse before the decode makes the copy.
     if data.len() > MAX_FILE / 3 * 4 + 8 {
@@ -77,7 +93,7 @@ fn decode(data: &str) -> Result<Vec<u8>, String> {
     let bytes = STANDARD
         .decode(data)
         .map_err(|_| "ファイルを読めません".to_owned())?;
-    if bytes.is_empty() {
+    if bytes.is_empty() && !allow_empty {
         return Err("ファイルを読めません".into());
     }
     if bytes.len() > MAX_FILE {
@@ -194,6 +210,15 @@ fn check_host(host_id: &str) -> Result<(), String> {
     }
 }
 
+/// A-47: the same refusal for a drop on the file pane.
+fn check_drop_host(host_id: &str) -> Result<(), String> {
+    if host_id.starts_with("ssh:") {
+        Err("SSH の接続先の worktree にはファイルを置けません".into())
+    } else {
+        Ok(())
+    }
+}
+
 /// The message of a failed call. A pairing of the `mobile` scope is refused by Orca with `forbidden`, which the code alone does not explain.
 fn reason(error: CallError) -> String {
     if error.shown.contains("forbidden") {
@@ -271,21 +296,21 @@ fn first_free(taken: &HashSet<String>, name: &str) -> Result<String, String> {
     Err("同じ名前のファイルが多すぎます".into())
 }
 
-/// The names `.orca/drops/` holds, from one `files.readDir`. A folder that is not there yet (`ENOENT`) holds none; any other failure is the upload's.
+/// The names the folder `dir` of the worktree holds, from one `files.readDir` (`.orca/drops/` for A-10; the folder of a drop for A-47). A folder that is not there yet (`ENOENT`) holds none; any other failure is the upload's.
 /// A name taken after this read, or beyond the page of the answer, is refused by `files.commitUpload`, so nothing is overwritten.
-async fn taken_names(rpc: &mut impl Rpc, path: &str) -> Result<HashSet<String>, String> {
+async fn taken_names(rpc: &mut impl Rpc, path: &str, dir: &str) -> Result<HashSet<String>, String> {
     match rpc
         .call(
             "files.readDir",
             worktree_params(
                 path,
                 None,
-                json!({"relativePath": DROPS, "limit": LIST_LIMIT}),
+                json!({"relativePath": dir, "limit": LIST_LIMIT}),
             ),
         )
         .await
     {
-        Ok(answer) => Ok(parse_dir(&answer, DROPS)?
+        Ok(answer) => Ok(parse_dir(&answer, dir)?
             .0
             .into_iter()
             .map(|e| e.name)
@@ -296,8 +321,7 @@ async fn taken_names(rpc: &mut impl Rpc, path: &str) -> Result<HashSet<String>, 
 }
 
 /// Puts `bytes` in `.orca/drops/` of the worktree at `path` under `name` (checked by `placed_name`), or the first free name of `first_free` (against the one `taken_names` read) when that exists, and gives the absolute path of the file.
-/// The file is written in chunks to a temporary name (`.orca-upload-{random}`, one of its own and short whatever the name is) and copied to its name, which fails when the name exists, so a file is never overwritten; the temporary file goes in every case.
-/// `.orca/drops/.gitignore` (`*`) is written first when it is missing, so the files do not show as changes, and a failure of that is ignored.
+/// `.orca/drops/.gitignore` (`*`) is written first when it is missing, so the files do not show as changes, and a failure of that is ignored. The rest is `place`.
 async fn upload(
     rpc: &mut impl Rpc,
     path: &str,
@@ -310,15 +334,55 @@ async fn upload(
     if !exists(rpc, path, &ignore).await? {
         let _ = write_chunk(rpc, path, host_id, &ignore, b"*\n", false).await;
     }
-    let name = first_free(&taken_names(rpc, path).await?, name)?;
-    let temporary = format!("{DROPS}/.orca-upload-{random}");
+    let name = place(
+        rpc,
+        path,
+        host_id,
+        DROPS,
+        name,
+        bytes,
+        random,
+        OnTaken::Copy,
+    )
+    .await?;
+    Ok(format!("{}/{DROPS}/{name}", path.trim_end_matches('/')))
+}
+
+/// The path of `name` in the folder `dir` (both from the worktree; its own folder is the empty one).
+fn in_dir(dir: &str, name: &str) -> String {
+    if dir.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{dir}/{name}")
+    }
+}
+
+/// Puts `bytes` in the folder `dir` of the worktree at `path` and gives the name it has there. `on_taken` is what a name that is there gets: `Copy` is the first free name (`first_free`, against the one `taken_names` read, so `name` itself when it is free) and `Overwrite` is `name` over the file that is there.
+/// The file is written in chunks to a temporary name (`.orca-upload-{random}`, one of its own and short whatever the name is) and copied to its name, which fails when the name exists, so under `Copy` a file is never overwritten; under `Overwrite` the file that is there is deleted after the last chunk has arrived and just before the copy, so a failed send leaves it. The temporary file goes in every case.
+#[allow(clippy::too_many_arguments)]
+async fn place(
+    rpc: &mut impl Rpc,
+    path: &str,
+    host_id: &str,
+    dir: &str,
+    name: &str,
+    bytes: &[u8],
+    random: &str,
+    on_taken: OnTaken,
+) -> Result<String, String> {
+    let name = match on_taken {
+        OnTaken::Copy => first_free(&taken_names(rpc, path, dir).await?, name)?,
+        OnTaken::Overwrite => name.to_owned(),
+    };
+    let temporary = in_dir(dir, &format!(".orca-upload-{random}"));
     let sent = send_and_commit(
         rpc,
         path,
         host_id,
         &temporary,
-        &format!("{DROPS}/{name}"),
+        &in_dir(dir, &name),
         bytes,
+        on_taken == OnTaken::Overwrite,
     )
     .await;
     // Whether it worked or not: the temporary file is not left behind, and a failure of this delete is not the upload's.
@@ -333,9 +397,10 @@ async fn upload(
         )
         .await;
     sent?;
-    Ok(format!("{}/{DROPS}/{name}", path.trim_end_matches('/')))
+    Ok(name)
 }
 
+/// Sends `bytes` to `temporary` and copies it to `relative`; with `replace`, the file that is at `relative` is deleted between the two (`files.delete` makes a path that is not there no error, and a folder of that name is refused, as `recursive` is false).
 async fn send_and_commit(
     rpc: &mut impl Rpc,
     path: &str,
@@ -343,11 +408,30 @@ async fn send_and_commit(
     temporary: &str,
     relative: &str,
     bytes: &[u8],
+    replace: bool,
 ) -> Result<(), String> {
-    for (n, chunk) in bytes.chunks(CHUNK).enumerate() {
+    // A file of no bytes is one empty chunk: the temporary file is made by the first chunk, and Orca's own upload sends it the same way.
+    let chunks: Vec<&[u8]> = if bytes.is_empty() {
+        vec![bytes]
+    } else {
+        bytes.chunks(CHUNK).collect()
+    };
+    for (n, chunk) in chunks.into_iter().enumerate() {
         write_chunk(rpc, path, host_id, temporary, chunk, n > 0)
             .await
             .map_err(reason)?;
+    }
+    if replace {
+        rpc.call(
+            "files.delete",
+            worktree_params(
+                path,
+                Some(host_id),
+                json!({"relativePath": relative, "recursive": false}),
+            ),
+        )
+        .await
+        .map_err(reason)?;
     }
     rpc.call(
         "files.commitUpload",
@@ -430,6 +514,110 @@ pub async fn orca_attach_file(
     typed_text(&file, image)
 }
 
+// ---- A-47: files dropped on the file pane ----
+
+/// `host_of` for a drop (A-47): the worktree at `path` is confirmed against the target's list once and believed for a while after (`worktree_host_cached`, as the reads of A-18 are), because a drop is one call for each of up to 1,000 files and a read of the list starts the CLI; an SSH host is refused.
+async fn drop_host(path: &str, environment: Option<&str>) -> Result<String, String> {
+    check_path(path)?;
+    let (path, environment) = (path.to_owned(), environment.map(str::to_owned));
+    let (host_id, _) =
+        tokio::task::spawn_blocking(move || worktree_host_cached(&path, environment.as_deref()))
+            .await
+            .map_err(|e| e.to_string())??;
+    check_drop_host(&host_id)?;
+    Ok(host_id)
+}
+
+/// The names of `names` (each one file name, `check_name`; at most `MAX_DROP_NAMES`) that are taken in the folder `dir` of the worktree at `path`, in the order given, each by one `files.stat` (a file or a folder of that name; any failure but `ENOENT` is the call's).
+async fn taken_among(
+    rpc: &mut impl Rpc,
+    path: &str,
+    dir: &str,
+    names: &[String],
+) -> Result<Vec<String>, String> {
+    let mut taken = Vec::new();
+    for name in names {
+        if exists(rpc, path, &in_dir(dir, name)).await? {
+            taken.push(name.clone());
+        }
+    }
+    Ok(taken)
+}
+
+/// Makes the folder `dir` (not the worktree's own) and the folders on the way that are missing, one `files.createDir` for each; one that is there is no failure.
+async fn make_dir(rpc: &mut impl Rpc, path: &str, host_id: &str, dir: &str) -> Result<(), String> {
+    make_parents(rpc, path, host_id, &format!("{dir}/"))
+        .await
+        .map(|_| ())
+}
+
+/// A-47: which of `names` the folder `dir` of the worktree at `path` (one of the target's list; `dir` is from the worktree, empty for its own folder) holds already, for the question the screen asks before a drop. The path is checked as A-18's paths are (`check_written`: nothing outside the worktree, no `.` or `..`), and each name as A-10's are (`check_name`). It reads only.
+#[tauri::command]
+pub async fn orca_drop_taken(
+    path: String,
+    dir: String,
+    names: Vec<String>,
+    environment: Option<String>,
+) -> Result<Vec<String>, String> {
+    check_written(&dir, true)?;
+    if names.len() > MAX_DROP_NAMES {
+        return Err("一度に置けるファイルが多すぎます".into());
+    }
+    for name in &names {
+        check_name(name)?;
+    }
+    drop_host(&path, environment.as_deref()).await?;
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut connection = Connection::open(environment).await?;
+    taken_among(&mut connection, &path, &dir, &names).await
+}
+
+/// A-47: makes the folder `dir` of the worktree at `path` (checked by `check_written`, never empty), with the folders on the way, and does nothing when it is there.
+#[tauri::command]
+pub async fn orca_drop_dir(
+    path: String,
+    dir: String,
+    environment: Option<String>,
+) -> Result<(), String> {
+    check_written(&dir, false)?;
+    let host_id = drop_host(&path, environment.as_deref()).await?;
+    let mut connection = Connection::open(environment).await?;
+    make_dir(&mut connection, &path, &host_id, &dir).await
+}
+
+/// A-47: puts the file `data` (base64, at most 20 MiB, and an empty one is a file) under `name` in the folder `dir` of the worktree at `path` (one of the target's list; `dir` is from the worktree, empty for its own folder) and answers its path from the worktree. `on_taken` says what a name that is there gets (`place`). `name` (`check_name`) and `dir` (`check_written`) are values from outside, so nothing is written outside the worktree, and a file is never named by what its bytes are.
+#[tauri::command]
+pub async fn orca_drop_file(
+    path: String,
+    dir: String,
+    name: String,
+    data: String,
+    on_taken: OnTaken,
+    environment: Option<String>,
+) -> Result<String, String> {
+    check_written(&dir, true)?;
+    check_name(&name)?;
+    let bytes = tokio::task::spawn_blocking(move || decode_bytes(&data, true))
+        .await
+        .map_err(|e| e.to_string())??;
+    let host_id = drop_host(&path, environment.as_deref()).await?;
+    let mut connection = Connection::open(environment).await?;
+    let name = place(
+        &mut connection,
+        &path,
+        &host_id,
+        &dir,
+        &name,
+        &bytes,
+        &random_hex()?,
+        on_taken,
+    )
+    .await?;
+    Ok(in_dir(&dir, &name))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -472,10 +660,16 @@ mod tests {
                     "ENOENT: no such file",
                 )),
                 "files.readDir" => {
+                    let prefix = if relative.is_empty() {
+                        String::new()
+                    } else {
+                        format!("{relative}/")
+                    };
                     let names: Vec<Value> = self
                         .files
                         .iter()
-                        .filter_map(|f| f.strip_prefix(".orca/drops/"))
+                        .filter_map(|f| f.strip_prefix(prefix.as_str()))
+                        .filter(|n| !n.contains('/'))
                         .map(|n| json!({"name": n, "isDirectory": false}))
                         .collect();
                     if names.is_empty() {
@@ -1101,5 +1295,430 @@ mod tests {
         assert_eq!(a.len(), 16);
         assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
         assert_ne!(a, b);
+    }
+
+    // ---- A-47: files dropped on the file pane ----
+
+    async fn put(
+        fake: &mut Fake,
+        dir: &str,
+        name: &str,
+        on_taken: OnTaken,
+    ) -> Result<String, String> {
+        place(
+            fake, "/work/a", "local", dir, name, b"abc", "r4nd", on_taken,
+        )
+        .await
+    }
+
+    fn call_of<'a>(fake: &'a Fake, method: &str, n: usize) -> &'a Value {
+        &fake
+            .calls
+            .iter()
+            .filter(|(m, _)| m == method)
+            .nth(n)
+            .unwrap()
+            .1
+    }
+
+    #[tokio::test]
+    async fn a_drop_puts_the_file_in_the_folder_it_is_given() {
+        let mut fake = Fake::default();
+        assert_eq!(
+            put(&mut fake, "src/ui", "a.txt", OnTaken::Copy)
+                .await
+                .unwrap(),
+            "a.txt"
+        );
+        assert_eq!(
+            methods(&fake),
+            [
+                "files.readDir",
+                "files.writeBase64Chunk",
+                "files.commitUpload",
+                "files.delete"
+            ]
+        );
+        assert_eq!(call_of(&fake, "files.readDir", 0)["relativePath"], "src/ui");
+        assert_eq!(
+            call_of(&fake, "files.writeBase64Chunk", 0)["relativePath"],
+            "src/ui/.orca-upload-r4nd"
+        );
+        assert_eq!(
+            call_of(&fake, "files.commitUpload", 0)["finalRelativePath"],
+            "src/ui/a.txt"
+        );
+        // No ignore file is made outside `.orca/drops/`.
+        assert!(!methods(&fake).contains(&"files.stat"));
+    }
+
+    #[tokio::test]
+    async fn a_drop_on_the_root_of_the_worktree_names_no_folder() {
+        let mut fake = with_files(&["a.txt", "a copy.txt"]);
+        assert_eq!(
+            put(&mut fake, "", "a.txt", OnTaken::Copy).await.unwrap(),
+            "a copy 2.txt"
+        );
+        assert_eq!(call_of(&fake, "files.readDir", 0)["relativePath"], "");
+        assert_eq!(
+            call_of(&fake, "files.writeBase64Chunk", 0)["relativePath"],
+            ".orca-upload-r4nd"
+        );
+        assert_eq!(
+            call_of(&fake, "files.commitUpload", 0)["finalRelativePath"],
+            "a copy 2.txt"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_taken_name_gets_a_copy_name_in_that_folder_only() {
+        // `a.txt` of another folder does not count.
+        let mut fake = with_files(&["src/a.txt", "other/a.txt", "other/a copy.txt"]);
+        assert_eq!(
+            put(&mut fake, "src", "a.txt", OnTaken::Copy).await.unwrap(),
+            "a copy.txt"
+        );
+        assert_eq!(
+            call_of(&fake, "files.commitUpload", 0)["finalRelativePath"],
+            "src/a copy.txt"
+        );
+        // Nothing is deleted but the temporary file.
+        assert_eq!(
+            call_of(&fake, "files.delete", 0)["relativePath"],
+            "src/.orca-upload-r4nd"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_overwrite_deletes_the_old_file_between_the_last_chunk_and_the_commit() {
+        let mut fake = with_files(&["src/a.txt"]);
+        assert_eq!(
+            put(&mut fake, "src", "a.txt", OnTaken::Overwrite)
+                .await
+                .unwrap(),
+            "a.txt"
+        );
+        assert_eq!(
+            methods(&fake),
+            [
+                "files.writeBase64Chunk",
+                "files.delete",
+                "files.commitUpload",
+                "files.delete"
+            ]
+        );
+        assert_eq!(
+            call_of(&fake, "files.delete", 0),
+            &json!({
+                "worktree": "path:/work/a",
+                "relativePath": "src/a.txt",
+                "recursive": false,
+                "expectedExecutionHostId": "local",
+            })
+        );
+        assert_eq!(
+            call_of(&fake, "files.commitUpload", 0)["finalRelativePath"],
+            "src/a.txt"
+        );
+        assert_eq!(
+            call_of(&fake, "files.delete", 1)["relativePath"],
+            "src/.orca-upload-r4nd"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_send_leaves_the_file_an_overwrite_would_have_replaced() {
+        let mut fake = with_files(&["src/a.txt"]);
+        fake.fail.push((
+            "files.writeBase64Chunk",
+            0,
+            error("Orca がエラーを返しました（runtime_error）", "ENOSPC"),
+        ));
+        assert!(put(&mut fake, "src", "a.txt", OnTaken::Overwrite)
+            .await
+            .is_err());
+        let deleted: Vec<&str> = fake
+            .calls
+            .iter()
+            .filter(|(m, _)| m == "files.delete")
+            .map(|(_, p)| p["relativePath"].as_str().unwrap())
+            .collect();
+        assert_eq!(deleted, ["src/.orca-upload-r4nd"]);
+        assert!(!methods(&fake).contains(&"files.commitUpload"));
+    }
+
+    #[tokio::test]
+    async fn a_failed_delete_of_the_old_file_stops_the_overwrite_before_the_commit() {
+        let mut fake = with_files(&["src/a.txt"]);
+        // The first delete is the old file's, the second the temporary file's.
+        fake.fail.push((
+            "files.delete",
+            0,
+            error("Orca がエラーを返しました（runtime_error）", "EISDIR"),
+        ));
+        let failed = put(&mut fake, "src", "a.txt", OnTaken::Overwrite)
+            .await
+            .unwrap_err();
+        assert_eq!(failed, "Orca がエラーを返しました（runtime_error）");
+        assert!(!methods(&fake).contains(&"files.commitUpload"));
+        assert_eq!(methods(&fake).last(), Some(&"files.delete"));
+    }
+
+    #[tokio::test]
+    async fn the_names_a_folder_holds_are_found_by_one_stat_each() {
+        let mut fake = with_files(&["d/a.txt", "d/sub", "e/c.txt"]);
+        let names: Vec<String> = ["a.txt", "c.txt", "sub"]
+            .iter()
+            .map(|n| (*n).to_owned())
+            .collect();
+        assert_eq!(
+            taken_among(&mut fake, "/work/a", "d", &names)
+                .await
+                .unwrap(),
+            ["a.txt", "sub"]
+        );
+        assert_eq!(methods(&fake), ["files.stat"; 3]);
+        assert_eq!(call_of(&fake, "files.stat", 1)["relativePath"], "d/c.txt");
+        // The worktree's own folder.
+        let mut fake = with_files(&["c.txt"]);
+        assert_eq!(
+            taken_among(&mut fake, "/work/a", "", &names).await.unwrap(),
+            ["c.txt"]
+        );
+        // A stat that fails for another reason is the call's failure.
+        let mut fake = Fake::default();
+        fake.fail.push((
+            "files.stat",
+            0,
+            error("Orca がエラーを返しました（forbidden）", "no"),
+        ));
+        assert!(taken_among(&mut fake, "/work/a", "d", &names)
+            .await
+            .unwrap_err()
+            .contains("forbidden"));
+    }
+
+    #[tokio::test]
+    async fn a_folder_is_made_level_by_level_and_one_that_is_there_is_no_failure() {
+        let mut fake = Fake::default();
+        // The first level is there already.
+        fake.fail.push((
+            "files.createDir",
+            0,
+            error(
+                "Orca がエラーを返しました（runtime_error）",
+                "Directory already exists",
+            ),
+        ));
+        make_dir(&mut fake, "/work/a", "local", "a/b/c")
+            .await
+            .unwrap();
+        let made: Vec<&str> = fake
+            .calls
+            .iter()
+            .map(|(_, p)| p["relativePath"].as_str().unwrap())
+            .collect();
+        assert_eq!(made, ["a", "a/b", "a/b/c"]);
+        assert_eq!(methods(&fake), ["files.createDir"; 3]);
+        assert_eq!(
+            call_of(&fake, "files.createDir", 2)["expectedExecutionHostId"],
+            "local"
+        );
+
+        let mut fake = Fake::default();
+        fake.fail.push((
+            "files.createDir",
+            1,
+            error("Orca がエラーを返しました（forbidden）", "EACCES"),
+        ));
+        assert!(make_dir(&mut fake, "/work/a", "local", "a/b/c")
+            .await
+            .unwrap_err()
+            .contains("forbidden"));
+        assert_eq!(methods(&fake).len(), 2);
+    }
+
+    #[test]
+    fn a_drop_into_an_ssh_host_is_refused() {
+        assert!(check_drop_host("ssh:one")
+            .unwrap_err()
+            .contains("置けません"));
+        assert_eq!(check_drop_host("local"), Ok(()));
+    }
+
+    #[tokio::test]
+    async fn the_commands_refuse_a_folder_or_a_name_that_leaves_the_worktree_before_anything_is_asked(
+    ) {
+        let data = STANDARD.encode(b"abc");
+        for dir in [
+            "..", "../x", "/etc", "a/../b", "a/./b", "a//b", "a\\b", "a\nb",
+        ] {
+            assert!(
+                orca_drop_file(
+                    "/work/a".into(),
+                    dir.into(),
+                    "a.txt".into(),
+                    data.clone(),
+                    OnTaken::Copy,
+                    None
+                )
+                .await
+                .is_err(),
+                "{dir:?}"
+            );
+            assert!(
+                orca_drop_taken("/work/a".into(), dir.into(), vec!["a.txt".into()], None)
+                    .await
+                    .is_err(),
+                "{dir:?}"
+            );
+            assert!(
+                orca_drop_dir("/work/a".into(), dir.into(), None)
+                    .await
+                    .is_err(),
+                "{dir:?}"
+            );
+        }
+        // The worktree's own folder is no folder to make.
+        assert!(orca_drop_dir("/work/a".into(), String::new(), None)
+            .await
+            .is_err());
+        for name in ["", ".", "..", "a/b", "../a", "a\\b", "a\0b", "a\u{202e}b"] {
+            assert!(
+                orca_drop_file(
+                    "/work/a".into(),
+                    "src".into(),
+                    name.into(),
+                    data.clone(),
+                    OnTaken::Copy,
+                    None
+                )
+                .await
+                .is_err(),
+                "{name:?}"
+            );
+            assert!(
+                orca_drop_taken("/work/a".into(), "src".into(), vec![name.into()], None)
+                    .await
+                    .is_err(),
+                "{name:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_file_over_the_limit_is_refused_before_anything_is_asked() {
+        let over = STANDARD.encode(vec![0u8; MAX_FILE + 1]);
+        let failed = orca_drop_file(
+            "/work/a".into(),
+            "src".into(),
+            "big.bin".into(),
+            over,
+            OnTaken::Copy,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(failed.contains("20 MiB"));
+    }
+
+    #[test]
+    fn a_drop_takes_a_file_of_no_bytes_and_a_pasted_one_does_not() {
+        assert_eq!(decode_bytes("", true).unwrap(), Vec::<u8>::new());
+        assert_eq!(decode_bytes("", false).unwrap_err(), "ファイルを読めません");
+        // A-10's own checks are the same as before.
+        assert!(decode("").is_err());
+        assert!(prepare("empty.txt", "").is_err());
+        // Anything else that is wrong is wrong for a drop too.
+        assert!(decode_bytes("not base64!", true).is_err());
+        assert!(decode_bytes(&"A".repeat(MAX_FILE / 3 * 4 + 12), true)
+            .unwrap_err()
+            .contains("20 MiB"));
+    }
+
+    #[tokio::test]
+    async fn a_file_of_no_bytes_is_one_empty_chunk_and_a_commit() {
+        for on_taken in [OnTaken::Copy, OnTaken::Overwrite] {
+            let mut fake = with_files(&["src/old.txt"]);
+            let placed = place(
+                &mut fake,
+                "/work/a",
+                "local",
+                "src",
+                "empty.txt",
+                b"",
+                "r4nd",
+                on_taken,
+            )
+            .await
+            .unwrap();
+            assert_eq!(placed, "empty.txt");
+            let writes: Vec<&Value> = fake
+                .calls
+                .iter()
+                .filter(|(m, _)| m == "files.writeBase64Chunk")
+                .map(|(_, p)| p)
+                .collect();
+            assert_eq!(writes.len(), 1);
+            assert_eq!(writes[0]["relativePath"], "src/.orca-upload-r4nd");
+            assert_eq!(writes[0]["contentBase64"], "");
+            assert_eq!(writes[0]["append"], false);
+            assert_eq!(
+                call_of(&fake, "files.commitUpload", 0)["finalRelativePath"],
+                "src/empty.txt"
+            );
+            assert_eq!(methods(&fake).last(), Some(&"files.delete"));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_file_with_bytes_is_still_sent_in_chunks_after_the_change() {
+        let mut fake = Fake::default();
+        let bytes = vec![7u8; CHUNK + 1];
+        put_bytes(&mut fake, &bytes).await;
+        let appends: Vec<bool> = fake
+            .calls
+            .iter()
+            .filter(|(m, _)| m == "files.writeBase64Chunk")
+            .map(|(_, p)| p["append"].as_bool().unwrap())
+            .collect();
+        assert_eq!(appends, [false, true]);
+    }
+
+    async fn put_bytes(fake: &mut Fake, bytes: &[u8]) {
+        place(
+            fake,
+            "/work/a",
+            "local",
+            "src",
+            "a.bin",
+            bytes,
+            "r4nd",
+            OnTaken::Copy,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn more_names_than_a_drop_holds_are_refused() {
+        let names: Vec<String> = (0..=MAX_DROP_NAMES).map(|n| format!("f{n}")).collect();
+        let failed = orca_drop_taken("/work/a".into(), "src".into(), names, None)
+            .await
+            .unwrap_err();
+        assert!(failed.contains("多すぎ"));
+    }
+
+    #[test]
+    fn what_to_do_with_a_taken_name_is_read_from_the_word_the_screen_sends() {
+        assert_eq!(
+            serde_json::from_value::<OnTaken>(json!("overwrite")).unwrap(),
+            OnTaken::Overwrite
+        );
+        assert_eq!(
+            serde_json::from_value::<OnTaken>(json!("copy")).unwrap(),
+            OnTaken::Copy
+        );
+        assert!(serde_json::from_value::<OnTaken>(json!("skip")).is_err());
     }
 }

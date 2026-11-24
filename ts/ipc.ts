@@ -346,6 +346,9 @@ export interface Commands {
   orca_browse_dir: { args: { environment: string; path: string }; result: BrowsedDir };
   // A-10: puts the file `data` (base64, any kind, up to 20 MiB) in `.orca/drops/` of the worktree at `path` of the target `environment`, under its own `name` (a taken name gets `copy`, `copy 2`, ...), and answers `AttachedFile { text, bracketed }`: the text to type for it (the absolute path, one blank after it) and whether the terminal gets it as a bracketed paste (an image) or as typed text. Not tried again: a failure carries its message.
   orca_attach_file: { args: { path: string; name: string; data: string; environment: string | null }; result: AttachedFile };
+  orca_drop_taken: { args: { path: string; dir: string; names: string[]; environment: string | null }; result: string[] };
+  orca_drop_dir: { args: { path: string; dir: string; environment: string | null }; result: null };
+  orca_drop_file: { args: { path: string; dir: string; name: string; data: string; onTaken: "overwrite" | "copy"; environment: string | null }; result: string };
   // Closes the tab of an Orca terminal (a Claude session or a plain terminal); `environment` is the target the screen shows. On `terminal_handle_stale` it closes once more without `--tab`, and a failure of that is an error.
   orca_close: { args: { handle: string; environment: string | null }; result: null };
   // The lines on the screen of the terminal `handle` (a Claude session's or a plain one) of this machine, or of the saved environment `environment` when given, for the mirror (no colors).
