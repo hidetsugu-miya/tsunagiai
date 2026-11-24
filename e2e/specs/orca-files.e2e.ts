@@ -5234,17 +5234,28 @@ describe("orca: drop on the file pane (A-47)", () => {
     await waitForCount(rows, 5);
     await mock("orca_drop_taken", []);
     await mock("orca_drop_file", "src/notes.txt");
+    await mock("orca_drop_dir", null);
   }
 
+  // A folder of a drop: its name, and what it holds (files and folders), which the page reads through `createReader`, two entries to a batch.
+  type GivenDir = { dir: string; children: (GivenFile | GivenDir)[] };
+  const folder = (dir: string, ...children: (GivenFile | GivenDir)[]): GivenDir => ({ dir, children });
   // An event of a drag from outside on the row of `where` (a path, or "empty" for the part of the tree under the rows), with the files; `dirs` are folders that go with them (the entries of the transfer). Answers whether the page cancelled the event and the drop effect it set.
-  const fireOn = (kind: "dragover" | "dragleave" | "drop", where: string, files: GivenFile[] = [note], dirs: string[] = []) =>
+  const fireOn = (kind: "dragover" | "dragleave" | "drop", where: string, files: GivenFile[] = [note], dirs: GivenDir[] = []) =>
     browser.execute(
       (k, w, given, folders, once) => {
         if (!window.__e2e_once__(once)) return null;
-        const list = given.map((g) => new File([g.bytes === undefined ? Uint8Array.from(atob(g.base64), (c) => c.charCodeAt(0)) : new Uint8Array(g.bytes)], g.name, { type: g.type }));
+        type Given = { name: string; type: string; base64: string; bytes?: number };
+        type Dir = { dir: string; children: (Given | Dir)[] };
+        const fileOf = (g: Given) => new File([g.bytes === undefined ? Uint8Array.from(atob(g.base64), (c) => c.charCodeAt(0)) : new Uint8Array(g.bytes)], g.name, { type: g.type });
+        const list = given.map(fileOf);
         const event = new Event(k, { bubbles: true, cancelable: true });
-        const entry = (name: string, isDirectory: boolean, file?: File) => ({ kind: "file", webkitGetAsEntry: () => ({ name, isDirectory, file: (ok: (f: File) => void) => ok(file!) }) });
-        const items = folders.length === 0 ? undefined : [...folders.map((f) => entry(f, true)), ...list.map((f) => entry(f.name, false, f))];
+        const make = (g: Given | Dir): unknown => {
+          if (!("dir" in g)) return { name: g.name, isDirectory: false, file: (ok: (f: File) => void) => ok(fileOf(g)) };
+          let at = 0;
+          return { name: g.dir, isDirectory: true, createReader: () => ({ readEntries: (ok: (e: unknown[]) => void) => { ok(g.children.slice(at, at + 2).map(make)); at += 2; } }) };
+        };
+        const items = folders.length === 0 ? undefined : [...folders.map((f) => ({ kind: "file", webkitGetAsEntry: () => make(f as Dir) })), ...given.map((g) => ({ kind: "file", webkitGetAsEntry: () => make(g) }))];
         const transfer = { files: list, items, types: ["Files"], dropEffect: "none", getData: () => "" };
         Object.defineProperty(event, "dataTransfer", { value: transfer });
         const target = w === "empty" ? document.getElementById("orca-files-tree")! : document.querySelector(`.orca-file[data-path="${w}"]`)!;
@@ -5258,7 +5269,7 @@ describe("orca: drop on the file pane (A-47)", () => {
     );
   const dropMark = () =>
     browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-files-tree [data-drop], #orca-files-tree[data-drop]")].map((e) => e.dataset.path ?? "[tree]"));
-  const drop = async (where: string, files?: GivenFile[], dirs?: string[]) => {
+  const drop = async (where: string, files?: GivenFile[], dirs?: GivenDir[]) => {
     await fireOn("dragover", where, files, dirs);
     await fireOn("drop", where, files, dirs);
   };
@@ -5311,14 +5322,92 @@ describe("orca: drop on the file pane (A-47)", () => {
     expect(await callsOf("orca_drop_taken")).toEqual([{ path: HERE, dir: "", names: ["notes.txt"], environment: null }]);
   });
 
-  it("puts a file of no bytes, and a folder given by the transfer is not put but named on a card while the files go on", async () => {
+  it("puts a file of no bytes", async () => {
     await openTree();
-    await drop("src", [empty, note], ["photos"]);
-    await expect($(CARD)).toHaveText("photos はフォルダーなので置けません");
+    await drop("src", [empty, note]);
     expect(await waitForCalls("orca_drop_file", 2)).toEqual([
       { path: HERE, dir: "src", name: "empty.txt", data: "", onTaken: "copy", environment: null },
       { path: HERE, dir: "src", name: "notes.txt", data: note.base64, onTaken: "copy", environment: null },
     ]);
+    await expect($(CARD)).not.toExist();
+  });
+
+  it("makes the folders of a dropped folder before its files go, and puts the files in the same layout (the batches of the reader, and an empty folder, are read through)", async () => {
+    await openTree();
+    const made = await mock("orca_drop_dir", holds);
+    const tree = folder("photos", named("a.jpg"), folder("2026", named("b.jpg"), folder("empty")), named("c.jpg"));
+    await drop("src", [note], [tree]);
+    // The names the drop puts in the folder itself: the file, and the folder (so that one that is there is known). The folder is new, so nothing is asked of what is in it.
+    expect(await waitForCalls("orca_drop_taken")).toEqual([{ path: HERE, dir: "src", names: ["notes.txt", "photos"], environment: null }]);
+    // The folder that holds no other folder of the drop is made (the folders on the way with it), and no file goes before.
+    expect(await waitForCalls(made)).toEqual([{ path: HERE, dir: "src/photos/2026/empty", environment: null }]);
+    await browser.pause(300);
+    expect(await callsOf("orca_drop_file")).toEqual([]);
+    await release(made, null);
+    expect((await waitForCalls("orca_drop_file", 4)).map((c) => [(c as { dir: string }).dir, (c as { name: string }).name])).toEqual([
+      ["src/photos", "a.jpg"],
+      ["src/photos/2026", "b.jpg"],
+      ["src/photos", "c.jpg"],
+      ["src", "notes.txt"],
+    ]);
+    await expect($(CARD)).not.toExist();
+    await expect($("#orca-drop")).not.toBeDisplayed();
+  });
+
+  it("makes a folder of the drop that holds no file, and shows no file count for it", async () => {
+    await openTree();
+    const made = await mock("orca_drop_dir", holds);
+    await drop("src", [], [folder("none", folder("deeper"))]);
+    await waitForCalls(made);
+    await expect($("#orca-drop")).toBeDisplayed();
+    await expect($("#orca-drop-count")).toHaveText("0 / 0");
+    await release(made, null);
+    await expect($("#orca-drop")).not.toBeDisplayed();
+    expect(await callsOf(made)).toEqual([{ path: HERE, dir: "src/none/deeper", environment: null }]);
+    expect(await callsOf("orca_drop_file")).toEqual([]);
+    await expect($(CARD)).not.toExist();
+  });
+
+  it("puts a dropped folder together with a folder of that name that is there, and asks only about the files of it whose names are taken, naming their folder", async () => {
+    await openTree();
+    const asked = await mock("orca_drop_taken", holds);
+    await drop("src", [], [folder("lib", named("a.rs"), folder("inner", named("b.rs")))]);
+    // The folder 'lib' is there: the files of each folder of the drop are asked after it, the ones of 'lib' itself first.
+    expect(await waitForCalls(asked)).toEqual([{ path: HERE, dir: "src", names: ["lib"], environment: null }]);
+    await release(asked, ["lib"]);
+    await waitForCalls(asked, 2);
+    await release(asked, ["a.rs"]);
+    await waitForCalls(asked, 3);
+    await release(asked, []);
+    expect(await callsOf(asked)).toEqual([
+      { path: HERE, dir: "src", names: ["lib"], environment: null },
+      { path: HERE, dir: "src/lib", names: ["a.rs"], environment: null },
+      { path: HERE, dir: "src/lib/inner", names: ["b.rs"], environment: null },
+    ]);
+    await expect(question()).toHaveText(expect.stringContaining("a.rs は src/lib/ にもうあります。"));
+    await expect(question()).not.toHaveText(expect.stringContaining("残りの"));
+    await answer("上書き");
+    const calls = (await waitForCalls("orca_drop_file", 2)) as { dir: string; name: string; onTaken: string }[];
+    expect(calls.map((c) => [c.dir, c.name, c.onTaken])).toEqual([["src/lib", "a.rs", "overwrite"], ["src/lib/inner", "b.rs", "copy"]]);
+    expect(await callsOf("orca_drop_dir")).toEqual([{ path: HERE, dir: "src/lib/inner", environment: null }]);
+  });
+
+  it("counts the files inside a dropped folder against the limit, and puts nothing when they are over it", async () => {
+    await openTree();
+    await drop("src", [], [folder("many", ...Array.from({ length: 1001 }, (_, i) => named(`f${i}.txt`)))]);
+    await expect($(CARD)).toHaveText("一度に置けるのは 1,000 ファイル、合計 200 MiB までです");
+    await browser.pause(300);
+    expect(await callsOf("orca_drop_taken")).toEqual([]);
+    expect(await callsOf("orca_drop_dir")).toEqual([]);
+    expect(await callsOf("orca_drop_file")).toEqual([]);
+  });
+
+  it("leaves a file over 20 MiB inside a dropped folder with a card, and puts the rest of the folder", async () => {
+    await openTree();
+    await drop("src", [], [folder("media", huge, note)]);
+    await expect($(CARD)).toHaveText("big.bin は 20 MiB を超えるので置けません");
+    expect((await waitForCalls("orca_drop_file")).map((c) => [(c as { dir: string }).dir, (c as { name: string }).name])).toEqual([["src/media", "notes.txt"]]);
+    expect(await callsOf("orca_drop_dir")).toEqual([{ path: HERE, dir: "src/media", environment: null }]);
   });
 
   it("asks about each file whose name is taken, and puts it as it is answered: replace, another name, or leave it", async () => {

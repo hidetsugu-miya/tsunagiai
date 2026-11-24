@@ -671,7 +671,7 @@ function drawDrop() {
   if (!live) return;
   $("orca-drop-label").textContent = `${folderName(now.dir)} に置いています`;
   $("orca-drop-count").textContent = `${now.done} / ${now.total}`;
-  $("orca-drop-fill").style.width = `${(now.done / now.total) * 100}%`;
+  $("orca-drop-fill").style.width = `${now.total === 0 ? 100 : (now.done / now.total) * 100}%`;
 }
 
 // A-47: what the owner answered for a file whose name is taken in the folder: replace it, put it under another name, or leave it; `all` is that the rest of the drop that is taken is answered the same way.
@@ -734,7 +734,10 @@ const DROP_FILES = 1000;
 const DROP_BYTES = 200 * 1024 * 1024;
 const DROP_FILE = 20 * 1024 * 1024;
 
-// A-47: puts what was dropped in the folder `dir` of the worktree. A drop over the number or the total puts nothing, a file over 20 MiB and a folder are left with a card, and for each name that the folder holds the owner is asked (all the questions come before the first file goes). The files are put one after another, and each one's row appears as soon as it is put: the folder is read again while the next one goes (at most one read at a time). A failure shows its card and stops at that file. A tree that became another worktree's ends it.
+// A-47: `dir` and `sub` (a folder inside what was dropped, "" for none) as one path of the worktree.
+const joinDir = (dir: string, sub: string) => (dir === "" ? sub : sub === "" ? dir : `${dir}/${sub}`);
+
+// A-47: puts what was dropped in the folder `dir` of the worktree: the files, and the folders with what is in them in the same layout. A drop over the number or the total puts nothing, a file over 20 MiB is left with a card, and for each name that a folder holds the owner is asked (all the questions come before the first folder is made or the first file goes). The folders are made first, then the files are put one after another, and each one's row appears as soon as it is put: the folders that are shown are read again while the next file goes (at most one read at a time). A failure shows its card and stops at that file. A tree that became another worktree's ends it.
 async function putDropped(dir: string, read: Promise<Dropped>) {
   const here = context;
   if (here === null || dropBusy) {
@@ -743,65 +746,83 @@ async function putDropped(dir: string, read: Promise<Dropped>) {
   }
   dropBusy = true;
   const mine = generation;
-  // The read of the folder that is on its way while files are put (the closure of `reread` sets it, so the type is stated to keep the checks from taking it for null).
+  // The read of the folders that is on its way while files are put (the closure of `reread` sets it, so the type is stated to keep the checks from taking it for null), and the folders that wait for the next read.
   let reading = null as Promise<void> | null;
-  let again = false;
+  const stale = new Set<string>();
+  const reread = (...dirs: string[]) => {
+    for (const d of dirs) if (d === dir || listings.has(d)) stale.add(d);
+    if (reading !== null) return;
+    reading = (async () => {
+      while (stale.size > 0 && mine === generation) {
+        const next = [...stale];
+        stale.clear();
+        for (const d of next) await readDir(d, true);
+      }
+      reading = null;
+    })();
+  };
   try {
     const dropped = await read;
-    const total = dropped.files.reduce((sum, f) => sum + f.size, 0);
-    if (dropped.files.length > DROP_FILES || total > DROP_BYTES) return showFailure("orca-files", "一度に置けるのは 1,000 ファイル、合計 200 MiB までです");
-    if (dropped.folders.length > 0) showFailure("orca-files", refused(dropped.folders, "はフォルダーなので置けません"));
-    const big = dropped.files.filter((f) => f.size > DROP_FILE);
-    if (big.length > 0) showFailure("orca-files", refused(big.map((f) => f.name), "は 20 MiB を超えるので置けません"));
-    const files = dropped.files.filter((f) => f.size <= DROP_FILE);
-    if (files.length === 0) return;
-    const taken = new Set(await invoke("orca_drop_taken", { path: here.path, dir, names: files.map((f) => f.name), environment: here.target }));
+    const total = dropped.files.reduce((sum, f) => sum + f.file.size, 0);
+    if (dropped.over || total > DROP_BYTES) return showFailure("orca-files", "一度に置けるのは 1,000 ファイル、合計 200 MiB までです");
+    const big = dropped.files.filter((f) => f.file.size > DROP_FILE);
+    if (big.length > 0) showFailure("orca-files", refused(big.map((f) => f.file.name), "は 20 MiB を超えるので置けません"));
+    const files = dropped.files.filter((f) => f.file.size <= DROP_FILE).map((f) => ({ file: f.file, dir: joinDir(dir, f.dir), top: f.dir.split("/")[0] }));
+    if (files.length === 0 && dropped.folders.length === 0) return;
+    // Which names are taken: the names the drop puts in `dir` itself (a folder's name too, so that one that is there is known), then the files of each folder of the drop, only where the folder of the drop is there already (a folder that is new holds nothing).
+    const taken = new Set<string>();
+    const ask = async (where: string, names: string[]) => {
+      for (let at = 0; at < names.length; at += DROP_FILES) {
+        const found = await invoke("orca_drop_taken", { path: here.path, dir: where, names: names.slice(at, at + DROP_FILES), environment: here.target });
+        for (const name of found) taken.add(`${where}\n${name}`);
+      }
+    };
+    const own = [...files.filter((f) => f.dir === dir).map((f) => f.file.name), ...dropped.folders.filter((f) => !f.includes("/"))];
+    if (own.length > 0) await ask(dir, own);
     if (mine !== generation) return;
-    const plan: { file: File; onTaken: "overwrite" | "copy" }[] = [];
+    const there = new Set(own.filter((name) => taken.has(`${dir}\n${name}`)));
+    for (const where of new Set(files.filter((f) => f.dir !== dir && there.has(f.top)).map((f) => f.dir))) {
+      await ask(where, files.filter((f) => f.dir === where).map((f) => f.file.name));
+      if (mine !== generation) return;
+    }
+    const plan: { file: File; dir: string; onTaken: "overwrite" | "copy" }[] = [];
     let same: Answer | null = null;
-    let left = files.filter((f) => taken.has(f.name)).length;
-    for (const file of files) {
-      if (!taken.has(file.name)) {
-        plan.push({ file, onTaken: "copy" });
+    let left = files.filter((f) => taken.has(`${f.dir}\n${f.file.name}`)).length;
+    for (const { file, dir: where } of files) {
+      if (!taken.has(`${where}\n${file.name}`)) {
+        plan.push({ file, dir: where, onTaken: "copy" });
         continue;
       }
       left--;
       let answer: Answer | null = same;
       if (answer === null) {
-        const reply = await askTaken(dir, file.name, left);
+        const reply = await askTaken(where, file.name, left);
         if (mine !== generation) return;
         answer = reply.answer;
         if (reply.all) same = answer;
       }
-      if (answer !== "skip") plan.push({ file, onTaken: answer });
+      if (answer !== "skip") plan.push({ file, dir: where, onTaken: answer });
     }
-    if (plan.length === 0) return;
+    if (plan.length === 0 && dropped.folders.length === 0) return;
     const progress = { dir, done: 0, total: plan.length };
     dropping = progress;
     version++;
     if (dir !== "") expandDir(dir);
     draw();
     drawDrop();
-    const reread = () => {
-      if (reading !== null) {
-        again = true;
-        return;
-      }
-      reading = (async () => {
-        do {
-          again = false;
-          await readDir(dir, true);
-        } while (again && mine === generation);
-        reading = null;
-      })();
-    };
-    for (const { file, onTaken } of plan) {
+    // A folder that holds no other folder of the drop is made with the folders on the way, so each folder of the drop is made by one of these.
+    for (const folder of dropped.folders.filter((f) => !dropped.folders.some((g) => g.startsWith(`${f}/`)))) {
+      await invoke("orca_drop_dir", { path: here.path, dir: joinDir(dir, folder), environment: here.target });
+      if (mine !== generation) return;
+    }
+    if (dropped.folders.length > 0) reread(dir);
+    for (const { file, dir: where, onTaken } of plan) {
       const data = await fileBase64(file);
-      await invoke("orca_drop_file", { path: here.path, dir, name: file.name, data, onTaken, environment: here.target });
+      await invoke("orca_drop_file", { path: here.path, dir: where, name: file.name, data, onTaken, environment: here.target });
       if (mine !== generation) return;
       progress.done++;
       drawDrop();
-      reread();
+      reread(dir, where);
     }
   } catch (e) {
     if (mine === generation) showFailure("orca-files", e);
@@ -1172,7 +1193,7 @@ export function initOrcaFiles(on: { open: (relative: string) => void; diff: (rel
   initHistory({ open: on.commitDiff });
   $("orca-files-tree").oncontextmenu = openRootMenu;
   $("orca-files-tree").onkeydown = deleteKey;
-  listenForDrops($("orca-files-tree"), {
+  listenForDrops($("orca-files-tree"), DROP_FILES, {
     over: (target) => {
       const take = context !== null && !dropBusy && !moving;
       showDrop(take ? dropDirAt(target) : null);
