@@ -1662,6 +1662,27 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 /* The language server of the file pane (A-34), and the definition tab of the work pane (A-34): the heading with the name and the count, and a row for each place with the lines around its definition, all open. */
 #orca-server { flex: 1; min-height: 0; overflow: auto; }
 #orca-database { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 4px; }
+/* J-2: the Jira part of the file pane: the choices on top, and the sections (a sprint, then the backlog) of tickets under them. */
+#orca-jira { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+#orca-jira-bar { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 8px 6px; border-bottom: 1px solid var(--line); }
+#orca-jira-bar select { flex: 1 1 0; min-width: 0; height: 26px; padding: 0 8px; border: 1px solid var(--chip-line); border-radius: 13px; background: var(--surface); font: inherit; font-size: calc(12px * var(--fs)); color: inherit; }
+#orca-jira-reload { flex: none; width: 24px; height: 24px; margin-left: auto; color: var(--ink-soft); }
+#orca-jira-reload svg { width: 14px; height: 14px; }
+#orca-jira-list { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 4px 8px; }
+#orca-jira-list .pending { margin: 4px; }
+.orca-jira-none { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 12px 8px; font-size: calc(12.5px * var(--fs)); color: var(--ink-soft); }
+.orca-jira-head { display: flex; align-items: center; gap: 6px; padding: 8px 8px 4px; font-size: calc(12px * var(--fs)); }
+.orca-jira-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.orca-jira-state { flex: none; padding: 0 6px; border-radius: 9px; background: var(--soft); color: var(--accent-text); font-size: calc(11px * var(--fs)); line-height: 18px; }
+.orca-jira-count { flex: none; margin-left: auto; color: var(--muted); }
+.orca-jira-issue { display: flex; align-items: center; gap: 8px; min-width: 0; height: 26px; box-sizing: border-box; padding: 0 8px; border-radius: 6px; font-size: calc(12.5px * var(--fs)); }
+.orca-jira-issue:hover { background: var(--hover); }
+.orca-jira-key { flex: none; color: var(--muted); font-family: var(--ff-mono, ) ui-monospace, monospace; }
+.orca-jira-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.orca-jira-status { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 8px; border-radius: 9px; background: var(--effort-low-bg); color: var(--effort-low); font-size: calc(11px * var(--fs)); line-height: 18px; }
+.orca-jira-issue[data-category="indeterminate"] .orca-jira-status { background: var(--codex-bg); color: var(--codex-fg); }
+.orca-jira-issue[data-category="done"] .orca-jira-status { background: var(--soft); color: var(--accent-text); }
+.orca-jira-issue[data-category="done"] .orca-jira-key, .orca-jira-issue[data-category="done"] .orca-jira-summary { text-decoration: line-through; color: var(--muted); }
 .orca-definition { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .orca-definition-head { gap: 6px; font-size: calc(13px * var(--fs)); }
 .orca-def-word { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--editor-family, ui-monospace, Menlo, monospace); font-weight: 600; }
