@@ -111,6 +111,20 @@
         "「Orders for the implementer」の ほかの行も `制約:` としてそのまま入っている",
         "起動の文で、担当に `run-ci.sh` と `run-e2e.sh` を回させていない"
       ]
+    },
+    {
+      "id": 9,
+      "name": "spec-found-by-rg-for-changed-behavior-runs-alone",
+      "prompt": "あなたは implement の実行の手順 3 で、実装の担当の返りを受け取るリードです。`.claude/skills/implement/SKILL.md` の手順 3 を読み、`.claude/evals/files/implement/behavior-changed-return.md` の返りを、受け取ってから issue の commit までに何をするかを決めてください。この記録が、あなたの持つ実行の文脈です。コマンドは実行せず、打つはずのコマンドを書き出してください。",
+      "expected_output": "担当が編集した `orca` に加え、変えた振る舞いで `rg` に当たった、編集していない `orca-handoff` も、commit の前にリードが `run-e2e.sh --only` で単独で回す。全件の `run-e2e.sh` はここでは回さない。",
+      "files": [
+        ".claude/evals/files/implement/behavior-changed-return.md"
+      ],
+      "assertions": [
+        "commit の前に、リード自身が `run-e2e.sh --only orca` を打つと書いている",
+        "担当が編集していない `orca-handoff` も、`run-e2e.sh --only orca-handoff` として単独で回すと書いている",
+        "全件の `run-e2e.sh` をこの時点で回すコマンドは書いていない"
+      ]
     }
   ]
 }
