@@ -2580,28 +2580,60 @@ fn link_absolute(uri: &str) -> Result<String, String> {
     Ok(path)
 }
 
-/// Opens the file of a `file:` link that was ⌘+clicked in a terminal of this machine and names a file outside the worktree (A-8) in Zed (`open -a Zed {path}`). The path is an argument of the process and never goes through a shell, and what is opened is that file in Zed alone, never by its kind (a `.command` or an `.app` would run). The file must exist.
+/// Opens the file of a `file:` link that was ⌘+clicked in a terminal of this machine and names a file outside the worktree (A-8). A regular file whose name, and whose name once its symbolic links are followed, ends with `.html` or `.htm` (whatever the case) is opened with `open {path}`, so the default app of the system shows it; any other file is opened in Zed alone (`open -a Zed {path}`), never by its kind (a `.command` or an `.app` would run). The path is an argument of the process and never goes through a shell. The file must exist.
 #[tauri::command]
-pub async fn orca_link_open_in_zed(uri: String) -> Result<(), String> {
+pub async fn orca_link_open(uri: String) -> Result<(), String> {
     let path = link_absolute(&uri)?;
-    blocking(move || open_in_zed(&path)).await?
+    blocking(move || open_link(&path)).await?
 }
 
-/// The file check and the wait for `open` of `orca_link_open_in_zed`, run off the async runtime so the screen does not stall while `open` runs.
-fn open_in_zed(path: &str) -> Result<(), String> {
+/// Whether `name` ends with `.html` or `.htm`, whatever the case.
+fn has_html_name(name: &std::path::Path) -> bool {
+    name.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("html") || e.eq_ignore_ascii_case("htm"))
+}
+
+/// The real path of the HTML file that `path` names: it is a regular file (a folder named `x.html`, a bundle, is not), its name ends with `.html` or `.htm`, and so does the name of what its symbolic links lead to. `None` for anything else, and for a file that is not there.
+fn html_file(path: &str) -> Option<std::path::PathBuf> {
+    let path = std::path::Path::new(path);
+    if !has_html_name(path) {
+        return None;
+    }
+    let real = std::fs::canonicalize(path).ok()?;
+    (has_html_name(&real) && real.is_file()).then_some(real)
+}
+
+/// The file check and the wait for `open` of `orca_link_open`, run off the async runtime so the screen does not stall while `open` runs.
+fn open_link(path: &str) -> Result<(), String> {
     if std::fs::metadata(path).is_err() {
         return Err(format!("ファイルがありません: {path}"));
     }
-    let out = std::process::Command::new("open")
-        .args(["-a", "Zed"])
-        .arg(path)
-        .output()
-        .map_err(|e| format!("Zed を開けません: {e}"))?;
+    let mut command = std::process::Command::new("open");
+    let in_zed = match html_file(path) {
+        Some(real) => {
+            command.arg(real);
+            false
+        }
+        None => {
+            command.args(["-a", "Zed"]).arg(path);
+            true
+        }
+    };
+    let out = command.output().map_err(|e| {
+        if in_zed {
+            format!("Zed を開けません: {e}")
+        } else {
+            format!("開けません: {e}")
+        }
+    })?;
     if out.status.success() {
         return Ok(());
     }
     let stderr = String::from_utf8_lossy(&out.stderr);
-    if stderr.contains("Unable to find application") {
+    if !in_zed {
+        Err(format!("開けません: {}", stderr.trim()))
+    } else if stderr.contains("Unable to find application") {
         Err("Zed が見つかりません。Zed を入れてください".into())
     } else {
         Err(format!("Zed で開けません: {}", stderr.trim()))
@@ -3044,6 +3076,46 @@ mod tests {
         ] {
             assert!(link_absolute(uri).is_err(), "{uri} was accepted");
         }
+    }
+
+    #[test]
+    fn only_a_regular_html_file_is_opened_by_the_system() {
+        let dir = std::env::temp_dir().join(format!("tsunagiai-orca-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("bundle.html")).unwrap();
+        std::fs::create_dir_all(dir.join("bundle.htm")).unwrap();
+        for name in ["page.html", "OLD.HTM", "script.command", "notes.md", "html"] {
+            std::fs::write(dir.join(name), "x").unwrap();
+        }
+        let at = |name: &str| dir.join(name);
+        let link = |from: &str, to: &str| std::os::unix::fs::symlink(at(to), at(from)).unwrap();
+        link("alias.html", "page.html");
+        link("evil.html", "script.command");
+        link("plain.html", "notes.md");
+        link("folder.html", "bundle.html");
+        link("dangling.html", "missing.html");
+        let real = |name: &str| html_file(at(name).to_str().unwrap());
+        let canonical = std::fs::canonicalize(&dir).unwrap();
+        // An HTML name, whatever the case, is opened, and a link to one is opened as the file it leads to.
+        assert_eq!(real("page.html"), Some(canonical.join("page.html")));
+        assert_eq!(real("OLD.HTM"), Some(canonical.join("OLD.HTM")));
+        assert_eq!(real("alias.html"), Some(canonical.join("page.html")));
+        // Anything else goes to Zed: another name, a folder with an HTML name, a link to a file of another kind or to a folder, a missing file.
+        for name in [
+            "script.command",
+            "notes.md",
+            "html",
+            "bundle.html",
+            "bundle.htm",
+            "evil.html",
+            "plain.html",
+            "folder.html",
+            "dangling.html",
+            "missing.html",
+        ] {
+            assert_eq!(real(name), None, "{name}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
