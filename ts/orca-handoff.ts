@@ -16,7 +16,8 @@ import type { HandoffCard } from "./orca-handoff-cards.js";
 import { openBranchList, type BranchSource, type PickedBranch } from "./orca-branch.js";
 import { openMenu } from "./menu.js";
 import { childrenFresh, isChildWorktree, readForChoice, readList } from "./formation-list.js";
-import { elapsed, heldOrca, noticeOf, openInOrca, readDestination, refreshOrca, STATUS_LABELS, THIS_MACHINE, worktreeLabel } from "./orca.js";
+import { elapsed, heldOrca, noticeOf, openInOrca, readDestination, refreshOrca, THIS_MACHINE, worktreeLabel } from "./orca.js";
+import { STATUS_LABELS } from "./orca-status.js";
 
 // The item a pane is for: a key that is the same while the same thread or task is shown, and the content to hand over, built when the pane is opened.
 export interface HandoffItem {

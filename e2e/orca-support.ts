@@ -8,12 +8,14 @@ import type { OrcaTerminal } from "../ts/bindings/OrcaTerminal";
 import type { OrcaWorktree } from "../ts/bindings/OrcaWorktree";
 import { boot, inbox, onceId, orcaOverview as readOf, orcaRow, orcaWorktree, streamList as streamOf, textsOf } from "./support";
 
+// A finished agent has one stop time that every read of it repeats, as Orca's `updatedAt` does (A-6: a stopped row with a newer time is a new notice), so the done row of `sample` keeps its time.
+const DONE_AT = Date.now() - 18 * 60_000 - 5_000;
 // A running, a waiting and a done agent, and a second running one that has no pane (its session has no tab). Each has its own project (`proj_{repo}`).
 export const sample = () => [
   orcaRow("example-app", "feat/a", "Write the docs", { minutes: 2 }),
   orcaRow("example-api", "main", "Fix the parser", { group: "waiting", minutes: 5 }),
   orcaRow("example-web", "dev", "Update the page", { minutes: 11, handle: null, paneKey: null }),
-  orcaRow("example-lib", "feature/x", "Opened the pull request.", { group: "done", minutes: 18 }),
+  orcaRow("example-lib", "feature/x", "Opened the pull request.", { group: "done", atMs: DONE_AT }),
 ];
 export const worktrees = () => [orcaWorktree("example-app", "feat/a"), orcaWorktree("example-api", "main")];
 

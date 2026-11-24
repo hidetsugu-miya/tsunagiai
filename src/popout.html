@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>つなぎAI</title>
+  <link rel="stylesheet" href="vendor/xterm.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body id="popout">
+  <header id="popout-head" data-tauri-drag-region="deep">
+    <div id="popout-title"><span id="popout-icon"></span><span id="popout-name"></span></div>
+    <button id="popout-pin" class="icon-btn" type="button" aria-label="最前面に固定" title="最前面に固定" aria-pressed="false">
+      <svg data-svg="pushpin"></svg>
+    </button>
+    <button id="popout-restore" class="icon-btn" type="button" aria-label="戻す" title="戻す">
+      <svg data-svg="popout-restore"></svg>
+    </button>
+  </header>
+  <div id="popout-term"></div>
+  <div id="popout-file" class="orca-edit-host" hidden></div>
+  <div id="orca-stash" hidden></div>
+  <div id="error-cards"></div>
+  <script type="module" src="js/popout.js"></script>
+</body>
+</html>

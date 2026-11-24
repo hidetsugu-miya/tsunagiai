@@ -1,9 +1,10 @@
 import type { OrcaDir } from "../../ts/bindings/OrcaDir";
 import type { OrcaFileText } from "../../ts/bindings/OrcaFileText";
+import type { OrcaSaved } from "../../ts/bindings/OrcaSaved";
 import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import type { PaneLayout } from "../../ts/bindings/PaneLayout";
 import type { PaneNode } from "../../ts/bindings/PaneNode";
-import { askScreen, boot, callsOf, claudeReady, chooseAppearance, chooseOption, chooseTheme, copiedTexts, count, fire, fontSettings, ghosttyImport, holds, huge, image, inbox, isoDate, logged, mock, note, onceId, orcaRow, orcaTerminal, orcaWorktree, PNG, rejects, release, sendStream, sendTerm, setClock, slackLoad, setDark, stubClipboard, terminalThemes, textsOf, timers, todoData, waitForCalls, waitForCount, CARD, CARDS } from "../support";
+import { askScreen, boot, callsOf, claudeReady, chooseAppearance, chooseOption, chooseTheme, copiedTexts, count, fire, fontSettings, ghosttyImport, holds, huge, image, inbox, isoDate, logged, mock, note, onceId, orcaRow, orcaTerminal, orcaWorktree, PNG, popoutTab, rejects, release, sendPopout, sendStream, sendTerm, setClock, slackLoad, setDark, stubClipboard, terminalThemes, textsOf, timers, todoData, waitForCalls, waitForCount, CARD, CARDS } from "../support";
 import { beside, claudeTab, filesToggle, onThisMachine, openOrca, orcaOverview, pickItem, project, sample, selectedTab, showAgain, streamList, studio, tabOf, tabTitles, worktrees } from "../orca-support";
 
 // example-app with a second worktree, so that the plus asks which one (A-16); example-api keeps its one.
@@ -116,7 +117,9 @@ async function reread(rows: Row[], extra: Partial<Parameters<typeof orcaOverview
 
 const working = (repo: string, extra: Partial<Row> = {}) => orcaRow(repo, "main", `Task of ${repo}`, extra);
 // What Orca says of a finished agent, and of one stopped with Esc (`state` done with `interrupted` true).
-const finished = (repo: string, extra: Partial<Row> = {}) => working(repo, { group: "done", ...extra });
+// A finished agent has one stop time that every read of it repeats, as Orca's `updatedAt` does (A-6: a stopped row with a newer time is a new notice).
+const STOPPED_AT = Date.now() - 125_000;
+const finished = (repo: string, extra: Partial<Row> = {}) => working(repo, { group: "done", atMs: STOPPED_AT, ...extra });
 const stopped = (repo: string) => finished(repo, { status: "interrupted" });
 
 // A drag of the divider (pointer events, as the divider listens for them) that ends with the pointer at `fraction` of #orca's width from its left edge.
@@ -285,6 +288,25 @@ describe("orca", () => {
     await expectCount(1);
     await reread([finished("example-app"), working("example-api", { group: "waiting" }), working("example-web", { group: "waiting", paneKey: null, handle: null })]);
     await expectCount(3);
+  });
+
+  it("counts an agent that was stopped in the read before too, when its stop time is newer", async () => {
+    // The work began and stopped between two reads: both reads show it stopped, and only its time (`atMs`) differs.
+    await openOrca(orcaOverview([finished("example-app")], worktrees()));
+    await expectCount(0);
+    await reread([finished("example-app", { atMs: STOPPED_AT + 15_000 })]);
+    await expectCount(1);
+    // The same time again is the same stop: the notice is not counted twice.
+    await reread([finished("example-app", { atMs: STOPPED_AT + 15_000 })]);
+    await expectCount(1);
+  });
+
+  it("gives a stopped agent no notice while its stop time stays the same", async () => {
+    await openOrca(orcaOverview([finished("example-app")], worktrees()));
+    await reread([finished("example-app")]);
+    await expectCount(0);
+    await reread([finished("example-app", { atMs: STOPPED_AT - 15_000 })]);
+    await expectCount(0);
   });
 
   it("gives an agent with no pane no notice when it stops", async () => {
@@ -3649,9 +3671,9 @@ describe("orca: split panes (A-17)", () => {
     const panes = await mock("orca_panes", layout(row(pane("p1", [claude, bash]), pane("p2", [zsh])), "p2"));
     await rightClick(zsh);
     await expect($('.menu[role="menu"]')).toBeDisplayed();
-    expect(await textsOf('.menu[role="menu"] button')).toEqual(["右に分割", "下に分割"]);
+    expect(await textsOf('.menu[role="menu"] button')).toEqual(["右に分割", "下に分割", "別ウィンドウで開く"]);
     // A line icon on each row and no colored dot; the terminal has no copy of a path.
-    expect(await count('.menu[role="menu"] button svg')).toBe(2);
+    expect(await count('.menu[role="menu"] button svg')).toBe(3);
     expect(await count('.menu[role="menu"] .pdot')).toBe(0);
     expect(await count('.menu[role="menu"] > [role="separator"]')).toBe(0);
     await pickItem("右に分割");
@@ -3681,11 +3703,11 @@ describe("orca: split panes (A-17)", () => {
     await expect($('.orca-pane[data-pane="p3"] .list-toggle')).not.toBeDisplayed();
   });
 
-  it("has no menu on a tab that is alone in its pane", async () => {
+  it("has only 「別ウィンドウで開く」 (A-46) in the menu of a tab that is alone in its pane: it cannot be split", async () => {
     await openSplit();
     await rightClick(zsh);
-    await browser.pause(300);
-    expect(await count(".menu")).toBe(0);
+    await expect($('.menu[role="menu"]')).toBeDisplayed();
+    expect(await textsOf('.menu[role="menu"] button')).toEqual(["別ウィンドウで開く"]);
   });
 
   it("splits by dragging a tab to an edge of another pane, joins it by dragging it to the strip or the middle, and asks nothing for a drop that changes nothing", async () => {
@@ -3944,6 +3966,316 @@ describe("orca: split panes (A-17)", () => {
       const sent = await waitForCalls(viewport, 2);
       expect(sent.map((c) => (c as { handle: string }).handle).sort()).toEqual(["term_example-app", "term_example-app_zsh"]);
       expect(viewportOf(sent[0]).cols).toBeGreaterThan(viewportOf(calls[0]).cols);
+    });
+  });
+});
+
+// A-46: a Claude session or a terminal of the work pane shown in a window of its own. Rust makes the window (unit tests) and the page of the window is `orca-popout.e2e.ts`; here the screen is checked: the menu, what it asks of `orca_popout_open` and `orca_panes`,
+// what it does with what the owner did in the window, and what it tells the window as the list changes.
+describe("orca: a tab in a window of its own (A-46)", () => {
+  const claude = claudeTab("example-app");
+  const zsh = "orca:term_example-app_zsh";
+  const bash = "orca:term_example-app_bash";
+  const handles = { [claude]: "term_example-app", [zsh]: "term_example-app_zsh", [bash]: "term_example-app_bash" };
+  const overview = (rows = sample()) => orcaOverview(rows, worktrees(), { terminals: [orcaTerminal("example-app", "zsh"), orcaTerminal("example-app", "bash")] });
+  // What the window of the shell shows, and of the Claude session.
+  const shell = popoutTab(zsh, "term_example-app_zsh", "zsh");
+  const session = popoutTab(claude, "term_example-app", "Write the docs", { status: "working", label: "作業中", content: { kind: "claude", handle: "term_example-app", path: "/work/example-app", stream: false, ended: false } });
+
+  // The right button on the tab, as the page gets it.
+  const rightClick = (tab: string) =>
+    browser.execute(
+      (id, once) => {
+        if (!window.__e2e_once__(once)) return;
+        document.querySelector(`[data-tab="${id}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 }));
+      },
+      tab,
+      onceId(),
+    );
+  async function open(fixtures: Record<string, unknown> = {}) {
+    await openOrca(overview(), { orca_terminal_read: ["$"], ...fixtures });
+    await project("example-app").click();
+    await waitForCalls("orca_panes");
+  }
+  // The tab asked to go to a window through the menu.
+  async function popOut(tab: string) {
+    await rightClick(tab);
+    await pickItem("別ウィンドウで開く");
+  }
+  // The tabs the latest call of `orca_panes` says are in a window.
+  const away = async () => ((await callsOf("orca_panes")).at(-1) as { away: string[] }).away;
+  const awayIs = (want: string[]) => browser.waitUntil(async () => JSON.stringify(await away()) === JSON.stringify(want), { timeoutMsg: `the tabs in a window never became ${want.join()}` });
+
+  it("opens a shell in a window: it asks `orca_popout_open` for the tab, sends it to `orca_panes` as away, and the strip no longer has it", async () => {
+    await open();
+    expect(await tabTitles()).toEqual(["Write the docs", "zsh", "bash"]);
+    await popOut(zsh);
+    expect(await waitForCalls("orca_popout_open")).toEqual([{ tab: shell }]);
+    await awayIs([zsh]);
+    expect((await callsOf("orca_panes")).at(-1)).toEqual({ environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], away: [zsh], handles, was: handles, op: null });
+    expect(await tabTitles()).toEqual(["Write the docs", "bash"]);
+  });
+
+  it("opens a Claude session in a window with its status and its name", async () => {
+    await open();
+    await popOut(claude);
+    expect(await waitForCalls("orca_popout_open")).toEqual([{ tab: session }]);
+    await awayIs([claude]);
+    expect(await tabTitles()).toEqual(["zsh", "bash"]);
+  });
+
+  it("keeps the tab in its pane, and shows the message, when the window cannot be made", async () => {
+    await open();
+    const opened = await mock("orca_popout_open", rejects("別ウィンドウを開けませんでした: test"));
+    await popOut(zsh);
+    await waitForCalls(opened);
+    await expect($(CARD)).toHaveText("別ウィンドウを開けませんでした: test");
+    await awayIs([]);
+    expect(await tabTitles()).toEqual(["Write the docs", "zsh", "bash"]);
+  });
+
+  it("brings the window to the front when a session of the list that is in it is pressed, and selects nothing", async () => {
+    await open();
+    await popOut(claude);
+    await awayIs([claude]);
+    const focused = await mock("orca_popout_focus", null);
+    await $('#orca-feed .orca-worktree[data-worktree="/work/example-app"]').click();
+    expect(await waitForCalls(focused)).toEqual([{ tab: claude }]);
+    expect((await callsOf("orca_panes")).filter((c) => (c as { op: { kind: string } | null }).op?.kind === "select")).toEqual([]);
+  });
+
+  it("puts the tab back in its pane when the owner presses the button of its window, and ends the window", async () => {
+    await open();
+    await popOut(zsh);
+    await awayIs([zsh]);
+    await sendPopout({ kind: "restore", tab: zsh });
+    expect(await waitForCalls("orca_popout_end")).toEqual([{ tab: zsh }]);
+    await awayIs([]);
+    expect(await tabTitles()).toEqual(["Write the docs", "zsh", "bash"]);
+  });
+
+  it("closes the terminal as the × of its pane does when the owner presses the red button of its window, then ends the window", async () => {
+    await open();
+    await popOut(zsh);
+    await awayIs([zsh]);
+    const closed = await mock("orca_close", null);
+    await sendPopout({ kind: "close", tab: zsh });
+    expect(await waitForCalls(closed)).toEqual([{ handle: "term_example-app_zsh", environment: null }]);
+    expect(await waitForCalls("orca_popout_end")).toEqual([{ tab: zsh }]);
+  });
+
+  it("keeps the window and shows the message when the terminal cannot be closed", async () => {
+    await open();
+    await popOut(zsh);
+    await awayIs([zsh]);
+    const closed = await mock("orca_close", rejects("閉じられませんでした"));
+    await sendPopout({ kind: "close", tab: zsh });
+    await waitForCalls(closed);
+    await expect($(CARD)).toHaveText("閉じられませんでした");
+    expect(await callsOf("orca_popout_end")).toEqual([]);
+    expect(await away()).toEqual([zsh]);
+  });
+
+  it("ends the window of a tab that the list no longer has", async () => {
+    await open(timers({ orcaClock: 1000 }));
+    await popOut(zsh);
+    await awayIs([zsh]);
+    await mock("orca_overview", orcaOverview(sample(), worktrees(), { terminals: [orcaTerminal("example-app", "bash")] }));
+    expect(await waitForCalls("orca_popout_end")).toEqual([{ tab: zsh }]);
+  });
+
+  it("gives its window the name the list says now", async () => {
+    await open(timers({ orcaClock: 1000 }));
+    await popOut(claude);
+    await awayIs([claude]);
+    const updated = await mock("orca_popout_update", null);
+    await mock("orca_overview", overview([orcaRow("example-app", "feat/a", "Read the page", { minutes: 2 }), ...sample().slice(1)]));
+    const [call] = (await waitForCalls(updated)) as { was: string; tab: { title: string } }[];
+    expect(call).toEqual({ was: claude, tab: { ...session, title: "Read the page" } });
+  });
+
+  it("makes no notice for a session that stops while its tab is in a window, as for one the screen shows", async () => {
+    await open(timers({ orcaClock: 1000 }));
+    // The shell is the selected tab, so the screen shows no session; the waiting agent of the sample is the one in the count.
+    await $(`.orca-tabs [data-tab="${bash}"] [role="tab"]`).click();
+    await popOut(claude);
+    await awayIs([claude]);
+    await expectCount(1);
+    const updated = await mock("orca_popout_update", null);
+    await mock("orca_overview", overview([orcaRow("example-app", "feat/a", "Write the docs", { group: "done", atMs: STOPPED_AT }), ...sample().slice(1)]));
+    const [call] = (await waitForCalls(updated)) as { tab: { status: string } }[];
+    expect(call.tab.status).toBe("done");
+    await expectCount(1);
+    await expect($("#nav-orca")).toHaveAttribute("aria-label", "開発（確認待ち 1 件、作業中 1 件）");
+  });
+
+  it("takes the windows that are open back from Rust when the page is loaded again: their tabs stay out of the panes", async () => {
+    await open({ orca_popout_main: [shell] });
+    await awayIs([zsh]);
+    expect(await tabTitles()).toEqual(["Write the docs", "bash"]);
+  });
+
+  // A file (A-18) and the scratchpad (A-29): the editor of a tab is held by the page that shows it, so the tab is saved and closed here before the window opens it again.
+  describe("a file", () => {
+    const memo = { relative: ".orca/scratchpad/memo.md", existed: false };
+    const fileText = (content: string): OrcaFileText => ({ content, crlf: false, signature: "sig-1", language: "plaintext", highlight: null });
+    const FILE = "file:1";
+    const inWindow = popoutTab(FILE, "", "memo.md", { label: "", content: { kind: "file", path: "/work/example-app", relative: memo.relative, server: null } });
+    const area = () => $(".orca-edit-area");
+    // Opens the scratchpad file of example-app as a tab (the first file of the page: `file:1`).
+    async function openMemo(fixtures: Record<string, unknown> = {}) {
+      await open({ editor_settings: { autosaveMs: 100 }, ...fixtures });
+      await mock("orca_scratchpad_create", memo);
+      await mock("orca_file_read", fileText("a note\n"));
+      await plus("example-app", SCRATCHPAD);
+      await browser.keys("Enter");
+      await expect(area()).toHaveValue("a note\n", { trim: false });
+      await expect(tabOf(FILE)).toBeDisplayed();
+    }
+    // Types a letter in the editor (the autosave of 100 ms is not waited for: the close of the tab saves it).
+    async function typeX() {
+      await area().click();
+      await browser.keys("x");
+    }
+    const saved = (signature: string): OrcaSaved => ({ state: "saved", signature });
+
+    it("has the row 「別ウィンドウで開く」 before the two copies of the path, with a line between", async () => {
+      await openMemo();
+      await rightClick(FILE);
+      expect(await textsOf('.menu[role="menu"] [role="menuitem"]')).toEqual(["右に分割", "下に分割", "別ウィンドウで開く", "パスのコピー", "相対パスをコピー"]);
+      expect(await count('.menu[role="menu"] [role="separator"]')).toBe(1);
+    });
+
+    it("saves what was typed, then asks `orca_popout_open` for the file, and the strip no longer has it", async () => {
+      await openMemo();
+      const write = await mock("orca_file_write", saved("sig-2"));
+      await typeX();
+      await popOut(FILE);
+      expect(await waitForCalls("orca_popout_open")).toEqual([{ tab: inWindow }]);
+      // The save came first: the call is of the typing, with the signature of the read.
+      expect(await callsOf(write)).toEqual([{ path: "/work/example-app", relative: memo.relative, content: "a note\nx", crlf: false, signature: "sig-1", environment: null }]);
+      await awayIs([FILE]);
+      expect(await tabTitles()).toEqual(["Write the docs", "zsh", "bash"]);
+      await expect(area()).not.toExist();
+    });
+
+    it("saves nothing when nothing was typed", async () => {
+      await openMemo();
+      const write = await mock("orca_file_write", saved("sig-2"));
+      await popOut(FILE);
+      expect(await waitForCalls("orca_popout_open")).toEqual([{ tab: inWindow }]);
+      expect(await callsOf(write)).toEqual([]);
+    });
+
+    it("keeps the tab in its pane, and the typing in it, when the save fails", async () => {
+      await openMemo();
+      await mock("orca_file_write", rejects("保存できませんでした"));
+      await typeX();
+      await popOut(FILE);
+      await expect($(CARD)).toHaveText("保存できませんでした");
+      expect(await callsOf("orca_popout_open")).toEqual([]);
+      expect(await tabTitles()).toEqual(["Write the docs", "zsh", "bash", "memo.md"]);
+      await expect(area()).toHaveValue("a note\nx", { trim: false });
+      expect(await away()).toEqual([]);
+    });
+
+    it("keeps the tab in its pane when the save is refused because the disk changed", async () => {
+      await openMemo();
+      await mock("orca_file_write", { state: "changed", signature: "sig-1" } satisfies OrcaSaved);
+      await typeX();
+      await popOut(FILE);
+      await expect($(".orca-edit-state")).toHaveText("ディスクのファイルが変わっています");
+      expect(await callsOf("orca_popout_open")).toEqual([]);
+      expect(await tabTitles()).toEqual(["Write the docs", "zsh", "bash", "memo.md"]);
+      await expect(area()).toHaveValue("a note\nx", { trim: false });
+    });
+
+    it("opens the file in its pane again, with the id it had and the disk's text, when the window is made no more", async () => {
+      await openMemo();
+      await mock("orca_popout_open", rejects("別ウィンドウを開けませんでした: test"));
+      await popOut(FILE);
+      await expect($(CARD)).toHaveText("別ウィンドウを開けませんでした: test");
+      await expect(tabOf(FILE)).toBeDisplayed();
+      await expect(area()).toHaveValue("a note\n", { trim: false });
+      expect(await callsOf("orca_file_read")).toHaveLength(2);
+      await awayIs([]);
+    });
+
+    it("puts the file back in its pane, read again from the disk, when the owner presses the button of its window", async () => {
+      await openMemo();
+      await popOut(FILE);
+      await awayIs([FILE]);
+      await mock("orca_file_read", fileText("a note, changed\n"));
+      await sendPopout({ kind: "restore", tab: FILE });
+      expect(await waitForCalls("orca_popout_end")).toEqual([{ tab: FILE }]);
+      await awayIs([]);
+      await expect(tabOf(FILE)).toBeDisplayed();
+      await expect(area()).toHaveValue("a note, changed\n", { trim: false });
+    });
+
+    it("ends the window, and asks nothing of Orca, when the page of a file window asked for the close", async () => {
+      await openMemo();
+      await popOut(FILE);
+      await awayIs([FILE]);
+      const closed = await mock("orca_close", null);
+      await sendPopout({ kind: "close", tab: FILE });
+      expect(await waitForCalls("orca_popout_end")).toEqual([{ tab: FILE }]);
+      expect(await callsOf(closed)).toEqual([]);
+      await awayIs([]);
+      expect(await tabTitles()).toEqual(["Write the docs", "zsh", "bash"]);
+    });
+
+    it("shows the definition that the editor of the window asked for as a tab of its own pane, and asks the server as the editor of a pane does", async () => {
+      await openMemo();
+      await popOut(FILE);
+      await awayIs([FILE]);
+      const asked = await mock("lsp_definition", []);
+      await mock("lsp_places", []);
+      const query = { target: null, project: "proj_example-app", path: "/work/example-app", server: "ruby", relative: memo.relative, text: "Rails.logger", line: 0, character: 2, word: "Rails" };
+      await sendPopout({ kind: "definition", tab: FILE, query });
+      expect(await waitForCalls(asked)).toEqual([{ environment: null, worktree: "/work/example-app", server: "ruby", relative: memo.relative, text: "Rails.logger", line: 0, character: 2 }]);
+      await browser.waitUntil(async () => (await tabTitles()).includes("定義 ・ Rails"), { timeoutMsg: "the definition tab never opened" });
+      // The file stays in its window.
+      expect(await away()).toEqual([FILE]);
+    });
+
+    it("brings the window to the front, and opens no second editor, when the same file is opened again", async () => {
+      await openMemo();
+      await popOut(FILE);
+      await awayIs([FILE]);
+      const focused = await mock("orca_popout_focus", null);
+      await mock("orca_scratchpad_create", { ...memo, existed: true });
+      const read = await mock("orca_file_read", fileText("a note\n"));
+      await plus("example-app", SCRATCHPAD);
+      await browser.keys("Enter");
+      expect(await waitForCalls(focused)).toEqual([{ tab: FILE }]);
+      expect(await callsOf(read)).toEqual([]);
+      await expect(area()).not.toExist();
+    });
+
+    it("takes a file window back from Rust when the page is loaded again: its tab stays out of the panes and the next file does not take its id", async () => {
+      await open({ orca_popout_main: [inWindow], editor_settings: { autosaveMs: 100 } });
+      await awayIs([FILE]);
+      await mock("orca_scratchpad_create", { relative: ".orca/scratchpad/other.md", existed: false });
+      await mock("orca_file_read", fileText("a note\n"));
+      await plus("example-app", SCRATCHPAD);
+      await browser.keys("Enter");
+      await expect(tabOf("file:2")).toBeDisplayed();
+      expect(await tabTitles()).toEqual(["Write the docs", "zsh", "bash", "other.md"]);
+      expect(await away()).toEqual([FILE]);
+    });
+
+    it("leaves its window as it is when the list is read again: a file is no row of the list", async () => {
+      await openMemo(timers({ orcaClock: 1000 }));
+      await popOut(FILE);
+      await awayIs([FILE]);
+      const updated = await mock("orca_popout_update", null);
+      const ended = await mock("orca_popout_end", null);
+      await mock("orca_overview", overview([orcaRow("example-app", "feat/a", "Read the page", { minutes: 2 }), ...sample().slice(1)]));
+      await browser.pause(1500);
+      expect(await callsOf(updated)).toEqual([]);
+      expect(await callsOf(ended)).toEqual([]);
+      expect(await away()).toEqual([FILE]);
     });
   });
 });

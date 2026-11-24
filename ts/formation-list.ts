@@ -12,7 +12,8 @@ import { confirmFormationDelete, confirmFormationForce } from "./hint.js";
 import { CHEVRON_SVG, DELETE_SVG, FOLDER_SVG, FORMATION_NEW_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { type MenuItem, openMenu } from "./menu.js";
-import { redrawOrca, statusIcon } from "./orca.js";
+import { redrawOrca } from "./orca.js";
+import { statusIcon } from "./orca-status.js";
 
 export const STATE_LABELS: Record<FormationState, string> = { working: "作業中", waiting: "承認待ち", done: "完了", planned: "予定" };
 
