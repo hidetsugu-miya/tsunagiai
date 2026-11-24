@@ -3473,13 +3473,54 @@ describe("orca: links in a terminal (A-8, A-12)", () => {
     const relative = await mock("orca_link_relative", rejects("開けるのはワークツリーの中のファイルだけです"));
     const browserOpen = await mock("orca_file_open_in_browser", null);
     const open = await mock("orca_open_url", null);
+    const zed = await mock("orca_link_open_in_zed", null);
     await clickOn("hosts", { metaKey: true });
     expect(await waitForCalls(relative)).toEqual([{ uri: "file:///etc/hosts", path: WORKTREE }]);
     await expect($(CARD)).toHaveText("開けるのはワークツリーの中のファイルだけです");
     expect(await callsOf(browserOpen)).toEqual([]);
     expect(await callsOf(open)).toEqual([]);
+    expect(await callsOf(zed)).toEqual([]);
     expect(await callsOf("orca_file_read")).toEqual([]);
     expect(await tabTitles()).not.toContain("hosts");
+  });
+
+  it("opens a file: link outside the worktree in Zed on this machine, and nothing else", async () => {
+    const uri = "file:///Users/me/notes/proposal.html";
+    await openMirrorWith(["$ open", osc8(uri, "outlink")], "outlink");
+    const relative = await mock("orca_link_relative", rejects("開けるのはワークツリーの中のファイルだけです"));
+    const zed = await mock("orca_link_open_in_zed", null);
+    const browserOpen = await mock("orca_file_open_in_browser", null);
+    const open = await mock("orca_open_url", null);
+    await clickOn("outlink");
+    await browser.pause(300);
+    expect(await callsOf(zed)).toEqual([]);
+    await clickOn("outlink", { metaKey: true });
+    expect(await waitForCalls(zed)).toEqual([{ uri }]);
+    expect(await callsOf(relative)).toEqual([{ uri, path: WORKTREE }]);
+    expect(await callsOf(browserOpen)).toEqual([]);
+    expect(await callsOf(open)).toEqual([]);
+    expect(await callsOf("orca_file_read")).toEqual([]);
+    await expect($(CARDS)).not.toExist();
+  });
+
+  it("shows the message on a card when Zed cannot open the file of a link outside the worktree", async () => {
+    const uri = "file:///Users/me/notes/missing.md";
+    await openMirrorWith(["$ open", osc8(uri, "outlink")], "outlink");
+    await mock("orca_link_relative", rejects("開けるのはワークツリーの中のファイルだけです"));
+    const zed = await mock("orca_link_open_in_zed", rejects("ファイルがありません: /Users/me/notes/missing.md"));
+    await clickOn("outlink", { metaKey: true });
+    expect(await waitForCalls(zed)).toEqual([{ uri }]);
+    await expect($(CARD)).toHaveText("ファイルがありません: /Users/me/notes/missing.md");
+  });
+
+  it("does not open a file of this machine in Zed when the link is inside the worktree", async () => {
+    await openMirrorWith(["$ open", osc8(FILE_URI, "pagelink")], "pagelink");
+    await mock("orca_link_relative", "tmp/page.html");
+    await mock("orca_file_open_in_browser", null);
+    const zed = await mock("orca_link_open_in_zed", null);
+    await clickOn("pagelink", { metaKey: true });
+    await waitForCalls("orca_file_open_in_browser");
+    expect(await callsOf(zed)).toEqual([]);
   });
 });
 

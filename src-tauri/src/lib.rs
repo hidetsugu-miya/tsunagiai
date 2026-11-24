@@ -421,6 +421,7 @@ pub fn run() {
             orca::orca_terminal_input,
             orca::orca_open_url,
             orca::orca_link_relative,
+            orca::orca_link_open_in_zed,
             orca_attach::orca_attach_file,
             orca_browse::orca_browse_dir,
             orca_pairing::orca_pairing_status,
