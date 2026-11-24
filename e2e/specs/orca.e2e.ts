@@ -3447,16 +3447,34 @@ describe("orca: links in a terminal (A-8, A-12)", () => {
     expect(await callsOf(browserOpen)).toEqual([]);
   });
 
-  it("opens an HTML file of a saved environment as a preview tab, and not in the browser", async () => {
+  it("opens an .htm file of this machine in the browser, whatever the case", async () => {
+    const uri = `file://${WORKTREE}/tmp/OLD.HTM`;
+    await openMirrorWith(["$ open", osc8(uri, "oldlink")], "oldlink");
+    await mock("orca_link_relative", "tmp/OLD.HTM");
+    const browserOpen = await mock("orca_file_open_in_browser", null);
+    await clickOn("oldlink", { metaKey: true });
+    expect(await waitForCalls(browserOpen)).toEqual([{ path: WORKTREE, relative: "tmp/OLD.HTM", environment: null }]);
+    expect(await callsOf("orca_file_read")).toEqual([]);
+  });
+
+  it("opens an HTML file of a saved environment in the browser with its environment, and not as a preview tab", async () => {
     await openStream(`$ cat\r\n${osc8(FILE_URI, "pagelink")}`, "pagelink");
     const relative = await mock("orca_link_relative", "tmp/page.html");
     const browserOpen = await mock("orca_file_open_in_browser", null);
     await clickOn("pagelink", { metaKey: true });
     expect(await waitForCalls(relative)).toEqual([{ uri: FILE_URI, path: WORKTREE }]);
-    await waitForCount(".orca-edit-preview iframe", 1);
-    expect(await callsOf("orca_file_preview_url")).toEqual([{ path: WORKTREE, relative: "tmp/page.html", environment: "Studio" }]);
-    expect(await tabTitles()).toContain("page.html");
-    expect(await callsOf(browserOpen)).toEqual([]);
+    expect(await waitForCalls(browserOpen)).toEqual([{ path: WORKTREE, relative: "tmp/page.html", environment: "Studio" }]);
+    expect(await callsOf("orca_file_preview_url")).toEqual([]);
+    expect(await callsOf("orca_file_read")).toEqual([]);
+  });
+
+  it("opens an .htm file of a saved environment in the browser", async () => {
+    const uri = `file://${WORKTREE}/tmp/old.htm`;
+    await openStream(`$ cat\r\n${osc8(uri, "oldlink")}`, "oldlink");
+    await mock("orca_link_relative", "tmp/old.htm");
+    const browserOpen = await mock("orca_file_open_in_browser", null);
+    await clickOn("oldlink", { metaKey: true });
+    expect(await waitForCalls(browserOpen)).toEqual([{ path: WORKTREE, relative: "tmp/old.htm", environment: "Studio" }]);
   });
 
   it("opens a file that is not HTML of a saved environment as an editor tab", async () => {

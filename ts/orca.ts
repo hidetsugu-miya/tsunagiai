@@ -1128,7 +1128,7 @@ async function openCheckedPreview(path: string, relative: string, environment: s
   draw();
 }
 
-// A `file:` link ⌘+clicked in a terminal (A-8, #1304, #1350): Rust gives its path inside the worktree of the terminal (and refuses one outside it, which opens in Zed on this machine), then an HTML file of this machine opens in the default browser (A-31) and any other file is a tab of the project in the editor, where an HTML file shows its preview (A-18, A-42; the HTML of another PC is shown there too).
+// A `file:` link ⌘+clicked in a terminal (A-8, #1304, #1350): Rust gives its path inside the worktree of the terminal (and refuses one outside it, which opens in Zed on this machine), then an HTML file (`.html` or `.htm`) opens in the default browser (A-31), of this machine and of a saved environment's PC alike, and any other file is a tab of the project in the editor (A-18).
 async function openTerminalLink(source: TermSource, uri: string) {
   const { path, environment } = source;
   let relative: string;
@@ -1140,7 +1140,7 @@ async function openTerminalLink(source: TermSource, uri: string) {
     await invoke("orca_link_open_in_zed", { uri });
     return;
   }
-  if (environment === null && /\.html$/i.test(relative)) await invoke("orca_file_open_in_browser", { path, relative, environment });
+  if (/\.html?$/i.test(relative)) await invoke("orca_file_open_in_browser", { path, relative, environment });
   else await openCheckedPreview(path, relative, environment);
 }
 

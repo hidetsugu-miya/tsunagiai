@@ -3180,6 +3180,24 @@ describe("orca: files and editor (A-18)", () => {
     expect(await textsOf('.menu[role="menu"] button')).toEqual(["新規ファイル", "新規フォルダー", "パスのコピー", "相対パスをコピー", "移動・名前の変更", "削除"]);
   });
 
+  it("has 「ブラウザで開く」 on a file whose name ends with .htm, whatever the case, and opens it in the browser, and not on .htmx (A-31)", async () => {
+    await openFiles({ orca_files_list: dirOf("", [["old.htm", false], ["OLD.HTM", false], ["a.htmx", false], ["a.rs", false]]) });
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const open = await mock("orca_file_open_in_browser", null);
+    expect(await rightClickRow("OLD.HTM")).toBe(true);
+    expect((await textsOf('.menu[role="menu"] button'))[4]).toBe("ブラウザで開く");
+    await browser.keys("Escape");
+    await expect($(".menu")).not.toExist();
+    expect(await rightClickRow("a.htmx")).toBe(true);
+    expect(await textsOf('.menu[role="menu"] button')).not.toContain("ブラウザで開く");
+    await browser.keys("Escape");
+    await expect($(".menu")).not.toExist();
+    expect(await rightClickRow("old.htm")).toBe(true);
+    await pickItem("ブラウザで開く");
+    expect(await waitForCalls(open)).toEqual([{ path: "/work/example-app", relative: "old.htm", environment: null }]);
+    await expect($(".menu")).not.toExist();
+  });
+
   it("opens an HTML file in the browser from the menu with the worktree, its path and the target, closes the menu and shows nothing (A-31)", async () => {
     await openFiles({ orca_files_list: withPage() });
     await waitForCount("#orca-files-tree .orca-file", 4);

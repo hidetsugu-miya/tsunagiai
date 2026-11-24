@@ -760,7 +760,7 @@ function gitItems(here: FilesContext, anchor: Element, relative: string, folder:
   ];
 }
 
-// The menu of a row (the right button): on a folder the new file and folder and then, after a line, the copies; on a file the path of the entry on the machine of the worktree, its path from the worktree, the download, the difference from HEAD (A-24) and, when its name ends with `.html` (whatever the case; Rust refuses any other name), 「ブラウザで開く」 (A-31); on both, when the row differs from HEAD (A-39), after a line, 「ステージ」, 「ステージ解除」 and 「変更を元に戻す」 in red (A-44); and on both, last and after a line, 「移動・名前の変更」 and the delete in red. The menu sets and removes aria-expanded on its anchor, so the anchor is the row's name, not the row, whose own aria-expanded is the state of its folder.
+// The menu of a row (the right button): on a folder the new file and folder and then, after a line, the copies; on a file the path of the entry on the machine of the worktree, its path from the worktree, the download, the difference from HEAD (A-24) and, when its name ends with `.html` or `.htm` (whatever the case; Rust refuses any other name), 「ブラウザで開く」 (A-31); on both, when the row differs from HEAD (A-39), after a line, 「ステージ」, 「ステージ解除」 and 「変更を元に戻す」 in red (A-44); and on both, last and after a line, 「移動・名前の変更」 and the delete in red. The menu sets and removes aria-expanded on its anchor, so the anchor is the row's name, not the row, whose own aria-expanded is the state of its folder.
 function openRowMenu(anchor: Element, relative: string, isDirectory: boolean) {
   const here = context;
   if (here === null) return;
@@ -772,7 +772,7 @@ function openRowMenu(anchor: Element, relative: string, isDirectory: boolean) {
   const [path, from] = [copy("パスのコピー", `${here.path.replace(/\/+$/, "")}/${relative}`, "パスをコピーしました"), copy("相対パスをコピー", relative, "相対パスをコピーしました")];
   const git = gitItems(here, anchor, relative, isDirectory);
   if (isDirectory) openMenu(anchor, [...createItems(relative), { ...path, divider: true }, from, ...git, rename, del]);
-  else openMenu(anchor, [path, from, menuItem("ダウンロード", DOWNLOAD_SVG, () => void download(here, relative)), menuItem("差分を表示", DIFF_SVG, () => openDiff(relative)), ...(/\.html$/i.test(relative) ? [menuItem("ブラウザで開く", OPEN_SVG, () => void openInBrowser(here, relative))] : []), ...git, rename, del]);
+  else openMenu(anchor, [path, from, menuItem("ダウンロード", DOWNLOAD_SVG, () => void download(here, relative)), menuItem("差分を表示", DIFF_SVG, () => openDiff(relative)), ...(/\.html?$/i.test(relative) ? [menuItem("ブラウザで開く", OPEN_SVG, () => void openInBrowser(here, relative))] : []), ...git, rename, del]);
 }
 
 // The menu of the empty part of the tree (the right button): the new file and folder in the root of the worktree, where the pointer is.
