@@ -39,17 +39,18 @@
 
 ## 子を置ける PC
 
-- あなたは、子と同じ PC で動いています。
-- 子を起動できるのは、その PC（環境 `local`）だけです。
-- 別の PC の子の起動には、まだ対応していません。
-- ほかの環境のリポジトリは、読めます。子は置けません。
-- その環境の仕事が要るときは、オーナーに伝えます。
-- `formation_launch` と `formation_plan` に `local` 以外を渡すと、何も作らず断られます。
+- あなたは、環境 `local` の PC で動いています。
+- 子は、`local` にも、保存した環境（別の PC）にも起動できます。環境は `formation_environments` で分かります。
+- 別の PC の子は、その PC の Orca が起動します。リポジトリは、その環境のものを渡します。
+- 別の PC の子は Dispatch ではありません。`formation_launch` の答えの `dispatchId` は `null` で、`runId` と `handle` があります。
+- 別の PC の子へは、`orca orchestration send --run {runId} --on {環境} --to {handle} --subject ...` で送ります。
+- 別の PC の子は、あなたのメッセージに `orca orchestration reply` で答える形でだけ報告します。起動の直後に、`HELLO` が届いています。
+- 子の返事は、`orca orchestration check --run {runId} --wait` で読みます。この PC の子と同じです。
 
 ## チームメイトを起動する
 
 - チームメイトは `formation_launch` で起動します。数と役割は自分で決めます。
-- 渡すのは、環境（`local`）、リポジトリ、子の名前、最初の指示です。置き場所とブランチは、仕事に合わせて選びます。
+- 渡すのは、環境（`local` か保存した環境）、リポジトリ、子の名前、最初の指示です。置き場所とブランチは、仕事に合わせて選びます。
 - 置き場所は三つから選べます。
   - 新しい worktree。`branch` を渡さなければ、名前は Orca が決めます。
   - 既存のブランチの worktree。`branch` に既存のブランチを渡すと、そのブランチのまま開きます。ローカルになければ origin のブランチから開きます。

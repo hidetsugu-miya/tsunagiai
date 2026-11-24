@@ -80,6 +80,7 @@ const STEP_SETTINGS: &str = "子の設定の書き出し";
 const STEP_IDLE: &str = "子のエージェントの立ち上がり待ち";
 const STEP_SEND: &str = "最初の指示の送信";
 const STEP_DISPATCH: &str = "子の Dispatch の作成";
+const STEP_HELLO: &str = "最初のメッセージの送信";
 const STEP_GIT: &str = "git での確認";
 const STEP_REMOVE: &str = "worktree の削除";
 const STEP_STOP: &str = "ターミナルを閉じる";
@@ -719,12 +720,12 @@ pub(crate) fn orchestrator_home(config: &Path, formation: &str) -> (String, Opti
     )
 }
 
-/// A formation belongs to one PC: a project of another environment is refused, because its children are launched on the PC of its orchestrator only (`check_children_here`).
+/// A formation belongs to one PC, the one its orchestrator runs on: a project of another environment is refused. A child may be launched in any environment that the orchestrator's Orca lists (A-41), so this is about where the leader runs and not about where the children are.
 fn check_one_environment(projects: &[FormationProject]) -> Result<(), String> {
     let environment = formation_environment(projects);
     match projects.iter().find(|p| p.environment != environment) {
         Some(other) => Err(format!(
-            "フォーメーションは一つの PC に属します。環境「{environment}」と環境「{}」にまたがるプロジェクトは入れられません（子は、リーダーと同じ PC にだけ置けるためです）",
+            "フォーメーションは一つの PC に属します。環境「{environment}」と環境「{}」にまたがるプロジェクトは入れられません（リーダーが動く PC は一つだけです）",
             other.environment
         )),
         None => Ok(()),
@@ -1156,11 +1157,14 @@ fn write_child_settings(config: &Path, formation: &str, name: &str) -> Result<Pa
 /// The command of a Codex child's terminal (A-41): its sandbox lets it write in the worktree, and it never stops to ask (no `-n`: its title is the name that Orca gives the terminal, and no plugin: it reads the prompt alone).
 const CODEX_COMMAND: &str = "codex --sandbox workspace-write --ask-for-approval never";
 
+/// What a Claude Code child runs at: the auto mode (it never stops to ask) at the effort `medium` (#911).
+const CLAUDE_CHILD_MODE: &str = "--permission-mode auto --effort medium";
+
 /// The command of the child's terminal: for Claude Code, Claude Code in auto mode at the effort `medium` (#911) under its name (`claude -n`), with the plugin of A-41 (`--plugin-dir`, in single quotes: the path of the config folder may hold a space) and its settings (`--settings {settings}`, the Figma permissions, #1162). The name was checked, so the rest of the command line holds nothing a shell would read.
 fn child_command(agent: FormationAgent, name: &str, plugin_dir: &Path, settings: &Path) -> String {
     match agent {
         FormationAgent::Claude => format!(
-            "claude -n {name} --permission-mode auto --effort medium --plugin-dir {} --settings {}",
+            "claude -n {name} {CLAUDE_CHILD_MODE} --plugin-dir {} --settings {}",
             crate::claude_code::sh_quote(&plugin_dir.to_string_lossy()),
             crate::claude_code::sh_quote(&settings.to_string_lossy())
         ),
@@ -1177,16 +1181,78 @@ fn terminal_create_args(
     settings: &Path,
     environment: &str,
 ) -> Vec<String> {
+    terminal_command_args(
+        path,
+        name,
+        &child_command(agent, name, plugin_dir, settings),
+        environment,
+    )
+}
+
+/// The terminal of a Claude Code child of another PC: titled with its name, and running `remote_child_command`.
+fn remote_terminal_create_args(
+    path: &str,
+    formation: &str,
+    name: &str,
+    environment: &str,
+) -> Vec<String> {
+    terminal_command_args(
+        path,
+        name,
+        &remote_child_command(formation, name),
+        environment,
+    )
+}
+
+fn terminal_command_args(path: &str, name: &str, command: &str, environment: &str) -> Vec<String> {
     let mut args = orca::args_of(&["terminal", "create", "--worktree"]);
     args.extend([
         format!("path:{path}"),
         "--title".into(),
         name.into(),
         "--command".into(),
-        child_command(agent, name, plugin_dir, settings),
+        command.into(),
         "--json".into(),
     ]);
     on(args, environment)
+}
+
+/// What the command of a remote child's terminal prints when the program of that PC wrote no plugin or settings (an older program does not know `--child-plugin`, and ends with no output).
+const CHILD_FILES_MISSING: &str = "子のプラグインを書き出せませんでした";
+
+/// The command of the terminal of a Claude Code child on another PC (#1239). The plugin of A-41 and the child's `--settings` are files of that PC, so the `remote/tsunagiai-mcp` that the app put there (`formation_remote::program_path`) writes them (`--child-plugin {formation} {name}`, `write_child_files`: it prints the plugin's folder on the first line and the settings file on the second) and `claude` is started with them, under the same name and mode as a child of this PC (`child_command`). The sentence begins with `exec`, so the `sh` takes the place of the login shell, as the orchestrator's does (`orchestrator_command`): a failure ends the terminal at once (no program, or no files), and the idle wait that follows says so, so that the prompt is never typed into a shell. `</dev/null`: a program of an older version that serves in place of printing would wait for the terminal's input. The script has no single quote and no backslash, and the formation and the child are its arguments, in single quotes (both passed `check_name`).
+fn remote_child_command(formation: &str, name: &str) -> String {
+    let program = crate::formation_remote::program_path();
+    let script = format!(
+        "m=\"{program}\"; [ -x \"$m\" ] || {{ echo \"{MCP_NOT_PLACED}\" >&2; exit 1; }}; o=$(\"$m\" {CHILD_PLUGIN_FLAG} \"$1\" \"$2\" 2>/dev/null </dev/null); d=$(echo \"$o\" | sed -n 1p); s=$(echo \"$o\" | sed -n 2p); [ -n \"$d\" ] && [ -n \"$s\" ] || {{ echo \"{CHILD_FILES_MISSING}\" >&2; exit 1; }}; exec claude -n \"$2\" {CLAUDE_CHILD_MODE} --plugin-dir \"$d\" --settings \"$s\""
+    );
+    format!(
+        "exec sh -c {} sh {} {}",
+        crate::claude_code::sh_quote(&script),
+        crate::claude_code::sh_quote(formation),
+        crate::claude_code::sh_quote(name)
+    )
+}
+
+/// The argument of `tsunagiai-mcp` that writes a child's plugin and settings on its PC (`write_child_files`), prints their paths and serves nothing.
+pub const CHILD_PLUGIN_FLAG: &str = "--child-plugin";
+
+/// The folder of the config folder that holds the `--settings` files of the children of other PCs' leaders. It is not under `formations/`: a folder there is a formation (`formation_names`), and this PC has no record of these children.
+const CHILD_SETTINGS_FOLDER: &str = "child-settings";
+
+/// Writes the plugin of A-41 and the `--settings` file of the child `name` of `formation` in `config` of this PC, for a leader on another PC (`remote_child_command`), and answers their paths: the plugin's folder and the settings file.
+pub fn write_child_files(
+    config: &Path,
+    formation: &str,
+    name: &str,
+) -> Result<(PathBuf, PathBuf), String> {
+    check_name(formation)?;
+    check_name(name)?;
+    let plugin = crate::formation_assets::write_plugin(config)?;
+    let folder = config.join(CHILD_SETTINGS_FOLDER);
+    let file = format!("{formation}-{name}.json");
+    accounts::write_atomic(&folder, &file, &child_settings())?;
+    Ok((plugin, folder.join(file)))
 }
 
 fn terminal_wait_args(handle: &str, environment: &str) -> Vec<String> {
@@ -1335,6 +1401,34 @@ fn first_instruction(preamble: &str, prompt: &str) -> String {
     } else {
         format!("{preamble}\n\n{prompt}")
     }
+}
+
+/// The subject of the first message that the leader sends to a Claude Code child of another PC.
+const HELLO_SUBJECT: &str = "HELLO";
+const HELLO_BODY: &str = "This is your leader. Answer this message, or the newest one that the leader sent you, with orca orchestration reply whenever you report.";
+
+/// The first message to the child `handle` of another PC (`environment`), from the leader's own Orca: `--on` has this Orca carry it to that PC's terminal, and the child's answers come back to the leader's own `check` (Orca 1.4.269). Every value is joined to its flag, so that a text that looks like an option stays one argument.
+fn hello_args(run_id: &str, handle: &str, environment: &str) -> Vec<String> {
+    vec![
+        "orchestration".into(),
+        "send".into(),
+        format!("--run={run_id}"),
+        format!("--on={environment}"),
+        format!("--to={handle}"),
+        format!("--subject={HELLO_SUBJECT}"),
+        format!("--body={HELLO_BODY}"),
+        "--json".into(),
+    ]
+}
+
+/// What stands in front of the first instruction of a Claude Code child of another PC, in the place of the preamble of a Dispatch (which that PC's Orca cannot make for a Run of the leader's Orca): the child is no Dispatch, so it has no recipient to send to, and it reports by answering the leader's messages. The text is fixed words.
+fn remote_preamble(formation: &str, name: &str) -> String {
+    format!(
+        "You are the child \"{name}\" of the formation \"{formation}\", and your leader runs on another PC. You are not a Dispatch of its Run: do not send with `orca orchestration send`.\n\
+- The leader's messages reach you through Orca's orchestration. Read them with `orca orchestration check --wait --timeout-ms 540000 --json`: each has an `id`, a subject and a body. Right after you start, the leader sends you `HELLO`.\n\
+- Report to the leader only by answering its newest message: `orca orchestration reply --id {{id of that message}} --body-file - <<'EOF'`, then the report, then `EOF`. Write the tag line of your report (`PAGE ...`, `QUESTION ...`, `DONE ...`) as the first line of the body: a reply has no subject.\n\
+- Never use `--environment` or `--on` with these commands, and never write the leader's address yourself."
+    )
 }
 
 /// The Run of `formation`: the one `formation.json` holds, else a new one (`run-create`), kept there. The Run binds itself to the terminal of the process that makes it, which is the orchestrator's (the `tsunagiai-mcp` of its Claude Code). Children launched side by side share one Run: the lock of the file `RUN_LOCK` is held while it is read and made.
@@ -1812,24 +1906,11 @@ pub(crate) fn now_ms() -> u64 {
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
-/// A child is launched on the PC of its orchestrator and nowhere else (a Dispatch to a terminal of a saved environment is not made yet, #1236). For `tsunagiai-mcp` of a PC that is `local`; another environment is refused with nothing planned, launched or written. The tools that only read take any environment.
-fn check_children_here(environment: &str) -> Result<(), String> {
-    if environment == LOCAL {
-        return Ok(());
-    }
-    Err(format!(
-        "環境「{environment}」には子を置けません。別の PC の子の起動には、まだ対応していません。子はリーダーと同じ PC の環境「{LOCAL}」にだけ置けます。他の環境は、formation_environments などで読むだけにしてください"
-    ))
-}
-
 /// Plans children: each is put in the record after the ones there, or in the place of a planned one of its name.
 pub fn plan(config: &Path, formation: &str, wanted: &[PlannedChild]) -> Result<Value, Refusal> {
     check_name(formation)?;
     if wanted.is_empty() {
         return Err("予定の子を 1 つ以上渡してください".to_owned().into());
-    }
-    for child in wanted {
-        check_children_here(&child.environment)?;
     }
     for (i, child) in wanted.iter().enumerate() {
         check_child_name(config, formation, &child.name)?;
@@ -2018,7 +2099,6 @@ pub fn launch(
     prompt: &str,
 ) -> Result<Value, Refusal> {
     check_name(formation)?;
-    check_children_here(environment)?;
     check_child_name(config, formation, name)?;
     let target = target_of(place)?;
     let prompt = check_prompt(prompt)?;
@@ -2027,18 +2107,20 @@ pub fn launch(
         return Err(already_launched(name).into());
     }
     let agent = agent_for(agent, &record, name);
+    let environment = chosen_environment(&mut None, environment)?;
+    let environment = environment.as_str();
+    // A Claude Code child of another PC gets its plugin and settings from that PC's own `tsunagiai-mcp`, which its terminal's command runs (`remote_child_command`).
+    let remote_claude = agent == FormationAgent::Claude && environment != LOCAL;
     // The plugin of A-41 is written (replaced as a whole) before anything is made, so that a failure leaves no worktree. A Codex child has none: it reads the prompt alone.
     let (plugin_dir, settings) = match agent {
-        FormationAgent::Claude => (
+        FormationAgent::Claude if !remote_claude => (
             crate::formation_assets::write_plugin(config)
                 .map_err(|e| Refusal::failed(STEP_PLUGIN, e))?,
             write_child_settings(config, formation, name)
                 .map_err(|e| Refusal::failed(STEP_SETTINGS, e))?,
         ),
-        FormationAgent::Codex => (PathBuf::new(), PathBuf::new()),
+        _ => (PathBuf::new(), PathBuf::new()),
     };
-    let environment = chosen_environment(&mut None, environment)?;
-    let environment = environment.as_str();
     let list = repos(environment)?;
     let repo = chosen_repo(&list, environment, repo)?;
     let (path, branch, created, branch_made, closed) = match target {
@@ -2074,15 +2156,12 @@ pub fn launch(
             refusal.with("folder", path.as_str())
         }
     };
-    let made = orca::write(&terminal_create_args(
-        &path,
-        agent,
-        name,
-        &plugin_dir,
-        &settings,
-        environment,
-    ))
-    .map_err(|e| kept(STEP_TERMINAL, e))?;
+    let terminal = if remote_claude {
+        remote_terminal_create_args(&path, formation, name, environment)
+    } else {
+        terminal_create_args(&path, agent, name, &plugin_dir, &settings, environment)
+    };
+    let made = orca::write(&terminal).map_err(|e| kept(STEP_TERMINAL, e))?;
     let (handle, pane_key) = created_terminal_of(&made).map_err(|e| kept(STEP_TERMINAL, e))?;
     let child = Child {
         name: name.to_owned(),
@@ -2108,7 +2187,9 @@ pub fn launch(
     let recorded = |step: &'static str, e: String| {
         kept(step, e).saying("子は記録に入っているので、formation_close で片付けられます")
     }; // A Claude Code child is a Dispatch of the formation's Run (#1237): the preamble of the Dispatch goes in front of the first instruction. A Codex child reports by files and is no Dispatch, so that no preamble tells it to talk with orchestration.
-    let dispatched = if talks_by_messages(agent) {
+       // A Claude Code child of another PC is no Dispatch (a Dispatch is made in the Orca that holds the Run, and the child's terminal is in another's): the Run is the leader's own, in this PC's Orca, and the leader sends to the child's terminal with `--on {environment}` (#1236, #1239). Its own preamble stands where the Dispatch's would be.
+    let talks = talks_by_messages(agent);
+    let dispatched = if talks && !remote_claude {
         Some(
             dispatch_child(config, formation, name, &handle, environment, &|args| {
                 orca::write(args)
@@ -2118,12 +2199,21 @@ pub fn launch(
     } else {
         None
     };
+    let run_id = match &dispatched {
+        Some(dispatched) => Some(dispatched.run_id.clone()),
+        None if talks => Some(
+            ensure_run(config, formation, LOCAL, &|args| orca::write(args))
+                .map_err(|e| recorded(STEP_DISPATCH, e))?,
+        ),
+        None => None,
+    };
     let prompt = match &dispatched {
         Some(dispatched) if !dispatched.preamble.is_empty() => {
             let preamble =
                 check_prompt(&dispatched.preamble).map_err(|e| recorded(STEP_DISPATCH, e))?;
             first_instruction(&preamble, &prompt)
         }
+        None if remote_claude => first_instruction(&remote_preamble(formation, name), &prompt),
         _ => prompt,
     };
     let idle = orca::call(&terminal_wait_args(&handle, environment), IDLE_WAIT_RUN)
@@ -2137,6 +2227,11 @@ pub fn launch(
     orca::write(&terminal_send_args(&handle, &prompt, environment))
         .and_then(|result| check_submitted(&result, agent))
         .map_err(|e| recorded(STEP_SEND, e))?;
+    // The child of another PC is told the leader's first message at once: it answers the leader's messages, and has none to answer before this one.
+    if let (true, Some(run_id)) = (remote_claude, &run_id) {
+        orca::write(&hello_args(run_id, &handle, environment))
+            .map_err(|e| recorded(STEP_HELLO, e))?;
+    }
     Ok(json!({
         "name": name,
         "environment": environment,
@@ -2148,7 +2243,7 @@ pub fn launch(
         "paneKey": pane_key,
         "created": created,
         "closedShells": closed,
-        "runId": dispatched.as_ref().map(|d| d.run_id.as_str()),
+        "runId": run_id,
         "dispatchId": dispatched.as_ref().map(|d| d.dispatch_id.as_str()),
     }))
 }
@@ -13029,42 +13124,121 @@ mod tests {
     }
 
     #[test]
-    fn a_child_is_planned_and_launched_only_on_the_pc_of_its_orchestrator() {
-        assert_eq!(check_children_here(LOCAL), Ok(()));
-        let err = check_children_here("mac-studio").unwrap_err();
-        assert!(
-            err.contains("環境「mac-studio」") && err.contains("まだ対応していません"),
-            "{err}"
+    fn the_terminal_of_a_child_of_another_pc_asks_its_program_for_the_plugin_and_settings() {
+        let command = remote_child_command("alpha", "api-fix");
+        // The program that the app put on that PC writes the files and prints their paths; claude takes the place of the shell.
+        assert!(command.starts_with("exec sh -c '"), "{command}");
+        assert!(command.ends_with("' sh 'alpha' 'api-fix'"), "{command}");
+        assert!(command.contains(&crate::formation_remote::program_path()));
+        assert!(command.contains("--child-plugin \"$1\" \"$2\""));
+        assert!(command.contains(
+            "exec claude -n \"$2\" --permission-mode auto --effort medium --plugin-dir \"$d\" --settings \"$s\""
+        ));
+        // A failure ends the terminal, so that the first instruction is never typed into a shell.
+        assert!(command.contains(&format!("echo \"{MCP_NOT_PLACED}\" >&2; exit 1")));
+        assert!(command.contains(&format!("echo \"{CHILD_FILES_MISSING}\" >&2; exit 1")));
+        assert!(!command.contains("exec \"${SHELL"));
+        // Nothing a login shell would read differently: no backslash, and the script is one quoted word.
+        assert!(!command.contains('\\'), "{command}");
+        // The mode is the one of a child of this PC.
+        let here = child_command(
+            FormationAgent::Claude,
+            "api-fix",
+            Path::new("/p"),
+            Path::new("/s"),
         );
-        // Nothing is read or written: the refusal is first, and the record stays as it was.
-        let config = temp_dir("here-only");
-        let err = plan(
-            &config,
-            "alpha",
-            &[
-                wanted("a", "x"),
-                PlannedChild {
-                    environment: "mac-studio".into(),
-                    ..wanted("b", "x")
-                },
-            ],
-        )
-        .unwrap_err();
-        assert!(err.error.contains("まだ対応していません"), "{}", err.error);
-        assert!(!dir(&config, "alpha").exists());
-        let err = launch(
-            &config,
-            "alpha",
-            "mac-studio",
-            "r",
-            "ok",
-            on_branch("feature/a"),
-            None,
-            "go",
-        )
-        .unwrap_err();
-        assert!(err.error.contains("まだ対応していません"), "{}", err.error);
-        assert!(!dir(&config, "alpha").exists());
+        assert!(here.contains(CLAUDE_CHILD_MODE));
+    }
+
+    #[test]
+    fn the_terminal_of_a_child_of_another_pc_is_made_in_that_pcs_orca() {
+        let args = remote_terminal_create_args("/w/a", "alpha", "a", "mac-studio");
+        assert_eq!(
+            args[..4],
+            ["terminal", "create", "--worktree", "path:/w/a"].map(str::to_owned)
+        );
+        assert!(args.contains(&"--environment=mac-studio".to_owned()));
+        let at = args.iter().position(|a| a == "--command").unwrap();
+        assert_eq!(args[at + 1], remote_child_command("alpha", "a"));
+        // The terminal of a child of this PC is as it was.
+        let here = terminal_create_args(
+            "/w/a",
+            FormationAgent::Codex,
+            "a",
+            Path::new(""),
+            Path::new(""),
+            LOCAL,
+        );
+        assert!(here.contains(&CODEX_COMMAND.to_owned()));
+        assert!(here.contains(&"--environment=local".to_owned()));
+    }
+
+    #[test]
+    fn the_first_message_to_a_child_of_another_pc_is_carried_by_the_leaders_own_orca() {
+        let args = hello_args("run_1", "term_a", "mac-studio");
+        assert_eq!(args[..2], ["orchestration", "send"].map(str::to_owned));
+        for expected in [
+            "--run=run_1",
+            "--on=mac-studio",
+            "--to=term_a",
+            "--subject=HELLO",
+        ] {
+            assert!(args.contains(&expected.to_owned()), "{expected}");
+        }
+        // `--environment` would run the command in that PC's Orca, which delivers no mail (the help of `orchestration send`).
+        assert!(!args.iter().any(|a| a.starts_with("--environment")));
+        assert!(!args.iter().any(|a| a == "--inject"));
+    }
+
+    #[test]
+    fn a_child_of_another_pc_is_told_to_report_by_answering_the_leader() {
+        let preamble = remote_preamble("alpha", "api-fix");
+        assert!(preamble.contains("child \"api-fix\" of the formation \"alpha\""));
+        assert!(preamble.contains("orca orchestration check --wait"));
+        assert!(preamble.contains("orca orchestration reply --id"));
+        assert!(preamble.contains("HELLO"));
+        // It has no Dispatch to send from, and nothing in the text is left unfilled.
+        assert!(preamble.contains("not a Dispatch"));
+        assert!(!preamble.contains("{{") && !preamble.contains("{name}"));
+        assert_eq!(
+            first_instruction(&preamble, "do it"),
+            format!("{preamble}\n\ndo it")
+        );
+    }
+
+    #[test]
+    fn the_program_of_a_pc_writes_the_plugin_and_the_settings_of_a_child_there() {
+        let config = temp_dir("child-files");
+        let (plugin, settings) = write_child_files(&config, "alpha", "api-fix").unwrap();
+        assert_eq!(plugin, crate::formation_assets::plugin_dir(&config));
+        assert!(plugin.join(".claude-plugin/plugin.json").is_file());
+        let written: Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        assert_eq!(
+            written["permissions"],
+            crate::formation_assets::figma_permissions()
+        );
+        // The settings are not in the folder of a formation: a folder there would be listed as one.
+        assert_eq!(settings, config.join("child-settings/alpha-api-fix.json"));
+        assert!(formation_names(&config, None).is_empty());
+        // A name that is no name of a formation or child never becomes a path.
+        for bad in ["../x", "A", "", "a/b"] {
+            assert!(write_child_files(&config, bad, "a").is_err(), "{bad}");
+            assert!(write_child_files(&config, "alpha", bad).is_err(), "{bad}");
+        }
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_project_of_another_environment_is_refused_for_where_the_leader_runs() {
+        let err = check_one_environment(&[project(LOCAL, "api"), project("mac-studio", "web")])
+            .unwrap_err();
+        assert!(err.contains("一つの PC に属します"), "{err}");
+        assert!(!err.contains("子は"), "{err}");
+        assert_eq!(
+            check_one_environment(&[project("mac-studio", "api"), project("mac-studio", "web")]),
+            Ok(())
+        );
     }
 
     macro_rules! flow_access {
