@@ -1,19 +1,19 @@
-// The editor of the Orca screen (A-18): a file of a worktree opened as a tab of the work pane, in a textarea with its text drawn in colors under it (A-21) and the numbers of its lines at its left. Rust reads and saves the text (`orca_file_read`, `orca_file_write`), decides whether a save went through and names the language to color it by; this module draws and takes the typing.
+// The editor of the Orca screen (A-18): a file of a worktree opened as a tab of the work pane, in CodeMirror 6 (`src/vendor/codemirror.js`, read when the first file is opened) with the numbers of its lines at its left and its text in colors (A-21). Rust reads and saves the text (`orca_file_read`, `orca_file_write`), decides whether a save went through and names the language to color it by; this module draws it and takes the typing.
 // A file is saved by itself: once the typing has stopped for the time of the settings, the text goes to Rust with the signature of the text that was read, and Orca writes only if the disk still holds it.
 // When it does not (the file was changed elsewhere, or is gone), nothing is written and the heading says so; the text stays in the editor and is not tried again until the tab is opened anew.
 // Typing that still waits for its timer when the window is closed is sent at once (`pagehide`).
-// A file that a pane shows is read again at once when the watch of the disk tells a change (`rereadEditors`, A-18), by the clock of the Orca screen where the disk is not watched (whether the file pane is shown or not), and when it is shown again after it was out of the page (`refreshEditors`, `showEditors`): only a file with no typing that waits for the disk, and its text is replaced, with the caret and the scroll kept, only when the disk holds another text than the one that was read. A read that fails says nothing.
+// A file that a pane shows is read again at once when the watch of the disk tells a change (`rereadEditors`, A-18), by the clock of the Orca screen where the disk is not watched (whether the file pane is shown or not), and when it is shown again after it was out of the page (`refreshEditors`, `showEditors`): only a file with no typing that waits for the disk, and its text is replaced (an edit that the history keeps, with the caret, the scroll and the folds kept) only when the disk holds another text than the one that was read. A read that fails says nothing.
 // A file whose language a language server takes asks for its definitions (A-34): the right button with the Command key on a name sends the editor's text, with the place of the character under the mouse, to the screen (`definition`), which shows the answer in the definition tab under the pane of the editor. A file the definition put outside the worktree (a gem) is a file of this editor too, read only (`outside`: its `relative` is the server's absolute path, Rust reads it by `lsp_read_outside`, and nothing is saved), and a place of a definition is gone to by `goTo`.
-// While the Command key is down and the mouse stays on a name for LINK_WAIT_MS, the editor asks whether the name has a definition (`lsp_definition_exists`, only of a server that is running) and draws an underline under it in the accent color, in the box of the text under the layer of colors, with the pointer for the cursor (A-34, `showLink`, `hideLink`). The answer is kept by the name's range until the text changes; the key's release, the mouse leaving the editor, typing and the scroll take the underline away.
-// The line of the caret (the source) and the paragraph of the caret (the rich view) have a faint band under the text, drawn here (A-18, A-26): `placeBand` and `placeRichBand`, called for each file at each change of the selection of the page and by the events of the text area.
+// While the Command key is down and the mouse stays on a name for LINK_WAIT_MS, the editor asks whether the name has a definition (`lsp_definition_exists`, only of a server that is running) and draws an underline under it in the accent color, in the box of the text that CodeMirror gives (`boxOf`), with the pointer for the cursor (A-34, `showLink`, `hideLink`). The answer is kept by the name's range until the text changes; the key's release, the mouse leaving the editor, typing and the scroll take the underline away.
+// The line of the caret (the source) has a faint band under the text, drawn by CodeMirror, and the paragraph of the caret (the rich view) has one drawn here (A-18, A-26): `placeRichBand`, called for each file at each change of the selection of the page.
 // The open files are kept in memory only, by target and project, as the tabs of the work pane (their ids are `file:{n}`); a tab that is not shown keeps its text, its timer and its save.
-// A Markdown file (the language Rust names `markdown`) has two buttons in its heading, the source (`<>`) and the rich view (the pencil), and opens in the rich view (A-26): Milkdown draws the text, without its front matter. The rich view is edited (the edit is put into the text of the textarea by Rust, `markdown_patch`, and saved as any typing is) unless the file does not load and export the same twice or Rust cannot put an edit into it; then it is read only and the file opens in the source. The choice is kept for the file while it is open, in memory only.
+// A Markdown file (the language Rust names `markdown`) has two buttons in its heading, the source (`<>`) and the rich view (the pencil), and opens in the rich view (A-26): Milkdown draws the text, without its front matter. The rich view is edited (the edit is put into the text of the editor by Rust, `markdown_patch`, and saved as any typing is) unless the file does not load and export the same twice or Rust cannot put an edit into it; then it is read only and the file opens in the source. The choice is kept for the file while it is open, in memory only.
 // An HTML file (its name ends with `.html`, whatever the case) has the source and the preview (the eye) in its heading, and opens in the preview (A-42): a frame that shows the address `orca_file_preview_url` gives (A-31), after the typing that waits is saved. While the preview is shown a button of the heading makes the frame again, which reads the file again; nothing else does.
 import { tag } from "./dom.js";
-import { CODE_SVG, EDIT_SVG, EYE_SVG, LOCK_SVG, RELOAD_SVG } from "./icons.js";
+import { CHEVRON_SVG, CODE_SVG, EDIT_SVG, EYE_SVG, LOCK_SVG, RELOAD_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import type { DefinitionQuery } from "./orca-definition.js";
-import { highlightReady, loadHighlight, loadMilkdown, loadPele } from "./vendor-load.js";
+import { loadCodeMirror, loadMilkdown, loadPele } from "./vendor-load.js";
 
 // What the heading says of the save: nothing yet, waiting for the typing to stop, on its way, done, or not done (and why).
 type Save = "idle" | "pending" | "saving" | "saved" | "changed" | "missing" | "not-utf8" | "error";
@@ -45,7 +45,7 @@ interface EditorFile {
   language: string;
   // The server of the project that takes that language (A-34), found once the file is read: none asks nothing. For a file outside the worktree, the server that gave it.
   server: string | null;
-  // The underline of the Command key (A-34): the element (in the box of the text, under the layer), the place of the mouse in the editor (null: it is not in it), the timer of the wait for the mouse to stay, the count that drops an answer older than the last move or hide, the box of the name that is underlined (null: none), and the answers kept (by line, start and end of the name) for the text of the edit `knownEdits`.
+  // The underline of the Command key (A-34): the element (in the box of the text, over the editor), the place of the mouse in the editor (null: it is not in it), the timer of the wait for the mouse to stay, the count that drops an answer older than the last move or hide, the box of the name that is underlined (null: none), and the answers kept (by line, start and end of the name) for the text of the edit `knownEdits`.
   link: HTMLElement;
   hover: { x: number; y: number } | null;
   linkTimer: number | null;
@@ -76,11 +76,8 @@ interface EditorFile {
   out: boolean;
   // Focus the text when it is first shown.
   wantFocus: boolean;
-  // The grammar of the highlighter for the file (null: none, drawn plain), and how to cancel the drawing of the layer that waits for the next frame or for the wait of a long text (null: none waits).
-  highlight: string | null;
-  cancelPaint: (() => void) | null;
-  // A Markdown file: the buttons of the heading (`modes`, hidden for another file), the view that is shown (`mode`; "rich" is the start), the box of the text and numbers (`body`), the box of the rich view (`rich`) with the Milkdown editor in it (`view`, null: none), and the count that tells a drawing of the rich view that waits for the library that it is out of date.
-  // The edit of the rich view: `richBase` is the text of the textarea when the view was drawn and `richBefore` what the editor exported then (the edit is put into `richBase` from them, so the text of the textarea is always the base with the whole edit in it); `richPending`: the document changed and the textarea does not hold it yet, `richTimer` waits to put it there, `richSync` is the put on its way. `richFirst`: the view was not drawn yet (a file that cannot be edited in it opens in the source).
+  // A Markdown file: the buttons of the heading (`modes`, hidden for another file), the view that is shown (`mode`; "rich" is the start), the box of the editor (`body`), the box of the rich view (`rich`) with the Milkdown editor in it (`view`, null: none), and the count that tells a drawing of the rich view that waits for the library that it is out of date.
+  // The edit of the rich view: `richBase` is the text of the editor when the view was drawn and `richBefore` what Milkdown exported then (the edit is put into `richBase` from them, so the text of the editor is always the base with the whole edit in it); `richPending`: the document changed and the editor does not hold it yet, `richTimer` waits to put it there, `richSync` is the put on its way. `richFirst`: the view was not drawn yet (a file that cannot be edited in it opens in the source).
   markdown: boolean;
   mode: Mode;
   modes: HTMLElement;
@@ -106,35 +103,19 @@ interface EditorFile {
   richSync: Promise<void> | null;
   richFirst: boolean;
   el: HTMLElement;
-  area: HTMLTextAreaElement;
-  // The layer under the textarea that carries the same text in colors.
-  code: HTMLElement;
-  // The band under the line of the caret, in the box of the text and under its layer (hidden unless the text area has the focus and no range is selected), and the band under the paragraph of the caret of the rich view, in the box of the rich view and under its text.
-  band: HTMLElement;
-  richBand: HTMLElement;
-  // What the band of the source keeps: the line it is under (`bandLine`, counted only when the caret is not `bandCaret` or the text was changed since (`edits` is not `bandEdits`: `edits` counts every change of the text area's value, by the user and by the page)), the height of a line and the padding above the text (`bandMetrics`, null: read again at the next place), and the frame in which the band of the rich view is put (null: none waits).
-  bandLine: number;
-  bandCaret: number;
-  bandEdits: number;
+  // The editor (null until the file is read and CodeMirror is loaded), and how many times its text changed (by the owner and by the page: the answers kept of the definitions are for one text, `known`).
+  cm: CodeMirrorEditor | null;
   edits: number;
-  bandMetrics: { height: number; top: number } | null;
+  // The band under the paragraph of the caret of the rich view, in the box of the rich view and under its text, and the frame in which it is put (null: none waits).
+  richBand: HTMLElement;
   richFrame: number | null;
-  // The numbers of the lines, one text node ("1\n2\n…") that grows and shrinks at its end with the line count (`lines`), in the box at the left of the text that follows the vertical scroll.
-  nums: Text;
-  numbers: HTMLElement;
-  // The box of the numbers: its width is set (in `ch`) when the number of digits of the last number changes.
-  gutter: HTMLElement;
-  lines: number;
   state: HTMLElement;
   // The path of the heading.
   where: HTMLElement;
   note: HTMLElement;
 }
 
-// Up to this many characters the layer is drawn again once a frame while keys come; a longer text keeps the layer it has (old colors, old text) and is drawn again at most once in COLOR_WAIT_MS, as coloring a file of the size the editor takes (384 KiB) takes longer than a key.
-const COLOR_NOW_MAX = 30000;
-const COLOR_WAIT_MS = 150;
-// After a change of the rich view, how long it waits for more changes before the edit is put into the textarea.
+// After a change of the rich view, how long it waits for more changes before the edit is put into the editor.
 const RICH_WAIT_MS = 200;
 // How long the mouse stays on a name, with the Command key down, before the editor asks whether the name has a definition.
 const LINK_WAIT_MS = 150;
@@ -158,110 +139,15 @@ export function setAutosaveMs(ms: number) {
   autosaveMs = ms;
 }
 
+// The text of the editor now (lines end with \n; CRLF is Rust's, `crlf`), empty until the file is read.
+const textOf = (f: EditorFile) => f.cm?.text() ?? "";
+
 const canSave = (f: EditorFile) => !f.outside && f.read === "ready" && f.dirty && !f.blocked && !f.held && f.save !== "error";
 
 function setSave(f: EditorFile, save: Save) {
   f.save = save;
   f.state.textContent = SAVE_LABELS[save];
   f.state.dataset.state = save;
-}
-
-// Draws the text of the textarea in the layer under it: in colors by the grammar of the file, else plain. The layer holds the text of the textarea after this.
-function draw(f: EditorFile) {
-  const text = f.area.value;
-  if (f.highlight && highlightReady()) f.code.innerHTML = hljs.highlight(text, { language: f.highlight, ignoreIllegals: true }).value;
-  else {
-    f.code.textContent = text;
-    // highlight.js is read the first time a file is colored; the layer is drawn again, colored, once it is there. A read that fails once gives up the colors of the file while it is open, so a key does not read it again.
-    if (f.highlight)
-      loadHighlight().then(
-        () => drawLater(f, nextFrame),
-        (e) => {
-          if (!f.highlight) return;
-          f.highlight = null;
-          fail(e);
-        },
-      );
-  }
-}
-
-function cancelPaint(f: EditorFile) {
-  f.cancelPaint?.();
-  f.cancelPaint = null;
-}
-
-// Draws the layer once when the run comes, and asks for nothing more while that waits: the text it draws is the textarea's then.
-function drawLater(f: EditorFile, wait: (run: () => void) => () => void) {
-  if (f.cancelPaint) return;
-  f.cancelPaint = wait(() => {
-    f.cancelPaint = null;
-    draw(f);
-  });
-}
-const nextFrame = (run: () => void) => {
-  const id = requestAnimationFrame(run);
-  return () => cancelAnimationFrame(id);
-};
-const afterColorWait = (run: () => void) => {
-  const id = window.setTimeout(run, COLOR_WAIT_MS);
-  return () => clearTimeout(id);
-};
-
-// The first drawing, when the file is read: a long text is drawn plain at once and colored after COLOR_WAIT_MS.
-function paint(f: EditorFile) {
-  cancelPaint(f);
-  if (f.highlight && f.area.value.length > COLOR_NOW_MAX) {
-    f.code.textContent = f.area.value;
-    drawLater(f, afterColorWait);
-  } else {
-    draw(f);
-  }
-}
-
-// At each key, with the text of the textarea (read once by the caller): the text is drawn again once a frame, or, for a long text, at most once in COLOR_WAIT_MS with the old layer kept till then.
-function repaint(f: EditorFile, text: string) {
-  if (!f.highlight) draw(f);
-  else drawLater(f, text.length <= COLOR_NOW_MAX ? nextFrame : afterColorWait);
-}
-
-// The layer under the textarea follows the scroll of the textarea, and the numbers follow its vertical scroll.
-function followScroll(f: EditorFile) {
-  f.code.style.transform = `translate(${-f.area.scrollLeft}px, ${-f.area.scrollTop}px)`;
-  f.numbers.style.transform = `translateY(${-f.area.scrollTop}px)`;
-  // The scroll moves neither the caret nor the focus: the band keeps its line and follows the scroll.
-  if (!f.band.hidden) moveBand(f);
-}
-
-// Puts the band at its line (`bandLine`), under the vertical scroll of the textarea. The height of a line and the padding are read once (`bandMetrics`).
-function moveBand(f: EditorFile) {
-  if (f.bandMetrics === null) {
-    const style = getComputedStyle(f.area);
-    f.bandMetrics = { height: Number.parseFloat(style.lineHeight) || 20, top: Number.parseFloat(style.paddingTop) || 0 };
-  }
-  const { height, top } = f.bandMetrics;
-  f.band.style.height = `${height}px`;
-  f.band.style.transform = `translateY(${top + f.bandLine * height - f.area.scrollTop}px)`;
-}
-
-// Puts the band of the source under the line of the caret: its place follows the vertical scroll of the textarea, and it is as wide as the box of the text. It is hidden when the text area has not the focus, while a range is selected (the color of the selection shows) and while the source is not shown.
-function placeBand(f: EditorFile) {
-  const area = f.area;
-  const caret = area.selectionStart;
-  if (f.read !== "ready" || f.body.hidden || document.activeElement !== area || caret !== area.selectionEnd) {
-    f.band.hidden = true;
-    return;
-  }
-  const text = area.value;
-  if (caret !== f.bandCaret || f.edits !== f.bandEdits) {
-    let line = 0;
-    for (let i = text.indexOf("\n"); i !== -1 && i < caret; i = text.indexOf("\n", i + 1)) line++;
-    f.bandLine = line;
-    f.bandCaret = caret;
-    f.bandEdits = f.edits;
-    f.band.dataset.line = String(line);
-  }
-  moveBand(f);
-  f.band.hidden = false;
 }
 
 // The blocks of the rich view that take the band: a paragraph (also that of a list item), a heading, a code block and a table cell.
@@ -297,34 +183,10 @@ function putRichBand(f: EditorFile) {
   f.richBand.hidden = false;
 }
 
-// The selection of the page changed, or the focus moved: the file that holds the focus, and a file whose band is shown (it hides it unless the caret is in it), put their bands again; a file with both bands hidden and no focus has nothing to change.
-function placeBands() {
+// The selection of the page changed, or the focus moved: the file that holds the focus, and a file whose band is shown (it hides it unless the caret is in it), put their bands again; a file with its band hidden and no focus has nothing to change.
+function placeRichBands() {
   const active = document.activeElement;
-  for (const f of files.values()) {
-    if (!f.el.isConnected || !(f.el.contains(active) || !f.band.hidden || !f.richBand.hidden)) continue;
-    placeBand(f);
-    placeRichBand(f);
-  }
-}
-
-// Brings the numbers to the line count of `text`, the value of the textarea: only the numbers that came or went are written, the rest of the text is left as it is. The box is as wide as the digits of the last number, set when their count changes.
-function numberLines(f: EditorFile, text: string) {
-  let n = 1;
-  for (let i = text.indexOf("\n"); i !== -1; i = text.indexOf("\n", i + 1)) n++;
-  if (n === f.lines) return;
-  if (n > f.lines) {
-    let more = "";
-    for (let i = f.lines + 1; i <= n; i++) more += `\n${i}`;
-    f.nums.appendData(more);
-  } else {
-    const data = f.nums.data;
-    let end = data.length;
-    for (let i = f.lines; i > n; i--) end = data.lastIndexOf("\n", end - 1);
-    f.nums.deleteData(end, data.length - end);
-  }
-  const digits = String(n).length;
-  if (digits !== String(f.lines).length) f.gutter.style.setProperty("--digits", String(digits));
-  f.lines = n;
+  for (const f of files.values()) if (f.el.isConnected && (f.el.contains(active) || !f.richBand.hidden)) placeRichBand(f);
 }
 
 function clearTimer(f: EditorFile) {
@@ -337,7 +199,7 @@ function flush(f: EditorFile): Promise<void> {
   clearTimer(f);
   if (f.writing) return f.writing;
   if (!f.richPending && !canSave(f)) return Promise.resolve();
-  // An edit of the rich view that is not in the textarea yet is put there first.
+  // An edit of the rich view that is not in the editor yet is put there first.
   f.writing = syncRich(f)
     .then(() => (canSave(f) ? write(f) : undefined))
     .finally(() => {
@@ -348,7 +210,7 @@ function flush(f: EditorFile): Promise<void> {
 }
 
 async function write(f: EditorFile) {
-  const sent = f.area.value;
+  const sent = textOf(f);
   setSave(f, "saving");
   try {
     const saved = await invoke("orca_file_write", { path: f.path, relative: f.relative, content: sent, crlf: f.crlf, signature: f.signature, environment: f.target });
@@ -358,7 +220,7 @@ async function write(f: EditorFile) {
       return;
     }
     f.signature = saved.signature;
-    if (f.area.value === sent) {
+    if (textOf(f) === sent) {
       f.dirty = false;
       setSave(f, "saved");
     } else {
@@ -370,14 +232,8 @@ async function write(f: EditorFile) {
   }
 }
 
-// The text of the textarea changed (typed in the source, or put there from the rich view): draws it again, marks the file as changed and waits for the typing to stop.
+// The text of the editor changed (typed in the source, or put there from the rich view): marks the file as changed and waits for the typing to stop.
 function typed(f: EditorFile) {
-  // The layers of the textarea are hidden while the rich view is shown: they are drawn when the source is shown (`setMode`).
-  if (!(f.markdown && f.mode === "rich")) {
-    const value = f.area.value;
-    repaint(f, value);
-    numberLines(f, value);
-  }
   if (!f.dirty) {
     f.dirty = true;
     changed();
@@ -395,7 +251,7 @@ function schedule(f: EditorFile) {
   f.timer = window.setTimeout(() => void flush(f), autosaveMs);
 }
 
-// The document of the rich view changed: the edit is put into the textarea after RICH_WAIT_MS (at most one wait at a time, so the text is put there while the typing goes on).
+// The document of the rich view changed: the edit is put into the editor after RICH_WAIT_MS (at most one wait at a time, so the text is put there while the typing goes on).
 function richChanged(f: EditorFile) {
   f.richPending = true;
   placeRichBand(f);
@@ -406,7 +262,7 @@ function richChanged(f: EditorFile) {
     }, RICH_WAIT_MS);
 }
 
-// Puts the edit of the rich view into the textarea (Rust's `markdown_patch` applies it to the text the view was drawn from) and waits until it is there; a call while a put is on its way waits for it.
+// Puts the edit of the rich view into the editor (Rust's `markdown_patch` applies it to the text the view was drawn from) and waits until it is there; a call while a put is on its way waits for it.
 function syncRich(f: EditorFile): Promise<void> {
   if (f.richTimer !== null) clearTimeout(f.richTimer);
   f.richTimer = null;
@@ -430,11 +286,8 @@ async function putRich(f: EditorFile) {
         fail("リッチビューの編集を元のテキストに反映できません");
         return;
       }
-      if (patched.text !== f.area.value) {
-        f.area.value = patched.text;
-        f.edits++;
-        typed(f);
-      }
+      // An edit like a key: the editor tells the change (`onChange`), which marks the file as changed.
+      if (patched.text !== textOf(f)) f.cm?.edit(patched.text);
     } catch (e) {
       if (turn !== f.richTurn) return;
       setMode(f, "source");
@@ -462,7 +315,7 @@ function clearRich(f: EditorFile) {
 async function drawRich(f: EditorFile) {
   clearRich(f);
   const turn = f.richTurn;
-  const text = f.area.value;
+  const text = textOf(f);
   try {
     const [{ body }] = await Promise.all([invoke("markdown_split", { text }), loadMilkdown()]);
     // A mermaid block is drawn as a diagram (A-26): Pele is read before the view is drawn, so the diagrams are in it when it is (the scroll that a redraw keeps is not moved by a diagram that comes later). A file that has none does not read it, and one that fails to read leaves the block as code.
@@ -545,14 +398,7 @@ function setMode(f: EditorFile, mode: Mode) {
   if (preview) void drawPreview(f);
   else clearPreview(f);
   if (rich) void drawRich(f);
-  else {
-    clearRich(f);
-    // The edits made in the rich view were not drawn in the layers of the textarea.
-    if (f.markdown) {
-      paint(f);
-      numberLines(f, f.area.value);
-    }
-  }
+  else clearRich(f);
 }
 
 // The server that gave a file outside the worktree (A-34); none is an error in Japanese.
@@ -564,7 +410,7 @@ function serverOf(f: EditorFile) {
 // The file outside the worktree, as the editor takes a file (read only, with the language that Rust gave it by its name).
 async function readOutside(f: EditorFile) {
   const read = await invoke("lsp_read_outside", { environment: f.target, project: f.project, worktree: f.path, server: serverOf(f), path: f.relative });
-  return { content: read.text, crlf: false, signature: "", language: read.language, highlight: read.highlight };
+  return { content: read.text, crlf: false, signature: "", language: read.language };
 }
 
 // Looks for the server of the project that takes the language of the file (A-34): with none the Command key and the right button ask nothing, and one that is found is started when the settings say so.
@@ -595,6 +441,13 @@ async function loadImage(f: EditorFile) {
   f.read = "ready";
 }
 
+// The arrow of a line that can be folded (A-18), drawn right of the line number: it points down while the line is open and right while it is folded, and the style shows an open one only while the pointer is over the numbers.
+function foldMarker(open: boolean): HTMLElement {
+  const mark = tag("span", open ? "orca-fold open" : "orca-fold");
+  mark.innerHTML = CHEVRON_SVG;
+  return mark;
+}
+
 async function load(f: EditorFile) {
   try {
     if (f.image) {
@@ -602,75 +455,45 @@ async function load(f: EditorFile) {
       changed();
       return;
     }
-    const text = f.outside ? await readOutside(f) : await invoke("orca_file_read", { path: f.path, relative: f.relative, environment: f.target });
-    f.area.value = text.content;
-    f.edits++;
-    f.highlight = text.highlight;
+    // CodeMirror is read the first time a file is opened, beside the read of the file; one that cannot be read fails the file as a file that cannot be read does (the note says so, and opening the file again tries again).
+    const [text] = await Promise.all([f.outside ? readOutside(f) : invoke("orca_file_read", { path: f.path, relative: f.relative, environment: f.target }), loadCodeMirror()]);
+    // A file closed while it was read has no editor made for it: nothing would destroy it.
+    if (files.get(f.id) !== f) return;
     f.language = text.language;
     // A file outside the worktree is marked `gem` when it is a Ruby file.
     if (f.outside) f.state.textContent = text.language === "ruby" ? "gem" : "";
     f.markdown = text.language === "markdown";
-    paint(f);
-    numberLines(f, f.area.value);
     f.crlf = text.crlf;
     f.signature = text.signature;
+    f.cm = TsunagiaiCodeMirror.create(f.body, {
+      text: text.content,
+      language: text.language,
+      readOnly: f.outside,
+      label: f.relative,
+      marker: foldMarker,
+      onChange: () => {
+        f.edits++;
+        hideLink(f);
+        typed(f);
+      },
+    });
+    watchMouse(f, f.cm);
     f.read = "ready";
-    f.area.disabled = false;
     setMode(f, f.mode);
     // The server that takes the file's language is looked for once the text is shown; with none the Command key and the right button ask nothing. A file of a worktree starts that server (A-34); a file outside the worktree belongs to a server that is there already.
     if (!f.outside) lookServer(f);
   } catch (e) {
     f.read = "failed";
-    f.note.textContent = String(e);
+    f.note.textContent = e instanceof Error ? e.message : String(e);
     f.note.hidden = false;
-    f.area.hidden = true;
-    f.area.closest<HTMLElement>(".orca-edit-body")!.hidden = true;
+    f.body.hidden = true;
   }
   changed();
 }
 
-// The offset in the text of the textarea of the character under the point (`x`, `y` of the window), none where there is no character (past the end of a line, or below the last). The layer under the textarea carries the same text in the same place, so it is asked in place of the textarea, which gives no place of a character: the textarea lets the point through for the moment of the question.
+// The offset in the text of the character under the point (`x`, `y` of the window), none where there is no character (past the end of a line, or below the last): CodeMirror answers it from the characters it draws.
 function offsetAt(f: EditorFile, x: number, y: number): number | null {
-  const layer = f.code.parentElement;
-  if (layer === null || f.code.textContent !== f.area.value) return null;
-  let range: Range | null;
-  f.area.style.pointerEvents = "none";
-  layer.style.pointerEvents = "auto";
-  try {
-    range = document.caretRangeFromPoint(x, y);
-  } finally {
-    f.area.style.pointerEvents = "";
-    layer.style.pointerEvents = "";
-  }
-  if (range === null || !f.code.contains(range.startContainer)) return null;
-  const before = document.createRange();
-  before.setStart(f.code, 0);
-  before.setEnd(range.startContainer, range.startOffset);
-  const caret = before.toString().length;
-  // The caret is before or after the character the point is on, by which half of it the point is in.
-  for (const at of [caret, caret - 1]) {
-    const box = charBox(f.code, at);
-    if (box !== null && x >= box.left && x < box.right && y >= box.top && y < box.bottom) return at;
-  }
-  return null;
-}
-
-// The box on the page of the character at `offset` of the text of the layer (its text is drawn in many nodes), none past its end.
-function charBox(code: HTMLElement, offset: number) {
-  if (offset < 0) return null;
-  const walker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
-  let left = offset;
-  for (let node = walker.nextNode() as Text | null; node !== null; node = walker.nextNode() as Text | null) {
-    if (left >= node.length) {
-      left -= node.length;
-      continue;
-    }
-    const box = document.createRange();
-    box.setStart(node, left);
-    box.setEnd(node, left + 1);
-    return box.getBoundingClientRect();
-  }
-  return null;
+  return f.cm?.offsetAt(x, y) ?? null;
 }
 
 // Where the character at `offset` of `text` is: the offset of the start of its line, the line from 0, the character in that line (UTF-16 units) and the text of the line.
@@ -682,29 +505,14 @@ function placeOf(text: string, offset: number) {
   return { lineStart, line, character: offset - lineStart, lineText: text.slice(lineStart, end === -1 ? undefined : end) };
 }
 
-// The box on the page of the text of the layer from `from` to `to` (offsets in its text, which is drawn in many nodes), none when the layer has no such text.
-function layerBox(code: HTMLElement, from: number, to: number) {
-  const walker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
-  const range = document.createRange();
-  let seen = 0;
-  let started = false;
-  for (let node = walker.nextNode() as Text | null; node !== null; node = walker.nextNode() as Text | null) {
-    const next = seen + node.length;
-    if (!started && from < next) {
-      range.setStart(node, from - seen);
-      started = true;
-    }
-    if (started && to <= next) {
-      range.setEnd(node, to - seen);
-      return range.getBoundingClientRect();
-    }
-    seen = next;
-  }
-  return null;
-}
-
 // Whether the Command key may draw an underline in the file: its text is shown in the source, it is a file of the worktree and a server takes its language (a file outside the worktree asks nothing, as the right button does).
 const linkReady = (f: EditorFile) => f.read === "ready" && !f.outside && f.server !== null && !f.body.hidden;
+
+// The cursor over the text of the editor (the pointer while an underline is drawn, else the editor's own).
+function setCursor(f: EditorFile, cursor: string) {
+  const content = f.cm?.dom.querySelector<HTMLElement>(".cm-content");
+  if (content) content.style.cursor = cursor;
+}
 
 // Takes the underline away and drops what waits for it: the timer of the wait and the answer that is on its way.
 function hideLink(f: EditorFile) {
@@ -716,7 +524,7 @@ function hideLink(f: EditorFile) {
   f.linkBox = null;
   if (!f.link.hidden) {
     f.link.hidden = true;
-    f.area.style.cursor = "";
+    setCursor(f, "");
   }
 }
 
@@ -738,7 +546,7 @@ async function probeLink(f: EditorFile, x: number, y: number, seq: number) {
   const server = f.server;
   // A server that is indexing or stopped can only refuse: nothing is sent to it.
   if (offset === null || server === null || !mayAsk(f.target, f.path, server)) return;
-  const text = f.area.value;
+  const text = textOf(f);
   const { lineStart, line, character, lineText } = placeOf(text, offset);
   try {
     const word = await invoke("lsp_word", { line: lineText, character });
@@ -762,18 +570,17 @@ async function probeLink(f: EditorFile, x: number, y: number, seq: number) {
   }
 }
 
-// Draws the underline under the text from `from` to `to` of the layer, in the box of the text: the layer sits where the text of the textarea does, so the line is under the letters the owner sees. The cursor over the textarea is the pointer while it is drawn.
+// Draws the underline under the text from `from` to `to`, in the box of the editor: the box of the text is where CodeMirror drew it, so the line is under the letters the owner sees. The cursor over the text is the pointer while it is drawn.
 function showLink(f: EditorFile, from: number, to: number) {
-  const box = layerBox(f.code, from, to);
-  const host = f.link.parentElement;
-  if (box === null || host === null) return;
-  const at = host.getBoundingClientRect();
+  const box = f.cm?.boxOf(from, to) ?? null;
+  if (box === null) return;
+  const at = f.body.getBoundingClientRect();
   f.link.style.left = `${box.left - at.left}px`;
   f.link.style.top = `${box.bottom - at.top - 1}px`;
   f.link.style.width = `${box.width}px`;
   f.link.hidden = false;
   f.linkBox = box;
-  f.area.style.cursor = "pointer";
+  setCursor(f, "pointer");
 }
 
 const hideLinks = () => {
@@ -784,7 +591,7 @@ const hideLinks = () => {
 async function askDefinition(f: EditorFile, x: number, y: number) {
   const offset = offsetAt(f, x, y);
   if (offset === null) return;
-  const text = f.area.value;
+  const text = textOf(f);
   const { line, character, lineText } = placeOf(text, offset);
   try {
     const word = await invoke("lsp_word", { line: lineText, character });
@@ -798,23 +605,9 @@ async function askDefinition(f: EditorFile, x: number, y: number) {
 // Puts the caret at the place `jump` names, in view and in the middle of the pane, once the text is shown (the line from 0, the character in UTF-16 units; a place past the end is the end).
 function flushJump(f: EditorFile) {
   const jump = f.jump;
-  if (jump === null || f.read !== "ready" || !f.el.isConnected || f.body.hidden || f.area.clientHeight === 0) return;
+  if (jump === null || f.read !== "ready" || !f.el.isConnected || f.body.hidden || f.cm === null || f.cm.scrollDOM.clientHeight === 0) return;
   f.jump = null;
-  const text = f.area.value;
-  let start = 0;
-  let reached = 0;
-  while (reached < jump.line) {
-    const next = text.indexOf("\n", start);
-    if (next === -1) break;
-    start = next + 1;
-    reached++;
-  }
-  const end = text.indexOf("\n", start);
-  const at = start + Math.min(jump.character, (end === -1 ? text.length : end) - start);
-  f.area.focus({ preventScroll: true });
-  f.area.setSelectionRange(at, at);
-  f.area.scrollTop = Math.max(0, reached * (Number.parseFloat(getComputedStyle(f.area).lineHeight) || 20) - f.area.clientHeight / 2);
-  followScroll(f);
+  f.cm.goTo(jump.line, jump.character);
 }
 
 // Goes to a place of the file of the tab `id` (A-34): at once when its text is shown, else when it is.
@@ -828,7 +621,7 @@ export function goTo(id: string, line: number, character: number) {
 // Whether the text may be replaced by the disk's: the file is read, is a worktree's, and has no typing that is not on the disk, on its way to it or refused by it.
 const canReread = (f: EditorFile) => f.read === "ready" && !f.outside && !f.image && !f.dirty && !f.blocked && !f.held && !f.richPending && f.richSync === null && f.writing === null && f.timer === null && f.save !== "error";
 
-// Reads the file again without a word (the clock, and a tab shown again). The signature of the read says whether the disk still holds the text that was read: when it does, nothing is drawn. Another text takes the place of the one shown, with the caret, the selection and the scroll where they were (the rich view of a Markdown file is drawn again and keeps its scroll).
+// Reads the file again without a word (the clock, and a tab shown again). The signature of the read says whether the disk still holds the text that was read: when it does, nothing is drawn. Another text takes the place of the one shown as a change from outside (`replace`: the caret, the selection, the scroll and the folds stay where they are, the history keeps its steps and the file is not marked as changed); the rich view of a Markdown file is drawn again and keeps its scroll.
 // Typing that came while the read was on its way keeps the text as it is, saved by then or not, and a failure keeps what is shown.
 // `again` (a change that the watch of the disk told) makes a read that is on its way be followed by one more, so that a change that came meanwhile is not lost.
 async function reread(f: EditorFile, again = false) {
@@ -846,25 +639,16 @@ async function reread(f: EditorFile, again = false) {
     if (files.get(f.id) !== f || f.relative !== relative || !canReread(f) || f.signature !== signature || text.signature === f.signature) return;
     f.signature = text.signature;
     f.crlf = text.crlf;
-    if (text.content === f.area.value) return;
-    const area = f.area;
-    const [start, end, top, left, richTop] = [area.selectionStart, area.selectionEnd, area.scrollTop, area.scrollLeft, f.rich.scrollTop];
-    area.value = text.content;
+    if (text.content === textOf(f)) return;
+    const richTop = f.rich.scrollTop;
+    f.cm?.replace(text.content);
     f.edits++;
     hideLink(f);
-    area.setSelectionRange(Math.min(start, text.content.length), Math.min(end, text.content.length));
-    area.scrollTop = top;
-    area.scrollLeft = left;
-    f.highlight = text.highlight;
     setSave(f, "idle");
     if (f.markdown && f.mode === "rich") {
       void drawRich(f).then(() => {
         f.rich.scrollTop = richTop;
       });
-    } else {
-      paint(f);
-      numberLines(f, area.value);
-      followScroll(f);
     }
   } catch {
     // What is shown stays.
@@ -916,29 +700,10 @@ function create(id: string, target: string | null, project: string, path: string
   head.append(where, state, modes);
   const note = tag("p", "orca-empty feed-empty");
   note.hidden = true;
-  const area = tag("textarea", "orca-edit-area");
-  area.spellcheck = false;
-  area.readOnly = outside;
-  area.disabled = true;
-  area.setAttribute("aria-label", relative);
-  const code = tag("code");
-  const layer = tag("pre", "orca-edit-hl");
-  layer.setAttribute("aria-hidden", "true");
-  layer.append(code);
-  const band = tag("div", "orca-edit-line");
-  band.hidden = true;
-  const text = tag("div", "orca-edit-text");
   const link = tag("div", "orca-edit-link");
   link.hidden = true;
-  text.append(band, link, layer, area);
-  const nums = document.createTextNode("1");
-  const numbers = tag("div", "orca-edit-nums");
-  numbers.append(nums);
-  const gutter = tag("div", "orca-edit-gutter");
-  gutter.setAttribute("aria-hidden", "true");
-  gutter.append(numbers);
   const body = tag("div", "orca-edit-body");
-  body.append(gutter, text);
+  body.append(link);
   const rich = tag("div", "orca-edit-rich");
   rich.hidden = true;
   const richBand = tag("div", "orca-edit-rich-band");
@@ -952,59 +717,16 @@ function create(id: string, target: string | null, project: string, path: string
   const html = !outside && /\.html$/i.test(nameOf(relative));
   const image = !outside && IMAGE_NAME.test(nameOf(relative));
   body.hidden = image;
-  const f: EditorFile = { id, target, project, path, relative, outside, language: "", server, jump: null, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, rereading: false, again: false, placed: false, out: false, wantFocus: true, highlight: null, cancelPaint: null, band, richBand, bandLine: 0, bandCaret: -1, bandEdits: 0, edits: 0, bandMetrics: null, richFrame: null, markdown: false, mode: html ? "preview" : "rich", modes, sourceButton, richButton, html, image, picture, previewButton, reloadButton, preview, previewTurn: 0, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, area, code, nums, numbers, gutter, lines: 1, state, where, note, link, hover: null, linkTimer: null, linkSeq: 0, linkBox: null, known: new Map(), knownEdits: 0 };
-  area.oninput = () => {
-    f.edits++;
-    hideLink(f);
-    typed(f);
-    placeBand(f);
-  };
-  area.onscroll = () => {
-    hideLink(f);
-    followScroll(f);
-  };
-  // The Command key and the mouse staying on a name draw the underline of a definition (A-34).
-  area.onmousemove = (e) => {
-    f.hover = { x: e.clientX, y: e.clientY };
-    if (!e.metaKey) {
-      hideLink(f);
-      return;
-    }
-    const box = f.linkBox;
-    if (box !== null && e.clientX >= box.left && e.clientX < box.right && e.clientY >= box.top && e.clientY < box.bottom) return;
-    waitLink(f);
-  };
-  area.onmouseleave = () => {
-    f.hover = null;
-    hideLink(f);
-  };
-  // The caret moves with a key (the key has not moved it yet at `keydown`, so that waits for the frame) or the mouse, and the focus comes and goes.
-  const bandLater = () => void requestAnimationFrame(() => placeBand(f));
-  const bandNow = () => placeBand(f);
-  area.onkeydown = bandLater;
-  area.onmousedown = bandLater;
-  area.onkeyup = bandNow;
-  area.onmouseup = bandNow;
-  area.onselect = bandNow;
-  area.onfocus = () => {
-    f.bandMetrics = null;
-    placeBand(f);
-  };
-  area.onblur = bandNow;
+  const f: EditorFile = { id, target, project, path, relative, outside, language: "", server, jump: null, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, rereading: false, again: false, placed: false, out: false, wantFocus: true, richBand, richFrame: null, markdown: false, mode: html ? "preview" : "rich", modes, sourceButton, richButton, html, image, picture, previewButton, reloadButton, preview, previewTurn: 0, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, cm: null, edits: 0, state, where, note, link, hover: null, linkTimer: null, linkSeq: 0, linkBox: null, known: new Map(), knownEdits: 0 };
   rich.addEventListener("focusin", () => placeRichBand(f));
   rich.addEventListener("focusout", () => placeRichBand(f));
-  area.oncontextmenu = (e) => {
-    if (!e.metaKey || f.outside || f.read !== "ready" || f.server === null || f.body.hidden) return;
-    e.preventDefault();
-    void askDefinition(f, e.clientX, e.clientY);
-  };
   sourceButton.onclick = async () => {
     if (f.mode === "source") return;
     // The edit of the rich view is in the textarea before the source is shown.
     await syncRich(f);
     setMode(f, "source");
     f.wantFocus = false;
-    area.focus({ preventScroll: true });
+    f.cm?.focus();
   };
   richButton.onclick = () => {
     if (f.mode !== "rich") setMode(f, "rich");
@@ -1015,12 +737,31 @@ function create(id: string, target: string | null, project: string, path: string
   reloadButton.onclick = () => {
     if (f.mode === "preview") void drawPreview(f);
   };
-  // The wheel over the numbers scrolls the text, as it does over the text: by pixels, by lines (the line height of the text) or by pages (the height of the textarea), as the event counts.
-  gutter.onwheel = (e) => {
-    const unit = e.deltaMode === 1 ? Number.parseFloat(getComputedStyle(area).lineHeight) : e.deltaMode === 2 ? area.clientHeight : 1;
-    area.scrollTop += e.deltaY * unit;
-  };
   return f;
+}
+
+// The mouse in the editor of the file (A-34): the Command key and the mouse staying on a name draw the underline of a definition, the right button with the Command key asks for it, and the scroll takes the underline away.
+function watchMouse(f: EditorFile, cm: CodeMirrorEditor) {
+  cm.scrollDOM.addEventListener("scroll", () => hideLink(f));
+  cm.dom.addEventListener("mousemove", (e) => {
+    f.hover = { x: e.clientX, y: e.clientY };
+    if (!e.metaKey) {
+      hideLink(f);
+      return;
+    }
+    const box = f.linkBox;
+    if (box !== null && e.clientX >= box.left && e.clientX < box.right && e.clientY >= box.top && e.clientY < box.bottom) return;
+    waitLink(f);
+  });
+  cm.dom.addEventListener("mouseleave", () => {
+    f.hover = null;
+    hideLink(f);
+  });
+  cm.dom.addEventListener("contextmenu", (e) => {
+    if (!e.metaKey || f.outside || f.read !== "ready" || f.server === null || f.body.hidden) return;
+    e.preventDefault();
+    void askDefinition(f, e.clientX, e.clientY);
+  });
 }
 
 // Opens the file as a tab of the project and gives its id (with `outside`, the server that gave a file outside the worktree that a definition named, read only: `relative` is its absolute path on the server's side, A-34); a file that is open already is not read here (`showEditors` reads it again when its tab is put back in a pane).
@@ -1078,7 +819,7 @@ export async function closeFile(id: string) {
   if (f.dirty && !f.blocked) return false;
   hideLink(f);
   clearTimer(f);
-  cancelPaint(f);
+  f.cm?.destroy();
   clearRich(f);
   clearPreview(f);
   f.el.remove();
@@ -1092,7 +833,7 @@ export function discardFiles(target: string | null, project: string, path: strin
   for (const f of gone) {
     hideLink(f);
     clearTimer(f);
-    cancelPaint(f);
+    f.cm?.destroy();
     clearRich(f);
     clearPreview(f);
     f.el.remove();
@@ -1118,7 +859,7 @@ export async function holdFiles(target: string | null, project: string, path: st
       if (to !== null) {
         f.relative = to + f.relative.slice(relative.length);
         f.where.textContent = f.relative;
-        f.area.setAttribute("aria-label", f.relative);
+        f.cm?.label(f.relative);
       }
       if (f.dirty && !f.blocked && f.save !== "error") schedule(f);
     }
@@ -1156,17 +897,11 @@ export function showEditors(placements: { id: string; host: HTMLElement }[]) {
     const back = f.out;
     f.placed = true;
     f.out = false;
-    if (f.el.parentElement !== host) {
-      host.replaceChildren(f.el);
-      // A textarea that was out of the page starts at the top again.
-      followScroll(f);
-    }
-    if (f.wantFocus && !f.area.disabled && !f.area.hidden && !f.body.hidden) {
+    if (f.el.parentElement !== host) host.replaceChildren(f.el);
+    if (f.wantFocus && f.cm !== null && !f.body.hidden) {
       f.wantFocus = false;
-      f.area.focus({ preventScroll: true });
+      f.cm.focus();
     }
-    f.bandMetrics = null;
-    placeBand(f);
     flushJump(f);
     if (back) void reread(f);
   }
@@ -1178,7 +913,7 @@ export function initOrcaEditor(on: { changed: () => void; error: (e: unknown) =>
   definition = on.definition;
   serve = on.serve;
   mayAsk = on.mayAsk;
-  document.addEventListener("selectionchange", placeBands);
+  document.addEventListener("selectionchange", placeRichBands);
   // The Command key pressed over a name that the mouse is on starts the wait; its release, and the window losing the focus, take every underline away.
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Meta" || e.repeat) return;

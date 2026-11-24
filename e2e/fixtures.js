@@ -29,6 +29,26 @@ window.__e2e_set_dark__ = (dark) => {
 };
 window.matchMedia = (query) => (query === darkQuery.media ? darkQuery : realMatchMedia(query));
 
+// The editors of the Orca screen's files (A-18) are CodeMirror, which draws only the lines near the window, so a spec reads the whole text from the editor and not from the page.
+// `TsunagiaiCodeMirror` (src/vendor/codemirror.js) is read when the first file is opened, and the page sets the global once: the setter wraps `create`, which records each editor in window.__e2e_editors__ (`editorText` in e2e/orca-support.ts).
+window.__e2e_editors__ = [];
+let codeMirror;
+Object.defineProperty(window, "TsunagiaiCodeMirror", {
+  configurable: true,
+  get: () => codeMirror,
+  set: (value) => {
+    // The exports of the bundle are getters that cannot be set, so the page gets a copy.
+    codeMirror = {
+      ...value,
+      create: (...args) => {
+        const editor = value.create(...args);
+        window.__e2e_editors__.push(editor);
+        return editor;
+      },
+    };
+  },
+});
+
 // Lets a script run once even when the driver runs it twice: see `onceId` in e2e/support.ts.
 const ran = new Set();
 window.__e2e_once__ = (id) => !ran.has(id) && !!ran.add(id);

@@ -1,5 +1,5 @@
 // The diff tab of the Orca screen (A-24): the difference of a file of a worktree from HEAD, as a tab of the work pane, side by side (HEAD on the left, the working tree on the right, the numbers of the lines between them) or in one column. A file of a commit in the history (A-27) opens the same tab: the parent on the left, the commit on the right, and the short id of the commit in the heading.
-// Rust reads the two texts and compares them (`orca_file_diff`, and `orca_commit_file_diff` for a commit): the rows of both views, the blocks of changes and the language to color by; this module draws them, colors the text with the highlighter of the editor (A-21), and takes the presses of the buttons of the tab.
+// Rust reads the two texts and compares them (`orca_file_diff`, and `orca_commit_file_diff` for a commit): the rows of both views, the blocks of changes and the language to color by; this module draws them, colors the text with highlight.js, which the editor no longer uses (the editor is CodeMirror, A-18), and takes the presses of the buttons of the tab.
 // A tab of a difference from HEAD that a pane shows is read again by the clock of the Orca screen (whether the file pane is shown or not), at once when the watch of the disk tells a change of its file (`rereadDiffs`, A-24), and when it is shown again after it was out of the page (`refreshDiffs`, `showDiffs`): the rows are drawn again only when the answer is not the one held, and a read that fails keeps what is shown. A file of a commit does not change and is not read again.
 // The tabs are kept in memory only, by target and project, as the tabs of the work pane (their ids are `diff:{n}`), as the files of the editor are (`file:{n}`). The view chosen (side by side or in one column) is one choice for all the tabs.
 import type { OrcaDiffRow } from "./bindings/OrcaDiffRow";
@@ -55,7 +55,7 @@ interface DiffTab {
   reload: HTMLButtonElement;
 }
 
-// Up to this many characters both sides are colored before the rows are drawn; for more, the rows are drawn plain at once and colored after COLOR_WAIT_MS (as the editor draws a long text, `paint` in orca-editor.ts).
+// Up to this many characters both sides are colored before the rows are drawn; for more, the rows are drawn plain at once and colored after COLOR_WAIT_MS.
 const COLOR_NOW_MAX = 30000;
 const COLOR_WAIT_MS = 150;
 

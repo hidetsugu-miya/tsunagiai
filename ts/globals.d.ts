@@ -42,6 +42,29 @@ declare const TsunagiaiMilkdown: {
   normalize(markdown: string): Promise<string>;
   compose(root: HTMLElement, onChange: () => void): Promise<MilkdownComposer>;
 };
+// CodeMirror 6 (src/vendor/codemirror.js, bundled by scripts/build-codemirror.mjs, A-18). `create` draws `text` in `host` as the editor of a file whose language is `language` (Orca's name for it, as `orca_file_read` gives it; one that has no grammar here is drawn plain).
+// `marker(open)` makes the arrow of a line that can be folded (`open` for a line that is not folded); with none the editor draws no arrow. `onChange` is called after each change by the owner (a key, a paste, an undo) and after `edit`, not after `replace`.
+// `text` is the text now (lines end with \n). `replace` puts a text that comes from outside (the file read again) in place: the cursor, the scroll and the folds stay, `onChange` is not called and the history takes no step. `edit` puts in the text of an edit made elsewhere (the rich view): it is an edit like a key.
+// `offsetAt` is the offset of the character under the point (x, y of the window), null where there is none; `boxOf` is the box on the page of the text from one offset to another, null when it is not drawn; `goTo` puts the caret at a line (from 0) and a character (UTF-16 units) and shows it in the middle; `label` changes the aria-label; `dom` is the editor's element and `scrollDOM` the one that scrolls.
+interface CodeMirrorEditor {
+  text(): string;
+  replace(text: string): void;
+  edit(text: string): void;
+  offsetAt(x: number, y: number): number | null;
+  boxOf(from: number, to: number): DOMRect | null;
+  goTo(line: number, character: number): void;
+  label(label: string): void;
+  focus(): void;
+  readonly dom: HTMLElement;
+  readonly scrollDOM: HTMLElement;
+  destroy(): void;
+}
+declare const TsunagiaiCodeMirror: {
+  create(
+    host: HTMLElement,
+    options: { text: string; language: string; readOnly: boolean; label: string; marker?: (open: boolean) => HTMLElement; onChange: () => void },
+  ): CodeMirrorEditor;
+};
 // Pele (src/vendor/pele.global.js, A-41 and A-26; the rich view reads it through the bundle of Milkdown, scripts/milkdown-entry.js): only `render`, which gives the SVG of one diagram and its size, and throws a `PeleError` when the text cannot be drawn. It makes no HTML label and no script, and the options here cut the links and the images.
 declare const pele: {
   render(source: string, options?: { fontFamily?: string; idPrefix?: string; links?: boolean; images?: boolean }): { svg: string; width: number; height: number };
