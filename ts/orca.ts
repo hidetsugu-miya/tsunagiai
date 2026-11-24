@@ -28,7 +28,7 @@ import type { PopoutTab } from "./bindings/PopoutTab";
 import { $, composing, isMac, partMatcher, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
 import { currentFormation, deselectFormation, isChildFolder, isChildSession, isChildWorktree, readForChoice } from "./formation-list.js";
-import { AGENT_SVG, CHEVRON_SVG, CLAUDE_SVG, CLOSE_SVG, COLUMNS_SVG, COPY_PATH_SVG, DATABASE_SVG, DEFINITION_SVG, DIFF_SVG, FILE_SVG, FORMATION_SVG, LOCK_SVG, POPOUT_SVG, ROWS_SVG, SCRATCHPAD_SVG, TERMINAL_SVG, withClass } from "./icons.js";
+import { AGENT_SVG, CHEVRON_SVG, CLAUDE_SVG, CLOSE_SVG, COLUMNS_SVG, COPY_PATH_SVG, DATABASE_SVG, DEFINITION_SVG, DIFF_SVG, FORMATION_SVG, POPOUT_SVG, ROWS_SVG, SCRATCHPAD_SVG, TERMINAL_SVG, withClass } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
 import { closeMenu, type MenuItem, openMenu, showMenu } from "./menu.js";
@@ -38,15 +38,15 @@ import { openAddProject } from "./orca-add.js";
 import { closeConnectionTabs, closeDatabaseTab, databaseTabsOf, openQuery, openTable, showDatabaseTabs } from "./orca-database-tabs.js";
 import { initOrcaDatabase } from "./orca-database.js";
 import { closeDiff, type DiffCommit, diffsOf, hasDiffIn, openDiff as openDiffTab, refreshDiffs, showDiffs } from "./orca-diff.js";
-import { closeFile, dirtyIds, discardFiles, filesOf, goTo, hasFileIn, holdFiles, initOrcaEditor, nameOf, openedIn, openFile as openEditorFile, refreshEditors, resolveServers, showEditors } from "./orca-editor.js";
+import { closeFile, dirtyIds, discardFiles, filesOf, goTo, hasFileIn, holdFiles, initOrcaEditor, nameOf, openedIn, openFile as openFileHere, refreshEditors, resolveServers, saveFile, showEditors } from "./orca-editor.js";
 import { ensureServer, initLsp, mayAsk, pauseLsp, syncServers } from "./orca-lsp.js";
 import { filesShown, initOrcaFiles, openFolders, refreshFiles, rereadScratchpad, syncFiles, toggleFiles, treeWatch } from "./orca-files.js";
 import { syncFileWatches, unwatched, watchReady } from "./orca-watch.js";
 import { type PaneModel, drawTree, editorHostOf, initPaneTree, type TreeModel } from "./orca-pane-tree.js";
 import { applyLocal, findTab, focusedTab, layoutOf, needsSync, type PaneTabs, panesOf, syncPanes } from "./orca-panes.js";
 import { closePeek, drawPeek, initPeek, openPeek, peeking } from "./orca-peek.js";
-import { awayIn, focusPopout, initPopout, isAway, popOut, syncPopouts } from "./orca-popout.js";
-import { STATUS_LABELS, statusIcon } from "./orca-status.js";
+import { awayFile, awayFileIn, awayIn, focusPopout, initPopout, isAway, popOut, syncPopouts } from "./orca-popout.js";
+import { fileIcon, lockIcon, STATUS_LABELS, statusIcon } from "./orca-status.js";
 import { openScratchpad } from "./orca-scratchpad.js";
 import { hideTerminals, initOrcaTerminal, type Placement, pruneTerminals, showTerminals, type TermSource } from "./orca-terminal.js";
 import { type Fields, registerDraftTarget } from "./screen-bridge.js";
@@ -929,22 +929,6 @@ function tabNode(t: Tab, selected: boolean) {
   return wrap;
 }
 
-// The mark of a file's tab (the status icon of a terminal's).
-function fileIcon() {
-  const icon = tag("span", "orca-ic orca-file-tab-ic");
-  icon.innerHTML = FILE_SVG;
-  return icon;
-}
-
-// The mark of the tab of a file outside the worktree: it is read only (A-34).
-function lockIcon() {
-  const icon = tag("span", "orca-ic orca-file-tab-ic");
-  icon.setAttribute("role", "img");
-  icon.setAttribute("aria-label", "読み取り専用");
-  icon.innerHTML = LOCK_SVG;
-  return icon;
-}
-
 // The mark of a diff's tab.
 function diffIcon() {
   const icon = tag("span", "orca-ic orca-file-tab-ic");
@@ -1131,6 +1115,8 @@ function openPlace(place: DefinitionOpen) {
   if (projectKey === null || view === null) return;
   started = null;
   const id = openEditorFile(query.target, query.project, query.path, path, outside ? query.server : null);
+  // The file is in a window of its own (A-46): the window comes to the front.
+  if (focusPopout(id)) return;
   const panes = panesOf(currentLayout()?.root ?? null);
   const near = panes.find((p) => p.tabs.includes(query.tab)) ?? panes.find((p) => !p.tabs.includes(place.definition));
   if (near !== undefined && !panes.some((p) => p.tabs.includes(id))) runPaneOp({ kind: "move", tab: id, pane: near.id, edge: "center" });
@@ -1301,7 +1287,7 @@ function claimStarted() {
 
 // The order of tabs that are no longer anywhere is dropped, so it does not pile up.
 function forgetGone() {
-  const live = new Set<string>([...mix.rows.flatMap((r) => (r.paneKey === null ? [] : [r.handle ?? claudeTabId(r.paneKey)])), ...mix.terminals.map((t) => t.handle), ...filesOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((f) => f.id), ...diffsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id), ...definitionsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id), ...databaseTabsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id)]);
+  const live = new Set<string>([...mix.rows.flatMap((r) => (r.paneKey === null ? [] : [r.handle ?? claudeTabId(r.paneKey)])), ...mix.terminals.map((t) => t.handle), ...filesOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((f) => f.id), ...awayIn(projectKey ?? "", []), ...diffsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id), ...definitionsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id), ...databaseTabsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id)]);
   for (const key of seen.keys()) if (!live.has(key)) seen.delete(key);
   for (const handle of endedHandles) if (!live.has(handle)) endedHandles.delete(handle);
 }
@@ -1309,7 +1295,7 @@ function forgetGone() {
 // Whether the language server of the worktree at `path` of `environment` is to stop (A-34): no tab of the worktree is open (a session, a terminal, a file, a difference or a definition of any project), or it has not the worktree any more in a list that was read well. A place that the screen does not list now (another saved environment than the one it shows) has no session or terminal tab open, so it needs no list: its server stops when no file or difference of the worktree is open.
 function serverGone(environment: string | null, path: string) {
   const listed = environment === view?.target || (environment === null && here !== null);
-  const kept = () => hasFileIn(environment, path) || hasDiffIn(environment, path) || hasDefinitionIn(environment, path);
+  const kept = () => hasFileIn(environment, path) || awayFileIn(environment, path) || hasDiffIn(environment, path) || hasDefinitionIn(environment, path);
   if (!listed) return !kept();
   if (!listRead(environment)) return false;
   if (worktreeGone(environment, path)) return true;
@@ -1688,7 +1674,7 @@ function runPaneOp(op: PaneOp | null) {
     if (view === null || view.target !== target || view.state === "missing") return null;
     const now = tabsOf(key);
     const ids = now.map((t) => t.id);
-    return { ids, away: awayOf(key, ids), handles: Object.fromEntries(now.flatMap((t) => (t.handle === null ? [] : [[t.id, t.handle]]))) };
+    return { ids, away: awayIn(key, ids), handles: Object.fromEntries(now.flatMap((t) => (t.handle === null ? [] : [[t.id, t.handle]]))) };
   };
   syncPanes(place, key, tabs, op, () => draw(), (e) => showFailure("orca", e));
 }
@@ -1697,7 +1683,7 @@ function runPaneOp(op: PaneOp | null) {
 function syncLayout(tabs: Tab[]) {
   if (projectKey === null || view === null || view.state !== "ready") return;
   const ids = tabs.map((t) => t.id);
-  if (needsSync(projectPlace(projectKey), projectKey, ids, awayOf(projectKey, ids))) runPaneOp(null);
+  if (needsSync(projectPlace(projectKey), projectKey, ids, awayIn(projectKey, ids))) runPaneOp(null);
 }
 
 // Selects the tab in its pane and gives the pane the focus, at once and then in Rust (nothing is asked when it is the selected tab already).
@@ -1733,7 +1719,7 @@ function pickTerminal(t: OrcaTerminal) {
 }
 
 // Closes a tab. An Orca terminal is closed in Orca, and the list is read at once: it leaves the tabs then, and a failure keeps the tab, shows the message and reads the list again.
-// It says whether the terminal was closed (the window of A-46 is ended by it); a tab of a document is not in a window yet, and says no.
+// It says whether the terminal was closed (the window of A-46 is ended by it); a tab of a document says no: a file in a window is closed by the page of its window, and the others are not in a window yet.
 async function closeTab(tab: Tab): Promise<boolean> {
   if (closing.has(tab.id)) return false;
   closing.add(tab.id);
@@ -1776,21 +1762,23 @@ function openTabMenu(anchor: Element, tab: string, pane: string) {
   const items: MenuItem[] = split ? [item("右に分割", COLUMNS_SVG, () => runPaneOp({ kind: "move", tab, pane, edge: "right" })), item("下に分割", ROWS_SVG, () => runPaneOp({ kind: "move", tab, pane, edge: "bottom" }))] : [];
   const found = projectKey === null ? undefined : tabsOf(projectKey).find((t) => t.id === tab);
   const entry = found === undefined ? null : popoutTab(found, projectKey!);
-  if (entry !== null) items.push(item("別ウィンドウで開く", POPOUT_SVG, () => void popOut(entry)));
+  if (entry !== null) items.push(item("別ウィンドウで開く", POPOUT_SVG, () => void popOutTab(entry)));
   if (file !== undefined && !file.outside) {
     const [path, from] = [`${file.path.replace(/\/+$/, "")}/${file.relative}`, file.relative];
-    items.push({ ...item("パスのコピー", COPY_PATH_SVG, () => void copyText(path, "パスをコピーしました")), divider: split }, item("相対パスをコピー", COPY_PATH_SVG, () => void copyText(from, "相対パスをコピーしました")));
+    items.push({ ...item("パスのコピー", COPY_PATH_SVG, () => void copyText(path, "パスをコピーしました")), divider: items.length > 0 }, item("相対パスをコピー", COPY_PATH_SVG, () => void copyText(from, "相対パスをコピーしました")));
   }
   if (items.length > 0) openMenu(anchor, items);
 }
 
 // ---- the windows of the tabs (A-46) ----
 
-// The ids among `ids` (the tabs of the project `project`) that are in a window of their own: the layout keeps their place and leaves them out of what it answers.
-const awayOf = (project: string, ids: string[]) => awayIn(project).filter((id) => ids.includes(id));
-
-// What the window of the tab `t` of the project `project` shows, null for a tab that has no window to show (only a Claude session and a terminal that have a terminal do).
+// What the window of the tab `t` of the project `project` shows, null for a tab that has no window to show (only a Claude session and a terminal that have a terminal do, and a file: the scratchpad's too, and one outside the worktree that has its server).
 function popoutTab(t: Tab, project: string): PopoutTab | null {
+  if (t.kind === "file") {
+    const f = filesOf(projectPlace(project), project).find((x) => x.id === t.id);
+    if (f === undefined || (f.outside && f.server === null)) return null;
+    return { tab: t.id, project, title: t.title, status: "done", label: "", environment: t.environment, content: { kind: "file", path: f.path, relative: f.relative, server: f.outside ? f.server : null } };
+  }
   if ((t.kind !== "claude" && t.kind !== "plain") || t.handle === null) return null;
   const terminal = { handle: t.handle, path: t.path, stream: streamsEnvironment(t.environment), ended: isEnded(t) };
   return { tab: t.id, project, title: t.title, status: t.status, label: t.label, environment: t.environment, content: t.kind === "claude" ? { kind: "claude", ...terminal } : { kind: "terminal", ...terminal } };
@@ -1798,10 +1786,39 @@ function popoutTab(t: Tab, project: string): PopoutTab | null {
 
 // The tab of a window as the list has it now: its terminal is the one that stays when its id changes (a plain terminal where Claude starts). null when the list no longer has it; undefined when the list of its place cannot say.
 function lookPopout(entry: PopoutTab): PopoutTab | null | undefined {
+  // A file is no row of the list: its window holds it until it is closed.
+  if (entry.content.kind === "file") return entry;
   if (!listRead(projectPlace(entry.project))) return undefined;
   const tabs = tabsOf(entry.project);
-  const found = tabs.find((t) => t.id === entry.tab) ?? tabs.find((t) => t.handle === entry.content.handle);
+  const { handle } = entry.content;
+  const found = tabs.find((t) => t.id === entry.tab) ?? tabs.find((t) => t.handle === handle);
   return found === undefined ? null : popoutTab(found, entry.project);
+}
+
+// Puts the tab in a window. A file is saved first, as a close saves it, and leaves the editor of this page (the page of the window opens it again, A-46): a save that failed or was refused keeps the tab in its pane.
+async function popOutTab(entry: PopoutTab) {
+  if (entry.content.kind === "file" && !((await saveFile(entry.tab)) && (await closeFile(entry.tab)))) return;
+  await popOut(entry);
+}
+
+// Opens a file in the editor, with the id its tab already has when a window gives it back; a file that a window holds is not opened a second time: the id of its tab is given, and `chooseTab` brings the window to the front.
+function openEditorFile(target: string | null, project: string, path: string, relative: string, outside: string | null = null, id?: string) {
+  return awayFile(target, project, path, relative, outside !== null) ?? openFileHere(target, project, path, relative, outside, id);
+}
+
+// The editor of a file window asked for the definition of a name (A-34): the definition tab is made in the project of the file, in its pane when that project is selected.
+function askPopoutDefinition(query: DefinitionQuery) {
+  if (view === null) return;
+  if (projectKey === query.project) askDefinition(query);
+  else {
+    openDefinition(query);
+    draw();
+  }
+}
+
+// A file whose window was put back, or could not be made, is opened again in its pane with the id it had, so the layout gives it its place.
+function reopenFile(entry: PopoutTab) {
+  if (entry.content.kind === "file") openEditorFile(entry.environment, entry.project, entry.content.path, entry.content.relative, entry.content.server, entry.tab);
 }
 
 // The red button of a window closes its tab as the × of its pane does; a tab that the list no longer has is closed already.
@@ -2065,7 +2082,7 @@ function initSearch() {
 export function initOrca() {
   initOrcaTerminal((e) => showFailure("orca", e), (source, uri) => void openTerminalLink(source, uri).catch((e) => showFailure("orca", e)));
   initPeek(statusIcon, selectSession);
-  initPopout({ changed: draw, close: closeWindowTab, failed: (e) => showFailure("orca", e) });
+  initPopout({ changed: draw, close: closeWindowTab, reopen: reopenFile, definition: askPopoutDefinition, failed: (e) => showFailure("orca", e) });
   initSplit($("orca"), $("orca-split"), { side: "left", min: 0.15, max: 0.5, initial: 0.19, property: "--list-w" });
   initSplit($("orca"), $("orca-files-split"), { side: "right", min: 0.15, max: 0.4, initial: 0.22, property: "--files-w" });
   initOrcaEditor({ changed: draw, error: (e) => showFailure("orca", e), definition: askDefinition, serve: (target, project, path, server) => void ensureServer({ target, project, path }, server), mayAsk });

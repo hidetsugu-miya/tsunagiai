@@ -1552,15 +1552,15 @@ describe("orca: files and editor (A-18)", () => {
       onceId(),
     );
 
-  it("adds the two copies, after a line under the split, to the menu of the tab of a file, with a line icon on each row and no colored dot (A-17)", async () => {
+  it("adds the window and the two copies, the copies after a line, to the menu of the tab of a file under the split, with a line icon on each row and no colored dot (A-17, A-46)", async () => {
     await openFiles();
     await openA();
     await stubClipboard();
     await rightClickTab("file:1");
     await expect($('.menu[role="menu"]')).toBeDisplayed();
-    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["右に分割", "下に分割", "", "パスのコピー", "相対パスをコピー"]);
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["右に分割", "下に分割", "別ウィンドウで開く", "", "パスのコピー", "相対パスをコピー"]);
     expect(await count('.menu[role="menu"] > [role="separator"]')).toBe(1);
-    expect(await count('.menu[role="menu"] button svg')).toBe(4);
+    expect(await count('.menu[role="menu"] button svg')).toBe(5);
     expect(await count('.menu[role="menu"] .pdot')).toBe(0);
     // The split to the right is a square cut by a vertical line, the one below by a horizontal line.
     const [right, below] = await browser.execute(() => [...document.querySelectorAll('.menu[role="menu"] button')].slice(0, 2).map((b) => b.querySelector("path")!.getAttribute("d")));
@@ -1576,7 +1576,7 @@ describe("orca: files and editor (A-18)", () => {
     expect(await copiedTexts()).toEqual(["/work/example-app/a.rs", "a.rs"]);
   });
 
-  it("has the two copies alone, with no line, on the tab of a file that is alone in its pane, and no menu on the Claude tab that is alone in its pane (A-17)", async () => {
+  it("has the window and the two copies, with a line before the copies, on the tab of a file that is alone in its pane, and the window alone on the Claude tab that is alone in its pane (A-17, A-46)", async () => {
     await openFiles();
     await openA();
     await stubClipboard();
@@ -1585,14 +1585,14 @@ describe("orca: files and editor (A-18)", () => {
     await waitForCount(".orca-pane", 2);
     await rightClickTab("file:1");
     await expect($('.menu[role="menu"]')).toBeDisplayed();
-    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["パスのコピー", "相対パスをコピー"]);
-    expect(await count('.menu[role="menu"] button svg')).toBe(2);
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["別ウィンドウで開く", "", "パスのコピー", "相対パスをコピー"]);
+    expect(await count('.menu[role="menu"] button svg')).toBe(3);
     await pickItem("相対パスをコピー");
     await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "the relative path was never copied" });
     expect(await copiedTexts()).toEqual(["a.rs"]);
     await rightClickTab(claude);
-    await browser.pause(300);
-    expect(await count(".menu")).toBe(0);
+    await expect($('.menu[role="menu"]')).toBeDisplayed();
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["別ウィンドウで開く"]);
   });
 
   it("opens a file that is open already by selecting its tab, and reads it again as it comes back into the pane: the text of the disk takes the place of the one held", async () => {
@@ -3260,7 +3260,7 @@ describe("orca: files and editor (A-18)", () => {
     return diff;
   }
 
-  it("has the split alone in the menu of the tab of a diff and of a Claude session, with no copy of a path (A-17)", async () => {
+  it("has the split alone in the menu of the tab of a diff, and the split and the window in that of a Claude session, with no copy of a path (A-17, A-46)", async () => {
     await openDiffOf();
     await rightClickTab("diff:1");
     await expect($('.menu[role="menu"]')).toBeDisplayed();
@@ -3269,7 +3269,7 @@ describe("orca: files and editor (A-18)", () => {
     await expect($(".menu")).not.toExist();
     await rightClickTab(claude);
     await expect($('.menu[role="menu"]')).toBeDisplayed();
-    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["右に分割", "下に分割"]);
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["右に分割", "下に分割", "別ウィンドウで開く"]);
   });
 
   it("opens the diff of a file from the menu of its row with the worktree, its path and the target, as a tab that is selected (A-24)", async () => {

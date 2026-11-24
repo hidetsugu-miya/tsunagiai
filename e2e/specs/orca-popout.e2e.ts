@@ -1,7 +1,9 @@
 // A-46: the page of the window of a tab (`popout.html`, `ts/popout.ts`). Rust makes the window (`orca_popout_open`, which this spec calls through the app's own bridge, the fixtures of the page being cut off for it), and the page runs with the answers of its own fixtures:
 // the commands the window sends are mocked, as in every spec. What the Orca screen does with a window is in `orca.e2e.ts`; the red button, the pin that keeps the window on top and the end of the main window are checked by hand (`tauri dev`), as WebDriver cannot press them.
+import type { OrcaFileText } from "../../ts/bindings/OrcaFileText";
+import type { OrcaSaved } from "../../ts/bindings/OrcaSaved";
 import type { PopoutTab } from "../../ts/bindings/PopoutTab";
-import { boot, callsOf, count, mock, popoutTab, rejects, sendPopoutTab, sendTerm, textsOf, timers, waitForCalls, CARD } from "../support";
+import { boot, callsOf, count, mock, onceId, popoutTab, rejects, sendPopoutClose, sendPopoutTab, sendTerm, textsOf, timers, waitForCalls, CARD } from "../support";
 
 type Bridge = { __TAURI_INTERNALS__: { invoke: (command: string, args: object) => Promise<unknown> }; __TAURI__: { core: { Channel: new () => object } } };
 
@@ -124,6 +126,177 @@ describe("orca: the window of a tab (A-46)", () => {
     await expect($("#popout-name")).toHaveText("zsh (api)");
     expect(await browser.execute(() => document.querySelector<HTMLElement>("#popout-icon .orca-ic")!.dataset.status)).toBe("working");
     expect((await waitForCalls("orca_stream_terminal"))[0]).toMatchObject({ environment: "Studio", handle: "term_a" });
+  });
+
+  // A file (A-18, A-29): the editor of the Orca screen, opened here from the disk. The window of a file holds its text and its save.
+  describe("a file", () => {
+    const FILE = "file:7";
+    const relative = "notes/memo.md";
+    const memo = popoutTab(FILE, "", "memo.md", { label: "", content: { kind: "file", path: "/work/example-app", relative, server: null } });
+    const text = (content: string, language = "plaintext"): OrcaFileText => ({ content, crlf: false, signature: "sig-1", language, highlight: null });
+    const saved = (signature: string): OrcaSaved => ({ state: "saved", signature });
+    const area = () => $(".orca-edit-area");
+    // A window of the file, with the text read and the autosave short.
+    async function openFileWindow(tab: PopoutTab = memo, fixtures: Record<string, unknown> = {}, shown = "a note\n") {
+      const label = await openWindow(tab, { orca_file_read: text("a note\n"), editor_settings: { autosaveMs: 100, autosaveMin: 100, autosaveMax: 3000, autosaveStep: 100 }, ...fixtures });
+      await expect(area()).toHaveValue(shown, { trim: false });
+      return label;
+    }
+    async function typeX() {
+      await area().click();
+      await browser.keys("x");
+    }
+
+    it("draws the file's icon and name in the header, and the editor under it with the text of the disk, in place of a terminal", async () => {
+      await openFileWindow();
+      await expect($("#popout-name")).toHaveText("memo.md");
+      expect(await count("#popout-icon .orca-file-tab-ic")).toBe(1);
+      await expect($(".orca-edit-path")).toHaveText(relative);
+      expect(await waitForCalls("orca_file_read")).toEqual([{ path: "/work/example-app", relative, environment: null }]);
+      await expect($("#popout-term")).not.toBeDisplayed();
+      await expect($("#popout-file")).toBeDisplayed();
+      expect(await count(".orca-term")).toBe(0);
+    });
+
+    it("reads the file of a saved environment with its target", async () => {
+      await openFileWindow({ ...memo, environment: "Studio" });
+      expect(await waitForCalls("orca_file_read")).toEqual([{ path: "/work/example-app", relative, environment: "Studio" }]);
+    });
+
+    it("shows a file outside the worktree with a lock, read only, through the server that gave it", async () => {
+      const gem = popoutTab("file:8", "", "rails.rb", { label: "", content: { kind: "file", path: "/work/example-app", relative: "/usr/local/bundle/gems/rails.rb", server: "ruby" } });
+      await openWindow(gem, { lsp_read_outside: { path: "/usr/local/bundle/gems/rails.rb", text: "module Rails\nend\n", language: "ruby", highlight: null } });
+      await expect(area()).toHaveValue("module Rails\nend\n", { trim: false });
+      expect(await count("#popout-icon .orca-ic[aria-label='読み取り専用']")).toBe(1);
+      expect(await area().getAttribute("readonly")).not.toBeNull();
+      expect(await waitForCalls("lsp_read_outside")).toEqual([{ environment: null, project: "proj_example-app", worktree: "/work/example-app", server: "ruby", path: "/usr/local/bundle/gems/rails.rb" }]);
+    });
+
+    it("saves the typing by itself, with the signature of the read", async () => {
+      await openFileWindow();
+      const write = await mock("orca_file_write", saved("sig-2"));
+      await typeX();
+      expect(await waitForCalls(write)).toEqual([{ path: "/work/example-app", relative, content: "a note\nx", crlf: false, signature: "sig-1", environment: null }]);
+    });
+
+    it("saves the typing and closes the file before it asks to put the tab back", async () => {
+      await openFileWindow();
+      const write = await mock("orca_file_write", saved("sig-2"));
+      const restore = await mock("orca_popout_restore", null);
+      await typeX();
+      await $("#popout-restore").click();
+      expect(await waitForCalls(restore)).toEqual([null]);
+      expect(await callsOf(write)).toHaveLength(1);
+      await expect(area()).not.toExist();
+    });
+
+    it("keeps the file in the window, and shows the message, when the save before putting the tab back fails", async () => {
+      await openFileWindow();
+      await mock("orca_file_write", rejects("保存できませんでした"));
+      const restore = await mock("orca_popout_restore", null);
+      await typeX();
+      await $("#popout-restore").click();
+      await expect($(CARD)).toHaveText("保存できませんでした");
+      expect(await callsOf(restore)).toEqual([]);
+      await expect(area()).toHaveValue("a note\nx", { trim: false });
+    });
+
+    it("keeps the file in the window when the save before putting the tab back is refused", async () => {
+      await openFileWindow();
+      await mock("orca_file_write", { state: "changed", signature: "sig-1" } satisfies OrcaSaved);
+      const restore = await mock("orca_popout_restore", null);
+      await typeX();
+      await $("#popout-restore").click();
+      await expect($(".orca-edit-state")).toHaveText("ディスクのファイルが変わっています");
+      expect(await callsOf(restore)).toEqual([]);
+      await expect(area()).toHaveValue("a note\nx", { trim: false });
+    });
+
+    it("opens the file here again, with the message, when the tab could not be put back", async () => {
+      await openFileWindow();
+      await mock("orca_popout_restore", rejects("戻せませんでした"));
+      await $("#popout-restore").click();
+      await expect($(CARD)).toHaveText("戻せませんでした");
+      await expect(area()).toHaveValue("a note\n", { trim: false });
+      expect(await callsOf("orca_file_read")).toHaveLength(2);
+    });
+
+    it("closes the file as the × of a pane does when Rust tells the page of the red button, and then asks for the close", async () => {
+      await openFileWindow();
+      const write = await mock("orca_file_write", saved("sig-2"));
+      const close = await mock("orca_popout_close", null);
+      await typeX();
+      await sendPopoutClose();
+      expect(await waitForCalls(close)).toEqual([null]);
+      expect(await callsOf(write)).toHaveLength(1);
+      await expect(area()).not.toExist();
+    });
+
+    it("keeps the window when the save of the red button fails, with the message", async () => {
+      await openFileWindow();
+      await mock("orca_file_write", rejects("保存できませんでした"));
+      const close = await mock("orca_popout_close", null);
+      await typeX();
+      await sendPopoutClose();
+      await expect($(CARD)).toHaveText("保存できませんでした");
+      expect(await callsOf(close)).toEqual([]);
+      await expect(area()).toHaveValue("a note\nx", { trim: false });
+    });
+
+    it("closes a file that a refused save left, as the × of a pane does (the heading said it)", async () => {
+      await openFileWindow();
+      await mock("orca_file_write", { state: "changed", signature: "sig-1" } satisfies OrcaSaved);
+      const close = await mock("orca_popout_close", null);
+      await typeX();
+      await sendPopoutClose();
+      expect(await waitForCalls(close)).toEqual([null]);
+    });
+
+    it("reads the disk again by the clock when nothing was typed", async () => {
+      await openFileWindow(memo, timers({ orcaClock: 500 }));
+      await mock("orca_file_read", { ...text("a note, changed\n"), signature: "sig-2" });
+      await expect(area()).toHaveValue("a note, changed\n", { trim: false });
+    });
+
+    it("takes the font of the editor from the settings", async () => {
+      await openFileWindow(memo, { font_settings: { app: { family: null, size: 14, ghostty: false }, mail: { family: null, size: 14, ghostty: false }, calendar: { family: null, size: 14, ghostty: false }, todoList: { family: null, size: 14, ghostty: false }, todoWork: { family: null, size: 14, ghostty: false }, slack: { family: null, size: 14, ghostty: false }, orcaList: { family: null, size: 14, ghostty: false }, orcaPane: { family: null, size: 14, ghostty: false }, orcaWork: { family: null, size: 13, ghostty: true }, editor: { family: "Menlo", size: 16, ghostty: false }, mono: { family: null, size: 14, ghostty: false } } });
+      expect(await browser.execute(() => [document.documentElement.style.getPropertyValue("--editor-family"), document.documentElement.style.getPropertyValue("--editor-size")])).toEqual(['"Menlo", ui-monospace, Menlo, monospace', "16px"]);
+    });
+
+    it("asks for the definition of the name under the mouse with the Command key, from Rust, for the Orca screen to show", async () => {
+      const source = "class A\n  def go\n    Rails.logger.info(x)\n  end\nend\n";
+      const ruby = popoutTab(FILE, "", "a.rb", { label: "", content: { kind: "file", path: "/work/example-app", relative: "a.rb", server: null } });
+      await openFileWindow(ruby, { orca_file_read: text(source, "ruby"), lsp_server_for: "ruby", lsp_word: "Rails" }, source);
+      await waitForCalls("lsp_server_for");
+      const asked = await mock("orca_popout_definition", null);
+      // The server is found a moment after the text is shown: the press is made until the editor takes it.
+      await browser.waitUntil(async () => {
+        await browser.execute(
+          (offset, once) => {
+            if (!window.__e2e_once__(once)) return;
+            const walker = document.createTreeWalker(document.querySelector(".orca-edit-hl code")!, NodeFilter.SHOW_TEXT);
+            let left = offset;
+            for (let node = walker.nextNode() as Text | null; node !== null; node = walker.nextNode() as Text | null) {
+              if (left >= node.length) {
+                left -= node.length;
+                continue;
+              }
+              const range = document.createRange();
+              range.setStart(node, left);
+              range.setEnd(node, left + 1);
+              const box = range.getBoundingClientRect();
+              document.querySelector(".orca-edit-area")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, metaKey: true, clientX: box.left + box.width / 2, clientY: box.top + box.height / 2 }));
+              return;
+            }
+          },
+          source.indexOf("Rails") + 2,
+          onceId(),
+        );
+        return (await callsOf(asked)).length > 0;
+      });
+      // The question is the editor's own, with no tab: Rust knows the tab of the window.
+      expect((await callsOf(asked))[0]).toEqual({ query: { target: null, project: "proj_example-app", path: "/work/example-app", server: "ruby", relative: "a.rb", text: source, line: 2, character: 6, word: "Rails" } });
+    });
   });
 
   it("shows the message when the tab cannot be taken from Rust", async () => {

@@ -3,25 +3,38 @@
 // The windows are held here by the id of their tab, as they were last given to Rust. What the owner does in a window (the red button closes the tab as the × of its pane does, the button at the right end puts it back) comes by the channel of `orca_popout_main`,
 // and this module carries it out through the screen (`PopoutHost`) and then ends the window. A window whose tab left the list ends with it, and what the list says of a tab (its name, its status, where its terminal comes from) is given to its window at each draw.
 // A window that is open when the page is loaded again (the screen holds nothing of it) is taken back from Rust.
+// A file in a window (A-18, A-29) is held by the page of its window, not here: it is saved and closed there before the tab leaves its pane, so this module keeps only its entry; the tab stays in the layout (it is away whether the list holds it or not), and coming back opens the file again in its pane with the id it had.
+// What the editor of a file window opens next (the definition of a name, A-34) comes from the window by the same channel, and the screen shows it in its own pane.
 import type { PopoutAction } from "./bindings/PopoutAction";
 import type { PopoutTab } from "./bindings/PopoutTab";
 import { invoke } from "./ipc.js";
+import type { DefinitionQuery } from "./orca-definition.js";
+import { reserveId } from "./orca-editor.js";
 
-// What the screen does for the windows: draws itself again, closes a tab as its pane's × does (and says whether it was closed), and shows a failure.
+// What the screen does for the windows: draws itself again, closes a tab as its pane's × does (and says whether it was closed), opens a file again in its pane (the window of a file was put back), shows the definition that the editor of a window asked for, and shows a failure.
 export interface PopoutHost {
   changed: () => void;
   close: (project: string, tab: string) => Promise<boolean>;
+  reopen: (entry: PopoutTab) => void;
+  definition: (query: DefinitionQuery) => void;
   failed: (e: unknown) => void;
 }
 
 const windows = new Map<string, PopoutTab>();
-let host: PopoutHost = { changed: () => {}, close: async () => false, failed: () => {} };
+let host: PopoutHost = { changed: () => {}, close: async () => false, reopen: () => {}, definition: () => {}, failed: () => {} };
 
 // Whether the tab `tab` is in a window.
 export const isAway = (tab: string) => windows.has(tab);
 
-// The ids of the tabs of the project `project` that are in a window.
-export const awayIn = (project: string) => [...windows.values()].filter((w) => w.project === project).map((w) => w.tab);
+// The ids of the tabs of the project `project` that are in a window: a terminal while `live` (the tabs the list holds) has it, a file always (the window holds it).
+export const awayIn = (project: string, live: string[]) => [...windows.values()].filter((w) => w.project === project && (w.content.kind === "file" || live.includes(w.tab))).map((w) => w.tab);
+
+// The id of the tab that holds the file `relative` of the worktree at `path` in a window (`outside`: the file that a definition named outside the worktree), none when no window holds it: the file is not opened a second time.
+export const awayFile = (target: string | null, project: string, path: string, relative: string, outside: boolean) =>
+  [...windows.values()].find((w) => w.project === project && w.environment === target && w.content.kind === "file" && w.content.path === path && w.content.relative === relative && (w.content.server !== null) === outside)?.tab;
+
+// Whether a window holds a file of the worktree at `path` of `target`: its language server is still wanted (A-34).
+export const awayFileIn = (target: string | null, path: string) => [...windows.values()].some((w) => w.environment === target && w.content.kind === "file" && w.content.path === path);
 
 // Puts the tab in a window: it leaves its pane at once (the draw stops its terminal here), and comes back when the window could not be made.
 export async function popOut(tab: PopoutTab) {
@@ -33,6 +46,8 @@ export async function popOut(tab: PopoutTab) {
   } catch (e) {
     if (windows.get(tab.tab) === tab) {
       windows.delete(tab.tab);
+      // A file left the editor of this page to be saved and opened in the window: it is opened here again.
+      host.reopen(tab);
       host.changed();
     }
     host.failed(e);
@@ -47,11 +62,17 @@ export function focusPopout(tab: string) {
 }
 
 // Carries out what the owner did in a window. A close that did not close the tab keeps the window; the tab that is not held any more only has its window ended.
+// The page of a file window closed the file before it asked for the close or the restore, so only the restore has something to do for it: the file opens again in its pane.
 async function act(action: PopoutAction) {
   const entry = windows.get(action.tab);
-  if (entry !== undefined && action.kind === "close" && !(await host.close(entry.project, entry.tab))) return;
+  if (action.kind === "definition") {
+    if (entry !== undefined) host.definition({ ...action.query, tab: action.tab });
+    return;
+  }
+  if (entry !== undefined && action.kind === "close" && entry.content.kind !== "file" && !(await host.close(entry.project, entry.tab))) return;
   windows.delete(action.tab);
   await invoke("orca_popout_end", { tab: action.tab }).catch(host.failed);
+  if (entry !== undefined && action.kind === "restore") host.reopen(entry);
   host.changed();
 }
 
@@ -76,7 +97,11 @@ export function initPopout(screen: PopoutHost) {
   const channel = new window.__TAURI__.core.Channel<PopoutAction>();
   channel.onmessage = (action) => void act(action);
   invoke("orca_popout_main", { channel }).then((tabs) => {
-    for (const tab of tabs) windows.set(tab.tab, tab);
+    for (const tab of tabs) {
+      windows.set(tab.tab, tab);
+      // The counter of the file ids passes a file that a window holds, so no file opened now takes its id.
+      if (tab.content.kind === "file") reserveId(tab.tab);
+    }
     if (tabs.length > 0) host.changed();
   }, screen.failed);
 }

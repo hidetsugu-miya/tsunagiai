@@ -44,6 +44,7 @@ import type { OrcaTermEvent } from "../ts/bindings/OrcaTermEvent";
 import type { OrcaTerminal } from "../ts/bindings/OrcaTerminal";
 import type { OrcaWorktree } from "../ts/bindings/OrcaWorktree";
 import type { PopoutAction } from "../ts/bindings/PopoutAction";
+import type { PopoutPage } from "../ts/bindings/PopoutPage";
 import type { PopoutTab } from "../ts/bindings/PopoutTab";
 import type { ScreenAnswer } from "../ts/bindings/ScreenAnswer";
 import type { Reaction } from "../ts/bindings/Reaction";
@@ -1032,7 +1033,9 @@ export const sendStream = (event: OrcaStreamEvent, nth = -1) => deliver("orca_st
 export const sendTerm = (event: OrcaTermEvent, nth = -1) => deliver("orca_stream_terminal", event, nth);
 // A-46: what the owner did in a window of a tab (the channel of `orca_popout_main`, which the screen gives at the start), and the tab as the screen knows it now (the channel of `orca_popout_attach`, which the page of a window gives).
 export const sendPopout = (action: PopoutAction, nth = -1) => deliver("orca_popout_main", action, nth);
-export const sendPopoutTab = (tab: PopoutTab, nth = -1) => deliver("orca_popout_attach", tab, nth);
+export const sendPopoutTab = (tab: PopoutTab, nth = -1) => deliver("orca_popout_attach", { kind: "tab", tab } satisfies PopoutPage, nth);
+// A-46: the red button of a window whose page holds a file, as Rust tells the page.
+export const sendPopoutClose = (nth = -1) => deliver("orca_popout_attach", { kind: "close" } satisfies PopoutPage, nth);
 // A tab as `orca_popout_open` takes it, `orca_popout_main` answers it, and `orca_popout_attach` answers it to the page of its window: a plain terminal of the project `proj_example-app` that this machine mirrors; `extra` overrides any field.
 export const popoutTab = (tab: string, handle: string, title: string, extra: Partial<PopoutTab> = {}): PopoutTab => ({
   tab,

@@ -3,8 +3,10 @@
 //! The screen (`ts/orca-popout.ts`) asks for the window with `orca_popout_open`, and keeps the tab out of its pane (`away` of `orca_panes`).
 //! The page of the window (`ts/popout.ts`) asks what it shows (`orca_popout_attach`) and draws it, and its two buttons are `orca_popout_pin` (the window stays on top) and `orca_popout_restore`.
 //! The window has no permission of its own: what it does goes through these commands, and what the two pages tell each other goes through channels, which need no `event` permission.
-//! The screen's channel (`orca_popout_main`) carries what the owner did in a window, the close (the red button, which is stopped here and left to the screen, so the tab is closed as the × of its pane closes it) and the restore;
-//! the window's channel (`orca_popout_attach`) carries what the screen knows of the tab now (its name, its status, where its terminal comes from).
+//! The screen's channel (`orca_popout_main`) carries what the owner did in a window, the close (the red button, which is stopped here and left to the screen, so the tab is closed as the × of its pane closes it), the restore,
+//! and the definition that the editor of a file window asked for (`orca_popout_definition`), which the screen shows as a tab of its own pane;
+//! the window's channel (`orca_popout_attach`) carries what the screen knows of the tab now (its name, its status, where its terminal comes from) and, for a file, the red button.
+//! A file is held by the page of its window (its text, its save): the red button is left to that page, which closes the file and then tells `orca_popout_close`, which asks the screen as the red button of a terminal does.
 //! A window that the screen cannot be asked about (no channel, or a send that failed) is destroyed. The window ends with `orca_popout_end`, when the screen has done what the owner asked, and with the main window.
 //! The table is held in memory only (a window is not restored when the app starts).
 
@@ -39,7 +41,18 @@ pub struct PopoutTerminal {
     pub ended: bool,
 }
 
-/// What a window shows, by the kind of the tab. A kind that comes later (a file, a diff, a definition, a database) is a variant of its own.
+/// The file that a file tab (an editor tab, A-18, and a scratchpad, A-29) shows: the worktree, the file in it (`relative`) and, for a file outside the worktree that a definition named (A-34), the server that gave it (`relative` is then its absolute path on the server's side, and the file is read only).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct PopoutFile {
+    pub path: String,
+    pub relative: String,
+    pub server: Option<String>,
+}
+
+/// What a window shows, by the kind of the tab. A kind that comes later (a diff, a definition, a database) is a variant of its own.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -47,6 +60,7 @@ pub struct PopoutTerminal {
 pub enum PopoutContent {
     Claude(PopoutTerminal),
     Terminal(PopoutTerminal),
+    File(PopoutFile),
 }
 
 /// A tab of the screen that is in a window: its id and project (which `orca_panes` keeps its place under), the name and the status its header shows, where it is (`environment`: null for this machine) and what it shows.
@@ -65,20 +79,55 @@ pub struct PopoutTab {
     pub content: PopoutContent,
 }
 
-/// What the owner did in a window, which the screen carries out: the tab is closed (the red button), or it goes back to its pane.
+/// The question of the editor of a file window about the definition of a name (A-34), as the screen takes it for the definition tab (`DefinitionQuery` of `ts/orca-definition.ts`, whose `tab` the screen fills from the window).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct PopoutDefinition {
+    pub target: Option<String>,
+    pub project: String,
+    pub path: String,
+    pub server: String,
+    pub relative: String,
+    pub text: String,
+    pub line: u32,
+    pub character: u32,
+    pub word: String,
+}
+
+/// What the owner did in a window, which the screen carries out: the tab is closed (the red button), it goes back to its pane, or its editor asked for the definition of a name, which the screen shows in its own pane.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum PopoutAction {
-    Close { tab: String },
-    Restore { tab: String },
+    Close {
+        tab: String,
+    },
+    Restore {
+        tab: String,
+    },
+    Definition {
+        tab: String,
+        query: PopoutDefinition,
+    },
+}
+
+/// What the page of a window is told: the tab as the screen knows it now, and the red button of a window whose page holds the tab's document (a file).
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PopoutPage {
+    Tab { tab: PopoutTab },
+    Close,
 }
 
 struct Slot {
     tab: PopoutTab,
     /// The channel of the page of the window, once it asked what it shows.
-    page: Option<Channel<PopoutTab>>,
+    page: Option<Channel<PopoutPage>>,
 }
 
 #[derive(Default)]
@@ -136,8 +185,44 @@ fn check(tab: &PopoutTab) -> Result<(), String> {
                 return Err("パスが正しくありません".into());
             }
         }
+        PopoutContent::File(f) => {
+            check_text("パス", &f.path)?;
+            check_text("ファイル", &f.relative)?;
+            if let Some(server) = &f.server {
+                check_text("サーバー", server)?;
+            }
+        }
     }
     Ok(())
+}
+
+/// The most that the text of a definition question holds: what `lsp_definition` takes.
+const MAX_DEFINITION_TEXT: usize = 1024 * 1024;
+
+/// Checks a question of the editor of the window that holds `tab`: the window shows a file, and the question is about that file of that worktree (and, for a file outside it, to the server that gave it), so a window asks nothing of another file.
+fn check_definition(tab: &PopoutTab, query: &PopoutDefinition) -> Result<(), String> {
+    let PopoutContent::File(file) = &tab.content else {
+        return Err("このウィンドウはファイルを開いていません".into());
+    };
+    if query.target != tab.environment
+        || query.project != tab.project
+        || query.path != file.path
+        || query.relative != file.relative
+        || file.server.as_ref().is_some_and(|s| *s != query.server)
+    {
+        return Err("このウィンドウのファイルの問い合わせではありません".into());
+    }
+    check_text("サーバー", &query.server)?;
+    check_text("名前", &query.word)?;
+    if query.text.len() > MAX_DEFINITION_TEXT {
+        return Err("ファイルが大きすぎます".into());
+    }
+    Ok(())
+}
+
+/// Whether the page of a window holds the document of its tab (a file: its text and its save), so the red button is left to the page.
+fn has_document(content: &PopoutContent) -> bool {
+    matches!(content, PopoutContent::File(_))
 }
 
 impl Table {
@@ -306,7 +391,7 @@ pub fn orca_popout_update(
         .ok_or("ウィンドウがありません")?;
     slot.tab = tab.clone();
     if let Some(page) = &slot.page {
-        let _ = page.send(tab);
+        let _ = page.send(PopoutPage::Tab { tab });
     }
     Ok(())
 }
@@ -316,7 +401,7 @@ pub fn orca_popout_update(
 pub fn orca_popout_attach(
     webview: Webview,
     state: State<'_, Popouts>,
-    channel: Channel<PopoutTab>,
+    channel: Channel<PopoutPage>,
 ) -> Result<PopoutTab, String> {
     let mut table = state.table();
     let slot = table
@@ -346,13 +431,71 @@ pub fn orca_popout_restore(window: WebviewWindow) -> Result<(), String> {
     Ok(())
 }
 
+/// The page of a window whose editor holds a file asks for the definition of a name (A-34): the screen shows it as a tab of its own pane, in the project of the file. The question must be about the window's own file.
+#[tauri::command]
+pub fn orca_popout_definition(
+    window: WebviewWindow,
+    state: State<'_, Popouts>,
+    query: PopoutDefinition,
+) -> Result<(), String> {
+    if !is_popout(window.label()) {
+        return Err("このウィンドウは問い合わせできません".into());
+    }
+    let (action, screen) = {
+        let table = state.table();
+        let slot = table
+            .slots
+            .get(window.label())
+            .ok_or("このウィンドウにタブがありません")?;
+        check_definition(&slot.tab, &query)?;
+        (
+            PopoutAction::Definition {
+                tab: slot.tab.tab.clone(),
+                query,
+            },
+            table.screen.clone(),
+        )
+    };
+    let screen = screen.ok_or("本体の画面につながっていません")?;
+    screen
+        .send(action)
+        .map_err(|e| format!("本体の画面に送れませんでした: {e}"))
+}
+
+/// The page of a file window closed its file (its typing saved, as the × of a pane closes a file): the screen is told to end the window.
+#[tauri::command]
+pub fn orca_popout_close(window: WebviewWindow) -> Result<(), String> {
+    if !is_popout(window.label()) {
+        return Err("このウィンドウは閉じられません".into());
+    }
+    ask(window.app_handle(), window.label(), false);
+    Ok(())
+}
+
+/// Tells the page of the window `label` that the red button was pressed, when the page holds the document of its tab (a file) and can be told; false leaves the red button to the screen.
+fn page_closes(app: &AppHandle, label: &str) -> bool {
+    let state = app.state::<Popouts>();
+    let page = {
+        let table = state.table();
+        table
+            .slots
+            .get(label)
+            .filter(|s| has_document(&s.tab.content))
+            .and_then(|s| s.page.clone())
+    };
+    page.is_some_and(|page| page.send(PopoutPage::Close).is_ok())
+}
+
 /// The windows of the app: the red button of a window made here does not close it, it asks the screen to close the tab, and the end of the main window ends them all.
 pub fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
     let label = window.label();
     match event {
         WindowEvent::CloseRequested { api, .. } if is_popout(label) => {
             api.prevent_close();
-            ask(window.app_handle(), label, false);
+            let app = window.app_handle();
+            if !page_closes(app, label) {
+                ask(app, label, false);
+            }
         }
         WindowEvent::Destroyed if is_popout(label) => {
             window
@@ -509,6 +652,120 @@ mod tests {
             ..tab("orca:t1", "t1")
         };
         assert!(check(&blank).is_ok());
+    }
+
+    fn file_tab(server: Option<&str>) -> PopoutTab {
+        PopoutTab {
+            tab: "file:3".into(),
+            project: "proj_a".into(),
+            title: "main.rs".into(),
+            status: OrcaStatus::Done,
+            label: String::new(),
+            environment: Some("Studio".into()),
+            content: PopoutContent::File(PopoutFile {
+                path: "/work/a".into(),
+                relative: "src/main.rs".into(),
+                server: server.map(str::to_owned),
+            }),
+        }
+    }
+
+    fn question() -> PopoutDefinition {
+        PopoutDefinition {
+            target: Some("Studio".into()),
+            project: "proj_a".into(),
+            path: "/work/a".into(),
+            server: "rust".into(),
+            relative: "src/main.rs".into(),
+            text: "fn main() {}".into(),
+            line: 0,
+            character: 3,
+            word: "main".into(),
+        }
+    }
+
+    #[test]
+    fn a_file_tab_is_checked_like_the_others_and_the_page_holds_its_document() {
+        assert!(check(&file_tab(None)).is_ok());
+        assert!(check(&file_tab(Some("ruby"))).is_ok());
+        for bad in [
+            PopoutFile {
+                path: String::new(),
+                relative: "a".into(),
+                server: None,
+            },
+            PopoutFile {
+                path: "/w".into(),
+                relative: "a\nb".into(),
+                server: None,
+            },
+            PopoutFile {
+                path: "/w".into(),
+                relative: "a".into(),
+                server: Some(String::new()),
+            },
+        ] {
+            let tab = PopoutTab {
+                content: PopoutContent::File(bad),
+                ..file_tab(None)
+            };
+            assert!(check(&tab).is_err(), "{tab:?}");
+        }
+        assert!(has_document(&file_tab(None).content));
+        assert!(!has_document(&tab("orca:t1", "t1").content));
+    }
+
+    #[test]
+    fn a_question_of_the_editor_is_about_the_file_of_its_own_window() {
+        assert!(check_definition(&file_tab(None), &question()).is_ok());
+        let ask = |change: fn(&mut PopoutDefinition)| {
+            let mut q = question();
+            change(&mut q);
+            check_definition(&file_tab(None), &q)
+        };
+        assert!(ask(|q| q.project = "proj_b".into()).is_err());
+        assert!(ask(|q| q.path = "/work/b".into()).is_err());
+        assert!(ask(|q| q.relative = "src/lib.rs".into()).is_err());
+        assert!(ask(|q| q.target = None).is_err());
+        assert!(ask(|q| q.word = String::new()).is_err());
+        assert!(ask(|q| q.server = String::new()).is_err());
+        assert!(ask(|q| q.text = "x".repeat(MAX_DEFINITION_TEXT + 1)).is_err());
+        assert!(ask(|q| q.text = "x".repeat(MAX_DEFINITION_TEXT)).is_ok());
+        // A file outside the worktree asks only the server that gave it.
+        assert!(check_definition(&file_tab(Some("ruby")), &question()).is_err());
+        let mut gem = question();
+        gem.server = "ruby".into();
+        assert!(check_definition(&file_tab(Some("ruby")), &gem).is_ok());
+        // A window of a terminal asks nothing.
+        assert!(check_definition(&tab("orca:t1", "t1"), &question()).is_err());
+    }
+
+    #[test]
+    fn a_file_tab_and_what_the_pages_tell_each_other_travel_as_written() {
+        let text = r#"{"tab":"file:3","project":"proj_a","title":"main.rs","status":"done","label":"","environment":"Studio","content":{"kind":"file","path":"/work/a","relative":"src/main.rs","server":null}}"#;
+        let read: PopoutTab = serde_json::from_str(text).unwrap();
+        assert_eq!(read, file_tab(None));
+        assert_eq!(serde_json::to_string(&read).unwrap(), text);
+        assert_eq!(
+            serde_json::to_string(&PopoutPage::Close).unwrap(),
+            r#"{"kind":"close"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&PopoutPage::Tab {
+                tab: file_tab(None)
+            })
+            .unwrap(),
+            format!(r#"{{"kind":"tab","tab":{text}}}"#)
+        );
+        let action = serde_json::to_value(PopoutAction::Definition {
+            tab: "file:3".into(),
+            query: question(),
+        })
+        .unwrap();
+        assert_eq!(action["kind"], "definition");
+        assert_eq!(action["tab"], "file:3");
+        assert_eq!(action["query"]["relative"], "src/main.rs");
+        assert_eq!(action["query"]["character"], 3);
     }
 
     #[test]

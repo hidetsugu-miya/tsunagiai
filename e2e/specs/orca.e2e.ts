@@ -1,5 +1,6 @@
 import type { OrcaDir } from "../../ts/bindings/OrcaDir";
 import type { OrcaFileText } from "../../ts/bindings/OrcaFileText";
+import type { OrcaSaved } from "../../ts/bindings/OrcaSaved";
 import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import type { PaneLayout } from "../../ts/bindings/PaneLayout";
 import type { PaneNode } from "../../ts/bindings/PaneNode";
@@ -4097,6 +4098,170 @@ describe("orca: a tab in a window of its own (A-46)", () => {
     await open({ orca_popout_main: [shell] });
     await awayIs([zsh]);
     expect(await tabTitles()).toEqual(["Write the docs", "bash"]);
+  });
+
+  // A file (A-18) and the scratchpad (A-29): the editor of a tab is held by the page that shows it, so the tab is saved and closed here before the window opens it again.
+  describe("a file", () => {
+    const memo = { relative: ".orca/scratchpad/memo.md", existed: false };
+    const fileText = (content: string): OrcaFileText => ({ content, crlf: false, signature: "sig-1", language: "plaintext", highlight: null });
+    const FILE = "file:1";
+    const inWindow = popoutTab(FILE, "", "memo.md", { label: "", content: { kind: "file", path: "/work/example-app", relative: memo.relative, server: null } });
+    const area = () => $(".orca-edit-area");
+    // Opens the scratchpad file of example-app as a tab (the first file of the page: `file:1`).
+    async function openMemo(fixtures: Record<string, unknown> = {}) {
+      await open({ editor_settings: { autosaveMs: 100 }, ...fixtures });
+      await mock("orca_scratchpad_create", memo);
+      await mock("orca_file_read", fileText("a note\n"));
+      await plus("example-app", SCRATCHPAD);
+      await browser.keys("Enter");
+      await expect(area()).toHaveValue("a note\n", { trim: false });
+      await expect(tabOf(FILE)).toBeDisplayed();
+    }
+    // Types a letter in the editor (the autosave of 100 ms is not waited for: the close of the tab saves it).
+    async function typeX() {
+      await area().click();
+      await browser.keys("x");
+    }
+    const saved = (signature: string): OrcaSaved => ({ state: "saved", signature });
+
+    it("has the row 「別ウィンドウで開く」 before the two copies of the path, with a line between", async () => {
+      await openMemo();
+      await rightClick(FILE);
+      expect(await textsOf('.menu[role="menu"] [role="menuitem"]')).toEqual(["右に分割", "下に分割", "別ウィンドウで開く", "パスのコピー", "相対パスをコピー"]);
+      expect(await count('.menu[role="menu"] [role="separator"]')).toBe(1);
+    });
+
+    it("saves what was typed, then asks `orca_popout_open` for the file, and the strip no longer has it", async () => {
+      await openMemo();
+      const write = await mock("orca_file_write", saved("sig-2"));
+      await typeX();
+      await popOut(FILE);
+      expect(await waitForCalls("orca_popout_open")).toEqual([{ tab: inWindow }]);
+      // The save came first: the call is of the typing, with the signature of the read.
+      expect(await callsOf(write)).toEqual([{ path: "/work/example-app", relative: memo.relative, content: "a note\nx", crlf: false, signature: "sig-1", environment: null }]);
+      await awayIs([FILE]);
+      expect(await tabTitles()).toEqual(["Write the docs", "zsh", "bash"]);
+      await expect(area()).not.toExist();
+    });
+
+    it("saves nothing when nothing was typed", async () => {
+      await openMemo();
+      const write = await mock("orca_file_write", saved("sig-2"));
+      await popOut(FILE);
+      expect(await waitForCalls("orca_popout_open")).toEqual([{ tab: inWindow }]);
+      expect(await callsOf(write)).toEqual([]);
+    });
+
+    it("keeps the tab in its pane, and the typing in it, when the save fails", async () => {
+      await openMemo();
+      await mock("orca_file_write", rejects("保存できませんでした"));
+      await typeX();
+      await popOut(FILE);
+      await expect($(CARD)).toHaveText("保存できませんでした");
+      expect(await callsOf("orca_popout_open")).toEqual([]);
+      expect(await tabTitles()).toEqual(["Write the docs", "zsh", "bash", "memo.md"]);
+      await expect(area()).toHaveValue("a note\nx", { trim: false });
+      expect(await away()).toEqual([]);
+    });
+
+    it("keeps the tab in its pane when the save is refused because the disk changed", async () => {
+      await openMemo();
+      await mock("orca_file_write", { state: "changed", signature: "sig-1" } satisfies OrcaSaved);
+      await typeX();
+      await popOut(FILE);
+      await expect($(".orca-edit-state")).toHaveText("ディスクのファイルが変わっています");
+      expect(await callsOf("orca_popout_open")).toEqual([]);
+      expect(await tabTitles()).toEqual(["Write the docs", "zsh", "bash", "memo.md"]);
+      await expect(area()).toHaveValue("a note\nx", { trim: false });
+    });
+
+    it("opens the file in its pane again, with the id it had and the disk's text, when the window is made no more", async () => {
+      await openMemo();
+      await mock("orca_popout_open", rejects("別ウィンドウを開けませんでした: test"));
+      await popOut(FILE);
+      await expect($(CARD)).toHaveText("別ウィンドウを開けませんでした: test");
+      await expect(tabOf(FILE)).toBeDisplayed();
+      await expect(area()).toHaveValue("a note\n", { trim: false });
+      expect(await callsOf("orca_file_read")).toHaveLength(2);
+      await awayIs([]);
+    });
+
+    it("puts the file back in its pane, read again from the disk, when the owner presses the button of its window", async () => {
+      await openMemo();
+      await popOut(FILE);
+      await awayIs([FILE]);
+      await mock("orca_file_read", fileText("a note, changed\n"));
+      await sendPopout({ kind: "restore", tab: FILE });
+      expect(await waitForCalls("orca_popout_end")).toEqual([{ tab: FILE }]);
+      await awayIs([]);
+      await expect(tabOf(FILE)).toBeDisplayed();
+      await expect(area()).toHaveValue("a note, changed\n", { trim: false });
+    });
+
+    it("ends the window, and asks nothing of Orca, when the page of a file window asked for the close", async () => {
+      await openMemo();
+      await popOut(FILE);
+      await awayIs([FILE]);
+      const closed = await mock("orca_close", null);
+      await sendPopout({ kind: "close", tab: FILE });
+      expect(await waitForCalls("orca_popout_end")).toEqual([{ tab: FILE }]);
+      expect(await callsOf(closed)).toEqual([]);
+      await awayIs([]);
+      expect(await tabTitles()).toEqual(["Write the docs", "zsh", "bash"]);
+    });
+
+    it("shows the definition that the editor of the window asked for as a tab of its own pane, and asks the server as the editor of a pane does", async () => {
+      await openMemo();
+      await popOut(FILE);
+      await awayIs([FILE]);
+      const asked = await mock("lsp_definition", []);
+      await mock("lsp_places", []);
+      const query = { target: null, project: "proj_example-app", path: "/work/example-app", server: "ruby", relative: memo.relative, text: "Rails.logger", line: 0, character: 2, word: "Rails" };
+      await sendPopout({ kind: "definition", tab: FILE, query });
+      expect(await waitForCalls(asked)).toEqual([{ environment: null, worktree: "/work/example-app", server: "ruby", relative: memo.relative, text: "Rails.logger", line: 0, character: 2 }]);
+      await browser.waitUntil(async () => (await tabTitles()).includes("定義 ・ Rails"), { timeoutMsg: "the definition tab never opened" });
+      // The file stays in its window.
+      expect(await away()).toEqual([FILE]);
+    });
+
+    it("brings the window to the front, and opens no second editor, when the same file is opened again", async () => {
+      await openMemo();
+      await popOut(FILE);
+      await awayIs([FILE]);
+      const focused = await mock("orca_popout_focus", null);
+      await mock("orca_scratchpad_create", { ...memo, existed: true });
+      const read = await mock("orca_file_read", fileText("a note\n"));
+      await plus("example-app", SCRATCHPAD);
+      await browser.keys("Enter");
+      expect(await waitForCalls(focused)).toEqual([{ tab: FILE }]);
+      expect(await callsOf(read)).toEqual([]);
+      await expect(area()).not.toExist();
+    });
+
+    it("takes a file window back from Rust when the page is loaded again: its tab stays out of the panes and the next file does not take its id", async () => {
+      await open({ orca_popout_main: [inWindow], editor_settings: { autosaveMs: 100 } });
+      await awayIs([FILE]);
+      await mock("orca_scratchpad_create", { relative: ".orca/scratchpad/other.md", existed: false });
+      await mock("orca_file_read", fileText("a note\n"));
+      await plus("example-app", SCRATCHPAD);
+      await browser.keys("Enter");
+      await expect(tabOf("file:2")).toBeDisplayed();
+      expect(await tabTitles()).toEqual(["Write the docs", "zsh", "bash", "other.md"]);
+      expect(await away()).toEqual([FILE]);
+    });
+
+    it("leaves its window as it is when the list is read again: a file is no row of the list", async () => {
+      await openMemo(timers({ orcaClock: 1000 }));
+      await popOut(FILE);
+      await awayIs([FILE]);
+      const updated = await mock("orca_popout_update", null);
+      const ended = await mock("orca_popout_end", null);
+      await mock("orca_overview", overview([orcaRow("example-app", "feat/a", "Read the page", { minutes: 2 }), ...sample().slice(1)]));
+      await browser.pause(1500);
+      expect(await callsOf(updated)).toEqual([]);
+      expect(await callsOf(ended)).toEqual([]);
+      expect(await away()).toEqual([FILE]);
+    });
   });
 });
 

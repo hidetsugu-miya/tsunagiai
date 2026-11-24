@@ -93,6 +93,7 @@ import type { OrcaStarted } from "./bindings/OrcaStarted";
 import type { OrcaViewport } from "./bindings/OrcaViewport";
 import type { PaneLayout } from "./bindings/PaneLayout";
 import type { PaneOp } from "./bindings/PaneOp";
+import type { PopoutDefinition } from "./bindings/PopoutDefinition";
 import type { PopoutTab } from "./bindings/PopoutTab";
 import type { PickedDue } from "./bindings/PickedDue";
 import type { PendingImage } from "./bindings/PendingImage";
@@ -427,6 +428,8 @@ export interface Commands {
   orca_popout_attach: { args: { channel: unknown }; result: PopoutTab };
   orca_popout_pin: { args: { pinned: boolean }; result: null };
   orca_popout_restore: { args: undefined; result: null };
+  orca_popout_close: { args: undefined; result: null };
+  orca_popout_definition: { args: { query: PopoutDefinition }; result: null };
   // A-18: the entries of the folder `dir` (relative to the worktree; "" is its own folder) of the worktree at `path` of the target `environment`: the folders first, each with whether git ignores it. Not tried again: a failure carries its message.
   orca_files_list: { args: { path: string; dir: string; ignored: boolean; environment: string | null }; result: OrcaDir };
   orca_files_ignored: { args: { path: string; paths: string[]; environment: string | null }; result: string[] };

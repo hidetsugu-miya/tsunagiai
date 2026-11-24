@@ -157,6 +157,8 @@ const answers = {
   orca_popout_update: null,
   orca_popout_pin: null,
   orca_popout_restore: null,
+  orca_popout_close: null,
+  orca_popout_definition: null,
   orca_stream_viewport: null,
   orca_stream_input: null,
   // A-36: a Claude Code pane's process; a spec that checks the calls reads them with `callsOf`.

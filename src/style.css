@@ -1846,6 +1846,7 @@ body#popout { flex-direction: column; overflow: hidden; }
 #popout-head .icon-btn svg { width: 16px; height: 16px; }
 #popout-head .icon-btn[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
 #popout-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
+#popout-file { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--surface); }
 /* The host of a Claude Code pane (A-36), as `#orca-panes .orca-term` is the host of an Orca terminal: the box of the terminal fills it. */
 .claude-code-pane { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
 .orca-drop { position: fixed; z-index: 30; box-sizing: border-box; border: 2px solid var(--accent); border-radius: 8px; background: var(--soft); opacity: .6; pointer-events: none; }
