@@ -2184,13 +2184,17 @@ describe("settings: tabs", () => {
 
   it("shows only the card of the pressed tab", async () => {
     await openSettings([]);
+    // One script reads every card, so a press costs two WebDriver commands and not one lookup for each of the eleven cards (the lookups timed out under load).
+    const shown = () =>
+      browser.execute(() =>
+        [...document.querySelectorAll('[role="tabpanel"][id^="settings-panel-"]')]
+          .filter((p) => !(p as HTMLElement).hidden && getComputedStyle(p).display !== "none")
+          .map((p) => p.id),
+      );
     for (const [name] of TABS) {
       await openTab(name);
       expect(await selected()).toEqual([`settings-tab-${name}`]);
-      for (const [other] of TABS) {
-        if (other === name) await expect(panel(other)).toBeDisplayed();
-        else await expect(panel(other)).not.toBeDisplayed();
-      }
+      expect(await shown()).toEqual([`settings-panel-${name}`]);
     }
   });
 
