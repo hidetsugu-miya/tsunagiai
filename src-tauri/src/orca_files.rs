@@ -386,7 +386,7 @@ pub(crate) fn check_relative(relative: &str, allow_empty: bool) -> Result<(), St
 }
 
 /// A path that names what is deleted, moved or made in: `check_relative`, and no `\` either. A worktree on Windows has Orca turn `\` into `/`, so a path of `\` alone would be the root of the worktree; a read keeps `\`, which a name on other disks may hold.
-fn check_written(relative: &str, allow_empty: bool) -> Result<(), String> {
+pub(crate) fn check_written(relative: &str, allow_empty: bool) -> Result<(), String> {
     check_relative(relative, allow_empty)?;
     if relative.contains('\\') {
         return Err("ファイルの場所が正しくありません".into());
@@ -1054,7 +1054,7 @@ async fn rename(
 }
 
 /// Makes the folders on the way to `to` that are missing, from the worktree down, one `files.createDir` for each (it makes one level and refuses a name that is there, which is no failure here). Answers whether one was made.
-async fn make_parents(
+pub(crate) async fn make_parents(
     rpc: &mut impl Rpc,
     path: &str,
     host_id: &str,

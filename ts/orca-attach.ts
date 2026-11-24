@@ -1,5 +1,6 @@
 // A-10: files pasted or dropped on a terminal of the Orca screen or in the pane of A-9. A file is taken as a File and kept in memory as base64; nothing is stored here.
 // A terminal puts the file in `.orca/drops/` of its worktree at once (`orca_attach_file`) and types the path of the file in itself; the pane keeps the files (an image as a thumbnail, any other by its name) until the send, which adds the paths to the instruction.
+// The file pane's tree takes a drop of its own, folders too (A-47, `listenForDrops`).
 // The window's own file drop is off (`dragDropEnabled` false), so a drop gives File objects to the page; a file dropped anywhere else must not make the webview navigate to it.
 import type { AttachedFile } from "./bindings/AttachedFile";
 import { tag } from "./dom.js";
@@ -119,6 +120,75 @@ export function listenForFiles(zone: HTMLElement, take: (files: File[]) => void)
     e.preventDefault();
     zone.classList.remove("dropping");
     take([...e.dataTransfer!.files]);
+  });
+}
+
+// A-47: what a drop on the file pane carried: the files the page can read, each with the folder that holds it inside the drop ("" for a file dropped by itself, "photos/2026" for a file of a dropped folder `photos`), and every folder that was dropped, the empty ones too (as paths inside the drop, a folder before what it holds). `over` is that the drop held more files than the walk was asked to take, and the walk stopped.
+export interface Dropped {
+  files: { file: File; dir: string }[];
+  folders: string[];
+  over: boolean;
+}
+
+const fileOf = (entry: FileSystemFileEntry) => new Promise<File>((resolve, reject) => entry.file(resolve, reject));
+
+// Walks the folder `entry` (which is in the folder `parent` of the drop): the folder is noted, and what it holds is read in the batches that `readEntries` gives until it gives an empty one. The walk ends once there are more than `max` files.
+async function walk(entry: FileSystemEntry, parent: string, found: Dropped, max: number) {
+  if (found.over) return;
+  if (!entry.isDirectory) {
+    if (found.files.length >= max) found.over = true;
+    else found.files.push({ file: await fileOf(entry as FileSystemFileEntry), dir: parent });
+    return;
+  }
+  const here = parent === "" ? entry.name : `${parent}/${entry.name}`;
+  found.folders.push(here);
+  const reader = (entry as FileSystemDirectoryEntry).createReader();
+  for (;;) {
+    const batch = await new Promise<FileSystemEntry[]>((resolve, reject) => reader.readEntries(resolve, reject));
+    if (batch.length === 0 || found.over) return;
+    for (const child of batch) await walk(child, here, found, max);
+  }
+}
+
+// Reads what a drop carried, at most `max` files. The entries of a drop are valid only while its event runs, so they are taken before the first wait; a transfer that has no entries (one that cannot name a folder) gives its plain files. Whether the entries of a drop from Finder work in the WKWebView is not checked (A-47).
+export async function readDropped(transfer: DataTransfer, max: number): Promise<Dropped> {
+  const entries = [...(transfer.items ?? [])].map((item) => (item.kind === "file" ? item.webkitGetAsEntry() : null));
+  const plain = [...transfer.files];
+  if (entries.length === 0 || entries.some((entry) => entry === null)) return { files: plain.slice(0, max).map((file) => ({ file, dir: "" })), folders: [], over: plain.length > max };
+  const found: Dropped = { files: [], folders: [], over: false };
+  for (const entry of entries as FileSystemEntry[]) await walk(entry, "", found, max);
+  return found;
+}
+
+// The bytes of `file` as base64 (an empty file is the empty string), as `orca_drop_file` takes them.
+export function fileBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = String(reader.result);
+      resolve(url.slice(url.indexOf(",") + 1));
+    };
+    reader.onerror = () => reject(new Error(`${file.name} を読めません`));
+    reader.readAsDataURL(file);
+  });
+}
+
+// A-47: makes `zone` take the files and folders dropped on it (the walk takes at most `max` files), and tells where. `over` is told the element under the pointer while a drag is over it and answers whether a drop is taken now (a drag that is not taken is shown the "none" cursor); `leave` is told when the drag leaves the zone and when it drops; `drop` is given the element under the pointer and what the drop carried.
+export function listenForDrops(zone: HTMLElement, max: number, on: { over: (target: EventTarget | null) => boolean; leave: () => void; drop: (target: EventTarget | null, dropped: Promise<Dropped>) => void }) {
+  zones.add(zone);
+  zone.addEventListener("dragover", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer!.dropEffect = on.over(e.target) ? "copy" : "none";
+  });
+  zone.addEventListener("dragleave", (e) => {
+    if (!zone.contains(e.relatedTarget as Node | null)) on.leave();
+  });
+  zone.addEventListener("drop", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    on.leave();
+    on.drop(e.target, readDropped(e.dataTransfer!, max));
   });
 }
 

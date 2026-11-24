@@ -17,7 +17,7 @@ import type { OrcaRemoteBranch } from "../../ts/bindings/OrcaRemoteBranch";
 import type { OrcaSaved } from "../../ts/bindings/OrcaSaved";
 import type { PaneLayout } from "../../ts/bindings/PaneLayout";
 import type { PaneNode } from "../../ts/bindings/PaneNode";
-import { callsOf, copiedTexts, count, databaseCell, databaseColumn, databaseProfile, databaseRecords, databaseSqlResult, databaseStructure, databaseTable, emitEvent, fontSettings, holds, mock, onceId, orcaRow, orcaTerminal, orcaWorktree, popoutTab, rejects, release, sendFiles, sendPopout, sendStream, stubClipboard, textsOf, timers, waitForCalls, waitForCount, CARDS, CARD } from "../support";
+import { type GivenFile, callsOf, copiedTexts, count, huge, note, databaseCell, databaseColumn, databaseProfile, databaseRecords, databaseSqlResult, databaseStructure, databaseTable, emitEvent, fontSettings, holds, mock, onceId, orcaRow, orcaTerminal, orcaWorktree, popoutTab, rejects, release, sendFiles, sendPopout, sendStream, stubClipboard, textsOf, timers, waitForCalls, waitForCount, CARDS, CARD } from "../support";
 import { blurEditor, caretOffset, charBoxes, claudeTab, CONTENT, editorText, filesToggle, onThisMachine, openOrca, orcaOverview, pickItem, pressEnter, pressFold, pressTab, pressUnfold, project, sample, selectedTab, setCaret, setText, showAgain, streamList, studio, tabOf, tabTitles, typeIn, waitForText, worktrees } from "../orca-support";
 
 // A-18: the file pane and the editor. Rust reads the folders, reads and saves the text, and decides whether a save went through (unit tests); here the screen is checked: what it asks of Rust, and how it draws the answers.
@@ -3180,6 +3180,24 @@ describe("orca: files and editor (A-18)", () => {
     expect(await textsOf('.menu[role="menu"] button')).toEqual(["新規ファイル", "新規フォルダー", "パスのコピー", "相対パスをコピー", "移動・名前の変更", "削除"]);
   });
 
+  it("has 「ブラウザで開く」 on a file whose name ends with .htm, whatever the case, and opens it in the browser, and not on .htmx (A-31)", async () => {
+    await openFiles({ orca_files_list: dirOf("", [["old.htm", false], ["OLD.HTM", false], ["a.htmx", false], ["a.rs", false]]) });
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    const open = await mock("orca_file_open_in_browser", null);
+    expect(await rightClickRow("OLD.HTM")).toBe(true);
+    expect((await textsOf('.menu[role="menu"] button'))[4]).toBe("ブラウザで開く");
+    await browser.keys("Escape");
+    await expect($(".menu")).not.toExist();
+    expect(await rightClickRow("a.htmx")).toBe(true);
+    expect(await textsOf('.menu[role="menu"] button')).not.toContain("ブラウザで開く");
+    await browser.keys("Escape");
+    await expect($(".menu")).not.toExist();
+    expect(await rightClickRow("old.htm")).toBe(true);
+    await pickItem("ブラウザで開く");
+    expect(await waitForCalls(open)).toEqual([{ path: "/work/example-app", relative: "old.htm", environment: null }]);
+    await expect($(".menu")).not.toExist();
+  });
+
   it("opens an HTML file in the browser from the menu with the worktree, its path and the target, closes the menu and shows nothing (A-31)", async () => {
     await openFiles({ orca_files_list: withPage() });
     await waitForCount("#orca-files-tree .orca-file", 4);
@@ -5187,5 +5205,342 @@ describe("orca: files and editor (A-18)", () => {
       await waitForText("by the clock\n");
       expect(await callsOf("orca_stream_files")).toEqual([]);
     });
+  });
+});
+
+// A-47: files dropped on the file pane from outside. Rust puts them (unit tests); here the screen is checked: the folder under the pointer, the question about a name that is taken, the limits and the cards, the progress, and what is asked of Rust.
+describe("orca: drop on the file pane (A-47)", () => {
+  const HERE = "/work/example-app";
+  const dirOf = (dir: string, entries: [string, boolean][]): OrcaDir => ({
+    entries: entries.map(([name, isDirectory]) => ({ name, path: dir === "" ? name : `${dir}/${name}`, isDirectory, ignored: false, icon: null })),
+    total: entries.length,
+  });
+  const rootEntries: [string, boolean][] = [["src", true], ["target", true], ["a.rs", false]];
+  const srcEntries: [string, boolean][] = [["lib", true], ["main.rs", false]];
+  const rows = "#orca-files-tree .orca-file";
+  const row = (path: string) => $(`${rows}[data-path="${path}"]`);
+  const names = () => textsOf("#orca-files-tree .orca-file-name");
+  const empty: GivenFile = { name: "empty.txt", type: "text/plain", base64: "" };
+  const named = (name: string): GivenFile => ({ name, type: "text/plain", base64: btoa(name) });
+
+  // The app with the file pane open, the root read and src open.
+  async function openTree() {
+    await openOrca(orcaOverview(sample(), worktrees()), { orca_terminal_read: ["$"], orca_files_list: dirOf("", rootEntries), orca_files_ignored: [], orca_files_changes: [], editor_settings: { autosaveMs: 100 } });
+    await project("example-app").click();
+    await filesToggle().click();
+    await waitForCount(rows, 3);
+    await mock("orca_files_list", dirOf("src", srcEntries));
+    await row("src").click();
+    await waitForCount(rows, 5);
+    await mock("orca_drop_taken", []);
+    await mock("orca_drop_file", "src/notes.txt");
+    await mock("orca_drop_dir", null);
+  }
+
+  // A folder of a drop: its name, and what it holds (files and folders), which the page reads through `createReader`, two entries to a batch.
+  type GivenDir = { dir: string; children: (GivenFile | GivenDir)[] };
+  const folder = (dir: string, ...children: (GivenFile | GivenDir)[]): GivenDir => ({ dir, children });
+  // An event of a drag from outside on the row of `where` (a path, or "empty" for the part of the tree under the rows), with the files; `dirs` are folders that go with them (the entries of the transfer). Answers whether the page cancelled the event and the drop effect it set.
+  const fireOn = (kind: "dragover" | "dragleave" | "drop", where: string, files: GivenFile[] = [note], dirs: GivenDir[] = []) =>
+    browser.execute(
+      (k, w, given, folders, once) => {
+        if (!window.__e2e_once__(once)) return null;
+        type Given = { name: string; type: string; base64: string; bytes?: number };
+        type Dir = { dir: string; children: (Given | Dir)[] };
+        const fileOf = (g: Given) => new File([g.bytes === undefined ? Uint8Array.from(atob(g.base64), (c) => c.charCodeAt(0)) : new Uint8Array(g.bytes)], g.name, { type: g.type });
+        const list = given.map(fileOf);
+        const event = new Event(k, { bubbles: true, cancelable: true });
+        const make = (g: Given | Dir): unknown => {
+          if (!("dir" in g)) return { name: g.name, isDirectory: false, file: (ok: (f: File) => void) => ok(fileOf(g)) };
+          let at = 0;
+          return { name: g.dir, isDirectory: true, createReader: () => ({ readEntries: (ok: (e: unknown[]) => void) => { ok(g.children.slice(at, at + 2).map(make)); at += 2; } }) };
+        };
+        const items = folders.length === 0 ? undefined : [...folders.map((f) => ({ kind: "file", webkitGetAsEntry: () => make(f as Dir) })), ...given.map((g) => ({ kind: "file", webkitGetAsEntry: () => make(g) }))];
+        const transfer = { files: list, items, types: ["Files"], dropEffect: "none", getData: () => "" };
+        Object.defineProperty(event, "dataTransfer", { value: transfer });
+        const target = w === "empty" ? document.getElementById("orca-files-tree")! : document.querySelector(`.orca-file[data-path="${w}"]`)!;
+        return { cancelled: !target.dispatchEvent(event), effect: transfer.dropEffect };
+      },
+      kind,
+      where,
+      files,
+      dirs,
+      onceId(),
+    );
+  const dropMark = () =>
+    browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-files-tree [data-drop], #orca-files-tree[data-drop]")].map((e) => e.dataset.path ?? "[tree]"));
+  const drop = async (where: string, files?: GivenFile[], dirs?: GivenDir[]) => {
+    await fireOn("dragover", where, files, dirs);
+    await fireOn("drop", where, files, dirs);
+  };
+  // Waits until the drop that was on its way has ended: a drag over the tree is taken again (a drop that is made before is not taken).
+  const idle = () => browser.waitUntil(async () => (await fireOn("dragover", "empty"))?.effect === "copy", { timeoutMsg: "the drop never ended" });
+  const question = () => $(".orca-drop-pop");
+  // Presses a button of the question; the next question, when the drop has one, comes in its place.
+  const answer = (label: string) => question().$(`button=${label}`).click();
+
+  it("marks the folder of the row under a dragged file, the folder that holds a file's row, and the tree for the empty part, and clears the mark when the drag leaves", async () => {
+    await openTree();
+    expect(await fireOn("dragover", "src")).toEqual({ cancelled: true, effect: "copy" });
+    expect(await dropMark()).toEqual(["src"]);
+    await fireOn("dragover", "src/main.rs");
+    expect(await dropMark()).toEqual(["src"]);
+    await fireOn("dragover", "a.rs");
+    expect(await dropMark()).toEqual(["[tree]"]);
+    await fireOn("dragover", "target");
+    expect(await dropMark()).toEqual(["target"]);
+    await fireOn("dragleave", "target");
+    expect(await dropMark()).toEqual([]);
+    expect(await callsOf("orca_drop_taken")).toEqual([]);
+  });
+
+  it("puts a file dropped on a folder's row in that folder, with no question when the name is free, and reads the folder again", async () => {
+    await openTree();
+    const list = await mock("orca_files_list", dirOf("src", [...srcEntries, ["notes.txt", false]]));
+    await drop("src");
+    expect(await waitForCalls("orca_drop_taken")).toEqual([{ path: HERE, dir: "src", names: ["notes.txt"], environment: null }]);
+    expect(await waitForCalls("orca_drop_file")).toEqual([{ path: HERE, dir: "src", name: "notes.txt", data: note.base64, onTaken: "copy", environment: null }]);
+    expect(await waitForCalls(list)).toEqual([{ path: HERE, dir: "src", ignored: false, environment: null }]);
+    await waitForCount(rows, 6);
+    expect(await names()).toEqual(["src", "lib", "main.rs", "notes.txt", "target", "a.rs"]);
+    await expect(question()).not.toExist();
+    await expect($(CARDS)).not.toExist();
+    await expect($("#orca-drop")).not.toBeDisplayed();
+    expect(await dropMark()).toEqual([]);
+  });
+
+  it("puts a file dropped on a file's row in the folder that holds it, and one dropped on the empty part in the worktree's own folder", async () => {
+    await openTree();
+    await drop("src/main.rs");
+    expect((await waitForCalls("orca_drop_file"))[0]).toMatchObject({ dir: "src" });
+    await idle();
+    await mock("orca_files_list", dirOf("", rootEntries));
+    await mock("orca_drop_taken", []);
+    await mock("orca_drop_file", "notes.txt");
+    await drop("empty");
+    expect((await waitForCalls("orca_drop_file"))[0]).toMatchObject({ path: HERE, dir: "", name: "notes.txt" });
+    expect(await callsOf("orca_drop_taken")).toEqual([{ path: HERE, dir: "", names: ["notes.txt"], environment: null }]);
+  });
+
+  it("puts a file of no bytes", async () => {
+    await openTree();
+    await drop("src", [empty, note]);
+    expect(await waitForCalls("orca_drop_file", 2)).toEqual([
+      { path: HERE, dir: "src", name: "empty.txt", data: "", onTaken: "copy", environment: null },
+      { path: HERE, dir: "src", name: "notes.txt", data: note.base64, onTaken: "copy", environment: null },
+    ]);
+    await expect($(CARD)).not.toExist();
+  });
+
+  it("makes the folders of a dropped folder before its files go, and puts the files in the same layout (the batches of the reader, and an empty folder, are read through)", async () => {
+    await openTree();
+    const made = await mock("orca_drop_dir", holds);
+    const tree = folder("photos", named("a.jpg"), folder("2026", named("b.jpg"), folder("empty")), named("c.jpg"));
+    await drop("src", [note], [tree]);
+    // The names the drop puts in the folder itself: the file, and the folder (so that one that is there is known). The folder is new, so nothing is asked of what is in it.
+    expect(await waitForCalls("orca_drop_taken")).toEqual([{ path: HERE, dir: "src", names: ["notes.txt", "photos"], environment: null }]);
+    // The folder that holds no other folder of the drop is made (the folders on the way with it), and no file goes before.
+    expect(await waitForCalls(made)).toEqual([{ path: HERE, dir: "src/photos/2026/empty", environment: null }]);
+    await browser.pause(300);
+    expect(await callsOf("orca_drop_file")).toEqual([]);
+    await release(made, null);
+    expect((await waitForCalls("orca_drop_file", 4)).map((c) => [(c as { dir: string }).dir, (c as { name: string }).name])).toEqual([
+      ["src/photos", "a.jpg"],
+      ["src/photos/2026", "b.jpg"],
+      ["src/photos", "c.jpg"],
+      ["src", "notes.txt"],
+    ]);
+    await expect($(CARD)).not.toExist();
+    await expect($("#orca-drop")).not.toBeDisplayed();
+  });
+
+  it("makes a folder of the drop that holds no file, and shows no file count for it", async () => {
+    await openTree();
+    const made = await mock("orca_drop_dir", holds);
+    await drop("src", [], [folder("none", folder("deeper"))]);
+    await waitForCalls(made);
+    await expect($("#orca-drop")).toBeDisplayed();
+    await expect($("#orca-drop-count")).toHaveText("0 / 0");
+    await release(made, null);
+    await expect($("#orca-drop")).not.toBeDisplayed();
+    expect(await callsOf(made)).toEqual([{ path: HERE, dir: "src/none/deeper", environment: null }]);
+    expect(await callsOf("orca_drop_file")).toEqual([]);
+    await expect($(CARD)).not.toExist();
+  });
+
+  it("puts a dropped folder together with a folder of that name that is there, and asks only about the files of it whose names are taken, naming their folder", async () => {
+    await openTree();
+    const asked = await mock("orca_drop_taken", holds);
+    await drop("src", [], [folder("lib", named("a.rs"), folder("inner", named("b.rs")))]);
+    // The folder 'lib' is there: the files of each folder of the drop are asked after it, the ones of 'lib' itself first.
+    expect(await waitForCalls(asked)).toEqual([{ path: HERE, dir: "src", names: ["lib"], environment: null }]);
+    await release(asked, ["lib"]);
+    await waitForCalls(asked, 2);
+    await release(asked, ["a.rs"]);
+    await waitForCalls(asked, 3);
+    await release(asked, []);
+    expect(await callsOf(asked)).toEqual([
+      { path: HERE, dir: "src", names: ["lib"], environment: null },
+      { path: HERE, dir: "src/lib", names: ["a.rs"], environment: null },
+      { path: HERE, dir: "src/lib/inner", names: ["b.rs"], environment: null },
+    ]);
+    await expect(question()).toHaveText(expect.stringContaining("a.rs は src/lib/ にもうあります。"));
+    await expect(question()).not.toHaveText(expect.stringContaining("残りの"));
+    await answer("上書き");
+    const calls = (await waitForCalls("orca_drop_file", 2)) as { dir: string; name: string; onTaken: string }[];
+    expect(calls.map((c) => [c.dir, c.name, c.onTaken])).toEqual([["src/lib", "a.rs", "overwrite"], ["src/lib/inner", "b.rs", "copy"]]);
+    expect(await callsOf("orca_drop_dir")).toEqual([{ path: HERE, dir: "src/lib/inner", environment: null }]);
+  });
+
+  it("counts the files inside a dropped folder against the limit, and puts nothing when they are over it", async () => {
+    await openTree();
+    await drop("src", [], [folder("many", ...Array.from({ length: 1001 }, (_, i) => named(`f${i}.txt`)))]);
+    await expect($(CARD)).toHaveText("一度に置けるのは 1,000 ファイル、合計 200 MiB までです");
+    await browser.pause(300);
+    expect(await callsOf("orca_drop_taken")).toEqual([]);
+    expect(await callsOf("orca_drop_dir")).toEqual([]);
+    expect(await callsOf("orca_drop_file")).toEqual([]);
+  });
+
+  it("leaves a file over 20 MiB inside a dropped folder with a card, and puts the rest of the folder", async () => {
+    await openTree();
+    await drop("src", [], [folder("media", huge, note)]);
+    await expect($(CARD)).toHaveText("big.bin は 20 MiB を超えるので置けません");
+    expect((await waitForCalls("orca_drop_file")).map((c) => [(c as { dir: string }).dir, (c as { name: string }).name])).toEqual([["src/media", "notes.txt"]]);
+    expect(await callsOf("orca_drop_dir")).toEqual([{ path: HERE, dir: "src/media", environment: null }]);
+  });
+
+  it("asks about each file whose name is taken, and puts it as it is answered: replace, another name, or leave it", async () => {
+    await openTree();
+    await mock("orca_drop_taken", ["a.txt", "b.txt", "c.txt"]);
+    await drop("src", [named("a.txt"), named("b.txt"), named("c.txt"), named("d.txt")]);
+    await expect(question()).toBeDisplayed();
+    await expect(question()).toHaveText(expect.stringContaining("a.txt は src/ にもうあります。"));
+    // The checkbox for the rest is there, with the number of the files that are taken after this one.
+    await expect(question()).toHaveText(expect.stringContaining("残りの 2 件も同じにする"));
+    expect(await textsOf(".orca-drop-pop button")).toEqual(["やめる", "別名で置く", "上書き"]);
+    // Nothing goes before the last answer.
+    expect(await callsOf("orca_drop_file")).toEqual([]);
+    await answer("上書き");
+    await expect(question()).toHaveText(expect.stringContaining("b.txt は src/ にもうあります。"));
+    await expect(question()).toHaveText(expect.stringContaining("残りの 1 件も同じにする"));
+    await answer("やめる");
+    await expect(question()).toHaveText(expect.stringContaining("c.txt は src/ にもうあります。"));
+    await expect(question()).not.toHaveText(expect.stringContaining("残りの"));
+    await answer("別名で置く");
+    const calls = (await waitForCalls("orca_drop_file", 3)) as { name: string; onTaken: string }[];
+    expect(calls.map((c) => [c.name, c.onTaken])).toEqual([["a.txt", "overwrite"], ["c.txt", "copy"], ["d.txt", "copy"]]);
+  });
+
+  it("answers the rest of the files that are taken the same way when 'the rest the same' is checked, and still puts the files whose names are free", async () => {
+    await openTree();
+    await mock("orca_drop_taken", ["a.txt", "b.txt"]);
+    await drop("src", [named("a.txt"), named("free.txt"), named("b.txt")]);
+    await expect(question()).toHaveText(expect.stringContaining("残りの 1 件も同じにする"));
+    await question().$("input[type=checkbox]").click();
+    await answer("上書き");
+    const calls = (await waitForCalls("orca_drop_file", 3)) as { name: string; onTaken: string }[];
+    expect(calls.map((c) => [c.name, c.onTaken])).toEqual([["a.txt", "overwrite"], ["free.txt", "copy"], ["b.txt", "overwrite"]]);
+    await expect(question()).not.toExist();
+  });
+
+  it("leaves the rest that are taken when 'leave it' is answered for all, and Escape leaves the file in question", async () => {
+    await openTree();
+    await mock("orca_drop_taken", ["a.txt", "b.txt"]);
+    await drop("src", [named("a.txt"), named("free.txt"), named("b.txt")]);
+    await question().$("input[type=checkbox]").click();
+    await answer("やめる");
+    expect((await waitForCalls("orca_drop_file")).map((c) => (c as { name: string }).name)).toEqual(["free.txt"]);
+    await idle();
+    await mock("orca_drop_file", "src/notes.txt");
+    await mock("orca_drop_taken", ["a.txt"]);
+    await drop("src", [named("a.txt")]);
+    await expect(question()).toBeDisplayed();
+    await browser.keys("Escape");
+    await expect(question()).not.toExist();
+    await browser.pause(300);
+    expect(await callsOf("orca_drop_file")).toEqual([]);
+  });
+
+  it("names the worktree's own folder by the project in the question, and ends a question when the tree becomes another worktree's", async () => {
+    await openTree();
+    await mock("orca_files_list", dirOf("", rootEntries));
+    await mock("orca_drop_taken", ["a.rs"]);
+    await drop("empty", [named("a.rs")]);
+    await expect(question()).toHaveText(expect.stringContaining("a.rs は example-app/ にもうあります。"));
+    await project("example-api").click();
+    await expect(question()).not.toExist();
+    await browser.pause(300);
+    expect(await callsOf("orca_drop_file")).toEqual([]);
+  });
+
+  it("shows the progress and a spinner on the folder's row while the files are put, takes no other drop meanwhile, and shows the rows as they are put", async () => {
+    await openTree();
+    const put = await mock("orca_drop_file", holds);
+    const list = await mock("orca_files_list", dirOf("src", srcEntries));
+    await drop("src", [named("one.txt"), named("two.txt")]);
+    await waitForCalls(put);
+    await expect($("#orca-drop")).toBeDisplayed();
+    await expect($("#orca-drop-label")).toHaveText("src/ に置いています");
+    await expect($("#orca-drop-count")).toHaveText("0 / 2");
+    await expect($(`${rows}[data-path="src"] .spin`)).toExist();
+    // Another drop is not taken: the cursor says so, and nothing is asked of Rust.
+    expect(await fireOn("dragover", "target")).toEqual({ cancelled: true, effect: "none" });
+    expect(await dropMark()).toEqual([]);
+    await fireOn("drop", "target");
+    await browser.pause(200);
+    expect(await callsOf("orca_drop_taken")).toHaveLength(1);
+    // The first file is put: its row appears at once, while the second is on its way.
+    await mock("orca_files_list", dirOf("src", [...srcEntries, ["one.txt", false]]));
+    await release(put, "src/one.txt");
+    await expect($("#orca-drop-count")).toHaveText("1 / 2");
+    await waitForCount(rows, 6);
+    expect(await names()).toContain("one.txt");
+    await waitForCalls(put, 2);
+    await release(put, "src/two.txt");
+    await expect($("#orca-drop")).not.toBeDisplayed();
+    await expect($(`${rows}[data-path="src"] .spin`)).not.toExist();
+    expect(await callsOf(list)).not.toEqual([]);
+    // The next drop is taken again.
+    await mock("orca_drop_file", "src/notes.txt");
+    expect(await fireOn("dragover", "target")).toEqual({ cancelled: true, effect: "copy" });
+  });
+
+  it("puts nothing and says so on a card when a drop holds more than 1,000 files", async () => {
+    await openTree();
+    await drop("src", Array.from({ length: 1001 }, (_, i) => named(`f${i}.txt`)));
+    await expect($(CARD)).toHaveText("一度に置けるのは 1,000 ファイル、合計 200 MiB までです");
+    await browser.pause(300);
+    expect(await callsOf("orca_drop_taken")).toEqual([]);
+    expect(await callsOf("orca_drop_file")).toEqual([]);
+  });
+
+  it("leaves a file over 20 MiB with a card, and puts the others of the drop", async () => {
+    await openTree();
+    await drop("src", [huge, note]);
+    await expect($(CARD)).toHaveText("big.bin は 20 MiB を超えるので置けません");
+    expect(await waitForCalls("orca_drop_taken")).toEqual([{ path: HERE, dir: "src", names: ["notes.txt"], environment: null }]);
+    expect((await waitForCalls("orca_drop_file")).map((c) => (c as { name: string }).name)).toEqual(["notes.txt"]);
+  });
+
+  it("shows the message of a file that Rust failed to put on a card, and stops there", async () => {
+    await openTree();
+    await mock("orca_drop_file", rejects("Orca がエラーを返しました（forbidden）"));
+    await drop("src", [named("one.txt"), named("two.txt")]);
+    await expect($(CARD)).toHaveText("Orca がエラーを返しました（forbidden）");
+    await idle();
+    expect(await callsOf("orca_drop_file")).toHaveLength(1);
+    // A new drop is taken after the failure.
+    await mock("orca_drop_file", "src/notes.txt");
+    await drop("src");
+    await waitForCalls("orca_drop_file");
+  });
+
+  it("shows the message of a worktree that takes no drop on a card, and puts nothing", async () => {
+    await openTree();
+    await mock("orca_drop_taken", rejects("SSH の接続先の worktree にはファイルを置けません"));
+    await drop("src");
+    await expect($(CARD)).toHaveText("SSH の接続先の worktree にはファイルを置けません");
+    expect(await callsOf("orca_drop_file")).toEqual([]);
   });
 });
