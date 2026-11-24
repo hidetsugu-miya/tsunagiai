@@ -35,7 +35,7 @@ import { closeMenu, type MenuItem, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { closeDefinition, type DefinitionOpen, type DefinitionQuery, definitionsOf, hasDefinitionIn, initDefinition, openDefinition, showDefinitions } from "./orca-definition.js";
 import { openAddProject } from "./orca-add.js";
-import { closeJiraTab, jiraTabsOf, openJiraTab, showJiraTabs } from "./orca-jira-tab.js";
+import { closeJiraTab, initJiraTab, jiraTabsOf, jiraTitleOf, openJiraTab, openNewJiraTab, showJiraTabs } from "./orca-jira-tab.js";
 import { closeConnectionTabs, closeDatabaseTab, conditionOf, databaseTabsOf, initDatabaseTabs, openQuery, openTable, showDatabaseTabs } from "./orca-database-tabs.js";
 import { initOrcaDatabase, lostConnection } from "./orca-database.js";
 import { closeDiff, type DiffCommit, diffsOf, hasDiffIn, openDiff as openDiffTab, refreshDiffs, showDiffs } from "./orca-diff.js";
@@ -226,7 +226,7 @@ function forgetNotices() {
 
 // ---- tabs ----
 
-// A tab of the work pane: a Claude session, or a plain terminal of Orca (both are terminals), or a file open in the editor (A-18), or the difference of a file from HEAD (A-24), or the definition of a name of the editor (A-34), or a table or the SQL of a database (A-43), or a ticket of Jira (J-2).
+// A tab of the work pane: a Claude session, or a plain terminal of Orca (both are terminals), or a file open in the editor (A-18), or the difference of a file from HEAD (A-24), or the definition of a name of the editor (A-34), or a table or the SQL of a database (A-43), or a ticket of Jira or the form of a new one (J-2).
 interface Tab {
   id: string;
   kind: "claude" | "plain" | "file" | "diff" | "definition" | "database" | "jira";
@@ -351,7 +351,7 @@ function tabsOf(key: string): Tab[] {
     tabs.push({ id: d.id, kind: "database", status: "done", label: "", title: d.title, latest: null, handle: null, path: main?.path ?? "", where: main === undefined ? "" : worktreeLabel(main), environment: d.target });
   }
   for (const j of jiraTabsOf(place, key)) {
-    tabs.push({ id: j.id, kind: "jira", status: "done", label: "", title: j.key, latest: null, handle: null, path: main?.path ?? "", where: main === undefined ? "" : worktreeLabel(main), environment: j.target });
+    tabs.push({ id: j.id, kind: "jira", status: "done", label: "", title: jiraTitleOf(j), latest: null, handle: null, path: main?.path ?? "", where: main === undefined ? "" : worktreeLabel(main), environment: j.target });
   }
   // A Claude row that got its handle after it was first seen keeps the place it had under its id.
   for (const t of tabs) if (!seen.has(keyOfTab(t))) seen.set(keyOfTab(t), seen.get(t.id) ?? seen.size);
@@ -1190,6 +1190,14 @@ function openJiraIssue(key: string, boardId: number) {
   if (projectKey === null || view === null) return;
   started = null;
   chooseTab(openJiraTab(projectPlace(projectKey), projectKey, key, boardId).tab.id);
+  draw();
+}
+
+// 「＋」 of the Jira part was pressed (J-2, #874): the tab of a new ticket opens as a tab in the focused pane and is selected; one that is open already is selected and read again.
+function openNewJiraTicket(boardId: number, sprintId: number | null) {
+  if (projectKey === null || view === null) return;
+  started = null;
+  chooseTab(openNewJiraTab(projectPlace(projectKey), projectKey, boardId, sprintId).id);
   draw();
 }
 
@@ -2136,7 +2144,14 @@ export function initOrca() {
   initOrcaDatabase({ table: openDatabaseTable, query: openDatabaseQuery, gone: (id) => {
       if (closeConnectionTabs(id)) draw();
     } });
-  initOrcaFiles({ open: (relative) => openFile(relative), jira: openJiraIssue, diff: (relative) => openDiff(relative), commitDiff: openDiff, toggle: toggleFilesAndDraw,
+  // A new ticket was made in its tab (J-2, #874): the tab is selected, with the key as its title.
+  initJiraTab({
+    created: (t) => {
+      if (projectKey === t.project && projectPlace(t.project) === t.target) chooseTab(t.id);
+      draw();
+    },
+  });
+  initOrcaFiles({ open: (relative) => openFile(relative), jira: openJiraIssue, newJira: openNewJiraTicket, diff: (relative) => openDiff(relative), commitDiff: openDiff, toggle: toggleFilesAndDraw,
     // A-25: after the app's own switch the tabs shown are read again with the tree, and the list (a streamed one is read again by Rust, which the switch told).
     // A git worktree that Orca's list lacks is on the branch the switch made, which the list cannot say.
     switched: (here, branch) => {

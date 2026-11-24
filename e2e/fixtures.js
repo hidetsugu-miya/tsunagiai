@@ -332,6 +332,12 @@ const computed = {
     if (held === undefined) throw `Jira が 404 を返しました: no ticket ${key}`;
     return held;
   },
+  // J-2 (#874): the issue types of a project, from the fixture `jira_types_of` ({ "{projectId}": the answer of `jira_issue_types` }); a project it does not hold fails as Jira's refusal does. A spec that wants one answer for every project mocks `jira_issue_types`.
+  jira_issue_types: ({ projectId }) => {
+    const held = fixtures.jira_types_of?.[projectId];
+    if (held === undefined) throw `Jira が 404 を返しました: no project ${projectId}`;
+    return held;
+  },
   // A-8: the titles as Rust answers a save of one title alone (the one saved, or none for an empty title); a spec that holds more mocks `orca_title_set`.
   orca_title_set: ({ target, key, title }) => (title.trim() === "" ? {} : { [target]: { [key]: title.trim() } }),
   // A-8: the titles left once the keys are taken out, as Rust answers when it held no other title.

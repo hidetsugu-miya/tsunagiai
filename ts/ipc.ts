@@ -71,10 +71,13 @@ import type { SkillScreen } from "./bindings/SkillScreen";
 import type { NewEvent } from "./bindings/NewEvent";
 import type { JiraBoard } from "./bindings/JiraBoard";
 import type { JiraComment } from "./bindings/JiraComment";
+import type { JiraCreated } from "./bindings/JiraCreated";
 import type { JiraIssueDetail } from "./bindings/JiraIssueDetail";
 import type { JiraIssues } from "./bindings/JiraIssues";
+import type { JiraIssueType } from "./bindings/JiraIssueType";
 import type { JiraPerson } from "./bindings/JiraPerson";
 import type { JiraPriority } from "./bindings/JiraPriority";
+import type { JiraProject } from "./bindings/JiraProject";
 import type { JiraSettings } from "./bindings/JiraSettings";
 import type { JiraSprint } from "./bindings/JiraSprint";
 import type { JiraTransition } from "./bindings/JiraTransition";
@@ -284,6 +287,11 @@ export interface Commands {
   jira_set_description: { args: { key: string; base: string; markdown: string }; result: string };
   // J-2 (#873): adds a comment from Markdown and gives it as Jira answers it (the author, the time, the text as Markdown).
   jira_add_comment: { args: { key: string; markdown: string }; result: JiraComment };
+  // J-2 (#874): the projects that a ticket can be created in (the credential has the permission to create there; at most 200, by name), and the issue types of one (no subtask). `projectId` is a number as text.
+  jira_projects: { args: undefined; result: JiraProject[] };
+  jira_issue_types: { args: { projectId: string }; result: JiraIssueType[] };
+  // J-2 (#874): creates a ticket (changes Jira) from the project, the issue type, the summary and the description as Markdown (empty for none), and puts it in the sprint when `sprintId` is given. The answer is its key, with `sprintError` when the ticket was made but could not go into the sprint.
+  jira_create_issue: { args: { projectId: string; issueTypeId: string; summary: string; markdown: string; sprintId: number | null }; result: JiraCreated };
   slack_channels: { args: { teamId: string; refresh: boolean }; result: Channel[] };
   // The newest 10 unread rows of each joined channel (no direct messages) of every workspace, newest first: the unread messages (S-8) and the threads with unread replies (S-14, each with `unreadReplies`), and `watched`, the watched threads (S-13, each with `watch`, the newest activity first); `failed` are workspaces whose read failed (the messages their earlier reads kept are still listed),
   // `missing` the scopes a token lacks (users:read, files:read, channels:write, groups:write among them), `refreshSecs` the wait until the next read, `pendingChannels` the channels no read has reached yet,

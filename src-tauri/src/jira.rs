@@ -48,6 +48,7 @@ const NOT_SAVED: &str = "Jira の接続が保存されていません";
 /// The Agile API, after `api_base`.
 const BOARD_PATH: &str = "/rest/agile/1.0/board";
 const SPRINT_PATH: &str = "/rest/agile/1.0/sprint";
+const PROJECT_SEARCH_PATH: &str = "/rest/api/3/project/search";
 /// What each call asks for a page, and how many items one command reads in all (a command stops at the page that reaches the limit).
 const PAGE_SIZE: usize = 50;
 const MAX_BOARDS: usize = 200;
@@ -69,6 +70,11 @@ const ID_LIMIT: usize = 18;
 const ACCOUNT_ID_LIMIT: usize = 128;
 /// The longest Markdown that is written back as ADF (J-2, #873), in bytes.
 const MARKDOWN_LIMIT: usize = 200_000;
+/// The projects and the issue types that the form of a new ticket offers, at most.
+const MAX_PROJECTS: usize = 200;
+const MAX_ISSUE_TYPES: usize = 100;
+/// Jira's own limit of a summary.
+const SUMMARY_LIMIT: usize = 255;
 
 /// What `jira-settings.json` holds.
 #[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
@@ -214,6 +220,35 @@ pub struct JiraPerson {
     pub display_name: String,
 }
 
+/// A project that a ticket can be created in (J-2, #874): its id (a number, which is what Rust sends back), its key and its name.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct JiraProject {
+    pub id: String,
+    pub key: String,
+    pub name: String,
+}
+
+/// An issue type that a ticket of the project can be created with (a subtask is left out: it needs a parent).
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct JiraIssueType {
+    pub id: String,
+    pub name: String,
+}
+
+/// The ticket that was created (J-2, #874). `sprintError` is the reason when the ticket was made but could not be put in the sprint (the ticket exists all the same), and `null` otherwise.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct JiraCreated {
+    pub key: String,
+    pub sprint_error: Option<String>,
+}
+
 /// A priority that the ticket can be given.
 #[derive(Serialize, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
@@ -301,7 +336,7 @@ fn user_of(status: u16, body: &str) -> Result<JiraUser, String> {
     }
 }
 
-/// One page of the Agile API: the boards and the sprints are under `values`, the tickets under `issues` (and the comments of a ticket, of REST API v3, under `comments`). Jira gives `isLast` for the first two and `total` for the last (and for some of the first).
+/// One page of the Agile API: the boards and the sprints are under `values`, the tickets under `issues` (and the comments of a ticket, of REST API v3, under `comments`, the issue types of the create metadata under `issueTypes`). Jira gives `isLast` for the first two and `total` for the last (and for some of the first).
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Page<T> {
@@ -309,7 +344,8 @@ struct Page<T> {
         default = "Vec::new",
         alias = "values",
         alias = "issues",
-        alias = "comments"
+        alias = "comments",
+        alias = "issueTypes"
     )]
     items: Vec<T>,
     total: Option<usize>,
@@ -622,7 +658,7 @@ async fn check(site: &str, email: &str, token: &str, gateway: &str) -> Result<Ji
     fetch_user(&connect(site, email, token, gateway).await?).await
 }
 
-/// Reads the pages of a list one after another, until its end or until `limit` items are held; the items past `limit` are dropped and the second value says so. `query` has no `startAt` or `maxResults`.
+/// Reads the pages of a list one after another, until its end or until `limit` items are held; the items past `limit` are dropped and the second value says so. `query` has no `startAt` or `maxResults` (and may be empty).
 async fn fetch_all<T: DeserializeOwned>(
     conn: &Conn,
     path: &str,
@@ -631,10 +667,11 @@ async fn fetch_all<T: DeserializeOwned>(
 ) -> Result<(Vec<T>, bool), String> {
     let mut items = Vec::new();
     let mut start = 0;
+    let join = if query.is_empty() { "" } else { "&" };
     loop {
         let (status, body) = get(
             conn,
-            &format!("{path}?{query}&startAt={start}&maxResults={PAGE_SIZE}"),
+            &format!("{path}?{query}{join}startAt={start}&maxResults={PAGE_SIZE}"),
         )
         .await?;
         let page = page_of::<T>(status, &body)?;
@@ -1003,6 +1040,146 @@ async fn add_comment(conn: &Conn, key: &str, markdown: &str) -> Result<JiraComme
     comment_of(status, &text)
 }
 
+/// The projects that Jira's answer gives, as the form offers them: those with a numeric id (it goes into a path and a body), by name. Archived ones are left out.
+fn project_of(raw: RawProject) -> Option<JiraProject> {
+    if raw.archived == Some(true) {
+        return None;
+    }
+    let id = raw.id.filter(|id| numeric_id_of(id).is_ok())?;
+    let key = raw.key.unwrap_or_default();
+    Some(JiraProject {
+        name: raw
+            .name
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| key.clone()),
+        id,
+        key,
+    })
+}
+
+#[derive(Deserialize)]
+struct RawProject {
+    id: Option<String>,
+    key: Option<String>,
+    name: Option<String>,
+    archived: Option<bool>,
+}
+
+/// The issue types that Jira's answer to the create metadata gives, as the form offers them: those with a numeric id and a name, and not a subtask.
+fn issue_type_of(raw: RawIssueType) -> Option<JiraIssueType> {
+    if raw.subtask == Some(true) {
+        return None;
+    }
+    let id = raw.id.filter(|id| numeric_id_of(id).is_ok())?;
+    Some(JiraIssueType {
+        id,
+        name: raw.name.filter(|n| !n.is_empty())?,
+    })
+}
+
+#[derive(Deserialize)]
+struct RawIssueType {
+    id: Option<String>,
+    name: Option<String>,
+    subtask: Option<bool>,
+}
+
+/// The projects the credential can create a ticket in (`action=create`: the *Create issues* permission), by name (at most `MAX_PROJECTS`).
+async fn projects(conn: &Conn) -> Result<Vec<JiraProject>, String> {
+    let (raw, _) = fetch_all::<RawProject>(
+        conn,
+        PROJECT_SEARCH_PATH,
+        "action=create&orderBy=name",
+        MAX_PROJECTS,
+    )
+    .await?;
+    Ok(raw.into_iter().filter_map(project_of).collect())
+}
+
+/// The issue types of a project that a ticket can be created with (at most `MAX_ISSUE_TYPES`).
+async fn issue_types(conn: &Conn, project_id: &str) -> Result<Vec<JiraIssueType>, String> {
+    let project_id = numeric_id_of(project_id)?;
+    let path = format!("{ISSUE_PATH}/createmeta/{project_id}/issuetypes");
+    let (raw, _) = fetch_all::<RawIssueType>(conn, &path, "", MAX_ISSUE_TYPES).await?;
+    Ok(raw.into_iter().filter_map(issue_type_of).collect())
+}
+
+/// A summary as the form gives it: trimmed, not empty, at most `SUMMARY_LIMIT` characters and in one line (Jira refuses a line break in it).
+fn summary_of(input: &str) -> Result<&str, String> {
+    let summary = input.trim();
+    if summary.is_empty() {
+        Err("件名を入力してください".into())
+    } else if summary.chars().count() > SUMMARY_LIMIT {
+        Err(format!("件名は {SUMMARY_LIMIT} 文字までです"))
+    } else if summary.chars().any(char::is_control) {
+        Err("件名に改行や制御文字は入れられません".into())
+    } else {
+        Ok(summary)
+    }
+}
+
+/// The body of `POST /rest/api/3/issue`: the project and the issue type by id, the summary and, when there is one, the description as ADF.
+fn create_body(
+    project_id: &str,
+    issue_type_id: &str,
+    summary: &str,
+    description: Vec<Value>,
+) -> Value {
+    let mut fields = serde_json::json!({
+        "project": { "id": project_id },
+        "issuetype": { "id": issue_type_id },
+        "summary": summary,
+    });
+    if !description.is_empty() {
+        fields["description"] =
+            serde_json::json!({"version": 1, "type": "doc", "content": description});
+    }
+    serde_json::json!({ "fields": fields })
+}
+
+/// The key in Jira's answer to a create (`{id, key, self}`), checked as a ticket key because it goes on to a path.
+fn created_of(status: u16, body: &str) -> Result<String, String> {
+    #[derive(Deserialize)]
+    struct Created {
+        key: String,
+    }
+    if !(200..=299).contains(&status) {
+        return Err(failure_of(status, body));
+    }
+    serde_json::from_str::<Created>(body)
+        .ok()
+        .filter(|c| key_of(&c.key).is_ok())
+        .map(|c| c.key)
+        .ok_or_else(|| {
+            "チケットは作られましたが、応答を読めません。一覧を読み直してください".to_owned()
+        })
+}
+
+/// Creates a ticket (J-2, #874) from the form: the project and the issue type by id, the summary, the description from Markdown (left out when it is empty) and, when `sprint_id` is given, the sprint, which is put with the Agile API after the create (the sprint is a custom field in REST API v3, whose id differs by site). Everything is checked before anything is sent. A ticket that was made but could not be put in the sprint is still the answer, with the reason in `sprint_error`.
+async fn create_issue(
+    conn: &Conn,
+    project_id: &str,
+    issue_type_id: &str,
+    summary: &str,
+    markdown: &str,
+    sprint_id: Option<u64>,
+) -> Result<JiraCreated, String> {
+    let (project_id, issue_type_id) = (numeric_id_of(project_id)?, numeric_id_of(issue_type_id)?);
+    let (summary, markdown) = (summary_of(summary)?, markdown_of(markdown)?);
+    let mut blocks = markdown::markdown_to_blocks(markdown);
+    markdown::with_ids(&mut blocks);
+    let body = create_body(project_id, issue_type_id, summary, blocks);
+    let (status, text) = send(conn, reqwest::Method::POST, ISSUE_PATH, Some(&body)).await?;
+    let key = created_of(status, &text)?;
+    let sprint_error = match sprint_id {
+        Some(id) => move_to_sprint(conn, &key, Some(id)).await.err().map(|e| {
+            format!("チケット {key} は作りましたが、スプリントに入れられませんでした: {e}")
+        }),
+        None => None,
+    };
+    Ok(JiraCreated { key, sprint_error })
+}
+
 fn load_file(dir: &Path) -> Result<Saved, String> {
     let path = dir.join(FILE);
     match std::fs::read_to_string(&path) {
@@ -1269,6 +1446,55 @@ pub async fn jira_add_comment(
     write
         .await
         .map_err(|e| log_failure("jira_add_comment", LOG_ACCOUNT, e))
+}
+
+/// The projects that the credential can create a ticket in (J-2, #874), by name (at most `MAX_PROJECTS`).
+#[tauri::command]
+pub async fn jira_projects(app: AppHandle) -> Result<Vec<JiraProject>, String> {
+    let read = async { projects(&saved_conn(&app).await?).await };
+    read.await
+        .map_err(|e| log_failure("jira_projects", LOG_ACCOUNT, e))
+}
+
+/// The issue types of a project that a ticket can be created with (J-2, #874). `project_id` is checked to be a number before anything is asked.
+#[tauri::command]
+pub async fn jira_issue_types(
+    app: AppHandle,
+    project_id: String,
+) -> Result<Vec<JiraIssueType>, String> {
+    let read = async { issue_types(&saved_conn(&app).await?, &project_id).await };
+    read.await
+        .map_err(|e| log_failure("jira_issue_types", LOG_ACCOUNT, e))
+}
+
+/// Creates a ticket in Jira (J-2, #874) and gives its key. `markdown` is the description (may be empty) and `sprint_id` the sprint to put it in (none leaves it where Jira puts a new ticket, the backlog).
+#[tauri::command]
+pub async fn jira_create_issue(
+    app: AppHandle,
+    project_id: String,
+    issue_type_id: String,
+    summary: String,
+    markdown: String,
+    sprint_id: Option<u64>,
+) -> Result<JiraCreated, String> {
+    let write = async {
+        create_issue(
+            &saved_conn(&app).await?,
+            &project_id,
+            &issue_type_id,
+            &summary,
+            &markdown,
+            sprint_id,
+        )
+        .await
+    };
+    let mut created = write
+        .await
+        .map_err(|e| log_failure("jira_create_issue", LOG_ACCOUNT, e))?;
+    created.sprint_error = created
+        .sprint_error
+        .map(|e| log_failure("jira_create_issue", LOG_ACCOUNT, e));
+    Ok(created)
 }
 
 #[cfg(test)]
@@ -2780,6 +3006,352 @@ mod tests {
             "put /ex/jira/{TENANT_ANSWER_ID}/rest/api/3/issue/ex-7 http/1.1"
         )));
         assert!(requests[1].contains("authorization: bearer tok\r\n"));
+        assert!(!lower(&tenant_seen.await.unwrap()).contains("authorization"));
+    }
+
+    #[test]
+    fn project_of_keeps_the_projects_that_can_go_into_a_body() {
+        let list: Vec<RawProject> = serde_json::from_str(
+            r#"[{"id":"10000","key":"EX","name":"Example"},
+                {"id":"10001","key":"NN"},
+                {"id":"10002","key":"OLD","name":"Old","archived":true},
+                {"id":"../3","key":"BAD","name":"Bad"},
+                {"key":"NOID","name":"No id"}]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            list.into_iter().filter_map(project_of).collect::<Vec<_>>(),
+            vec![
+                JiraProject {
+                    id: "10000".into(),
+                    key: "EX".into(),
+                    name: "Example".into()
+                },
+                JiraProject {
+                    id: "10001".into(),
+                    key: "NN".into(),
+                    name: "NN".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn issue_type_of_leaves_out_subtasks_and_what_has_no_usable_id_or_name() {
+        let list: Vec<RawIssueType> = serde_json::from_str(
+            r#"[{"id":"10001","name":"Task","subtask":false},
+                {"id":"10002","name":"Bug"},
+                {"id":"10003","name":"Sub-task","subtask":true},
+                {"id":"x","name":"Bad id"},
+                {"id":"10005","name":""},
+                {"id":"10006"}]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            list.into_iter()
+                .filter_map(issue_type_of)
+                .collect::<Vec<_>>(),
+            vec![
+                JiraIssueType {
+                    id: "10001".into(),
+                    name: "Task".into()
+                },
+                JiraIssueType {
+                    id: "10002".into(),
+                    name: "Bug".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn summary_of_trims_and_refuses_an_empty_long_or_multi_line_summary() {
+        assert_eq!(summary_of("  Fix it \n"), Ok("Fix it"));
+        assert_eq!(summary_of(" \n "), Err("件名を入力してください".into()));
+        assert_eq!(
+            summary_of("a\nb"),
+            Err("件名に改行や制御文字は入れられません".into())
+        );
+        assert_eq!(
+            summary_of("a\u{0}b"),
+            Err("件名に改行や制御文字は入れられません".into())
+        );
+        assert!(summary_of(&"あ".repeat(255)).is_ok());
+        assert_eq!(
+            summary_of(&"あ".repeat(256)),
+            Err("件名は 255 文字までです".into())
+        );
+    }
+
+    #[test]
+    fn create_body_has_the_ids_the_summary_and_a_description_only_when_there_is_one() {
+        let blocks = vec![serde_json::json!({"type": "paragraph", "content": []})];
+        assert_eq!(
+            create_body("10000", "10001", "Sum", blocks.clone()),
+            serde_json::json!({"fields": {
+                "project": {"id": "10000"},
+                "issuetype": {"id": "10001"},
+                "summary": "Sum",
+                "description": {"version": 1, "type": "doc", "content": blocks},
+            }})
+        );
+        assert_eq!(
+            create_body("10000", "10001", "Sum", vec![]),
+            serde_json::json!({"fields": {
+                "project": {"id": "10000"},
+                "issuetype": {"id": "10001"},
+                "summary": "Sum",
+            }})
+        );
+    }
+
+    #[test]
+    fn created_of_reads_the_key_and_says_why_for_a_failure() {
+        assert_eq!(
+            created_of(
+                201,
+                r#"{"id":"10042","key":"EX-42","self":"https://x/10042"}"#
+            ),
+            Ok("EX-42".into())
+        );
+        for body in ["not json", "{}", r#"{"key":"../x"}"#, r#"{"key":"ex-1"}"#] {
+            assert!(
+                created_of(201, body).unwrap_err().contains("作られました"),
+                "{body}"
+            );
+        }
+        assert_eq!(
+            created_of(400, r#"{"errors":{"summary":"required"}}"#),
+            Err(r#"Jira が 400 を返しました: {"errors":{"summary":"required"}}"#.into())
+        );
+        assert_eq!(
+            created_of(403, ""),
+            Err("Jira が認証を拒否しました（403）".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn the_projects_to_create_in_are_read_page_by_page_and_the_issue_types_by_project_id() {
+        let page = |values: &str, last: bool| {
+            json_answer(&format!(
+                r#"{{"values":{values},"isLast":{last},"startAt":0,"total":3}}"#
+            ))
+        };
+        let (site, seen) = serve_each(vec![
+            page(r#"[{"id":"10000","key":"EX","name":"Example"},{"id":"10001","key":"AB","name":"Alpha"}]"#, false),
+            page(r#"[{"id":"10002","key":"CD","name":"Beta","archived":true}]"#, true),
+            json_answer(
+                r#"{"startAt":0,"maxResults":50,"total":2,"issueTypes":[{"id":"10001","name":"Task","subtask":false},{"id":"10003","name":"Sub-task","subtask":true}]}"#,
+            ),
+        ])
+        .await;
+        let conn = basic_conn(&site).await;
+        let list = projects(&conn).await.unwrap();
+        assert_eq!(
+            list.iter().map(|p| p.key.as_str()).collect::<Vec<_>>(),
+            ["EX", "AB"]
+        );
+        let types = issue_types(&conn, "10000").await.unwrap();
+        assert_eq!(
+            types,
+            vec![JiraIssueType {
+                id: "10001".into(),
+                name: "Task".into()
+            }]
+        );
+        let requests = seen.await.unwrap();
+        assert!(
+            requests[0].starts_with(
+                "get /rest/api/3/project/search?action=create&orderby=name&startat=0&maxresults=50 http/1.1"
+            ),
+            "{}",
+            requests[0]
+        );
+        assert!(
+            requests[1].contains("startat=2&maxresults=50"),
+            "{}",
+            requests[1]
+        );
+        assert!(
+            requests[2].starts_with(
+                "get /rest/api/3/issue/createmeta/10000/issuetypes?startat=0&maxresults=50 http/1.1"
+            ),
+            "{}",
+            requests[2]
+        );
+        assert!(requests.iter().all(|r| r.contains(BASIC)));
+        for bad in ["", "EX", "../1", "1/2", "1?x=y"] {
+            assert_eq!(
+                issue_types(&basic_conn("http://127.0.0.1:1").await, bad).await,
+                Err("ID の形が正しくありません".into()),
+                "{bad}"
+            );
+        }
+    }
+
+    fn created_answer() -> String {
+        let body = r#"{"id":"10042","key":"EX-42","self":"https://x/rest/api/3/issue/10042"}"#;
+        format!(
+            "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    #[tokio::test]
+    async fn a_ticket_is_created_with_its_fields_and_then_put_in_the_sprint() {
+        let (site, seen) = serve_each(vec![created_answer(), NO_CONTENT.into()]).await;
+        let conn = basic_conn(&site).await;
+        let created = create_issue(
+            &conn,
+            "10000",
+            "10001",
+            " New one ",
+            "**why**\n\n- a",
+            Some(37),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            created,
+            JiraCreated {
+                key: "EX-42".into(),
+                sprint_error: None
+            }
+        );
+        let requests = seen.await.unwrap();
+        assert!(
+            requests[0].starts_with("post /rest/api/3/issue http/1.1"),
+            "{}",
+            requests[0]
+        );
+        assert!(requests[0].contains(BASIC));
+        let sent = body_of(&requests[0]);
+        assert_eq!(sent["fields"]["project"]["id"], "10000");
+        assert_eq!(sent["fields"]["issuetype"]["id"], "10001");
+        assert_eq!(sent["fields"]["summary"], "new one");
+        assert_eq!(sent["fields"]["description"]["type"], "doc");
+        assert_eq!(
+            sent["fields"]["description"]["content"][0]["content"][0]["marks"][0]["type"],
+            "strong"
+        );
+        assert!(
+            requests[1].starts_with("post /rest/agile/1.0/sprint/37/issue http/1.1"),
+            "{}",
+            requests[1]
+        );
+        assert!(
+            requests[1].ends_with(r#"{"issues":["ex-42"]}"#),
+            "{}",
+            requests[1]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_ticket_with_no_description_and_no_sprint_sends_neither() {
+        let (site, seen) = serve_each(vec![created_answer()]).await;
+        let created = create_issue(
+            &basic_conn(&site).await,
+            "10000",
+            "10001",
+            "Only",
+            " \n ",
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(created.key, "EX-42");
+        let requests = seen.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let sent = body_of(&requests[0]);
+        assert!(sent["fields"].get("description").is_none());
+        assert!(sent["fields"].get("sprint").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_ticket_that_could_not_be_put_in_the_sprint_is_still_the_answer_with_the_reason() {
+        let (site, seen) = serve_each(vec![
+            created_answer(),
+            "HTTP/1.1 400 Bad Request\r\nContent-Length: 6\r\nConnection: close\r\n\r\nclosed"
+                .into(),
+        ])
+        .await;
+        let created = create_issue(&basic_conn(&site).await, "10000", "10001", "S", "", Some(5))
+            .await
+            .unwrap();
+        assert_eq!(created.key, "EX-42");
+        assert_eq!(
+            created.sprint_error,
+            Some("チケット EX-42 は作りましたが、スプリントに入れられませんでした: Jira が 400 を返しました: closed".into())
+        );
+        assert_eq!(seen.await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_refused_create_is_the_error_and_puts_nothing_in_a_sprint() {
+        let (site, seen) = serve_each(vec![
+            "HTTP/1.1 400 Bad Request\r\nContent-Length: 12\r\nConnection: close\r\n\r\nneed a field".into(),
+        ])
+        .await;
+        assert_eq!(
+            create_issue(&basic_conn(&site).await, "10000", "10001", "S", "", Some(5)).await,
+            Err("Jira が 400 を返しました: need a field".into())
+        );
+        assert_eq!(seen.await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_create_with_a_bad_value_asks_nothing() {
+        let dead = basic_conn("http://127.0.0.1:1").await;
+        for (project, kind, summary, markdown, error) in [
+            ("x", "10001", "S", "", "ID の形が正しくありません"),
+            ("10000", "1/2", "S", "", "ID の形が正しくありません"),
+            ("10000", "10001", " ", "", "件名を入力してください"),
+            (
+                "10000",
+                "10001",
+                "a\nb",
+                "",
+                "件名に改行や制御文字は入れられません",
+            ),
+        ] {
+            assert_eq!(
+                create_issue(&dead, project, kind, summary, markdown, None).await,
+                Err(error.into()),
+                "{project} {kind} {summary:?}"
+            );
+        }
+        assert_eq!(
+            create_issue(
+                &dead,
+                "10000",
+                "10001",
+                "S",
+                &"a".repeat(MARKDOWN_LIMIT + 1),
+                None
+            )
+            .await,
+            Err("文章が長すぎます".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn the_create_goes_through_the_gateway_with_the_bearer_credential() {
+        let (site, tenant_seen) = serve_once(tenant_answer()).await;
+        let (gateway, seen) = serve_each(vec![created_answer(), NO_CONTENT.into()]).await;
+        let conn = connect(&site, "", "tok", &gateway).await.unwrap();
+        create_issue(&conn, "10000", "10001", "S", "", Some(7))
+            .await
+            .unwrap();
+        let requests = seen.await.unwrap();
+        assert!(requests[0].starts_with(&format!(
+            "post /ex/jira/{TENANT_ANSWER_ID}/rest/api/3/issue http/1.1"
+        )));
+        assert!(requests[1].starts_with(&format!(
+            "post /ex/jira/{TENANT_ANSWER_ID}/rest/agile/1.0/sprint/7/issue http/1.1"
+        )));
+        assert!(requests
+            .iter()
+            .all(|r| r.contains("authorization: bearer tok\r\n")));
         assert!(!lower(&tenant_seen.await.unwrap()).contains("authorization"));
     }
 }

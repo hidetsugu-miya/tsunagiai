@@ -1,4 +1,4 @@
-import { callsOf, CARD, CARDS, count, holds, jiraBoard, jiraDetail, jiraIssue, jiraIssues, jiraSprint, logged, mock, onceId, rejects, release, textsOf, waitForCalls, waitForCount, waitForLog } from "../support";
+import { callsOf, CARD, CARDS, count, holds, jiraBoard, jiraDetail, jiraIssue, jiraIssues, jiraIssueType, jiraProject, jiraSprint, logged, mock, onceId, rejects, release, textsOf, waitForCalls, waitForCount, waitForLog } from "../support";
 import { filesToggle, openOrca, orcaOverview, project, sample, selectedTab, tabOf, worktrees } from "../orca-support";
 
 // J-2: the Jira part of the file pane (#870). Rust reads the boards, the sprints and the tickets (unit tests); here the screen is checked: what it asks of Rust, and how it draws the answers.
@@ -679,5 +679,180 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await $(".orca-jira-comment-add").click();
     await browser.waitUntil(async () => (await commentField().getAttribute("contenteditable")) === "true");
     expect(await commentField().getText()).toBe("");
+  });
+
+  // J-2 (#874): the tab of a new ticket, opened by the plus of the list.
+  const created = jiraDetail("EX-9", { summary: "Brand new", sprint: "Sprint 13" });
+  const projectsOf = [jiraProject("10000", "EX", "Example"), jiraProject("10001", "AB", "Alpha")];
+  const typesOf = { 10000: [jiraIssueType("10001", "Task"), jiraIssueType("10002", "Bug")], 10001: [jiraIssueType("10003", "Story")] };
+  const withNew = (extra: Record<string, unknown> = {}) => jiraFixtures({ jira_details: { ...detailOf, "EX-9": created }, jira_projects: projectsOf, jira_types_of: typesOf, jira_create_issue: { key: "EX-9", sprintError: null }, ...extra });
+  const plus = () => $("#orca-jira-new");
+  const newField = (name: string) => $(`.orca-jira-new [aria-label="${name}"]`);
+  const newDescField = () => $("#orca-jira-new-desc-input .ProseMirror");
+  const newOptions = (name: string) => browser.execute((n) => [...document.querySelectorAll<HTMLOptionElement>(`.orca-jira-new [aria-label="${n}"] option`)].map((o) => [o.value, o.textContent]), name);
+  // Chooses an option of a select of the form as the page does.
+  const pickNew = (name: string, value: string) =>
+    browser.execute(
+      (n, v) => {
+        const field = document.querySelector<HTMLSelectElement>(`.orca-jira-new [aria-label="${n}"]`)!;
+        field.value = v;
+        field.dispatchEvent(new Event("change"));
+      },
+      name,
+      value,
+    );
+  const submitNew = () => $(".orca-jira-new-submit");
+  // The list read, and the tab of a new ticket opened with its first options read.
+  async function openNew(fixtures: Record<string, unknown> = withNew()) {
+    await openJira(fixtures);
+    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    await plus().click();
+    await expect($(".orca-jira-new")).toBeDisplayed();
+    await waitForCalls("jira_issue_types");
+  }
+
+  it("shows the plus only while a board is shown, and opens the tab of a new ticket that asks for the projects, the sprints of the board and the types of the first project (J-2, #874)", async () => {
+    await openJira();
+    await waitForCount("#orca-jira-list .orca-jira-none", 1);
+    await expect(plus()).not.toBeDisplayed();
+    await openNew();
+    await expect(plus()).toBeDisplayed();
+    await expect(tabOf("jira:1")).toBeDisplayed();
+    await expect(tabOf("jira:1").$(".orca-tab-btn")).toHaveAttribute("aria-selected", "true");
+    await expect(tabOf("jira:1").$(".orca-tab-title")).toHaveText("新しいチケット");
+    await expect($(".orca-jira-tab-head .orca-edit-path")).toHaveText("新しいチケット");
+    expect(await callsOf("jira_projects")).toEqual([null]);
+    expect(await callsOf("jira_sprints")).toEqual([{ boardId: 1 }, { boardId: 1 }]);
+    expect(await callsOf("jira_issue_types")).toEqual([{ projectId: "10000" }]);
+    expect(await callsOf("jira_issue")).toEqual([]);
+    expect(await newOptions("プロジェクト")).toEqual([["10000", "Example (EX)"], ["10001", "Alpha (AB)"]]);
+    expect(await newOptions("種類")).toEqual([["10001", "Task"], ["10002", "Bug"]]);
+    // The sprint of the list is the one chosen, and the backlog is the first choice.
+    expect(await newOptions("スプリント")).toEqual([["", "バックログ"], ["12", "Sprint 12"], ["13", "Sprint 13"]]);
+    expect(await newField("スプリント").getValue()).toBe("12");
+    await expect(newField("件名")).toHaveValue("");
+    await expect($("#orca-jira-new-desc-input")).toExist();
+    expect(await count(".orca-jira-tab [placeholder]")).toBe(0);
+    await expect(submitNew()).toBeDisabled();
+  });
+
+  it("reads the types of another project when it is chosen, and keeps one tab for the form when the plus is pressed again (J-2, #874)", async () => {
+    await openNew();
+    await newField("件名").setValue("Typed first");
+    await pickNew("プロジェクト", "10001");
+    await waitForCalls("jira_issue_types", 2);
+    expect(await callsOf("jira_issue_types")).toEqual([{ projectId: "10000" }, { projectId: "10001" }]);
+    await browser.waitUntil(async () => JSON.stringify(await newOptions("種類")) === JSON.stringify([["10003", "Story"]]));
+    await plus().click();
+    await waitForCalls("jira_projects", 2);
+    await expect(tabOf("jira:2")).not.toExist();
+    expect(await count(".orca-jira-new")).toBe(1);
+    // What was typed and chosen stays through the read of the options.
+    await expect(newField("件名")).toHaveValue("Typed first");
+    expect(await newField("プロジェクト").getValue()).toBe("10001");
+  });
+
+  it("keeps the button off until there is a summary, sends what the form holds, and turns the tab into the ticket's tab with the list read again (J-2, #874)", async () => {
+    await openNew();
+    const before = { sprint: (await callsOf("jira_sprint_issues")).length, backlog: (await callsOf("jira_backlog")).length };
+    await newField("件名").setValue("  Brand new ");
+    await expect(submitNew()).toBeEnabled();
+    await newField("件名").setValue("   ");
+    await expect(submitNew()).toBeDisabled();
+    await newField("件名").setValue("Brand new");
+    await typeInto(newDescField, "Some **text**");
+    await pickNew("プロジェクト", "10000");
+    await pickNew("種類", "10002");
+    await pickNew("スプリント", "13");
+    await submitNew().click();
+    expect(await waitForCalls("jira_create_issue")).toEqual([{ projectId: "10000", issueTypeId: "10002", summary: "Brand new", markdown: "Some **text**\n", sprintId: 13 }]);
+    await expect(tabOf("jira:1").$(".orca-tab-title")).toHaveText("EX-9");
+    await expect(tabOf("jira:1").$(".orca-tab-btn")).toHaveAttribute("aria-selected", "true");
+    expect(await waitForCalls("jira_issue")).toEqual([{ key: "EX-9" }]);
+    await expect($(".orca-jira-tab .orca-jira-title")).toHaveText("Brand new");
+    expect(await count(".orca-jira-new")).toBe(0);
+    await expect(tabOf("jira:2")).not.toExist();
+    await waitForCalls("jira_sprint_issues", before.sprint + 1);
+    await waitForCalls("jira_backlog", before.backlog + 1);
+    expect(await count(CARDS)).toBe(0);
+  });
+
+  it("makes a ticket with the backlog as its sprint and sends it by Enter in the summary (J-2, #874)", async () => {
+    await openNew();
+    await pickNew("スプリント", "");
+    await newField("件名").setValue("Brand new");
+    await expect(submitNew()).toBeEnabled();
+    await browser.keys("Enter");
+    expect(await waitForCalls("jira_create_issue")).toEqual([{ projectId: "10000", issueTypeId: "10001", summary: "Brand new", markdown: expect.any(String), sprintId: null }]);
+    await expect(tabOf("jira:1").$(".orca-tab-title")).toHaveText("EX-9");
+  });
+
+  it("keeps the fields off while Jira answers, and keeps the typing with the reason in a card when Jira refuses (J-2, #874)", async () => {
+    await openNew();
+    await mock("jira_create_issue", holds);
+    await newField("件名").setValue("Kept summary");
+    await typeInto(newDescField, "Kept text");
+    await pressSubmit("#orca-jira-new-desc-input .ProseMirror");
+    await waitForCalls("jira_create_issue");
+    await expect(submitNew()).toBeDisabled();
+    await expect(newField("件名")).toBeDisabled();
+    await expect(newField("プロジェクト")).toBeDisabled();
+    await expect(newField("種類")).toBeDisabled();
+    await expect(newField("スプリント")).toBeDisabled();
+    await expect(newDescField()).toHaveAttribute("contenteditable", "false");
+    await release("jira_create_issue", rejects("Jira が 400 を返しました: Epic Name is required"));
+    await waitForCount(CARDS, 1);
+    expect(await textsOf(CARD)).toEqual(["Jira が 400 を返しました: Epic Name is required"]);
+    expect((await logged()).some((l) => l.level === "error" && l.source === "orca-jira")).toBe(true);
+    await expect(tabOf("jira:1").$(".orca-tab-title")).toHaveText("新しいチケット");
+    await expect(newField("件名")).toHaveValue("Kept summary");
+    await expect(newField("件名")).toBeEnabled();
+    await expect(submitNew()).toBeEnabled();
+    expect(await newDescField().getText()).toBe("Kept text");
+    expect(await callsOf("jira_issue")).toEqual([]);
+  });
+
+  it("opens the ticket's tab and shows a card when the ticket was made but could not be put in the sprint (J-2, #874)", async () => {
+    await openNew();
+    await mock("jira_create_issue", { key: "EX-9", sprintError: "チケット EX-9 は作りましたが、スプリントに入れられませんでした: Jira が 400 を返しました: closed" });
+    await newField("件名").setValue("Brand new");
+    await expect(submitNew()).toBeEnabled();
+    await submitNew().click();
+    await waitForCount(CARDS, 1);
+    expect(await textsOf(CARD)).toEqual(["チケット EX-9 は作りましたが、スプリントに入れられませんでした: Jira が 400 を返しました: closed"]);
+    await expect(tabOf("jira:1").$(".orca-tab-title")).toHaveText("EX-9");
+    expect(await waitForCalls("jira_issue")).toEqual([{ key: "EX-9" }]);
+    expect(await count(".orca-jira-new")).toBe(0);
+  });
+
+  it("shows the reason in place of the form when the options cannot be read, with no card, and reads them again with the button (J-2, #874)", async () => {
+    await openJira(withNew());
+    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    await mock("jira_projects", rejects("Jira が 403 を返しました: no scope"));
+    await plus().click();
+    await waitForCount(".orca-jira-tab-body .orca-file-note.fail", 1);
+    expect(await textsOf(".orca-jira-tab-body .orca-file-note.fail")).toEqual(["Jira が 403 を返しました: no scope"]);
+    expect(await count(CARDS)).toBe(0);
+    expect((await logged()).some((l) => l.level === "error" && l.source === "orca-jira")).toBe(true);
+    expect(await count(".orca-jira-new")).toBe(0);
+    await mock("jira_projects", projectsOf);
+    await $('.orca-jira-tab-head .icon-btn[aria-label="読み直す"]').click();
+    await expect($(".orca-jira-new")).toBeDisplayed();
+    expect(await newOptions("プロジェクト")).toEqual([["10000", "Example (EX)"], ["10001", "Alpha (AB)"]]);
+  });
+
+  it("says so when there is no project to create a ticket in, and when the types cannot be read (J-2, #874)", async () => {
+    await openJira(withNew());
+    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    await mock("jira_projects", []);
+    await plus().click();
+    await waitForCount(".orca-jira-tab-body .orca-file-note", 1);
+    expect(await textsOf(".orca-jira-tab-body .orca-file-note")).toEqual(["作れるプロジェクトがありません"]);
+    await mock("jira_projects", projectsOf);
+    await mock("jira_issue_types", rejects("Jira が 404 を返しました: no project"));
+    await $('.orca-jira-tab-head .icon-btn[aria-label="読み直す"]').click();
+    await waitForCount(".orca-jira-tab-body .orca-file-note.fail", 1);
+    expect(await textsOf(".orca-jira-tab-body .orca-file-note.fail")).toEqual(["Jira が 404 を返しました: no project"]);
+    expect(await count(CARDS)).toBe(0);
   });
 });

@@ -1666,8 +1666,9 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 #orca-jira { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 #orca-jira-bar { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 8px 6px; border-bottom: 1px solid var(--line); }
 #orca-jira-bar select { flex: 1 1 0; min-width: 0; height: 26px; padding: 0 8px; border: 1px solid var(--chip-line); border-radius: 13px; background: var(--surface); font: inherit; font-size: calc(12px * var(--fs)); color: inherit; }
-#orca-jira-reload { flex: none; width: 24px; height: 24px; margin-left: auto; color: var(--ink-soft); }
-#orca-jira-reload svg { width: 14px; height: 14px; }
+#orca-jira-reload, #orca-jira-new { flex: none; width: 24px; height: 24px; color: var(--ink-soft); }
+#orca-jira-reload { margin-left: auto; }
+#orca-jira-reload svg, #orca-jira-new svg { width: 14px; height: 14px; }
 #orca-jira-list { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 4px 8px; }
 #orca-jira-list .pending { margin: 4px; }
 .orca-jira-none { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 12px 8px; font-size: calc(12.5px * var(--fs)); color: var(--ink-soft); }
@@ -1735,6 +1736,13 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-jira-labels { display: flex; flex-wrap: wrap; gap: 4px; }
 .orca-jira-label { padding: 0 8px; border-radius: 9px; background: var(--bar); color: var(--ink-soft); font-size: calc(11px * var(--fs)); line-height: 18px; }
 .orca-jira-parent { display: flex; flex-direction: column; gap: 2px; }
+.orca-jira-new { flex: 1; min-width: 0; max-width: 760px; display: flex; flex-direction: column; gap: 14px; }
+.orca-jira-new-picks { display: flex; flex-wrap: wrap; gap: 12px; }
+.orca-jira-new-picks .orca-jira-new-field { flex: 1 1 180px; min-width: 0; }
+.orca-jira-new-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.orca-jira-new-select, .orca-jira-new-summary { box-sizing: border-box; width: 100%; min-width: 0; height: 30px; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 15px; background: var(--surface); font: inherit; font-size: calc(13px * var(--fs)); color: inherit; }
+.orca-jira-new-select:disabled, .orca-jira-new-summary:disabled { opacity: 0.6; }
+.orca-jira-new .orca-jira-edit-bar { margin-top: 0; }
 .orca-definition { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .orca-definition-head { gap: 6px; font-size: calc(13px * var(--fs)); }
 .orca-def-word { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--editor-family, ui-monospace, Menlo, monospace); font-weight: 600; }

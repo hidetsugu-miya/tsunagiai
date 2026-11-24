@@ -1,13 +1,13 @@
 // The Jira part of the file pane of the Orca screen (J-2, #870): the tickets of the Jira that J-1 connects, by sprint, with the backlog under them. Each ticket is a row of its key, its summary and its status; a ticket that is done (its status category) is struck through. The tickets belong to no worktree, so the part hides the heading of the pane, as the database part does (A-43).
 // `jira_settings` is read first (it asks Jira nothing): with no site or no token saved the part says so and leads to the card of the settings (J-1). Then the scrum boards (`jira_boards`: only a scrum board has sprints), the sprints of the board (`jira_sprints`) and, for the sprints that the choice names and for the backlog, the tickets, one section after another (`jira_sprint_issues`, `jira_backlog`). A section reads, fails and is read again on its own.
-// A double press on a row opens the ticket as a tab of the work pane (orca-jira-tab.ts).
+// A double press on a row opens the ticket as a tab of the work pane (orca-jira-tab.ts), and 「＋」 opens the tab of a new ticket (#874).
 // Everything is read when the part comes to be shown, when 「再読み込み」 is pressed, and, while the connection is missing or the first read failed, when the window gets the focus back and when the screen is shown again after 「設定を開く」; nothing is read at an interval.
 import type { JiraBoard } from "./bindings/JiraBoard";
 import type { JiraIssue } from "./bindings/JiraIssue";
 import type { JiraSprint } from "./bindings/JiraSprint";
 import { $, span, tag } from "./dom.js";
 import { logError } from "./error-card.js";
-import { RELOAD_SVG } from "./icons.js";
+import { PLUS_SVG, RELOAD_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { setScreen } from "./nav.js";
 
@@ -24,6 +24,8 @@ interface Section {
 
 // A row was pressed twice: the screen opens the ticket as a tab of the work pane (orca-jira-tab.ts, #871), with the board the list shows (the sprints that the tab offers are the board's).
 let openIssue: (key: string, boardId: number) => void = () => {};
+// 「＋」 was pressed (#874): the screen opens the tab of a new ticket, with the board the list shows and the sprint it has chosen (none for the backlog).
+let newIssue: (boardId: number, sprintId: number | null) => void = () => {};
 
 const BACKLOG = "backlog";
 const ALL = "all";
@@ -84,6 +86,7 @@ function drawBar() {
   $("orca-jira-sprint").hidden = !ready || sprints.length === 0;
   $("orca-jira-status").hidden = !ready || statuses().length === 0;
   $("orca-jira-reload").hidden = stage === "idle";
+  $("orca-jira-new").hidden = !ready || boardId === null;
   if (withBoards) fill($<HTMLSelectElement>("orca-jira-board"), boards.map((b) => [String(b.id), b.name]), String(boardId));
   if (ready && sprints.length > 0) fill($<HTMLSelectElement>("orca-jira-sprint"), [[ALL, "すべてのスプリント"], ...sprints.map((s): [string, string] => [String(s.id), s.name])], sprintPick);
   if (ready) fill($<HTMLSelectElement>("orca-jira-status"), [["", "すべてのステータス"], ...statuses().map((s): [string, string] => [s, s])], statusPick);
@@ -262,8 +265,11 @@ export function refreshOrcaJira() {
   if (stage === "none" || stage === "failed") void read();
 }
 
-export function initOrcaJira(on: { open: (key: string, boardId: number) => void }) {
+export function initOrcaJira(on: { open: (key: string, boardId: number) => void; create: (boardId: number, sprintId: number | null) => void }) {
   openIssue = on.open;
+  newIssue = on.create;
+  $("orca-jira-new").innerHTML = PLUS_SVG;
+  $("orca-jira-new").onclick = () => boardId !== null && newIssue(boardId, sprints.some((s) => String(s.id) === sprintPick) ? Number(sprintPick) : null);
   $("orca-jira-reload").innerHTML = RELOAD_SVG;
   $("orca-jira-reload").onclick = () => void read();
   $<HTMLSelectElement>("orca-jira-board").onchange = (e) => {
