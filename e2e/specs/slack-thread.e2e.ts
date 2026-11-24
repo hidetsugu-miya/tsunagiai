@@ -289,9 +289,9 @@ describe("slack thread: where it opens", () => {
     browser.execute((t) => {
       document.getElementById("st-msgs")!.scrollTop = t;
     }, top);
-  // Waits until the image in the box is decoded, so that its height is in the layout.
-  const imageLoaded = () =>
-    browser.waitUntil(() => browser.execute(() => [...document.querySelectorAll<HTMLImageElement>("#st-msgs img.st-img")].some((i) => i.complete && i.naturalHeight > 0)));
+  // Whether an image in the box is decoded, so that its height is in the layout.
+  const imageDecoded = () => browser.execute(() => [...document.querySelectorAll<HTMLImageElement>("#st-msgs img.st-img")].some((i) => i.complete && i.naturalHeight > 0));
+  const imageLoaded = () => browser.waitUntil(imageDecoded);
   const thumbThread = () => slackThread(long({ files: [slackFile("F1", "design.png", { thumbUrl: thumbUrlOf("F1") })] }));
   // The app with the thread of a thumbnail held, opened; the thumbnail's call is waiting.
   async function openHeld() {
@@ -339,12 +339,12 @@ describe("slack thread: where it opens", () => {
   it("stays at the newest message when an image of a block is drawn after 画像を表示", async () => {
     const blockThread = slackThread(long({ blocks: [{ type: "image", image: { url: imageUrl, alt: "A chart" }, title: null }], showText: false, imageUrls: [imageUrl] }));
     await openDetail({}, blockThread);
-    await browser.waitUntil(atBottom);
+    await browser.waitUntil(atBottom, { timeoutMsg: "the thread did not open at its newest message" });
     await mock("fetch_images", { [imageUrl]: tall });
     await $("#st-msgs .st-images .text-btn").click();
-    await browser.waitUntil(async () => (await count("#st-msgs img.st-img")) === 1);
-    await imageLoaded();
-    await browser.waitUntil(atBottom);
+    // One wait for the end state: the image is decoded (the box is taller by it) and the box is at its end.
+    // Under load the script of a poll may lose its result and cost the 3 s script timeout, so the wait has room for several such losses (#1345).
+    await browser.waitUntil(async () => (await imageDecoded()) && (await atBottom()), { timeout: 30_000, timeoutMsg: "the box was not at its newest message with the image of the block decoded" });
   });
 
   it("does not take the user back to the end when an image changes the height after they scrolled up", async () => {
