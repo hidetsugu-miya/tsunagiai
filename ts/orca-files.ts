@@ -1,5 +1,6 @@
 // The file pane of the Orca screen (A-18): the files of the worktree of the selected tab (with no tab, the main worktree of the selected project), as a tree on the right of the work pane. Rust reads a folder (`orca_files_list`: its entries sorted) and, after it, which of them git ignores (`orca_files_ignored`) and which differ from HEAD (`orca_files_changes`, A-39); this module draws the folder at once, marks the ignored and the changed entries when the answers come, and takes the presses.
 // A folder is read the first time it is opened and drawn from what was read after that, and the root and then the open folders are read again, side by side (at most `reads()` at a time), when the window gets the focus back and, while the pane is shown, by the clock of the Orca screen (`refreshFiles`, called by orca.ts), after the app's own create, delete and move, and after a switch of the branch, the app's own or one the list of Orca shows (`syncFiles`). A read by the clock or for a branch that changed outside the app says nothing when it fails (what is shown stays). Where the Orca screen streams (A-12), the disk is watched (`orca-watch.ts`, Orca's `files.watch`) and the folders that hold a path that changed or lie above it (read ones, not in an ignored folder) are read again at once (`rereadTree`), and the clock does not read the tree while its worktree is watched, unless a folder of `node_modules` or `.git` is open (Orca does not watch them); elsewhere nothing watches the disk. A press on a row selects it (with ⌘ it adds the row to the selection or takes it off, with Shift it selects the rows from the one pressed before), and the selected rows are drawn in the accent color. A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path (and, on a file, downloads it; on a folder, first makes a new file or folder in it, as the right button on the empty part of the tree does in the root; on a row that differs from HEAD, after a line, stages it, unstages it and puts it back, which asks first, A-44; last, after a line, 「移動・名前の変更」, which turns the row into a field with its path from the worktree, and the delete, which asks first and deletes for good, A-18; on several selected rows the menu is the delete alone, as the Delete key is, A-18). A row is also moved by dragging it onto a folder's row or onto the empty part of the tree (the root of the worktree). The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
+// A file or folder dragged in from outside is put in the folder under the pointer (A-47, `putDropped`): the tree is a drop zone of `orca-attach.ts`, marks the folder with `data-drop` as a dragged row does, asks about each name that is taken, and shows the progress above the tree.
 // The tree belongs to one worktree of one target: another tab's worktree gives a new tree (nothing is kept of the old one, and an answer that comes late for the old one is dropped).
 // The top row also has the three buttons that choose what the pane shows under the heading, the files, the history of the worktree (A-27, orca-history.ts) or the language server of the worktree (A-34, orca-lsp.ts), and a fourth for the connections of the database screen (A-43, orca-database.ts), which belong to no worktree and hide the heading; the choice is kept in memory only, and the heading serves the files, the history and the language server, and so do the reads at the return of the focus and by the clock (`refreshFiles`), which the language server and the connections have none of.
 import type { OrcaDeleteEntry } from "./bindings/OrcaDeleteEntry";
@@ -19,6 +20,7 @@ import type { DiffCommit } from "./orca-diff.js";
 import { checkHistory, initHistory, refreshHistory, reloadHistory, syncHistory } from "./orca-history.js";
 import { syncOrcaDatabase } from "./orca-database.js";
 import { syncLsp } from "./orca-lsp.js";
+import { type Dropped, fileBase64, listenForDrops } from "./orca-attach.js";
 import { toast } from "./toast.js";
 import { showFailure } from "./error-card.js";
 import { copyText } from "./view.js";
@@ -78,6 +80,11 @@ let renaming: Renaming | null = null;
 let moving = false;
 // The folder a dragged row would be dropped in ("" is the root of the worktree), which is drawn as the place of the drop; null while nothing is dragged over one.
 let dropDir: string | null = null;
+// A-47: a drop from outside is on its way (from the drop to its end, the questions included), and the files of it that are put: the folder, how many are put of how many. A drop is not taken while one is on its way.
+let dropBusy = false;
+let dropping: { dir: string; done: number; total: number } | null = null;
+// The question about a name that is taken (A-47) while it is open: closing it answers "skip".
+let asking: { skip: () => void } | null = null;
 // A drag starts once the pointer has moved this far from its press, and a closed folder under a dragged row opens after this long.
 const DRAG_PX = 5;
 const DRAG_OPEN_MS = 600;
@@ -128,6 +135,7 @@ function syncModes() {
   syncHistory(context === null ? null : { target: context.target, path: context.path }, shown && part === "history");
   syncLsp(context === null ? null : { target: context.target, project: context.project, path: context.path }, shown && part === "server");
   syncOrcaDatabase(shown && part === "database");
+  drawDrop();
   if (shown && part === "files" && context !== null && !listings.has("")) void readDir("");
 }
 
@@ -638,6 +646,177 @@ function startDrag(down: PointerEvent, entry: OrcaFileEntry) {
   document.addEventListener("keydown", key);
 }
 
+// A-47: the folder a drop at `target`, the element under the pointer, goes to: the folder of a folder's row, the folder that holds a file's row, and the root of the worktree ("") on the part of the tree with no row.
+function dropDirAt(target: EventTarget | null) {
+  const over = (target as Element | null)?.closest<HTMLElement>(".orca-file");
+  if (over === null || over === undefined) return "";
+  const path = over.dataset.path ?? "";
+  return over.dataset.kind === "dir" ? path : parentOf(path);
+}
+
+// A-47: how a folder is named in the words of a drop: its path, and the worktree's own folder by the name of the project.
+function folderName(dir: string) {
+  if (dir !== "") return `${dir}/`;
+  const here = context;
+  if (here === null) return "";
+  const end = ` ・ ${here.branch}`;
+  return `${here.branch !== null && here.label.endsWith(end) ? here.label.slice(0, here.label.length - end.length) : here.label}/`;
+}
+
+// A-47: the line above the tree while a drop is put: the folder, how many files are put of how many, and the bar.
+function drawDrop() {
+  const now = dropping;
+  const live = now !== null && shownPart() === "files";
+  $("orca-drop").hidden = !live;
+  if (!live) return;
+  $("orca-drop-label").textContent = `${folderName(now.dir)} に置いています`;
+  $("orca-drop-count").textContent = `${now.done} / ${now.total}`;
+  $("orca-drop-fill").style.width = `${(now.done / now.total) * 100}%`;
+}
+
+// A-47: what the owner answered for a file whose name is taken in the folder: replace it, put it under another name, or leave it; `all` is that the rest of the drop that is taken is answered the same way.
+type Answer = "overwrite" | "copy" | "skip";
+
+// Asks about the file `name`, which the folder `dir` holds already, with `left` more such files after it (the checkbox for them is there when it is not 0). The question is a card over the tree; Escape leaves the file, and so does the end of the tree.
+function askTaken(dir: string, name: string, left: number): Promise<{ answer: Answer; all: boolean }> {
+  return new Promise((resolve) => {
+    const where = folderName(dir);
+    const pop = tag("div", "pop orca-drop-pop");
+    pop.setAttribute("role", "alertdialog");
+    pop.setAttribute("aria-label", `${name} は ${where} にもうあります`);
+    const text = tag("p");
+    text.append(tag("b", "", name), ` は ${where} にもうあります。`);
+    pop.append(text);
+    const check = tag("input");
+    check.type = "checkbox";
+    if (left > 0) {
+      const label = tag("label", "orca-drop-all");
+      label.append(check, `残りの ${left} 件も同じにする`);
+      pop.append(label);
+    }
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || composing(e)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      done("skip");
+    };
+    const done = (answer: Answer) => {
+      window.removeEventListener("keydown", key, true);
+      pop.remove();
+      asking = null;
+      resolve({ answer, all: check.checked });
+    };
+    const actions = tag("div", "popup-actions");
+    const choices: [string, Answer, string][] = [["やめる", "skip", ""], ["別名で置く", "copy", ""], ["上書き", "overwrite", " danger"]];
+    const buttons = choices.map(([label, answer, extra]) => {
+      const button = tag("button", `text-btn${extra}`, label);
+      button.type = "button";
+      button.onclick = () => done(answer);
+      return button;
+    });
+    actions.append(...buttons);
+    pop.append(actions);
+    window.addEventListener("keydown", key, true);
+    asking = { skip: () => done("skip") };
+    document.body.append(pop);
+    const r = $("orca-files-tree").getBoundingClientRect();
+    const width = Math.min(320, r.width - 16);
+    Object.assign(pop.style, { width: `${width}px`, left: `${r.left + (r.width - width) / 2}px`, top: `${r.top + 24}px` });
+    buttons[0].focus();
+  });
+}
+
+// A-47: the words of a card for the files `names` that are not put, for `why`.
+const refused = (names: string[], why: string) => `${names[0]}${names.length > 1 ? ` ほか ${names.length - 1} 件` : ""} ${why}`;
+
+// A-47: the most one drop holds (files, and bytes in all), and the most one file is (the same as A-10's).
+const DROP_FILES = 1000;
+const DROP_BYTES = 200 * 1024 * 1024;
+const DROP_FILE = 20 * 1024 * 1024;
+
+// A-47: puts what was dropped in the folder `dir` of the worktree. A drop over the number or the total puts nothing, a file over 20 MiB and a folder are left with a card, and for each name that the folder holds the owner is asked (all the questions come before the first file goes). The files are put one after another, and each one's row appears as soon as it is put: the folder is read again while the next one goes (at most one read at a time). A failure shows its card and stops at that file. A tree that became another worktree's ends it.
+async function putDropped(dir: string, read: Promise<Dropped>) {
+  const here = context;
+  if (here === null || dropBusy) {
+    read.catch(() => {});
+    return;
+  }
+  dropBusy = true;
+  const mine = generation;
+  // The read of the folder that is on its way while files are put (the closure of `reread` sets it, so the type is stated to keep the checks from taking it for null).
+  let reading = null as Promise<void> | null;
+  let again = false;
+  try {
+    const dropped = await read;
+    const total = dropped.files.reduce((sum, f) => sum + f.size, 0);
+    if (dropped.files.length > DROP_FILES || total > DROP_BYTES) return showFailure("orca-files", "一度に置けるのは 1,000 ファイル、合計 200 MiB までです");
+    if (dropped.folders.length > 0) showFailure("orca-files", refused(dropped.folders, "はフォルダーなので置けません"));
+    const big = dropped.files.filter((f) => f.size > DROP_FILE);
+    if (big.length > 0) showFailure("orca-files", refused(big.map((f) => f.name), "は 20 MiB を超えるので置けません"));
+    const files = dropped.files.filter((f) => f.size <= DROP_FILE);
+    if (files.length === 0) return;
+    const taken = new Set(await invoke("orca_drop_taken", { path: here.path, dir, names: files.map((f) => f.name), environment: here.target }));
+    if (mine !== generation) return;
+    const plan: { file: File; onTaken: "overwrite" | "copy" }[] = [];
+    let same: Answer | null = null;
+    let left = files.filter((f) => taken.has(f.name)).length;
+    for (const file of files) {
+      if (!taken.has(file.name)) {
+        plan.push({ file, onTaken: "copy" });
+        continue;
+      }
+      left--;
+      let answer: Answer | null = same;
+      if (answer === null) {
+        const reply = await askTaken(dir, file.name, left);
+        if (mine !== generation) return;
+        answer = reply.answer;
+        if (reply.all) same = answer;
+      }
+      if (answer !== "skip") plan.push({ file, onTaken: answer });
+    }
+    if (plan.length === 0) return;
+    const progress = { dir, done: 0, total: plan.length };
+    dropping = progress;
+    version++;
+    if (dir !== "") expandDir(dir);
+    draw();
+    drawDrop();
+    const reread = () => {
+      if (reading !== null) {
+        again = true;
+        return;
+      }
+      reading = (async () => {
+        do {
+          again = false;
+          await readDir(dir, true);
+        } while (again && mine === generation);
+        reading = null;
+      })();
+    };
+    for (const { file, onTaken } of plan) {
+      const data = await fileBase64(file);
+      await invoke("orca_drop_file", { path: here.path, dir, name: file.name, data, onTaken, environment: here.target });
+      if (mine !== generation) return;
+      progress.done++;
+      drawDrop();
+      reread();
+    }
+  } catch (e) {
+    if (mine === generation) showFailure("orca-files", e);
+  } finally {
+    await reading;
+    dropBusy = false;
+    if (mine === generation) {
+      dropping = null;
+      version++;
+      draw();
+      drawDrop();
+    }
+  }
+}
+
 // Saves the file to this PC (A-22): Rust opens the save dialog and writes where it says, so the page names no place. Nothing is shown when the dialog is cancelled.
 async function download(here: FilesContext, relative: string) {
   try {
@@ -826,6 +1005,7 @@ function row(entry: OrcaFileEntry, depth: number) {
     };
   }
   button.append(name);
+  if (entry.isDirectory && dropping?.dir === entry.path) button.append(tag("span", "spin orca-file-spin"));
   // A change from HEAD (A-39): the name and the icon take the color, and the right end has `M` or `U` on a file and a dot on a folder.
   const change = changes.get(entry.path);
   if (change !== undefined) {
@@ -952,6 +1132,9 @@ export function syncFiles(next: FilesContext | null, open: Set<string>) {
     switchedTo = null;
     treeAgain = false;
     generation++;
+    // A drop of the old tree ends: its question closes, its progress goes, and the loop stops at its next step.
+    dropping = null;
+    asking?.skip();
     listings.clear();
     expanded.clear();
     changes.clear();
@@ -989,6 +1172,15 @@ export function initOrcaFiles(on: { open: (relative: string) => void; diff: (rel
   initHistory({ open: on.commitDiff });
   $("orca-files-tree").oncontextmenu = openRootMenu;
   $("orca-files-tree").onkeydown = deleteKey;
+  listenForDrops($("orca-files-tree"), {
+    over: (target) => {
+      const take = context !== null && !dropBusy && !moving;
+      showDrop(take ? dropDirAt(target) : null);
+      return take;
+    },
+    leave: () => showDrop(null),
+    drop: (target, read) => void putDropped(dropDirAt(target), read),
+  });
   $("orca-files-toggle").innerHTML = FOLDER_SVG;
   $("orca-files-toggle").onclick = on.toggle;
   $("orca-files-mode-files").innerHTML = FILE_SVG;
