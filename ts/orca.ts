@@ -89,8 +89,8 @@ const isWorking = (r: OrcaRow) => r.group === "working" && (r.status === "workin
 const workingOf = (read: OrcaLocal | null | undefined) => (read?.state === "ready" ? read.rows.filter(isWorking).length : 0);
 // The notices: the panes of the stopped agents (done, failed or interrupted) that changed while the app ran and have not been shown on this screen yet.
 const notified = new Set<string>();
-// The panes that were stopped when last seen (a pane that left the list stays here, so one that comes back stopped is not noticed again), and whether a read of the target was taken as the base (its rows are never noticed).
-let wasStopped = new Set<string>();
+// The panes that were stopped when last seen, each with the newest `atMs` seen while stopped (a pane that left the list stays here, so one that comes back stopped with the same time is not noticed again), and whether a read of the target was taken as the base (its rows are never noticed).
+let wasStopped = new Map<string, number>();
 let baselined = false;
 // Reads: the latest request is the one used; one is on its way; when the last one started.
 let loadSeq = 0;
@@ -189,7 +189,7 @@ const viewedPane = () => {
 };
 
 // Takes the rows of a read as the one the count follows (the rows of one read, whatever its scope). The first read of a target is only the base: a notice is made for a row that went from not stopped to stopped,
-// or that first appeared in a later read already stopped (a pane seen stopped before is never new, even after it left the list and came back). A notice goes when the agent runs again, leaves the list, or its session is shown. A row with no pane cannot be opened, so it has no notice.
+// or that first appeared in a later read already stopped, or that is stopped again with a newer `atMs` (the time it stopped: work that began and ended between two reads is stopped in both, and only its time tells; a pane seen stopped before with the same time is never new, even after it left the list and came back). A notice goes when the agent runs again, leaves the list, or its session is shown. A row with no pane cannot be opened, so it has no notice.
 function track(rows: OrcaRow[]) {
   waitingCount = rows.filter((r) => r.group === "waiting").length;
   workingCount = rows.filter(isWorking).length;
@@ -201,8 +201,9 @@ function track(rows: OrcaRow[]) {
       notified.delete(r.paneKey);
       wasStopped.delete(r.paneKey);
     } else {
-      if (baselined && !wasStopped.has(r.paneKey)) notified.add(r.paneKey);
-      wasStopped.add(r.paneKey);
+      const seen = wasStopped.get(r.paneKey);
+      if (baselined && (seen === undefined || r.atMs > seen)) notified.add(r.paneKey);
+      wasStopped.set(r.paneKey, Math.max(seen ?? 0, r.atMs));
     }
   }
   for (const key of notified) if (!live.has(key)) notified.delete(key);
@@ -214,7 +215,7 @@ function forgetNotices() {
   waitingCount = 0;
   workingCount = 0;
   notified.clear();
-  wasStopped = new Set();
+  wasStopped = new Map();
   baselined = false;
 }
 

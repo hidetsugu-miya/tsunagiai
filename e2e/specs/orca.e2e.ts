@@ -116,7 +116,9 @@ async function reread(rows: Row[], extra: Partial<Parameters<typeof orcaOverview
 
 const working = (repo: string, extra: Partial<Row> = {}) => orcaRow(repo, "main", `Task of ${repo}`, extra);
 // What Orca says of a finished agent, and of one stopped with Esc (`state` done with `interrupted` true).
-const finished = (repo: string, extra: Partial<Row> = {}) => working(repo, { group: "done", ...extra });
+// A finished agent has one stop time that every read of it repeats, as Orca's `updatedAt` does (A-6: a stopped row with a newer time is a new notice).
+const STOPPED_AT = Date.now() - 125_000;
+const finished = (repo: string, extra: Partial<Row> = {}) => working(repo, { group: "done", atMs: STOPPED_AT, ...extra });
 const stopped = (repo: string) => finished(repo, { status: "interrupted" });
 
 // A drag of the divider (pointer events, as the divider listens for them) that ends with the pointer at `fraction` of #orca's width from its left edge.
@@ -285,6 +287,25 @@ describe("orca", () => {
     await expectCount(1);
     await reread([finished("example-app"), working("example-api", { group: "waiting" }), working("example-web", { group: "waiting", paneKey: null, handle: null })]);
     await expectCount(3);
+  });
+
+  it("counts an agent that was stopped in the read before too, when its stop time is newer", async () => {
+    // The work began and stopped between two reads: both reads show it stopped, and only its time (`atMs`) differs.
+    await openOrca(orcaOverview([finished("example-app")], worktrees()));
+    await expectCount(0);
+    await reread([finished("example-app", { atMs: STOPPED_AT + 15_000 })]);
+    await expectCount(1);
+    // The same time again is the same stop: the notice is not counted twice.
+    await reread([finished("example-app", { atMs: STOPPED_AT + 15_000 })]);
+    await expectCount(1);
+  });
+
+  it("gives a stopped agent no notice while its stop time stays the same", async () => {
+    await openOrca(orcaOverview([finished("example-app")], worktrees()));
+    await reread([finished("example-app")]);
+    await expectCount(0);
+    await reread([finished("example-app", { atMs: STOPPED_AT - 15_000 })]);
+    await expectCount(0);
   });
 
   it("gives an agent with no pane no notice when it stops", async () => {
