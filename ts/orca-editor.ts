@@ -457,6 +457,8 @@ async function load(f: EditorFile) {
     }
     // CodeMirror is read the first time a file is opened, beside the read of the file; one that cannot be read fails the file as a file that cannot be read does (the note says so, and opening the file again tries again).
     const [text] = await Promise.all([f.outside ? readOutside(f) : invoke("orca_file_read", { path: f.path, relative: f.relative, environment: f.target }), loadCodeMirror()]);
+    // A file closed while it was read has no editor made for it: nothing would destroy it.
+    if (files.get(f.id) !== f) return;
     f.language = text.language;
     // A file outside the worktree is marked `gem` when it is a Ruby file.
     if (f.outside) f.state.textContent = text.language === "ruby" ? "gem" : "";
