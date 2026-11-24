@@ -3,11 +3,13 @@ import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import { streamList as streamedList } from "../orca-support";
 import { boot, callsOf, claudeReady, claudeSettings, composerLayout, count, fire, formationEntry, formationList, handoffSummary, heightOf, holds, huge, image, inbox, listedChild, mock, note, onceId, orcaOverview, orcaRow, orcaWorktree, PNG, rejects, release, slackLoad, sendStream, slackThread, slackTs, streamList, textsOf, threadMessage, timeline, timelineMessage, todoData, waitForCalls, waitForCount, CARDS } from "../support";
 
+// A finished agent has one stop time that every read of it repeats, as Orca's `updatedAt` does (A-6: a stopped row with a newer time is a new notice).
+const DONE_AT = Date.now() - 18 * 60_000 - 5_000;
 // A waiting, a working and a done agent (all have a terminal), and a working one with no terminal. The pane lists none of them (it hands over to a new session only), but the Orca screen does.
 const sample = () => [
   orcaRow("example-api", "main", "Fix the parser", { group: "waiting", minutes: 5 }),
   orcaRow("example-app", "feat/a", "Write the docs", { minutes: 2 }),
-  orcaRow("example-lib", "feature/x", "Opened the pull request.", { group: "done", minutes: 18 }),
+  orcaRow("example-lib", "feature/x", "Opened the pull request.", { group: "done", atMs: DONE_AT }),
   orcaRow("example-web", "dev", "Update the page", { minutes: 11, handle: null, paneKey: null }),
 ];
 const worktrees = () => [orcaWorktree("example-app", "feat/a"), orcaWorktree("example-api", "main")];

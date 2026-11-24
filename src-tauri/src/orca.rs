@@ -69,7 +69,7 @@ pub enum OrcaGroup {
 
 /// What a status icon shows (A-8), in Orca's own words: `question` is an agent that waits for the user (`waiting`, `blocked`, `permission`).
 /// The order of the variants is Orca's rank, the highest first: an unconfirmed state is drawn as `interrupted` and ranks with it.
-#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "lowercase")]

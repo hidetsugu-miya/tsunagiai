@@ -1024,16 +1024,23 @@ function create(id: string, target: string | null, project: string, path: string
 }
 
 // Opens the file as a tab of the project and gives its id (with `outside`, the server that gave a file outside the worktree that a definition named, read only: `relative` is its absolute path on the server's side, A-34); a file that is open already is not read here (`showEditors` reads it again when its tab is put back in a pane).
-export function openFile(target: string | null, project: string, path: string, relative: string, outside: string | null = null) {
+// `id` is the id the tab has already (A-46: a file that goes to a window of its own and comes back keeps the place its tab has in the layout); the counter passes it, so no tab made later takes it.
+export function openFile(target: string | null, project: string, path: string, relative: string, outside: string | null = null, id?: string) {
   const open = [...files.values()].find((f) => f.target === target && f.project === project && f.path === path && f.relative === relative && f.outside === (outside !== null));
   if (open) {
     open.wantFocus = true;
     return open.id;
   }
-  const f = create(`file:${++lastId}`, target, project, path, relative, outside !== null, outside);
+  if (id !== undefined) reserveId(id);
+  const f = create(id ?? `file:${++lastId}`, target, project, path, relative, outside !== null, outside);
   files.set(f.id, f);
   void load(f);
   return f.id;
+}
+
+// Makes the counter of the ids pass the id of a tab that is held somewhere else (a window of its own, A-46), so a file opened later does not take it.
+export function reserveId(id: string) {
+  lastId = Math.max(lastId, Number(id.slice("file:".length)) || 0);
 }
 
 // The open files of the project, in the order they were opened.
@@ -1048,14 +1055,26 @@ export const dirtyIds = () => new Set([...files.values()].filter((f) => f.dirty)
 // The files of the worktree at `path` that are open in the project, by their relative paths (the file list colors them).
 export const openedIn = (target: string | null, project: string, path: string) => new Set(filesOf(target, project).filter((f) => !f.outside && f.path === path).map((f) => f.relative));
 
+// Saves the typing of a file as a close does: the edit of the rich view is put in the text, a save that failed before is tried again (one try: a failure ends the loop), and the loop saves until nothing is left that can be saved.
+async function settle(f: EditorFile) {
+  await syncRich(f);
+  if (f.save === "error") setSave(f, "pending");
+  while (canSave(f)) await flush(f);
+}
+
+// Saves the typing of the tab, as a close does, and says whether none is left unsaved: a save that failed (its message is shown) or was refused (the heading says so) leaves it. A file that is not open has none (A-46: the tab goes to a window of its own only after this).
+export async function saveFile(id: string) {
+  const f = files.get(id);
+  if (!f) return true;
+  await settle(f);
+  return !f.dirty;
+}
+
 // Closes the tab after its typing is saved. A save that cannot be made keeps the tab (its message is shown); one that was refused (the disk changed) is said in the heading already, and the tab closes without it.
 export async function closeFile(id: string) {
   const f = files.get(id);
   if (!f) return true;
-  await syncRich(f);
-  // A save that failed before is tried again by this close (one try: a failure ends the loop below).
-  if (f.save === "error") setSave(f, "pending");
-  while (canSave(f)) await flush(f);
+  await settle(f);
   if (f.dirty && !f.blocked) return false;
   hideLink(f);
   clearTimer(f);

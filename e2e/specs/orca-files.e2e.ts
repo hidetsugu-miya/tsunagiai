@@ -17,7 +17,7 @@ import type { OrcaRemoteBranch } from "../../ts/bindings/OrcaRemoteBranch";
 import type { OrcaSaved } from "../../ts/bindings/OrcaSaved";
 import type { PaneLayout } from "../../ts/bindings/PaneLayout";
 import type { PaneNode } from "../../ts/bindings/PaneNode";
-import { callsOf, copiedTexts, count, databaseCell, databaseColumn, databaseProfile, databaseRecords, databaseSqlResult, databaseStructure, databaseTable, emitEvent, fontSettings, holds, mock, onceId, orcaRow, orcaTerminal, orcaWorktree, rejects, release, sendFiles, sendStream, stubClipboard, textsOf, timers, waitForCalls, waitForCount, CARDS, CARD } from "../support";
+import { callsOf, copiedTexts, count, databaseCell, databaseColumn, databaseProfile, databaseRecords, databaseSqlResult, databaseStructure, databaseTable, emitEvent, fontSettings, holds, mock, onceId, orcaRow, orcaTerminal, orcaWorktree, popoutTab, rejects, release, sendFiles, sendPopout, sendStream, stubClipboard, textsOf, timers, waitForCalls, waitForCount, CARDS, CARD } from "../support";
 import { claudeTab, filesToggle, onThisMachine, openOrca, orcaOverview, pickItem, project, sample, selectedTab, showAgain, streamList, studio, tabOf, tabTitles, worktrees } from "../orca-support";
 
 // A-18: the file pane and the editor. Rust reads the folders, reads and saves the text, and decides whether a save went through (unit tests); here the screen is checked: what it asks of Rust, and how it draws the answers.
@@ -1552,15 +1552,15 @@ describe("orca: files and editor (A-18)", () => {
       onceId(),
     );
 
-  it("adds the two copies, after a line under the split, to the menu of the tab of a file, with a line icon on each row and no colored dot (A-17)", async () => {
+  it("adds the window and the two copies, the copies after a line, to the menu of the tab of a file under the split, with a line icon on each row and no colored dot (A-17, A-46)", async () => {
     await openFiles();
     await openA();
     await stubClipboard();
     await rightClickTab("file:1");
     await expect($('.menu[role="menu"]')).toBeDisplayed();
-    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["右に分割", "下に分割", "", "パスのコピー", "相対パスをコピー"]);
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["右に分割", "下に分割", "別ウィンドウで開く", "", "パスのコピー", "相対パスをコピー"]);
     expect(await count('.menu[role="menu"] > [role="separator"]')).toBe(1);
-    expect(await count('.menu[role="menu"] button svg')).toBe(4);
+    expect(await count('.menu[role="menu"] button svg')).toBe(5);
     expect(await count('.menu[role="menu"] .pdot')).toBe(0);
     // The split to the right is a square cut by a vertical line, the one below by a horizontal line.
     const [right, below] = await browser.execute(() => [...document.querySelectorAll('.menu[role="menu"] button')].slice(0, 2).map((b) => b.querySelector("path")!.getAttribute("d")));
@@ -1576,7 +1576,7 @@ describe("orca: files and editor (A-18)", () => {
     expect(await copiedTexts()).toEqual(["/work/example-app/a.rs", "a.rs"]);
   });
 
-  it("has the two copies alone, with no line, on the tab of a file that is alone in its pane, and no menu on the Claude tab that is alone in its pane (A-17)", async () => {
+  it("has the window and the two copies, with a line before the copies, on the tab of a file that is alone in its pane, and the window alone on the Claude tab that is alone in its pane (A-17, A-46)", async () => {
     await openFiles();
     await openA();
     await stubClipboard();
@@ -1585,14 +1585,14 @@ describe("orca: files and editor (A-18)", () => {
     await waitForCount(".orca-pane", 2);
     await rightClickTab("file:1");
     await expect($('.menu[role="menu"]')).toBeDisplayed();
-    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["パスのコピー", "相対パスをコピー"]);
-    expect(await count('.menu[role="menu"] button svg')).toBe(2);
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["別ウィンドウで開く", "", "パスのコピー", "相対パスをコピー"]);
+    expect(await count('.menu[role="menu"] button svg')).toBe(3);
     await pickItem("相対パスをコピー");
     await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "the relative path was never copied" });
     expect(await copiedTexts()).toEqual(["a.rs"]);
     await rightClickTab(claude);
-    await browser.pause(300);
-    expect(await count(".menu")).toBe(0);
+    await expect($('.menu[role="menu"]')).toBeDisplayed();
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["別ウィンドウで開く"]);
   });
 
   it("opens a file that is open already by selecting its tab, and reads it again as it comes back into the pane: the text of the disk takes the place of the one held", async () => {
@@ -3260,16 +3260,51 @@ describe("orca: files and editor (A-18)", () => {
     return diff;
   }
 
-  it("has the split alone in the menu of the tab of a diff and of a Claude session, with no copy of a path (A-17)", async () => {
+  it("has the split and the window in the menu of the tab of a diff, and in that of a Claude session, with no copy of a path (A-17, A-46)", async () => {
     await openDiffOf();
     await rightClickTab("diff:1");
     await expect($('.menu[role="menu"]')).toBeDisplayed();
-    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["右に分割", "下に分割"]);
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["右に分割", "下に分割", "別ウィンドウで開く"]);
     await browser.keys("Escape");
     await expect($(".menu")).not.toExist();
     await rightClickTab(claude);
     await expect($('.menu[role="menu"]')).toBeDisplayed();
-    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["右に分割", "下に分割"]);
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["右に分割", "下に分割", "別ウィンドウで開く"]);
+  });
+
+
+  // A-46: a diff tab in a window of its own. The window reads the difference again from the conditions it is given; the tab stays in the memory of the screen, out of the panes.
+  const diffWindow = popoutTab("diff:1", "", "a.rs", { label: "", content: { kind: "diff", path: "/work/example-app", relative: "a.rs", commit: null } });
+  const away = async () => ((await callsOf("orca_panes")).at(-1) as { away: string[] }).away;
+  const awayIs = (want: string[]) => browser.waitUntil(async () => JSON.stringify(await away()) === JSON.stringify(want), { timeoutMsg: `the tabs in a window never became ${want.join()}` });
+
+  it("opens the diff of a file in a window with its worktree, its file and no commit, and the tab leaves the panes (A-46)", async () => {
+    await openDiffOf();
+    await rightClickTab("diff:1");
+    await pickItem("別ウィンドウで開く");
+    expect(await waitForCalls("orca_popout_open")).toEqual([{ tab: diffWindow }]);
+    await awayIs(["diff:1"]);
+    expect(await tabTitles()).toEqual(["Write the docs"]);
+    await expect($(".orca-diff")).not.toBeDisplayed();
+  });
+
+  it("closes the diff, and ends its window, when the owner presses the red button of the window, and puts it back in its pane when the owner presses the button of the right end (A-46)", async () => {
+    await openDiffOf();
+    await rightClickTab("diff:1");
+    await pickItem("別ウィンドウで開く");
+    await awayIs(["diff:1"]);
+    await sendPopout({ kind: "restore", tab: "diff:1" });
+    expect(await waitForCalls("orca_popout_end")).toEqual([{ tab: "diff:1" }]);
+    await awayIs([]);
+    expect(await tabTitles()).toEqual(["Write the docs", "a.rs"]);
+    await rightClickTab("diff:1");
+    await pickItem("別ウィンドウで開く");
+    await awayIs(["diff:1"]);
+    await sendPopout({ kind: "close", tab: "diff:1" });
+    await browser.waitUntil(async () => (await callsOf("orca_popout_end")).length >= 2, { timeoutMsg: "the window never ended" });
+    expect(await callsOf("orca_popout_end")).toEqual([{ tab: "diff:1" }, { tab: "diff:1" }]);
+    expect(await tabTitles()).toEqual(["Write the docs"]);
+    await awayIs([]);
   });
 
   it("opens the diff of a file from the menu of its row with the worktree, its path and the target, as a tab that is selected (A-24)", async () => {
@@ -4300,10 +4335,51 @@ describe("orca: files and editor (A-18)", () => {
     await waitForCount(".orca-database-tab .database-grid", 1);
     const [id] = (await dbTabId()) as string[];
     await rightClickTab(id);
-    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["右に分割", "下に分割"]);
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["右に分割", "下に分割", "別ウィンドウで開く"]);
     await pickItem("右に分割");
     const asked = (await callsOf("orca_panes")).map((c) => (c as { op: { kind?: string; tab?: string; edge?: string } | null }).op);
     expect(asked).toContainEqual({ kind: "move", tab: id, pane: "p1", edge: "right" });
+  });
+
+
+  // A-46: a database tab in a window of its own, with the conditions to read it again (the table, its tab, the page of its records and the text of its SQL).
+  it("opens a table in a window with its connection, database, table, tab and page, and the tab leaves the panes (A-46)", async () => {
+    await openShop();
+    await dbRow("p1/d/shop/t/orders").click();
+    await waitForCount(".orca-database-tab .database-grid", 1);
+    const [id] = (await dbTabId()) as string[];
+    await rightClickTab(id);
+    await pickItem("別ウィンドウで開く");
+    expect(await waitForCalls("orca_popout_open")).toEqual([{ tab: popoutTab(id, "", "orders · Example direct", { label: "", content: { kind: "database", connection: "p1", name: "Example direct", database: "shop", table: "orders", tab: "records", page: 0, sql: "" } }) }]);
+    await browser.waitUntil(async () => (await dbTabs()).length === 0, { timeoutMsg: "the tab never left the strip" });
+    await expect($(".orca-database-tab")).not.toBeDisplayed();
+  });
+
+  it("opens the SQL of a database in a window with the text that was typed (A-46)", async () => {
+    await openShop();
+    await dbRightPress("p1/d/shop");
+    await $('.menu button[role="menuitem"]:first-child').click();
+    await waitForCount(".orca-database-tab [data-key='sql-input']", 1);
+    await typeSql("select 1");
+    const [id] = (await dbTabId()) as string[];
+    await rightClickTab(id);
+    await pickItem("別ウィンドウで開く");
+    expect(await waitForCalls("orca_popout_open")).toEqual([{ tab: popoutTab(id, "", "SQL · shop · Example direct", { label: "", content: { kind: "database", connection: "p1", name: "Example direct", database: "shop", table: null, tab: "sql", page: 0, sql: "select 1" } }) }]);
+  });
+
+  it("closes the tabs of a connection that a window found lost, the window's too, as it does for a connection that its own tab found lost (A-46)", async () => {
+    await openShop();
+    await dbRow("p1/d/shop/t/orders").click();
+    await waitForCount(".orca-database-tab .database-grid", 1);
+    const [id] = (await dbTabId()) as string[];
+    await rightClickTab(id);
+    await pickItem("別ウィンドウで開く");
+    await waitForCalls("orca_popout_open");
+    const open = await mock("database_connections", []);
+    await sendPopout({ kind: "lost", tab: id, connection: "p1", error: "接続が切れました" });
+    await waitForCalls(open);
+    expect(await waitForCalls("orca_popout_end")).toEqual([{ tab: id }]);
+    await expect(dbRow("p1/d/shop")).not.toBeExisting();
   });
 
   it("reads the history and the files of a commit in the environment of the worktree's row, whatever target the screen holds (A-27)", async () => {

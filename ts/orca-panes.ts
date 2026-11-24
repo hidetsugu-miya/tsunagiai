@@ -51,8 +51,11 @@ export function findTab<T extends { id: string; handle: string | null }>(environ
   return handle === undefined ? undefined : tabs.find((t) => t.handle === handle);
 }
 
-// Whether the layout of the project was not asked for with exactly these tabs yet.
-export const needsSync = (environment: string | null, project: string, tabs: string[]) => asked.get(keyOf(environment, project)) !== tabs.join("\n");
+// What a call was made with, to tell a later one that differs: the tabs, and which of them are in a window.
+const askedWith = (ids: string[], away: string[]) => `${ids.join("\n")}\n\n${away.join("\n")}`;
+
+// Whether the layout of the project was not asked for with exactly these tabs (and these in a window) yet.
+export const needsSync = (environment: string | null, project: string, ids: string[], away: string[]) => asked.get(keyOf(environment, project)) !== askedWith(ids, away);
 
 // The least share of its split that a divider leaves a node: `MIN_SHARE` of `orca_panes.rs`.
 export const MIN_SHARE = 0.1;
@@ -97,12 +100,12 @@ export function syncPanes(environment: string | null, project: string, tabs: () 
   if (now === null) return;
   const mine = ++issued;
   latest.set(key, mine);
-  asked.set(key, now.ids.join("\n"));
+  asked.set(key, askedWith(now.ids, now.away));
   chain = chain.then(async () => {
     const next = tabs();
     if (next === null) return;
     const { ids, away, handles } = next;
-    asked.set(key, ids.join("\n"));
+    asked.set(key, askedWith(ids, away));
     try {
       const layout = await invoke("orca_panes", { environment, project, tabs: ids, away, handles, was: known.get(key) ?? {}, op });
       known.set(key, handles);

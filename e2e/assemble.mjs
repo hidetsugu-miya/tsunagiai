@@ -14,10 +14,13 @@ copyFileSync(`${root}e2e/fixtures.js`, `${dist}/e2e-fixtures.js`);
 
 // Module scripts run in document order: the plugin and the fixtures go before the app's own module, so the app finds their `window.__TAURI__.core` in place.
 // `npm run build:ts` has to have run: the app is src/js/main.js, the output of tsc.
-const app = '<script type="module" src="js/main.js"></script>';
-const html = readFileSync(`${dist}/index.html`, "utf8");
-if (!html.includes(app)) throw new Error("index.html: the app's module tag changed, update e2e/assemble.mjs");
-writeFileSync(
-  `${dist}/index.html`,
-  html.replace(app, `<script type="module" src="wdio-plugin.js"></script>\n  <script type="module" src="e2e-fixtures.js"></script>\n  ${app}`),
-);
+// The page of the window of a tab (A-46) is the same: the plugin and the fixtures go before its own module.
+for (const [page, module] of [["index.html", "js/main.js"], ["popout.html", "js/popout.js"]]) {
+  const app = `<script type="module" src="${module}"></script>`;
+  const html = readFileSync(`${dist}/${page}`, "utf8");
+  if (!html.includes(app)) throw new Error(`${page}: the app's module tag changed, update e2e/assemble.mjs`);
+  writeFileSync(
+    `${dist}/${page}`,
+    html.replace(app, `<script type="module" src="wdio-plugin.js"></script>\n  <script type="module" src="e2e-fixtures.js"></script>\n  ${app}`),
+  );
+}

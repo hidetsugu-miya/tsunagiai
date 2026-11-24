@@ -81,7 +81,7 @@ export const thread = (id: string, subject: string): ThreadItem => ({ id, accoun
 
 ### Run the E2E app with the production capability, and add only WebDriver's permissions
 
-`src-tauri/tauri.e2e.conf.json` lists the capability `default` (`src-tauri/capabilities/default.json`, the one the production app has) and a second capability `e2e` that holds only `wdio:default` and `wdio-webdriver:default`.
+`src-tauri/tauri.e2e.conf.json` lists the capabilities `default` and `popout` (`src-tauri/capabilities/default.json` and `popout.json`, the ones the production app has) and a second capability `e2e` that holds only `wdio:default` and `wdio-webdriver:default`.
 Never add another permission to `e2e`, and never give the E2E app a capability of its own in place of `default`, such as `core:default`: a permission that only E2E has makes a spec pass on a call that the production app refuses.
 At the owner's instruction, 2026-11-19; #1068. Production lacked `core:event`, so every `listen` of the screens was refused there, while E2E ran with `core:default` and passed (#1066). From v0.88.1 (#731) to v0.90.0 the screen bridge, the Slack Socket Mode updates, the language server status and the output of the database script never reached the screens in production.
 

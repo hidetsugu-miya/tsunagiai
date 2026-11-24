@@ -43,6 +43,7 @@ pub mod orca_language;
 pub mod orca_link;
 pub mod orca_pairing;
 pub mod orca_panes;
+pub mod orca_popout;
 pub mod orca_preview;
 pub mod orca_stream;
 pub mod orca_theme;
@@ -255,12 +256,14 @@ pub fn run() {
         .manage(update::Installed::default())
         .manage(orca::OrcaMirror::default())
         .manage(orca_stream::OrcaStream::default())
+        .manage(orca_popout::Popouts::default())
         .manage(database::script::Scripts::default())
         .manage(database::session::Sessions::default())
         .manage(claude_code::ClaudeCode::default())
         .manage(screen_bridge::Pending::default())
         .manage(lsp::server::LspServers::default())
         .manage(Mutex::new(Badge::default()))
+        .on_window_event(orca_popout::on_window_event)
         .setup(|app| {
             // Before anything reads the settings: the folder of the old identifier is copied to the new one once.
             match app.path().app_config_dir() {
@@ -432,6 +435,18 @@ pub fn run() {
             orca_stream::orca_stream_viewport,
             orca_stream::orca_stream_input,
             orca_panes::orca_panes,
+            orca_popout::orca_popout_open,
+            orca_popout::orca_popout_focus,
+            orca_popout::orca_popout_end,
+            orca_popout::orca_popout_main,
+            orca_popout::orca_popout_update,
+            orca_popout::orca_popout_attach,
+            orca_popout::orca_popout_pin,
+            orca_popout::orca_popout_restore,
+            orca_popout::orca_popout_definition,
+            orca_popout::orca_popout_place,
+            orca_popout::orca_popout_lost,
+            orca_popout::orca_popout_close,
             orca_files::orca_files_list,
             orca_files::orca_files_ignored,
             orca_files::orca_files_changes,

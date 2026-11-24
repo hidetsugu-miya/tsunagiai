@@ -140,6 +140,8 @@ pub struct OrcaViewport {
 /// A terminal the screen shows.
 pub struct Watch {
     handle: String,
+    /// The label of the window that shows it: the screen of each window counts its generations from 0, so a generation is told apart only together with this.
+    window: String,
     /// The number the screen gave this showing; a close of an earlier showing of the same handle does not end this one.
     generation: u64,
     /// The size the pane fits (FitAddon's proposal): the subscription registers it, and a send of keys claims it.
@@ -161,8 +163,8 @@ pub struct FilesWatch {
 pub enum StreamCommand {
     /// Show this terminal (it is subscribed in place of one shown before with the same handle); the others shown stay.
     Terminal(Watch),
-    /// Show the terminal `handle` no more: it is unsubscribed. It ends only the showing of its generation (the second field), so a close that comes after a later showing of the handle changes nothing.
-    TerminalClose(String, u64),
+    /// Show the terminal `handle` no more: it is unsubscribed. It ends only the showing of its window (the second field) and generation (the third), so a close that comes after a later showing of the handle, or from another window, changes nothing.
+    TerminalClose(String, String, u64),
     /// Watch the files of this worktree (it is watched in place of one watched before with the same path); the others watched stay.
     Files(FilesWatch),
     /// Watch the files of the worktree `path` no more: it ends only the watch of its generation (the second field).
@@ -566,11 +568,11 @@ struct Stream {
 }
 
 impl Stream {
-    /// Whether the terminal `handle` is shown by a showing other than that of `generation`: a close of that generation is late and must not end it.
-    fn shows_later(&self, handle: &str, generation: u64) -> bool {
+    /// Whether the terminal `handle` is shown by a showing other than that of `generation` of the window `window`: a close of that showing is late (or is of another window) and must not end it.
+    fn shows_later(&self, handle: &str, window: &str, generation: u64) -> bool {
         self.watches
             .get(handle)
-            .is_some_and(|w| w.generation != generation)
+            .is_some_and(|w| w.generation != generation || w.window != window)
     }
 
     /// The same for the watch of the worktree `path`.
@@ -904,8 +906,8 @@ impl Connection {
                 stream.watches.insert(handle, watch);
                 self.subscribe(link, stream).await?;
             }
-            Some(StreamCommand::TerminalClose(handle, generation)) => {
-                if stream.shows_later(&handle, generation) {
+            Some(StreamCommand::TerminalClose(handle, window, generation)) => {
+                if stream.shows_later(&handle, &window, generation) {
                     return Ok(true);
                 }
                 stream.watches.remove(&handle);
@@ -1077,8 +1079,8 @@ async fn run_loop<F, Fut>(
                     Some(StreamCommand::Terminal(watch)) => {
                         stream.watches.insert(watch.handle.clone(), watch);
                     }
-                    Some(StreamCommand::TerminalClose(handle, generation)) => {
-                        if !stream.shows_later(&handle, generation) {
+                    Some(StreamCommand::TerminalClose(handle, window, generation)) => {
+                        if !stream.shows_later(&handle, &window, generation) {
                             stream.watches.remove(&handle);
                         }
                     }
@@ -1240,9 +1242,10 @@ pub async fn orca_stream_close(
     Ok(())
 }
 
-/// Shows the terminal `handle` of the stream of `environment` (`None`: this machine's), the place of the tab (as another pane's terminal may be shown too): its screen and what it prints go through `channel`. `viewport` is the size the pane fits, which the subscription registers.
+/// Shows the terminal `handle` of the stream of `environment` (`None`: this machine's), the place of the tab (as another pane's terminal may be shown too): its screen and what it prints go through `channel`. `viewport` is the size the pane fits, which the subscription registers. The showing is of the window that calls (`webview`), whose generations are its own.
 #[tauri::command]
 pub async fn orca_stream_terminal(
+    webview: tauri::Webview,
     state: tauri::State<'_, OrcaStream>,
     environment: Option<String>,
     handle: String,
@@ -1255,6 +1258,7 @@ pub async fn orca_stream_terminal(
         environment.as_deref(),
         StreamCommand::Terminal(Watch {
             handle,
+            window: webview.label().to_owned(),
             generation,
             viewport,
             sink: Box::new(move |event| channel.send(event).is_ok()),
@@ -1262,9 +1266,10 @@ pub async fn orca_stream_terminal(
     )
 }
 
-/// Shows the terminal `handle` of the stream of `environment` no more: it is unsubscribed, and Orca gives it back its own size.
+/// Shows the terminal `handle` of the stream of `environment` no more: it is unsubscribed, and Orca gives it back its own size. It ends only a showing of the window that calls (`webview`).
 #[tauri::command]
 pub async fn orca_stream_terminal_close(
+    webview: tauri::Webview,
     state: tauri::State<'_, OrcaStream>,
     environment: Option<String>,
     handle: String,
@@ -1274,7 +1279,7 @@ pub async fn orca_stream_terminal_close(
     // With no stream there is nothing to let go.
     let _ = state.send(
         environment.as_deref(),
-        StreamCommand::TerminalClose(handle, generation),
+        StreamCommand::TerminalClose(handle, webview.label().to_owned(), generation),
     );
     Ok(())
 }
@@ -1981,6 +1986,7 @@ mod tests {
         let into = seen.clone();
         let watch = Watch {
             handle: handle.into(),
+            window: "main".into(),
             generation: 1,
             viewport,
             sink: Box::new(move |event| {
@@ -2002,16 +2008,34 @@ mod tests {
             attempt: 0,
         };
         // Nothing is shown: a close has nothing to spare.
-        assert!(!stream.shows_later("term_s", 1));
+        assert!(!stream.shows_later("term_s", "main", 1));
         stream.watches.insert("term_s".into(), first);
-        assert!(!stream.shows_later("term_s", 1));
+        assert!(!stream.shows_later("term_s", "main", 1));
         // The handle is shown again (generation 2) before the close of generation 1 arrives.
         let (mut second, _) = watch("term_s", OrcaViewport { cols: 80, rows: 24 });
         second.generation = 2;
         stream.watches.insert("term_s".into(), second);
-        assert!(stream.shows_later("term_s", 1));
-        assert!(!stream.shows_later("term_s", 2));
-        assert!(!stream.shows_later("term_other", 1));
+        assert!(stream.shows_later("term_s", "main", 1));
+        assert!(!stream.shows_later("term_s", "main", 2));
+        assert!(!stream.shows_later("term_other", "main", 1));
+    }
+
+    #[test]
+    fn a_close_of_another_window_with_the_same_generation_does_not_end_the_showing() {
+        let (shown, _) = watch("term_s", OrcaViewport { cols: 80, rows: 24 });
+        let mut stream = Stream {
+            client: "tsunagiai-test".into(),
+            watches: HashMap::new(),
+            files: HashMap::new(),
+            attempt: 0,
+        };
+        // The window "main" shows the handle with generation 1.
+        stream.watches.insert("term_s".into(), shown);
+        assert!(!stream.shows_later("term_s", "main", 1));
+        // The window "second" counts from 0 too: its late close of generation 1 is not for this showing.
+        assert!(stream.shows_later("term_s", "second", 1));
+        // The window's own close of its own generation still ends it.
+        assert!(!stream.shows_later("term_s", "main", 1));
     }
 
     async fn streamed(server: &mut FakeDesktop, id: &Value, result: Value) {
@@ -2260,7 +2284,11 @@ mod tests {
 
         // Shown no more: it is let go by the request that subscribed it.
         commands
-            .send(StreamCommand::TerminalClose("term_c".into(), 1))
+            .send(StreamCommand::TerminalClose(
+                "term_c".into(),
+                "main".into(),
+                1,
+            ))
             .ok()
             .unwrap();
         let unsubscribe = server.request().await;
@@ -2908,7 +2936,11 @@ mod tests {
         assert!(answer.await.unwrap().is_ok());
         // One shown no more is let go and the other stays: its keys still go.
         commands
-            .send(StreamCommand::TerminalClose("term_c".into(), 1))
+            .send(StreamCommand::TerminalClose(
+                "term_c".into(),
+                "main".into(),
+                1,
+            ))
             .ok()
             .unwrap();
         let unsubscribe = server.request().await;

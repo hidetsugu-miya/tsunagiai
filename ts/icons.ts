@@ -140,3 +140,6 @@ export const BULLET_LIST_SVG = icon("bullet-list", '<path d="M10 6h10M10 12h10M1
 export const QUOTE_SVG = icon("quote", '<path d="M5 5v14M10 7h9M10 12h9M10 17h6"/>');
 export const INLINE_CODE_SVG = icon("inline-code", '<path d="M9 8l-4 4 4 4M15 8l4 4-4 4"/>');
 export const CODE_BLOCK_SVG = icon("code-block", '<rect x="4" y="5" width="16" height="14" rx="2"/><path d="M9 10l-2 2 2 2M15 10l2 2-2 2"/>');
+export const POPOUT_SVG = icon("popout", '<rect x="3" y="7" width="13" height="13" rx="2"/><path d="M10 3h11v11M21 3l-9 9"/>');
+export const PUSHPIN_SVG = icon("pushpin", '<path d="M9 4h6l-1 6 4 3H6l4-3-1-6zM12 13v7"/>');
+export const POPOUT_RESTORE_SVG = icon("popout-restore", '<rect x="8" y="4" width="13" height="16" rx="2"/><path d="M3 12h10M9 8l4 4-4 4"/>');
