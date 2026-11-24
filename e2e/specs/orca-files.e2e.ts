@@ -697,8 +697,27 @@ describe("orca: files and editor (A-18)", () => {
   it("keeps the band on its line while the text scrolls (A-18)", async () => {
     await openFiles();
     await openA("x\n".repeat(200));
-    await caretAt(6);
-    await bandOn("3");
+    // The editor puts the numbers on the lines when it has measured the text, a frame after the text is drawn: the number of a line is at that line once it has measured (`line` is the index of the line in the page).
+    const numberAtLine = (n: string, line: number) =>
+      browser.execute(
+        (text, at) => {
+          const lines = document.querySelectorAll(".orca-edit-body .cm-content .cm-line");
+          const number = [...document.querySelectorAll<HTMLElement>(".orca-edit-body .cm-lineNumbers .cm-gutterElement")].find((e) => e.style.visibility !== "hidden" && e.textContent === text);
+          return number !== undefined && lines[at] !== undefined && Math.abs(number.getBoundingClientRect().top - lines[at].getBoundingClientRect().top) < 0.5;
+        },
+        n,
+        line,
+      );
+    await browser.waitUntil(() => numberAtLine("1", 0), { timeoutMsg: "the first number never came to the first line" });
+    // The caret set in the page reaches the editor at the `selectionchange` that follows, and a draw of the lines in between puts the selection of the editor back: it is set again until the band is on its line.
+    await browser.waitUntil(
+      async () => {
+        await caretAt(6);
+        return (await band()).line === "3";
+      },
+      { timeoutMsg: "the band never came to line 3" },
+    );
+    await browser.waitUntil(() => numberAtLine("4", 3), { timeoutMsg: "the number of the band's line never came to it" });
     const before = (await band()).top;
     await browser.execute(() => {
       document.querySelector(".orca-edit-body .cm-scroller")!.scrollTop = 48;
@@ -919,7 +938,14 @@ describe("orca: files and editor (A-18)", () => {
 
   it("folds the range at the caret with Option and Command with [ and opens it with ] (A-18)", async () => {
     await openJson();
-    await setCaret(5);
+    // The editor takes the selection of the page at the `selectionchange` that follows, and a draw of the lines in between puts its own back: the caret is set again until the band is on the line of the caret (the second), and the key is pressed then.
+    await browser.waitUntil(
+      async () => {
+        await setCaret(5);
+        return (await band()).line === "1";
+      },
+      { timeoutMsg: "the band never came to line 1" },
+    );
     await pressFold();
     await waitForCount(".orca-edit-body .cm-foldPlaceholder", 1);
     expect(await lineTexts()).toEqual(["{", '  "a": {…},', '  "c": 2', "}", ""]);
