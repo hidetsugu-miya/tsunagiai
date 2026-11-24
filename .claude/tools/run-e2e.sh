@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # E2E を回し、結果を main の checkout の .claude/e2e/{HEAD の SHA} に JSON で書く（.claude/rules/review.md、check-e2e.sh が読む。pre-git.sh と release-verifier は check-e2e.sh を呼ぶ）。
-# ビルドと E2E の出力は .claude/e2e/{HEAD の SHA}.log に残す（同じ HEAD で再実行すると上書き）。後から回数や失敗を検証するため。
+# ビルドと E2E の出力は .claude/e2e/{HEAD の SHA}.log に残す。後から回数や失敗を検証するため。
+#   同じ HEAD で回し直すとき、前の記録が不合格なら、そのログは上書きせず .claude/e2e/{HEAD の SHA}.{n}.log（n は 1 から）に名前を変えて残す（flaky の issue にログのパスを書けるように。#1349）。記録の場所（{HEAD の SHA}）は変えない。
 # e2e:build が終わったら、HEAD に合格した CI の記録（check-ci.sh）が無いときだけ、wdio の実行と同時に run-ci.sh を回す（記録は run-ci.sh が今までどおり書く。#420）。
 #   cargo が target/debug のロックを取るのは e2e:build までで、wdio は cargo を回さないので、取り合わない。CI の失敗でも終了コードは 0 にならない（E2E の記録の passed は E2E だけの結果）。
 # 使い方: run-e2e.sh [checkout のパス]（省略時はカレント）。終了コードは E2E の結果、E2E が通ったときは同時に回した CI の結果。
@@ -41,6 +42,14 @@ version=$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -n 1)
 
 mkdir -p "$main/.claude/e2e" || exit 2
 log="$main/.claude/e2e/$sha.log"
+# 前の回が不合格だったログは、上書きする前に {sha}.{n}.log に名前を変えて残す。合格した回のログと、記録の無いログは上書きする。
+keep_failed_log() {
+  [ -f "$2" ] && [ "$(jq -r '.passed' "$1" 2>/dev/null)" = false ] || return 0
+  local n=1
+  while [ -e "${2%.log}.$n.log" ]; do n=$((n + 1)); done
+  mv "$2" "${2%.log}.$n.log"
+}
+keep_failed_log "$main/.claude/e2e/$sha" "$log" || exit 2
 # node_modules は追跡されないので、後から git worktree add した worktree には無く、main の checkout のものは fast-forward のたびに古くなる。ensure-deps.sh が揃える。
 "$here/ensure-deps.sh" "$root" >"$log" 2>&1 \
   && mise exec -- npm run e2e:build >>"$log" 2>&1
