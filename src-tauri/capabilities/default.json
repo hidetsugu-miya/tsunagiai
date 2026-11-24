@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The main window can be moved by a drag region (A-23), and the screens listen to the events of the app (A-36, S-16, A-34, D-2).",
-  "windows": ["main"],
+  "description": "The main window can be moved by a drag region (A-23), and the screens listen to the events of the app (A-36, S-16, A-34, D-2). The windows of the tabs that the Orca screen shows apart (`tab-*`, A-46) are moved by the drag region of their header; they get no other permission, and their buttons are commands of the app.",
+  "windows": ["main", "tab-*"],
   "permissions": ["core:window:allow-start-dragging", "core:window:allow-internal-toggle-maximize", "core:event:default"]
 }

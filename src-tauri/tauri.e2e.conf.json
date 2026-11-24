@@ -8,7 +8,7 @@
         "default",
         {
           "identifier": "e2e",
-          "windows": ["main"],
+          "windows": ["main", "tab-*"],
           "permissions": ["wdio:default", "wdio-webdriver:default"]
         }
       ]

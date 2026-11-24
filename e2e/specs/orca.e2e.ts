@@ -3,7 +3,7 @@ import type { OrcaFileText } from "../../ts/bindings/OrcaFileText";
 import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import type { PaneLayout } from "../../ts/bindings/PaneLayout";
 import type { PaneNode } from "../../ts/bindings/PaneNode";
-import { askScreen, boot, callsOf, claudeReady, chooseAppearance, chooseOption, chooseTheme, copiedTexts, count, fire, fontSettings, ghosttyImport, holds, huge, image, inbox, isoDate, logged, mock, note, onceId, orcaRow, orcaTerminal, orcaWorktree, PNG, rejects, release, sendStream, sendTerm, setClock, slackLoad, setDark, stubClipboard, terminalThemes, textsOf, timers, todoData, waitForCalls, waitForCount, CARD, CARDS } from "../support";
+import { askScreen, boot, callsOf, claudeReady, chooseAppearance, chooseOption, chooseTheme, copiedTexts, count, fire, fontSettings, ghosttyImport, holds, huge, image, inbox, isoDate, logged, mock, note, onceId, orcaRow, orcaTerminal, orcaWorktree, PNG, popoutTab, rejects, release, sendPopout, sendStream, sendTerm, setClock, slackLoad, setDark, stubClipboard, terminalThemes, textsOf, timers, todoData, waitForCalls, waitForCount, CARD, CARDS } from "../support";
 import { beside, claudeTab, filesToggle, onThisMachine, openOrca, orcaOverview, pickItem, project, sample, selectedTab, showAgain, streamList, studio, tabOf, tabTitles, worktrees } from "../orca-support";
 
 // example-app with a second worktree, so that the plus asks which one (A-16); example-api keeps its one.
@@ -3670,9 +3670,9 @@ describe("orca: split panes (A-17)", () => {
     const panes = await mock("orca_panes", layout(row(pane("p1", [claude, bash]), pane("p2", [zsh])), "p2"));
     await rightClick(zsh);
     await expect($('.menu[role="menu"]')).toBeDisplayed();
-    expect(await textsOf('.menu[role="menu"] button')).toEqual(["右に分割", "下に分割"]);
+    expect(await textsOf('.menu[role="menu"] button')).toEqual(["右に分割", "下に分割", "別ウィンドウで開く"]);
     // A line icon on each row and no colored dot; the terminal has no copy of a path.
-    expect(await count('.menu[role="menu"] button svg')).toBe(2);
+    expect(await count('.menu[role="menu"] button svg')).toBe(3);
     expect(await count('.menu[role="menu"] .pdot')).toBe(0);
     expect(await count('.menu[role="menu"] > [role="separator"]')).toBe(0);
     await pickItem("右に分割");
@@ -3702,11 +3702,11 @@ describe("orca: split panes (A-17)", () => {
     await expect($('.orca-pane[data-pane="p3"] .list-toggle')).not.toBeDisplayed();
   });
 
-  it("has no menu on a tab that is alone in its pane", async () => {
+  it("has only 「別ウィンドウで開く」 (A-46) in the menu of a tab that is alone in its pane: it cannot be split", async () => {
     await openSplit();
     await rightClick(zsh);
-    await browser.pause(300);
-    expect(await count(".menu")).toBe(0);
+    await expect($('.menu[role="menu"]')).toBeDisplayed();
+    expect(await textsOf('.menu[role="menu"] button')).toEqual(["別ウィンドウで開く"]);
   });
 
   it("splits by dragging a tab to an edge of another pane, joins it by dragging it to the strip or the middle, and asks nothing for a drop that changes nothing", async () => {
@@ -3966,6 +3966,137 @@ describe("orca: split panes (A-17)", () => {
       expect(sent.map((c) => (c as { handle: string }).handle).sort()).toEqual(["term_example-app", "term_example-app_zsh"]);
       expect(viewportOf(sent[0]).cols).toBeGreaterThan(viewportOf(calls[0]).cols);
     });
+  });
+});
+
+// A-46: a Claude session or a terminal of the work pane shown in a window of its own. Rust makes the window (unit tests) and the page of the window is `orca-popout.e2e.ts`; here the screen is checked: the menu, what it asks of `orca_popout_open` and `orca_panes`,
+// what it does with what the owner did in the window, and what it tells the window as the list changes.
+describe("orca: a tab in a window of its own (A-46)", () => {
+  const claude = claudeTab("example-app");
+  const zsh = "orca:term_example-app_zsh";
+  const bash = "orca:term_example-app_bash";
+  const handles = { [claude]: "term_example-app", [zsh]: "term_example-app_zsh", [bash]: "term_example-app_bash" };
+  const overview = (rows = sample()) => orcaOverview(rows, worktrees(), { terminals: [orcaTerminal("example-app", "zsh"), orcaTerminal("example-app", "bash")] });
+  // What the window of the shell shows, and of the Claude session.
+  const shell = popoutTab(zsh, "term_example-app_zsh", "zsh");
+  const session = popoutTab(claude, "term_example-app", "Write the docs", { status: "working", label: "作業中", content: { kind: "claude", handle: "term_example-app", path: "/work/example-app", stream: false, ended: false } });
+
+  // The right button on the tab, as the page gets it.
+  const rightClick = (tab: string) =>
+    browser.execute(
+      (id, once) => {
+        if (!window.__e2e_once__(once)) return;
+        document.querySelector(`[data-tab="${id}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 }));
+      },
+      tab,
+      onceId(),
+    );
+  async function open(fixtures: Record<string, unknown> = {}) {
+    await openOrca(overview(), { orca_terminal_read: ["$"], ...fixtures });
+    await project("example-app").click();
+    await waitForCalls("orca_panes");
+  }
+  // The tab asked to go to a window through the menu.
+  async function popOut(tab: string) {
+    await rightClick(tab);
+    await pickItem("別ウィンドウで開く");
+  }
+  // The tabs the latest call of `orca_panes` says are in a window.
+  const away = async () => ((await callsOf("orca_panes")).at(-1) as { away: string[] }).away;
+  const awayIs = (want: string[]) => browser.waitUntil(async () => JSON.stringify(await away()) === JSON.stringify(want), { timeoutMsg: `the tabs in a window never became ${want.join()}` });
+
+  it("opens a shell in a window: it asks `orca_popout_open` for the tab, sends it to `orca_panes` as away, and the strip no longer has it", async () => {
+    await open();
+    expect(await tabTitles()).toEqual(["Write the docs", "zsh", "bash"]);
+    await popOut(zsh);
+    expect(await waitForCalls("orca_popout_open")).toEqual([{ tab: shell }]);
+    await awayIs([zsh]);
+    expect((await callsOf("orca_panes")).at(-1)).toEqual({ environment: null, project: "proj_example-app", tabs: [claude, zsh, bash], away: [zsh], handles, was: handles, op: null });
+    expect(await tabTitles()).toEqual(["Write the docs", "bash"]);
+  });
+
+  it("opens a Claude session in a window with its status and its name", async () => {
+    await open();
+    await popOut(claude);
+    expect(await waitForCalls("orca_popout_open")).toEqual([{ tab: session }]);
+    await awayIs([claude]);
+    expect(await tabTitles()).toEqual(["zsh", "bash"]);
+  });
+
+  it("keeps the tab in its pane, and shows the message, when the window cannot be made", async () => {
+    await open();
+    const opened = await mock("orca_popout_open", rejects("別ウィンドウを開けませんでした: test"));
+    await popOut(zsh);
+    await waitForCalls(opened);
+    await expect($(CARD)).toHaveText("別ウィンドウを開けませんでした: test");
+    await awayIs([]);
+    expect(await tabTitles()).toEqual(["Write the docs", "zsh", "bash"]);
+  });
+
+  it("brings the window to the front when a session of the list that is in it is pressed, and selects nothing", async () => {
+    await open();
+    await popOut(claude);
+    await awayIs([claude]);
+    const focused = await mock("orca_popout_focus", null);
+    await $('#orca-feed .orca-worktree[data-worktree="/work/example-app"]').click();
+    expect(await waitForCalls(focused)).toEqual([{ tab: claude }]);
+    expect((await callsOf("orca_panes")).filter((c) => (c as { op: { kind: string } | null }).op?.kind === "select")).toEqual([]);
+  });
+
+  it("puts the tab back in its pane when the owner presses the button of its window, and ends the window", async () => {
+    await open();
+    await popOut(zsh);
+    await awayIs([zsh]);
+    await sendPopout({ kind: "restore", tab: zsh });
+    expect(await waitForCalls("orca_popout_end")).toEqual([{ tab: zsh }]);
+    await awayIs([]);
+    expect(await tabTitles()).toEqual(["Write the docs", "zsh", "bash"]);
+  });
+
+  it("closes the terminal as the × of its pane does when the owner presses the red button of its window, then ends the window", async () => {
+    await open();
+    await popOut(zsh);
+    await awayIs([zsh]);
+    const closed = await mock("orca_close", null);
+    await sendPopout({ kind: "close", tab: zsh });
+    expect(await waitForCalls(closed)).toEqual([{ handle: "term_example-app_zsh", environment: null }]);
+    expect(await waitForCalls("orca_popout_end")).toEqual([{ tab: zsh }]);
+  });
+
+  it("keeps the window and shows the message when the terminal cannot be closed", async () => {
+    await open();
+    await popOut(zsh);
+    await awayIs([zsh]);
+    const closed = await mock("orca_close", rejects("閉じられませんでした"));
+    await sendPopout({ kind: "close", tab: zsh });
+    await waitForCalls(closed);
+    await expect($(CARD)).toHaveText("閉じられませんでした");
+    expect(await callsOf("orca_popout_end")).toEqual([]);
+    expect(await away()).toEqual([zsh]);
+  });
+
+  it("ends the window of a tab that the list no longer has", async () => {
+    await open(timers({ orcaClock: 1000 }));
+    await popOut(zsh);
+    await awayIs([zsh]);
+    await mock("orca_overview", orcaOverview(sample(), worktrees(), { terminals: [orcaTerminal("example-app", "bash")] }));
+    expect(await waitForCalls("orca_popout_end")).toEqual([{ tab: zsh }]);
+  });
+
+  it("gives its window the name the list says now", async () => {
+    await open(timers({ orcaClock: 1000 }));
+    await popOut(claude);
+    await awayIs([claude]);
+    const updated = await mock("orca_popout_update", null);
+    await mock("orca_overview", overview([orcaRow("example-app", "feat/a", "Read the page", { minutes: 2 }), ...sample().slice(1)]));
+    const [call] = (await waitForCalls(updated)) as { was: string; tab: { title: string } }[];
+    expect(call).toEqual({ was: claude, tab: { ...session, title: "Read the page" } });
+  });
+
+  it("takes the windows that are open back from Rust when the page is loaded again: their tabs stay out of the panes", async () => {
+    await open({ orca_popout_main: [shell] });
+    await awayIs([zsh]);
+    expect(await tabTitles()).toEqual(["Write the docs", "bash"]);
   });
 });
 

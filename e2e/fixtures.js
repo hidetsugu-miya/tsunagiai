@@ -149,6 +149,14 @@ const answers = {
   orca_stream_terminal_close: null,
   orca_stream_files: null,
   orca_stream_files_close: null,
+  // A-46: no tab is in a window of its own, and a spec of the screen mocks `orca_popout_open`; the page of a window (a spec of `orca-popout`) mocks `orca_popout_attach` with the tab it shows.
+  orca_popout_main: [],
+  orca_popout_open: "tab-1",
+  orca_popout_focus: null,
+  orca_popout_end: null,
+  orca_popout_update: null,
+  orca_popout_pin: null,
+  orca_popout_restore: null,
   orca_stream_viewport: null,
   orca_stream_input: null,
   // A-36: a Claude Code pane's process; a spec that checks the calls reads them with `callsOf`.

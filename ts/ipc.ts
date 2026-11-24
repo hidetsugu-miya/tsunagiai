@@ -93,6 +93,7 @@ import type { OrcaStarted } from "./bindings/OrcaStarted";
 import type { OrcaViewport } from "./bindings/OrcaViewport";
 import type { PaneLayout } from "./bindings/PaneLayout";
 import type { PaneOp } from "./bindings/PaneOp";
+import type { PopoutTab } from "./bindings/PopoutTab";
 import type { PickedDue } from "./bindings/PickedDue";
 import type { PendingImage } from "./bindings/PendingImage";
 import type { HeldThread } from "./bindings/HeldThread";
@@ -417,6 +418,15 @@ export interface Commands {
   formation_consent_revoke: { args: { environment: string }; result: FormationConsent[] };
   // A-17: the layout of the work pane of the project `project` of `environment` (null: this machine): the saved one, mended against the tabs the screen shows now (`tabs`), after `op` when there is one. Rust saves it.
   orca_panes: { args: { environment: string | null; project: string; tabs: string[]; away: string[]; handles: Record<string, string>; was: Record<string, string>; op: PaneOp | null }; result: PaneLayout };
+  // A-46: the window of a tab of the Orca screen. `orca_popout_open` answers the label of the window; the channel of `orca_popout_main` carries what the owner did in a window (`PopoutAction`) and answers the tabs in a window; the channel of `orca_popout_attach` carries the tab as the screen knows it now.
+  orca_popout_open: { args: { tab: PopoutTab }; result: string };
+  orca_popout_focus: { args: { tab: string }; result: null };
+  orca_popout_end: { args: { tab: string }; result: null };
+  orca_popout_main: { args: { channel: unknown }; result: PopoutTab[] };
+  orca_popout_update: { args: { was: string; tab: PopoutTab }; result: null };
+  orca_popout_attach: { args: { channel: unknown }; result: PopoutTab };
+  orca_popout_pin: { args: { pinned: boolean }; result: null };
+  orca_popout_restore: { args: undefined; result: null };
   // A-18: the entries of the folder `dir` (relative to the worktree; "" is its own folder) of the worktree at `path` of the target `environment`: the folders first, each with whether git ignores it. Not tried again: a failure carries its message.
   orca_files_list: { args: { path: string; dir: string; ignored: boolean; environment: string | null }; result: OrcaDir };
   orca_files_ignored: { args: { path: string; paths: string[]; environment: string | null }; result: string[] };

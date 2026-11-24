@@ -1836,6 +1836,16 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 #orca-peek-head .icon-btn { flex: none; width: 28px; height: 28px; }
 #orca-peek-head .icon-btn svg { width: 16px; height: 16px; }
 #orca-peek-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
+/* A-46: the page of the window of a tab (popout.html): its header is the title bar (the traffic lights sit at its left, as on the main window, A-23), and the terminal fills the rest. */
+body#popout { flex-direction: column; overflow: hidden; }
+#popout-head { flex: none; display: flex; align-items: center; gap: 2px; box-sizing: border-box; height: 40px; padding: 0 8px 0 84px; border-bottom: 1px solid var(--line); background: var(--bar); }
+#popout-title { flex: 1 1 0; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: calc(13px * var(--fs)); font-weight: 600; }
+#popout-icon { flex: none; display: inline-flex; }
+#popout-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#popout-head .icon-btn { flex: none; width: 28px; height: 28px; color: var(--ink-soft); }
+#popout-head .icon-btn svg { width: 16px; height: 16px; }
+#popout-head .icon-btn[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
+#popout-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
 /* The host of a Claude Code pane (A-36), as `#orca-panes .orca-term` is the host of an Orca terminal: the box of the terminal fills it. */
 .claude-code-pane { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
 .orca-drop { position: fixed; z-index: 30; box-sizing: border-box; border: 2px solid var(--accent); border-radius: 8px; background: var(--soft); opacity: .6; pointer-events: none; }

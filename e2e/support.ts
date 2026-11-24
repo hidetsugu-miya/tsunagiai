@@ -43,6 +43,8 @@ import type { OrcaFilesEvent } from "../ts/bindings/OrcaFilesEvent";
 import type { OrcaTermEvent } from "../ts/bindings/OrcaTermEvent";
 import type { OrcaTerminal } from "../ts/bindings/OrcaTerminal";
 import type { OrcaWorktree } from "../ts/bindings/OrcaWorktree";
+import type { PopoutAction } from "../ts/bindings/PopoutAction";
+import type { PopoutTab } from "../ts/bindings/PopoutTab";
 import type { ScreenAnswer } from "../ts/bindings/ScreenAnswer";
 import type { Reaction } from "../ts/bindings/Reaction";
 import type { ResponseStatus } from "../ts/bindings/ResponseStatus";
@@ -1028,6 +1030,21 @@ const deliver = (command: string, event: unknown, nth: number) =>
 // A-12: an event of the stream of the list (`orca_stream_open`), and of the terminal shown (`orca_stream_terminal`).
 export const sendStream = (event: OrcaStreamEvent, nth = -1) => deliver("orca_stream_open", event, nth);
 export const sendTerm = (event: OrcaTermEvent, nth = -1) => deliver("orca_stream_terminal", event, nth);
+// A-46: what the owner did in a window of a tab (the channel of `orca_popout_main`, which the screen gives at the start), and the tab as the screen knows it now (the channel of `orca_popout_attach`, which the page of a window gives).
+export const sendPopout = (action: PopoutAction, nth = -1) => deliver("orca_popout_main", action, nth);
+export const sendPopoutTab = (tab: PopoutTab, nth = -1) => deliver("orca_popout_attach", tab, nth);
+// A tab as `orca_popout_open` takes it, `orca_popout_main` answers it, and `orca_popout_attach` answers it to the page of its window: a plain terminal of the project `proj_example-app` that this machine mirrors; `extra` overrides any field.
+export const popoutTab = (tab: string, handle: string, title: string, extra: Partial<PopoutTab> = {}): PopoutTab => ({
+  tab,
+  project: "proj_example-app",
+  title,
+  status: "done",
+  label: "起動中",
+  environment: null,
+  content: { kind: "terminal", handle, path: "/work/example-app", stream: false, ended: false },
+  ...extra,
+});
+
 // A-12, A-18: an event of the watch of the files of a worktree (`orca_stream_files`).
 export const sendFiles = (event: OrcaFilesEvent, nth = -1) => deliver("orca_stream_files", event, nth);
 // A-36: an event of the process of a Claude Code pane (`claude_code_start`).
