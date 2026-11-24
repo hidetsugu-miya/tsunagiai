@@ -1,5 +1,5 @@
-import { callsOf, count, jiraBoard, jiraIssue, jiraIssues, jiraSprint, logged, mock, rejects, textsOf, waitForCalls, waitForCount, waitForLog } from "../support";
-import { filesToggle, openOrca, orcaOverview, project, sample, selectedTab, worktrees } from "../orca-support";
+import { callsOf, count, jiraBoard, jiraDetail, jiraIssue, jiraIssues, jiraSprint, logged, mock, onceId, rejects, textsOf, waitForCalls, waitForCount, waitForLog } from "../support";
+import { filesToggle, openOrca, orcaOverview, project, sample, selectedTab, tabOf, worktrees } from "../orca-support";
 
 // J-2: the Jira part of the file pane (#870). Rust reads the boards, the sprints and the tickets (unit tests); here the screen is checked: what it asks of Rust, and how it draws the answers.
 describe("orca: the Jira part of the file pane (J-2)", () => {
@@ -220,5 +220,158 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await browser.pause(1500);
     expect(await callsOf("jira_boards")).toHaveLength(2);
     expect(await callsOf("jira_sprint_issues")).toHaveLength(2);
+  });
+
+  // J-2 (#871): the ticket in a tab of the work pane.
+  const detailOf = {
+    "EX-1": jiraDetail("EX-1", {
+      summary: "Write the page",
+      description: "Show **the ticket**.\n\n- one\n- two\n\n[spec](https://example.com/spec) and [bad](javascript:alert(1))\n\n<form><input name=\"x\"></form>",
+      status: "In Progress",
+      statusCategory: "indeterminate",
+      assignee: "Mia",
+      priority: "High",
+      sprint: "Sprint 12",
+      labels: ["ui", "ready"],
+      parent: { key: "EX-100", summary: "The epic" },
+      comments: [
+        { author: "Ann", created: "2026-11-20 09:30", body: "Looks **good**" },
+        { author: "Bob", created: "2026-11-21 18:05", body: "" },
+      ],
+    }),
+    "EX-2": jiraDetail("EX-2", { summary: "Fix the list", status: "Done", statusCategory: "done" }),
+  };
+  const withTickets = () => jiraFixtures({ jira_details: detailOf });
+  // The page's own double press on a row of the list.
+  const openTicket = (key: string) =>
+    browser.execute(
+      (k, once) => {
+        if (!window.__e2e_once__(once)) return;
+        document.querySelector(`.orca-jira-issue[data-key="${k}"]`)!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+      },
+      key,
+      onceId(),
+    );
+  const rightClickTab = (tab: string) =>
+    browser.execute(
+      (id, once) => {
+        if (!window.__e2e_once__(once)) return;
+        document.querySelector(`[data-tab="${id}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 }));
+      },
+      tab,
+      onceId(),
+    );
+
+  it("opens the ticket in a tab of the work pane by a double press on its row, and not by one press, and reads it (J-2)", async () => {
+    await openJira(withTickets());
+    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    await $('.orca-jira-issue[data-key="EX-1"]').click();
+    expect(await callsOf("jira_issue")).toEqual([]);
+    expect(await count(".orca-jira-tab")).toBe(0);
+    await openTicket("EX-1");
+    await expect(tabOf("jira:1")).toBeDisplayed();
+    await expect(tabOf("jira:1").$(".orca-tab-btn")).toHaveAttribute("aria-selected", "true");
+    await expect(tabOf("jira:1").$(".orca-tab-title")).toHaveText("EX-1");
+    await expect(tabOf("jira:1").$(".orca-file-tab-ic svg")).toExist();
+    expect(await waitForCalls("jira_issue")).toEqual([{ key: "EX-1" }]);
+    await expect($(".orca-jira-tab .orca-jira-title")).toHaveText("Write the page");
+    // The tickets of the list stay where they were: the part is still shown.
+    await expect($("#orca-jira")).toBeDisplayed();
+  });
+
+  it("draws the key with its parent, the summary, the description as Markdown and the comments, and the fields in the right column (J-2)", async () => {
+    await openJira(withTickets());
+    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    await openTicket("EX-1");
+    await expect($(".orca-jira-tab .orca-jira-title")).toBeDisplayed();
+    expect(await textsOf(".orca-jira-tab-head .orca-edit-path")).toEqual(["EX-1"]);
+    expect(await textsOf(".orca-jira-crumb")).toEqual(["EX-100/EX-1"]);
+    const html = await browser.execute(() => document.querySelector(".orca-jira-main > .md")!.innerHTML);
+    expect(html).toContain("<strong>the ticket</strong>");
+    expect(html).toContain("<li>one</li>");
+    expect(html).toContain('href="https://example.com/spec"');
+    // What the sanitizer of the Todo comments drops: an address that is not http(s), and a form.
+    expect(html).not.toContain("javascript:");
+    expect(await count(".orca-jira-main > .md form, .orca-jira-main > .md input")).toBe(0);
+    expect(await textsOf(".orca-jira-comments-head")).toEqual(["コメント 2 件"]);
+    expect(await textsOf(".orca-jira-comment")).toEqual(["Ann2026-11-20 09:30Looks good", "Bob2026-11-21 18:05"]);
+    expect(await textsOf(".orca-jira-side-row")).toEqual(["ステータスIn Progress", "担当Mia", "スプリントSprint 12", "優先度High", "ラベルuiready", "親EX-100The epic"]);
+    await expect($(".orca-jira-pill")).toHaveAttribute("data-category", "indeterminate");
+    expect(await count(".orca-jira-tab [placeholder]")).toBe(0);
+  });
+
+  it("says that a field has nothing when the ticket has none, and has no parent in its key line (J-2)", async () => {
+    await openJira(withTickets());
+    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    await openTicket("EX-2");
+    await expect($(".orca-jira-tab .orca-jira-title")).toHaveText("Fix the list");
+    expect(await textsOf(".orca-jira-crumb")).toEqual(["EX-2"]);
+    expect(await textsOf(".orca-jira-side-row")).toEqual(["ステータスDone", "担当未割り当て", "スプリントなし", "優先度なし", "ラベルなし", "親なし"]);
+    expect(await textsOf(".orca-jira-comments-head")).toEqual(["コメント 0 件"]);
+    expect(await count(".orca-jira-main > .md")).toBe(0);
+    await expect($(".orca-jira-pill")).toHaveAttribute("data-category", "done");
+  });
+
+  it("selects the tab of a ticket that is open and reads it again, and gives another ticket a tab of its own (J-2)", async () => {
+    await openJira(withTickets());
+    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    await openTicket("EX-1");
+    await expect(tabOf("jira:1")).toBeDisplayed();
+    await openTicket("EX-2");
+    await expect(tabOf("jira:2").$(".orca-tab-btn")).toHaveAttribute("aria-selected", "true");
+    await expect($(".orca-jira-tab .orca-jira-title")).toHaveText("Fix the list");
+    await tabOf("jira:1").$(".orca-tab-btn").click();
+    await expect($(".orca-jira-tab .orca-jira-title")).toHaveText("Write the page");
+    await openTicket("EX-1");
+    await waitForCalls("jira_issue", 3);
+    expect(await callsOf("jira_issue")).toEqual([{ key: "EX-1" }, { key: "EX-2" }, { key: "EX-1" }]);
+    expect(await count('.orca-tab[data-jira="true"]')).toBe(2);
+    await expect(tabOf("jira:1").$(".orca-tab-btn")).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("shows the reason in place of the ticket when it cannot be read, writes it to the log with no card, and reads again with the button (J-2)", async () => {
+    await openJira(withTickets());
+    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    await mock("jira_issue", rejects("Jira が 404 を返しました: no ticket"));
+    await openTicket("EX-1");
+    await waitForCount(".orca-jira-tab .orca-file-note.fail", 1);
+    expect(await textsOf(".orca-jira-tab .orca-file-note.fail")).toEqual(["Jira が 404 を返しました: no ticket"]);
+    expect((await logged()).some((l) => l.level === "error" && l.source === "orca-jira")).toBe(true);
+    expect(await count("#error-cards .error-card")).toBe(0);
+    expect(await count(".orca-jira-side")).toBe(0);
+    await mock("jira_issue", detailOf["EX-1"]);
+    await $('.orca-jira-tab-head .icon-btn[aria-label="読み直す"]').click();
+    await expect($(".orca-jira-tab .orca-jira-title")).toHaveText("Write the page");
+    expect(await count(".orca-jira-tab .orca-file-note.fail")).toBe(0);
+    // `mock` cleared the record: this is the read of the button.
+    expect(await callsOf("jira_issue")).toEqual([{ key: "EX-1" }]);
+  });
+
+  it("says how many comments were read when Jira has more (J-2)", async () => {
+    await openJira(jiraFixtures({ jira_details: { "EX-1": { ...detailOf["EX-1"], commentsTruncated: true } } }));
+    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    await openTicket("EX-1");
+    await waitForCount(".orca-jira-comments .orca-file-note", 1);
+    expect(await textsOf(".orca-jira-comments .orca-file-note")).toEqual(["2 件で打ち切りました"]);
+  });
+
+  it("closes the tab with its close button, and has the split rows only in its menu, with no window of its own (J-2, A-17)", async () => {
+    await openJira(withTickets());
+    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    await openTicket("EX-1");
+    await expect(tabOf("jira:1")).toBeDisplayed();
+    await rightClickTab("jira:1");
+    await expect($('.menu[role="menu"]')).toBeDisplayed();
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["右に分割", "下に分割"]);
+    await browser.keys("Escape");
+    await expect($(".menu")).not.toExist();
+    await $('.orca-tab[data-jira="true"] .orca-tab-close').click();
+    await expect($('.orca-tab[data-jira="true"]')).not.toExist();
+    expect(await count(".orca-jira-tab")).toBe(0);
+    // The tab was kept in memory only: nothing was called for the close, and a second press opens a new one.
+    expect(await callsOf("jira_issue")).toHaveLength(1);
+    await openTicket("EX-1");
+    await expect($(".orca-jira-tab .orca-jira-title")).toHaveText("Write the page");
+    expect(await callsOf("jira_issue")).toHaveLength(2);
   });
 });

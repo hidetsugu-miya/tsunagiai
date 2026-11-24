@@ -1,5 +1,6 @@
 // The Jira part of the file pane of the Orca screen (J-2, #870): the tickets of the Jira that J-1 connects, by sprint, with the backlog under them. Each ticket is a row of its key, its summary and its status; a ticket that is done (its status category) is struck through. The tickets belong to no worktree, so the part hides the heading of the pane, as the database part does (A-43).
 // `jira_settings` is read first (it asks Jira nothing): with no site or no token saved the part says so and leads to the card of the settings (J-1). Then the scrum boards (`jira_boards`: only a scrum board has sprints), the sprints of the board (`jira_sprints`) and, for the sprints that the choice names and for the backlog, the tickets, one section after another (`jira_sprint_issues`, `jira_backlog`). A section reads, fails and is read again on its own.
+// A double press on a row opens the ticket as a tab of the work pane (orca-jira-tab.ts).
 // Everything is read when the part comes to be shown, when 「再読み込み」 is pressed, and, while the connection is missing or the first read failed, when the window gets the focus back and when the screen is shown again after 「設定を開く」; nothing is read at an interval.
 import type { JiraBoard } from "./bindings/JiraBoard";
 import type { JiraIssue } from "./bindings/JiraIssue";
@@ -20,6 +21,9 @@ interface Section {
   truncated: boolean;
   error: string | null;
 }
+
+// A row was pressed twice: the screen opens the ticket as a tab of the work pane (orca-jira-tab.ts, #871).
+let openIssue: (key: string) => void = () => {};
 
 const BACKLOG = "backlog";
 const ALL = "all";
@@ -103,6 +107,7 @@ function issueRow(issue: JiraIssue) {
   const row = tag("div", "orca-jira-issue");
   row.dataset.key = issue.key;
   row.dataset.category = issue.statusCategory;
+  row.ondblclick = () => openIssue(issue.key);
   row.append(span("orca-jira-key", issue.key), span("orca-jira-summary", issue.summary), span("orca-jira-status", issue.status));
   return row;
 }
@@ -244,7 +249,8 @@ export function refreshOrcaJira() {
   if (stage === "none" || stage === "failed") void read();
 }
 
-export function initOrcaJira() {
+export function initOrcaJira(on: { open: (key: string) => void }) {
+  openIssue = on.open;
   $("orca-jira-reload").innerHTML = RELOAD_SVG;
   $("orca-jira-reload").onclick = () => void read();
   $<HTMLSelectElement>("orca-jira-board").onchange = (e) => {

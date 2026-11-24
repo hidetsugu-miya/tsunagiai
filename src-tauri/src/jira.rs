@@ -5,12 +5,16 @@
 //! The token is never returned to the screen, logged or written to a file; a save with no token keeps the stored one.
 //!
 //! The boards, the sprints and their tickets are read through the Agile API (`/rest/agile/1.0`, J-2, #869): the commands `jira_boards`, `jira_sprints`, `jira_sprint_issues` and `jira_backlog` read the saved connection and call it where `api_base` says. They only read; the answers are turned into the types below by pure functions.
+//! A ticket is read for its tab (J-2, #871) by `jira_issue`: the ticket with its description (REST API v3, where the description is ADF, read as Markdown by `adf`), its sprint (the Agile API) and its comments.
+
+mod adf;
 
 use std::{path::Path, time::Duration};
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use reqwest::header::{HeaderValue, ACCEPT, AUTHORIZATION};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde_json::Value;
 use tauri::AppHandle;
 #[cfg(test)]
 use ts_rs::TS;
@@ -48,6 +52,13 @@ const MAX_SPRINTS: usize = 100;
 const MAX_ISSUES: usize = 500;
 /// The fields of a ticket that `JiraIssue` holds, and nothing else is asked for.
 const ISSUE_FIELDS: &str = "fields=summary,status,assignee,priority";
+/// One ticket (J-2, #871): its fields and its description in REST API v3 (ADF), its sprint in the Agile API, and its comments.
+const ISSUE_PATH: &str = "/rest/api/3/issue";
+const AGILE_ISSUE_PATH: &str = "/rest/agile/1.0/issue";
+const DETAIL_FIELDS: &str = "summary,description,status,assignee,priority,labels,parent";
+const MAX_COMMENTS: usize = 200;
+/// The longest ticket key taken (a project key of letters, digits and underscores, a hyphen and a number).
+const KEY_LIMIT: usize = 64;
 
 /// What `jira-settings.json` holds.
 #[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
@@ -134,6 +145,44 @@ pub struct JiraIssues {
     pub truncated: bool,
 }
 
+/// A ticket as its tab draws it (J-2, #871). `description` and the `body` of a comment are Markdown (read from Jira's ADF), `sprint` is the name of the sprint the ticket is in now (`null` for none), `created` is Jira's time as `YYYY-MM-DD HH:MM` in the offset it gave, and `commentsTruncated` is true when there were more comments than the command reads (`MAX_COMMENTS`).
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct JiraIssueDetail {
+    pub key: String,
+    pub summary: String,
+    pub description: String,
+    pub status: String,
+    pub status_category: String,
+    pub assignee: Option<String>,
+    pub priority: Option<String>,
+    pub sprint: Option<String>,
+    pub labels: Vec<String>,
+    pub parent: Option<JiraParent>,
+    pub comments: Vec<JiraComment>,
+    pub comments_truncated: bool,
+}
+
+/// The parent of a ticket: its key and its summary.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct JiraParent {
+    pub key: String,
+    pub summary: String,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct JiraComment {
+    pub author: String,
+    pub created: String,
+    pub body: String,
+}
+
 /// The origin of a site: `https://{name}.atlassian.net` only. Another scheme, host, port, user info or an empty or dotted name is refused, and a path is dropped.
 fn site_url(input: &str) -> Result<String, String> {
     let bad = || "サイトの URL は https://{名前}.atlassian.net の形で入力してください".to_owned();
@@ -212,11 +261,16 @@ fn user_of(status: u16, body: &str) -> Result<JiraUser, String> {
     }
 }
 
-/// One page of the Agile API: the boards and the sprints are under `values`, the tickets under `issues`. Jira gives `isLast` for the first two and `total` for the last (and for some of the first).
+/// One page of the Agile API: the boards and the sprints are under `values`, the tickets under `issues` (and the comments of a ticket, of REST API v3, under `comments`). Jira gives `isLast` for the first two and `total` for the last (and for some of the first).
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Page<T> {
-    #[serde(default = "Vec::new", alias = "values", alias = "issues")]
+    #[serde(
+        default = "Vec::new",
+        alias = "values",
+        alias = "issues",
+        alias = "comments"
+    )]
     items: Vec<T>,
     total: Option<usize>,
     is_last: Option<bool>,
@@ -250,6 +304,27 @@ struct RawFields {
     status: Option<RawStatus>,
     assignee: Option<RawUser>,
     priority: Option<RawPriority>,
+    description: Option<Value>,
+    labels: Option<Vec<String>>,
+    parent: Option<RawParent>,
+}
+
+#[derive(Deserialize)]
+struct RawParent {
+    key: String,
+    fields: Option<RawParentFields>,
+}
+
+#[derive(Deserialize)]
+struct RawParentFields {
+    summary: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RawComment {
+    author: Option<RawUser>,
+    body: Option<Value>,
+    created: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -289,6 +364,106 @@ fn issue_of(raw: RawIssue) -> JiraIssue {
         status: status.and_then(|s| s.name).unwrap_or_default(),
         assignee: fields.assignee.and_then(|u| u.display_name),
         priority: fields.priority.and_then(|p| p.name),
+    }
+}
+
+/// A ticket key as the tab asks for it: a project key (a capital letter, then capitals, digits and underscores), a hyphen and a number. It goes into a path, so nothing else is let through.
+fn key_of(input: &str) -> Result<&str, String> {
+    let bad = || "チケットのキーの形が正しくありません".to_owned();
+    let (project, number) = input.split_once('-').ok_or_else(bad)?;
+    let mut letters = project.chars();
+    let ok = input.len() <= KEY_LIMIT
+        && letters.next().is_some_and(|c| c.is_ascii_uppercase())
+        && letters.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+        && !number.is_empty()
+        && number.chars().all(|c| c.is_ascii_digit());
+    if ok {
+        Ok(input)
+    } else {
+        Err(bad())
+    }
+}
+
+/// Jira's time (`2026-11-20T09:30:12.345+0900`) as `2026-11-20 09:30`, in the offset Jira gave (the one of the credential's user); a text of another form is kept as it is.
+fn shown_time(time: &str) -> String {
+    match (time.as_bytes().get(10), time.get(..10), time.get(11..16)) {
+        (Some(b'T'), Some(date), Some(clock)) => format!("{date} {clock}"),
+        _ => time.to_owned(),
+    }
+}
+
+/// What Jira's answer to the read of a ticket (REST API v3) means.
+fn raw_issue_of(status: u16, body: &str) -> Result<RawIssue, String> {
+    match status {
+        200..=299 => {
+            serde_json::from_str(body).map_err(|e| format!("Jira の応答を読めません: {e}"))
+        }
+        _ => Err(failure_of(status, body)),
+    }
+}
+
+/// The name of the sprint that the Agile API's answer for a ticket (`fields=sprint`) puts it in, `None` for a ticket in none.
+fn sprint_of(status: u16, body: &str) -> Result<Option<String>, String> {
+    #[derive(Deserialize)]
+    struct Sprint {
+        name: Option<String>,
+    }
+    #[derive(Deserialize)]
+    struct Fields {
+        sprint: Option<Sprint>,
+    }
+    #[derive(Deserialize)]
+    struct Answer {
+        fields: Option<Fields>,
+    }
+    if !(200..=299).contains(&status) {
+        return Err(failure_of(status, body));
+    }
+    let answer: Answer =
+        serde_json::from_str(body).map_err(|e| format!("Jira の応答を読めません: {e}"))?;
+    Ok(answer
+        .fields
+        .and_then(|f| f.sprint)
+        .and_then(|s| s.name)
+        .filter(|name| !name.is_empty()))
+}
+
+/// The ticket's tab from what the three reads gave: the description and the comments are read as Markdown.
+fn detail_of(
+    mut raw: RawIssue,
+    sprint: Option<String>,
+    comments: Vec<RawComment>,
+    comments_truncated: bool,
+) -> JiraIssueDetail {
+    let (description, labels, parent) = raw
+        .fields
+        .as_mut()
+        .map(|f| (f.description.take(), f.labels.take(), f.parent.take()))
+        .unwrap_or_default();
+    let issue = issue_of(raw);
+    JiraIssueDetail {
+        key: issue.key,
+        summary: issue.summary,
+        description: adf::adf_to_markdown(&description.unwrap_or(Value::Null)),
+        status: issue.status,
+        status_category: issue.status_category,
+        assignee: issue.assignee,
+        priority: issue.priority,
+        sprint,
+        labels: labels.unwrap_or_default(),
+        parent: parent.map(|p| JiraParent {
+            summary: p.fields.and_then(|f| f.summary).unwrap_or_default(),
+            key: p.key,
+        }),
+        comments: comments
+            .into_iter()
+            .map(|c| JiraComment {
+                author: c.author.and_then(|u| u.display_name).unwrap_or_default(),
+                created: shown_time(&c.created.unwrap_or_default()),
+                body: adf::adf_to_markdown(&c.body.unwrap_or(Value::Null)),
+            })
+            .collect(),
+        comments_truncated,
     }
 }
 
@@ -454,6 +629,23 @@ async fn backlog(conn: &Conn, board_id: u64) -> Result<JiraIssues, String> {
     issues(conn, &format!("{BOARD_PATH}/{board_id}/backlog")).await
 }
 
+/// A ticket for its tab: its fields and description (REST API v3), its sprint (the Agile API) and its comments, oldest first (at most `MAX_COMMENTS`).
+async fn issue_detail(conn: &Conn, key: &str) -> Result<JiraIssueDetail, String> {
+    let key = key_of(key)?;
+    let (status, body) = get(conn, &format!("{ISSUE_PATH}/{key}?fields={DETAIL_FIELDS}")).await?;
+    let raw = raw_issue_of(status, &body)?;
+    let (status, body) = get(conn, &format!("{AGILE_ISSUE_PATH}/{key}?fields=sprint")).await?;
+    let sprint = sprint_of(status, &body)?;
+    let (comments, truncated) = fetch_all::<RawComment>(
+        conn,
+        &format!("{ISSUE_PATH}/{key}/comment"),
+        "orderBy=created",
+        MAX_COMMENTS,
+    )
+    .await?;
+    Ok(detail_of(raw, sprint, comments, truncated))
+}
+
 fn load_file(dir: &Path) -> Result<Saved, String> {
     let path = dir.join(FILE);
     match std::fs::read_to_string(&path) {
@@ -609,6 +801,14 @@ pub async fn jira_backlog(app: AppHandle, board_id: u64) -> Result<JiraIssues, S
     let read = async { backlog(&saved_conn(&app).await?, board_id).await };
     read.await
         .map_err(|e| log_failure("jira_backlog", LOG_ACCOUNT, e))
+}
+
+/// A ticket for its tab (J-2, #871): its description and comments read as Markdown, and the fields of its right column. `key` is checked to be a ticket key before anything is asked.
+#[tauri::command]
+pub async fn jira_issue(app: AppHandle, key: String) -> Result<JiraIssueDetail, String> {
+    let read = async { issue_detail(&saved_conn(&app).await?, &key).await };
+    read.await
+        .map_err(|e| log_failure("jira_issue", LOG_ACCOUNT, e))
 }
 
 #[cfg(test)]
@@ -1318,5 +1518,220 @@ mod tests {
             Err("Jira が 302 を返しました: ".into())
         );
         assert_eq!(seen.await.unwrap().len(), 1);
+    }
+
+    const ISSUE_BODY: &str = r#"{"id":"10007","key":"EX-7","fields":{"summary":"Show the ticket","description":{"version":1,"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Body *x*"}]}]},"status":{"name":"In Progress","statusCategory":{"key":"indeterminate"}},"assignee":{"displayName":"Mia"},"priority":{"name":"High"},"labels":["ui","ready"],"parent":{"id":"10000","key":"EX-1","fields":{"summary":"The epic","status":{"name":"To Do"}}}}}"#;
+    const SPRINT_BODY: &str = r#"{"id":"10007","key":"EX-7","fields":{"sprint":{"id":12,"name":"Sprint 12","state":"active"},"closedSprints":[{"id":11,"name":"Sprint 11"}]}}"#;
+    const COMMENTS_BODY: &str = r#"{"startAt":0,"maxResults":50,"total":2,"comments":[{"id":"1","author":{"displayName":"Ann","accountId":"a"},"body":{"version":1,"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Looks good"}]}]},"created":"2026-11-20T09:30:12.345+0900","updated":"2026-11-20T09:30:12.345+0900"},{"id":"2","body":null,"created":"2026-11-21T18:05:00.000+0900"}]}"#;
+
+    #[test]
+    fn key_of_takes_a_ticket_key_and_refuses_what_must_not_reach_a_path() {
+        for key in ["EX-1", "ABC_D2-1234567", "A-0"] {
+            assert_eq!(key_of(key), Ok(key), "{key}");
+        }
+        for key in [
+            "",
+            "EX",
+            "EX-",
+            "-1",
+            "ex-1",
+            "1X-1",
+            "_X-1",
+            "EX-1a",
+            "EX--1",
+            "EX-1-2",
+            "E X-1",
+            "EX-1/comment",
+            "EX-1?x=1",
+            "EX-1#",
+            "../EX-1",
+            "EX-1%2F",
+            "Ｅ-1",
+            "EX-１",
+        ] {
+            assert!(key_of(key).is_err(), "{key:?}");
+        }
+        assert!(key_of(&format!("A-{}", "1".repeat(KEY_LIMIT))).is_err());
+        assert_eq!(
+            key_of("x"),
+            Err("チケットのキーの形が正しくありません".into())
+        );
+    }
+
+    #[test]
+    fn shown_time_keeps_the_date_and_the_minute_in_the_offset_jira_gave() {
+        assert_eq!(
+            shown_time("2026-11-20T09:30:12.345+0900"),
+            "2026-11-20 09:30"
+        );
+        assert_eq!(
+            shown_time("2026-11-20T23:59:59.000-0500"),
+            "2026-11-20 23:59"
+        );
+        assert_eq!(shown_time("2026-11-20T09:30"), "2026-11-20 09:30");
+        assert_eq!(shown_time(""), "");
+        assert_eq!(shown_time("yesterday"), "yesterday");
+        assert_eq!(shown_time("2026-11-20 09:30:12"), "2026-11-20 09:30:12");
+        assert_eq!(
+            shown_time("日本語のとても長い文字列です。"),
+            "日本語のとても長い文字列です。"
+        );
+    }
+
+    #[test]
+    fn sprint_of_reads_the_sprint_of_a_ticket_and_says_why_for_a_failure() {
+        assert_eq!(sprint_of(200, SPRINT_BODY), Ok(Some("Sprint 12".into())));
+        assert_eq!(sprint_of(200, r#"{"fields":{"sprint":null}}"#), Ok(None));
+        assert_eq!(sprint_of(200, r#"{"fields":{}}"#), Ok(None));
+        assert_eq!(
+            sprint_of(200, r#"{"fields":{"sprint":{"name":""}}}"#),
+            Ok(None)
+        );
+        assert_eq!(sprint_of(200, "{}"), Ok(None));
+        assert!(sprint_of(200, "<html>")
+            .unwrap_err()
+            .starts_with("Jira の応答を読めません"));
+        assert_eq!(
+            sprint_of(403, "no"),
+            Err("Jira が認証を拒否しました（403）".into())
+        );
+        assert_eq!(
+            sprint_of(404, r#"{"errorMessages":["Issue does not exist"]}"#),
+            Err(r#"Jira が 404 を返しました: {"errorMessages":["Issue does not exist"]}"#.into())
+        );
+    }
+
+    #[test]
+    fn raw_issue_of_reads_a_ticket_and_says_why_for_a_failure() {
+        assert_eq!(raw_issue_of(200, ISSUE_BODY).unwrap().key, "EX-7");
+        let fail = |status, body| raw_issue_of(status, body).err().unwrap_or_default();
+        assert!(fail(200, "[]").starts_with("Jira の応答を読めません"));
+        assert_eq!(fail(401, ""), "Jira が認証を拒否しました（401）");
+        assert_eq!(fail(500, "boom"), "Jira が 500 を返しました: boom");
+    }
+
+    #[test]
+    fn detail_of_gathers_the_fields_the_description_and_the_comments() {
+        let comments: Page<RawComment> = serde_json::from_str(COMMENTS_BODY).unwrap();
+        let detail = detail_of(
+            raw_issue_of(200, ISSUE_BODY).unwrap(),
+            Some("Sprint 12".into()),
+            comments.items,
+            true,
+        );
+        assert_eq!(
+            detail,
+            JiraIssueDetail {
+                key: "EX-7".into(),
+                summary: "Show the ticket".into(),
+                description: "Body \\*x\\*".into(),
+                status: "In Progress".into(),
+                status_category: "indeterminate".into(),
+                assignee: Some("Mia".into()),
+                priority: Some("High".into()),
+                sprint: Some("Sprint 12".into()),
+                labels: vec!["ui".into(), "ready".into()],
+                parent: Some(JiraParent {
+                    key: "EX-1".into(),
+                    summary: "The epic".into()
+                }),
+                comments: vec![
+                    JiraComment {
+                        author: "Ann".into(),
+                        created: "2026-11-20 09:30".into(),
+                        body: "Looks good".into()
+                    },
+                    JiraComment {
+                        author: String::new(),
+                        created: "2026-11-21 18:05".into(),
+                        body: String::new()
+                    },
+                ],
+                comments_truncated: true,
+            }
+        );
+    }
+
+    #[test]
+    fn detail_of_leaves_out_what_jira_did_not_give() {
+        let raw: RawIssue = serde_json::from_str(r#"{"key":"EX-8","fields":{"summary":"Bare","description":null,"labels":[],"parent":{"key":"EX-2"}}}"#).unwrap();
+        let detail = detail_of(raw, None, Vec::new(), false);
+        assert_eq!(detail.description, "");
+        assert_eq!(detail.status, "");
+        assert_eq!(detail.status_category, "undefined");
+        assert_eq!(
+            (detail.assignee, detail.priority, detail.sprint),
+            (None, None, None)
+        );
+        assert!(detail.labels.is_empty() && detail.comments.is_empty());
+        assert_eq!(
+            detail.parent,
+            Some(JiraParent {
+                key: "EX-2".into(),
+                summary: String::new()
+            })
+        );
+        let none: RawIssue = serde_json::from_str(r#"{"key":"EX-9"}"#).unwrap();
+        let detail = detail_of(none, None, Vec::new(), false);
+        assert_eq!(
+            (detail.key.as_str(), detail.parent, detail.labels),
+            ("EX-9", None, Vec::new())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_ticket_is_read_with_its_sprint_and_its_comments_through_the_three_paths() {
+        let (site, seen) = serve_each(vec![
+            json_answer(ISSUE_BODY),
+            json_answer(SPRINT_BODY),
+            json_answer(COMMENTS_BODY),
+        ])
+        .await;
+        let detail = issue_detail(&basic_conn(&site).await, "EX-7")
+            .await
+            .unwrap();
+        assert_eq!(detail.key, "EX-7");
+        assert_eq!(detail.sprint.as_deref(), Some("Sprint 12"));
+        assert_eq!(detail.comments.len(), 2);
+        assert!(!detail.comments_truncated);
+        let requests = seen.await.unwrap();
+        assert!(requests[0].starts_with("get /rest/api/3/issue/ex-7?fields=summary,description,status,assignee,priority,labels,parent http/1.1"), "{}", requests[0]);
+        assert!(
+            requests[1].starts_with("get /rest/agile/1.0/issue/ex-7?fields=sprint http/1.1"),
+            "{}",
+            requests[1]
+        );
+        assert!(requests[2].starts_with("get /rest/api/3/issue/ex-7/comment?orderby=created&startat=0&maxresults=50 http/1.1"), "{}", requests[2]);
+        for request in &requests {
+            assert!(request.contains(BASIC), "{request}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_ticket_with_a_bad_key_asks_nothing_and_a_refused_read_stops_the_rest() {
+        let conn = basic_conn("http://127.0.0.1:1").await;
+        assert_eq!(
+            issue_detail(&conn, "../x").await,
+            Err("チケットのキーの形が正しくありません".into())
+        );
+        let (site, seen) = serve_each(vec![
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
+        ])
+        .await;
+        assert_eq!(
+            issue_detail(&basic_conn(&site).await, "EX-404").await,
+            Err("Jira が 404 を返しました: ".into())
+        );
+        assert_eq!(seen.await.unwrap().len(), 1);
+        // A refusal of the sprint, or of the comments, is the failure of the whole read.
+        let (site, _seen) = serve_each(vec![
+            json_answer(ISSUE_BODY),
+            "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
+        ])
+        .await;
+        assert_eq!(
+            issue_detail(&basic_conn(&site).await, "EX-7").await,
+            Err("Jira が認証を拒否しました（403）".into())
+        );
     }
 }

@@ -35,6 +35,7 @@ import { closeMenu, type MenuItem, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { closeDefinition, type DefinitionOpen, type DefinitionQuery, definitionsOf, hasDefinitionIn, initDefinition, openDefinition, showDefinitions } from "./orca-definition.js";
 import { openAddProject } from "./orca-add.js";
+import { closeJiraTab, jiraTabsOf, openJiraTab, showJiraTabs } from "./orca-jira-tab.js";
 import { closeConnectionTabs, closeDatabaseTab, conditionOf, databaseTabsOf, initDatabaseTabs, openQuery, openTable, showDatabaseTabs } from "./orca-database-tabs.js";
 import { initOrcaDatabase, lostConnection } from "./orca-database.js";
 import { closeDiff, type DiffCommit, diffsOf, hasDiffIn, openDiff as openDiffTab, refreshDiffs, showDiffs } from "./orca-diff.js";
@@ -46,7 +47,7 @@ import { type PaneModel, drawTree, editorHostOf, initPaneTree, type TreeModel } 
 import { applyLocal, findTab, focusedTab, layoutOf, needsSync, type PaneTabs, panesOf, syncPanes } from "./orca-panes.js";
 import { closePeek, drawPeek, initPeek, openPeek, peeking } from "./orca-peek.js";
 import { awayFile, awayFileIn, awayIn, focusPopout, initPopout, isAway, popOut, syncPopouts } from "./orca-popout.js";
-import { databaseIcon, definitionIcon, diffIcon, fileIcon, lockIcon, STATUS_LABELS, statusIcon } from "./orca-status.js";
+import { databaseIcon, definitionIcon, diffIcon, fileIcon, lockIcon, STATUS_LABELS, statusIcon, ticketIcon } from "./orca-status.js";
 import { openScratchpad } from "./orca-scratchpad.js";
 import { hideTerminals, initOrcaTerminal, type Placement, pruneTerminals, showTerminals, type TermSource } from "./orca-terminal.js";
 import { type Fields, registerDraftTarget } from "./screen-bridge.js";
@@ -225,10 +226,10 @@ function forgetNotices() {
 
 // ---- tabs ----
 
-// A tab of the work pane: a Claude session, or a plain terminal of Orca (both are terminals), or a file open in the editor (A-18), or the difference of a file from HEAD (A-24), or the definition of a name of the editor (A-34), or a table or the SQL of a database (A-43).
+// A tab of the work pane: a Claude session, or a plain terminal of Orca (both are terminals), or a file open in the editor (A-18), or the difference of a file from HEAD (A-24), or the definition of a name of the editor (A-34), or a table or the SQL of a database (A-43), or a ticket of Jira (J-2).
 interface Tab {
   id: string;
-  kind: "claude" | "plain" | "file" | "diff" | "definition" | "database";
+  kind: "claude" | "plain" | "file" | "diff" | "definition" | "database" | "jira";
   status: OrcaStatus;
   label: string;
   title: string;
@@ -253,8 +254,8 @@ interface Tab {
   gem?: boolean;
 }
 
-// A tab with no terminal, whose page is a document of the worktree: a file in the editor, the difference of a file, or the definition of a name; or the page of a database (it has the main worktree of its project, so the file pane keeps its worktree).
-const isDocument = (t: Tab) => t.kind === "file" || t.kind === "diff" || t.kind === "definition" || t.kind === "database";
+// A tab with no terminal, whose page is a document of the worktree: a file in the editor, the difference of a file, or the definition of a name; or the page of a database or of a Jira ticket (they have the main worktree of their project, so the file pane keeps its worktree).
+const isDocument = (t: Tab) => t.kind === "file" || t.kind === "diff" || t.kind === "definition" || t.kind === "database" || t.kind === "jira";
 
 // Where an item of a list is (A-6): the saved environment's name, null for this machine (an item with no `environment` is this machine's).
 const placeOf = (item: { environment?: string | null }) => item.environment ?? null;
@@ -348,6 +349,9 @@ function tabsOf(key: string): Tab[] {
   const main = mix.worktrees.find((w) => w.projectKey === key && w.isMain);
   for (const d of databaseTabsOf(place, key)) {
     tabs.push({ id: d.id, kind: "database", status: "done", label: "", title: d.title, latest: null, handle: null, path: main?.path ?? "", where: main === undefined ? "" : worktreeLabel(main), environment: d.target });
+  }
+  for (const j of jiraTabsOf(place, key)) {
+    tabs.push({ id: j.id, kind: "jira", status: "done", label: "", title: j.key, latest: null, handle: null, path: main?.path ?? "", where: main === undefined ? "" : worktreeLabel(main), environment: j.target });
   }
   // A Claude row that got its handle after it was first seen keeps the place it had under its id.
   for (const t of tabs) if (!seen.has(keyOfTab(t))) seen.set(keyOfTab(t), seen.get(t.id) ?? seen.size);
@@ -903,9 +907,10 @@ function tabNode(t: Tab, selected: boolean) {
   select.type = "button";
   select.setAttribute("role", "tab");
   select.setAttribute("aria-selected", String(selected));
-  select.append(t.outside ? lockIcon() : t.kind === "file" ? fileIcon() : t.kind === "diff" ? diffIcon() : t.kind === "definition" ? definitionIcon() : t.kind === "database" ? databaseIcon() : statusIcon(t.status, t.label), tag("span", "orca-tab-title", t.title));
+  select.append(t.outside ? lockIcon() : t.kind === "file" ? fileIcon() : t.kind === "diff" ? diffIcon() : t.kind === "definition" ? definitionIcon() : t.kind === "database" ? databaseIcon() : t.kind === "jira" ? ticketIcon() : statusIcon(t.status, t.label), tag("span", "orca-tab-title", t.title));
   if (t.kind === "definition") wrap.dataset.definition = "true";
   if (t.kind === "database") wrap.dataset.database = "true";
+  if (t.kind === "jira") wrap.dataset.jira = "true";
   if (t.kind === "file") {
     wrap.dataset.file = "true";
     if (t.outside) {
@@ -1031,6 +1036,18 @@ function syncDatabase(tabs: Tab[]) {
     if (tab?.kind === "database" && host) placements.push({ id: tab.id, host });
   }
   showDatabaseTabs(placements);
+}
+
+// Shows the ticket of the Jira tab selected in each pane while the screen is shown (in the host of the editor, which a pane shows one of).
+function syncJira(tabs: Tab[]) {
+  const layout = shown() ? currentLayout() : null;
+  const placements: { id: string; host: HTMLElement }[] = [];
+  for (const pane of panesOf(layout?.root ?? null)) {
+    const tab = tabOfId(tabs, pane.selected);
+    const host = editorHostOf(pane.id);
+    if (tab?.kind === "jira" && host) placements.push({ id: tab.id, host });
+  }
+  showJiraTabs(placements);
 }
 
 // The git worktrees that the list of branches of the file pane showed and Orca's list lacks (A-25), by target and path: the label of their heading and of the tabs of their files, and the git branch they are on.
@@ -1168,6 +1185,14 @@ function openDatabaseQuery(profile: DatabaseProfileView, database: string) {
   draw();
 }
 
+// A ticket of the Jira part of the file pane was pressed twice (J-2): it opens as a tab in the focused pane and is selected, and is read; one that is open already is selected and read again.
+function openJiraIssue(key: string) {
+  if (projectKey === null || view === null) return;
+  started = null;
+  chooseTab(openJiraTab(projectPlace(projectKey), projectKey, key).tab.id);
+  draw();
+}
+
 // The difference of a file of the file pane from HEAD (its menu), or, with `commit`, of a file of a commit of the history (A-27): it opens as a tab in the focused pane and is selected; one that is open already is selected and read again.
 function openDiff(relative: string, commit: DiffCommit | null = null) {
   const worktree = projectKey === null ? null : filesWorktree(tabsOf(projectKey));
@@ -1276,7 +1301,7 @@ function claimStarted() {
 
 // The order of tabs that are no longer anywhere is dropped, so it does not pile up.
 function forgetGone() {
-  const live = new Set<string>([...mix.rows.flatMap((r) => (r.paneKey === null ? [] : [r.handle ?? claudeTabId(r.paneKey)])), ...mix.terminals.map((t) => t.handle), ...filesOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((f) => f.id), ...awayIn(projectKey ?? "", []), ...diffsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id), ...definitionsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id), ...databaseTabsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id)]);
+  const live = new Set<string>([...mix.rows.flatMap((r) => (r.paneKey === null ? [] : [r.handle ?? claudeTabId(r.paneKey)])), ...mix.terminals.map((t) => t.handle), ...filesOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((f) => f.id), ...awayIn(projectKey ?? "", []), ...diffsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id), ...definitionsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id), ...databaseTabsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id), ...jiraTabsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((j) => j.id)]);
   for (const key of seen.keys()) if (!live.has(key)) seen.delete(key);
   for (const handle of endedHandles) if (!live.has(handle)) endedHandles.delete(handle);
 }
@@ -1343,6 +1368,7 @@ function drawScreen() {
   syncDiff(tabs);
   syncDefinition(tabs);
   syncDatabase(tabs);
+  syncJira(tabs);
 }
 
 // ---- the stream of the list ----
@@ -1720,8 +1746,8 @@ async function closeTab(tab: Tab): Promise<boolean> {
     draw();
     return false;
   }
-  if (tab.kind === "diff" || tab.kind === "definition" || tab.kind === "database") {
-    (tab.kind === "diff" ? closeDiff : tab.kind === "definition" ? closeDefinition : closeDatabaseTab)(tab.id);
+  if (tab.kind === "diff" || tab.kind === "definition" || tab.kind === "database" || tab.kind === "jira") {
+    (tab.kind === "diff" ? closeDiff : tab.kind === "definition" ? closeDefinition : tab.kind === "jira" ? closeJiraTab : closeDatabaseTab)(tab.id);
     closing.delete(tab.id);
     draw();
     return true;
@@ -2110,7 +2136,7 @@ export function initOrca() {
   initOrcaDatabase({ table: openDatabaseTable, query: openDatabaseQuery, gone: (id) => {
       if (closeConnectionTabs(id)) draw();
     } });
-  initOrcaFiles({ open: (relative) => openFile(relative), diff: (relative) => openDiff(relative), commitDiff: openDiff, toggle: toggleFilesAndDraw,
+  initOrcaFiles({ open: (relative) => openFile(relative), jira: openJiraIssue, diff: (relative) => openDiff(relative), commitDiff: openDiff, toggle: toggleFilesAndDraw,
     // A-25: after the app's own switch the tabs shown are read again with the tree, and the list (a streamed one is read again by Rust, which the switch told).
     // A git worktree that Orca's list lacks is on the branch the switch made, which the list cannot say.
     switched: (here, branch) => {

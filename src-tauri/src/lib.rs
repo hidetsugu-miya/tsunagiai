@@ -340,6 +340,7 @@ pub fn run() {
             jira::jira_sprints,
             jira::jira_sprint_issues,
             jira::jira_backlog,
+            jira::jira_issue,
             todoist::todoist_add,
             todoist::todoist_add_subtask,
             todoist::todoist_task_from_mail,

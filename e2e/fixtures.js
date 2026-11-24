@@ -326,6 +326,12 @@ const computed = {
     if (held === undefined) throw `Jira が 404 を返しました: no sprint ${sprintId}`;
     return held;
   },
+  // J-2 (#871): a ticket for its tab, from the fixture `jira_details` ({ "{key}": the answer of `jira_issue` }); a ticket it does not hold fails as Jira's refusal does. A spec that wants one answer for every ticket mocks `jira_issue`.
+  jira_issue: ({ key }) => {
+    const held = fixtures.jira_details?.[key];
+    if (held === undefined) throw `Jira が 404 を返しました: no ticket ${key}`;
+    return held;
+  },
   // A-8: the titles as Rust answers a save of one title alone (the one saved, or none for an empty title); a spec that holds more mocks `orca_title_set`.
   orca_title_set: ({ target, key, title }) => (title.trim() === "" ? {} : { [target]: { [key]: title.trim() } }),
   // A-8: the titles left once the keys are taken out, as Rust answers when it held no other title.
