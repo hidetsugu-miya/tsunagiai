@@ -88,3 +88,180 @@ export async function pickItem(label: string) {
 export const filesToggle = () => $(".orca-tabbar .orca-files-toggle:not([hidden]), #orca-files:not([hidden]) .orca-files-toggle");
 
 export const project = (name: string) => $(`//*[@id="orca-list"]//button[contains(@class,"orca-project")][.//span[@class="orca-project-name"][. = "${name}"]]`);
+
+// The source view of a file in the editor (A-18) is CodeMirror 6, so a spec reads and drives its DOM: the lines are `.cm-line` in `.cm-content`, and only the lines near the window are drawn (a spec that reads or moves the caret by an offset keeps to the lines at the top).
+export const CONTENT = ".orca-edit-body .cm-content";
+
+// The text of the editor now, all of it: read from the editor (`window.__e2e_editors__`, e2e/fixtures.js), because the page draws only the lines near the window.
+export const editorText = () =>
+  browser.execute(() => {
+    const dom = document.querySelector(".orca-edit-body .cm-editor");
+    return window.__e2e_editors__.find((editor) => editor.dom === dom)?.text() ?? "";
+  });
+
+// Waits until the editor holds `content`, and says what it holds when it never does.
+export async function waitForText(content: string) {
+  let last = "";
+  try {
+    await browser.waitUntil(async () => {
+      last = await editorText();
+      return last === content;
+    });
+  } catch {
+    throw new Error(`the editor holds ${JSON.stringify(last)}, not ${JSON.stringify(content)}`);
+  }
+}
+
+// The box on the page of the character at each of `offsets` of the text of the editor (null: it is not drawn, or the offset is a line end).
+export const charBoxes = (...offsets: number[]) =>
+  browser.execute((list) => {
+    const lines = [...(document.querySelector(".orca-edit-body .cm-content")?.querySelectorAll(".cm-line") ?? [])];
+    return list.map((offset) => {
+      let left = offset;
+      for (const line of lines) {
+        const length = line.textContent!.length;
+        if (left >= length) {
+          left -= length + 1;
+          continue;
+        }
+        const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode() as Text | null; node !== null; node = walker.nextNode() as Text | null) {
+          if (left >= node.length) {
+            left -= node.length;
+            continue;
+          }
+          const range = document.createRange();
+          range.setStart(node, left);
+          range.setEnd(node, left + 1);
+          const box = range.getBoundingClientRect();
+          return { left: box.left, top: box.top, right: box.right, bottom: box.bottom, width: box.width, height: box.height };
+        }
+        return null;
+      }
+      return null;
+    });
+  }, offsets);
+export type CharBox = NonNullable<Awaited<ReturnType<typeof charBoxes>>[number]>;
+
+// The window of the E2E build has no focus (`document.hasFocus()` is false), and the editor draws its caret, its band and its selection only while its document has the focus: the page says it has, as the window of the owner has it.
+export const claimFocus = () =>
+  browser.execute(() => {
+    document.hasFocus = () => true;
+  });
+
+// Gives the editor the focus as the owner's click does (the page says its window has it).
+export const focusEditor = () =>
+  browser.execute(() => {
+    document.hasFocus = () => true;
+    const content = document.querySelector<HTMLElement>(".orca-edit-body .cm-content")!;
+    content.focus({ preventScroll: true });
+    content.dispatchEvent(new FocusEvent("focus"));
+  });
+
+// Takes the focus from the editor, and the page says its window has none again.
+export const blurEditor = () =>
+  browser.execute(() => {
+    delete (document as { hasFocus?: unknown }).hasFocus;
+    const content = document.querySelector<HTMLElement>(".orca-edit-body .cm-content")!;
+    content.blur();
+    content.dispatchEvent(new FocusEvent("blur"));
+  });
+
+const frames = () => browser.execute("return new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))");
+
+// Gives the editor the focus and puts the selection from offset `start` to `end` of its text in it (the lines drawn are the ones that can hold it). The editor takes the selection of the page at the `selectionchange` that follows.
+export async function setCaret(start: number, end = start) {
+  await focusEditor();
+  await browser.execute(
+    (a, b) => {
+      const lines = [...document.querySelector(".orca-edit-body .cm-content")!.querySelectorAll(".cm-line")];
+      const place = (offset: number): [Node, number] => {
+        let left = offset;
+        for (const line of lines) {
+          const length = line.textContent!.length;
+          if (left > length) {
+            left -= length + 1;
+            continue;
+          }
+          const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+          for (let node = walker.nextNode() as Text | null; node !== null; node = walker.nextNode() as Text | null) {
+            if (left <= node.length) return [node, left];
+            left -= node.length;
+          }
+          return [line, 0];
+        }
+        const last = lines[lines.length - 1];
+        return [last, last.childNodes.length];
+      };
+      const [anchor, anchorAt] = place(a);
+      const [focus, focusAt] = place(b);
+      const range = document.createRange();
+      range.setStart(anchor, anchorAt);
+      range.setEnd(focus, focusAt);
+      const selection = getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+    },
+    start,
+    end,
+  );
+  await frames();
+}
+
+// Where the caret of the editor is in its text (the end of the selection), null while the page has no selection in it. The editor puts its selection in the page only while it has the focus (`claimFocus`).
+export const caretOffset = () =>
+  browser.execute(() => {
+    const content = document.querySelector(".orca-edit-body .cm-content")!;
+    const selection = getSelection()!;
+    const node = selection.focusNode;
+    if (node === null || !content.contains(node)) return null;
+    const lines = [...content.querySelectorAll(".cm-line")];
+    const line = node === content ? lines[Math.min(selection.focusOffset, lines.length - 1)] : (node instanceof Element ? node : node.parentElement!).closest(".cm-line")!;
+    const before = lines.slice(0, lines.indexOf(line)).reduce((n, l) => n + l.textContent!.length + 1, 0);
+    if (node === content) return before + (selection.focusOffset >= lines.length ? line.textContent!.length : 0);
+    const range = document.createRange();
+    range.setStart(line, 0);
+    range.setEnd(node, selection.focusOffset);
+    return before + range.toString().length;
+  });
+
+// The keys of WebDriver: Command, Enter, Tab, Backspace and the arrow down.
+const META = "\u{E03D}";
+const ENTER = "\u{E007}";
+const TAB = "\u{E004}";
+const BACKSPACE = "\u{E003}";
+const ARROW_DOWN = "\u{E015}";
+
+// Types `text` with real keys, a line feed as Enter and a tab as Tab (the editor indents by them).
+async function typeKeys(text: string) {
+  for (const part of text.split(/(\n|\t)/)) {
+    if (part === "\n") await browser.keys(ENTER);
+    else if (part === "\t") await browser.keys(TAB);
+    else if (part !== "") await browser.keys(part);
+  }
+}
+
+// Types `add` at the end of the text of the editor, as the owner does (the keys go to the editor, which has the focus); the page says its window has the focus until the keys are typed.
+export async function typeIn(add: string) {
+  await focusEditor();
+  await browser.keys([META, ARROW_DOWN]);
+  await typeKeys(add);
+  await browser.execute(() => {
+    delete (document as { hasFocus?: unknown }).hasFocus;
+  });
+}
+
+// Takes the whole text of the editor out and types `value` in its place (select all, Backspace and the keys).
+export async function setText(value: string) {
+  await focusEditor();
+  await browser.keys([META, "a"]);
+  await browser.keys(BACKSPACE);
+  await typeKeys(value);
+  await browser.execute(() => {
+    delete (document as { hasFocus?: unknown }).hasFocus;
+  });
+}
+
+// The key Tab and Enter at the caret, with nothing typed before them.
+export const pressTab = () => browser.keys(TAB);
+export const pressEnter = () => browser.keys(ENTER);

@@ -85,6 +85,8 @@ declare global {
   interface Window {
     __e2e_once__(id: string): boolean;
     __e2e_set_dark__(dark: boolean): void;
+    // The editors that the page made with `TsunagiaiCodeMirror.create` (e2e/fixtures.js).
+    __e2e_editors__: { dom: HTMLElement; text(): string }[];
   }
 }
 

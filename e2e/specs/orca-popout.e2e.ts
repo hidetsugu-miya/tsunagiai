@@ -5,6 +5,7 @@ import type { OrcaFileDiff } from "../../ts/bindings/OrcaFileDiff";
 import type { OrcaFileText } from "../../ts/bindings/OrcaFileText";
 import type { OrcaSaved } from "../../ts/bindings/OrcaSaved";
 import type { PopoutTab } from "../../ts/bindings/PopoutTab";
+import { charBoxes, CONTENT, typeIn, waitForText } from "../orca-support";
 import { boot, callsOf, copiedTexts, count, databaseCell, databaseColumn, databaseRecords, databaseSqlResult, databaseStructure, mock, onceId, popoutTab, rejects, sendPopoutClose, sendPopoutTab, sendTerm, stubClipboard, textsOf, timers, waitForCalls, waitForCount, CARD } from "../support";
 
 type Bridge = { __TAURI_INTERNALS__: { invoke: (command: string, args: object) => Promise<unknown> }; __TAURI__: { core: { Channel: new () => object } } };
@@ -135,18 +136,17 @@ describe("orca: the window of a tab (A-46)", () => {
     const FILE = "file:7";
     const relative = "notes/memo.md";
     const memo = popoutTab(FILE, "", "memo.md", { label: "", content: { kind: "file", path: "/work/example-app", relative, server: null } });
-    const text = (content: string, language = "plaintext"): OrcaFileText => ({ content, crlf: false, signature: "sig-1", language, highlight: null });
+    const text = (content: string, language = "plaintext"): OrcaFileText => ({ content, crlf: false, signature: "sig-1", language });
     const saved = (signature: string): OrcaSaved => ({ state: "saved", signature });
-    const area = () => $(".orca-edit-area");
+    const area = () => $(CONTENT);
     // A window of the file, with the text read and the autosave short.
     async function openFileWindow(tab: PopoutTab = memo, fixtures: Record<string, unknown> = {}, shown = "a note\n") {
       const label = await openWindow(tab, { orca_file_read: text("a note\n"), editor_settings: { autosaveMs: 100, autosaveMin: 100, autosaveMax: 3000, autosaveStep: 100 }, ...fixtures });
-      await expect(area()).toHaveValue(shown, { trim: false });
+      await waitForText(shown);
       return label;
     }
     async function typeX() {
-      await area().click();
-      await browser.keys("x");
+      await typeIn("x");
     }
 
     it("draws the file's icon and name in the header, and the editor under it with the text of the disk, in place of a terminal", async () => {
@@ -167,10 +167,10 @@ describe("orca: the window of a tab (A-46)", () => {
 
     it("shows a file outside the worktree with a lock, read only, through the server that gave it", async () => {
       const gem = popoutTab("file:8", "", "rails.rb", { label: "", content: { kind: "file", path: "/work/example-app", relative: "/usr/local/bundle/gems/rails.rb", server: "ruby" } });
-      await openWindow(gem, { lsp_read_outside: { path: "/usr/local/bundle/gems/rails.rb", text: "module Rails\nend\n", language: "ruby", highlight: null } });
-      await expect(area()).toHaveValue("module Rails\nend\n", { trim: false });
+      await openWindow(gem, { lsp_read_outside: { path: "/usr/local/bundle/gems/rails.rb", text: "module Rails\nend\n", language: "ruby" } });
+      await waitForText("module Rails\nend\n");
       expect(await count("#popout-icon .orca-ic[aria-label='読み取り専用']")).toBe(1);
-      expect(await area().getAttribute("readonly")).not.toBeNull();
+      await expect(area()).toHaveAttribute("aria-readonly", "true");
       expect(await waitForCalls("lsp_read_outside")).toEqual([{ environment: null, project: "proj_example-app", worktree: "/work/example-app", server: "ruby", path: "/usr/local/bundle/gems/rails.rb" }]);
     });
 
@@ -200,7 +200,7 @@ describe("orca: the window of a tab (A-46)", () => {
       await $("#popout-restore").click();
       await expect($(CARD)).toHaveText("保存できませんでした");
       expect(await callsOf(restore)).toEqual([]);
-      await expect(area()).toHaveValue("a note\nx", { trim: false });
+      await waitForText("a note\nx");
     });
 
     it("keeps the file in the window when the save before putting the tab back is refused", async () => {
@@ -211,7 +211,7 @@ describe("orca: the window of a tab (A-46)", () => {
       await $("#popout-restore").click();
       await expect($(".orca-edit-state")).toHaveText("ディスクのファイルが変わっています");
       expect(await callsOf(restore)).toEqual([]);
-      await expect(area()).toHaveValue("a note\nx", { trim: false });
+      await waitForText("a note\nx");
     });
 
     it("opens the file here again, with the message, when the tab could not be put back", async () => {
@@ -219,7 +219,7 @@ describe("orca: the window of a tab (A-46)", () => {
       await mock("orca_popout_restore", rejects("戻せませんでした"));
       await $("#popout-restore").click();
       await expect($(CARD)).toHaveText("戻せませんでした");
-      await expect(area()).toHaveValue("a note\n", { trim: false });
+      await waitForText("a note\n");
       expect(await callsOf("orca_file_read")).toHaveLength(2);
     });
 
@@ -242,7 +242,7 @@ describe("orca: the window of a tab (A-46)", () => {
       await sendPopoutClose();
       await expect($(CARD)).toHaveText("保存できませんでした");
       expect(await callsOf(close)).toEqual([]);
-      await expect(area()).toHaveValue("a note\nx", { trim: false });
+      await waitForText("a note\nx");
     });
 
     it("closes a file that a refused save left, as the × of a pane does (the heading said it)", async () => {
@@ -257,7 +257,7 @@ describe("orca: the window of a tab (A-46)", () => {
     it("reads the disk again by the clock when nothing was typed", async () => {
       await openFileWindow(memo, timers({ orcaClock: 500 }));
       await mock("orca_file_read", { ...text("a note, changed\n"), signature: "sig-2" });
-      await expect(area()).toHaveValue("a note, changed\n", { trim: false });
+      await waitForText("a note, changed\n");
     });
 
     it("does not read the disk again by the clock while the window is hidden, and reads it once when it is seen again", async () => {
@@ -272,7 +272,7 @@ describe("orca: the window of a tab (A-46)", () => {
       await browser.pause(1200);
       expect(await callsOf("orca_file_read")).toEqual([]);
       await hide(false);
-      await expect(area()).toHaveValue("a note, changed\n", { trim: false });
+      await waitForText("a note, changed\n");
     });
 
     it("takes the font of the editor from the settings", async () => {
@@ -288,25 +288,14 @@ describe("orca: the window of a tab (A-46)", () => {
       const asked = await mock("orca_popout_definition", null);
       // The server is found a moment after the text is shown: the press is made until the editor takes it.
       await browser.waitUntil(async () => {
+        const [box] = await charBoxes(source.indexOf("Rails") + 2);
+        if (box === null) return false;
         await browser.execute(
-          (offset, once) => {
+          (b, once) => {
             if (!window.__e2e_once__(once)) return;
-            const walker = document.createTreeWalker(document.querySelector(".orca-edit-hl code")!, NodeFilter.SHOW_TEXT);
-            let left = offset;
-            for (let node = walker.nextNode() as Text | null; node !== null; node = walker.nextNode() as Text | null) {
-              if (left >= node.length) {
-                left -= node.length;
-                continue;
-              }
-              const range = document.createRange();
-              range.setStart(node, left);
-              range.setEnd(node, left + 1);
-              const box = range.getBoundingClientRect();
-              document.querySelector(".orca-edit-area")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, metaKey: true, clientX: box.left + box.width / 2, clientY: box.top + box.height / 2 }));
-              return;
-            }
+            document.querySelector(".orca-edit-body .cm-content")!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, metaKey: true, clientX: b!.left + b!.width / 2, clientY: b!.top + b!.height / 2 }));
           },
-          source.indexOf("Rails") + 2,
+          box,
           onceId(),
         );
         return (await callsOf(asked)).length > 0;
@@ -376,7 +365,7 @@ describe("orca: the window of a tab (A-46)", () => {
     const answers = {
       lsp_definition: [{ path: "app/lib/rails_ext.rb", outside: false, line: 6, character: 2 }],
       lsp_places: [{ file: "rails_ext.rb", line: 7, place: "app/lib", outside: false, language: "ruby" }],
-      orca_file_read: { content: "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\n", crlf: false, signature: "sig-1", language: "ruby", highlight: null } satisfies OrcaFileText,
+      orca_file_read: { content: "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\n", crlf: false, signature: "sig-1", language: "ruby" } satisfies OrcaFileText,
     };
 
     it("asks the server for the definition with the question of the tab, and draws its places", async () => {
@@ -400,7 +389,7 @@ describe("orca: the window of a tab (A-46)", () => {
       await waitForCount(".orca-definition .orca-def", 1);
       await $(".orca-definition .orca-def-open").click();
       expect(await waitForCalls("orca_popout_place")).toEqual([{ path: "app/lib/rails_ext.rb", outside: false, line: 6, character: 2 }]);
-      expect(await count(".orca-edit-area")).toBe(0);
+      expect(await count(".cm-content")).toBe(0);
     });
 
     it("asks again with the new question when the screen gives the tab with one", async () => {

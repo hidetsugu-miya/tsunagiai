@@ -18,7 +18,7 @@ import type { OrcaSaved } from "../../ts/bindings/OrcaSaved";
 import type { PaneLayout } from "../../ts/bindings/PaneLayout";
 import type { PaneNode } from "../../ts/bindings/PaneNode";
 import { callsOf, copiedTexts, count, databaseCell, databaseColumn, databaseProfile, databaseRecords, databaseSqlResult, databaseStructure, databaseTable, emitEvent, fontSettings, holds, mock, onceId, orcaRow, orcaTerminal, orcaWorktree, popoutTab, rejects, release, sendFiles, sendPopout, sendStream, stubClipboard, textsOf, timers, waitForCalls, waitForCount, CARDS, CARD } from "../support";
-import { claudeTab, filesToggle, onThisMachine, openOrca, orcaOverview, pickItem, project, sample, selectedTab, showAgain, streamList, studio, tabOf, tabTitles, worktrees } from "../orca-support";
+import { blurEditor, caretOffset, charBoxes, claudeTab, CONTENT, editorText, filesToggle, onThisMachine, openOrca, orcaOverview, pickItem, pressEnter, pressTab, project, sample, selectedTab, setCaret, setText, showAgain, streamList, studio, tabOf, tabTitles, typeIn, waitForText, worktrees } from "../orca-support";
 
 // A-18: the file pane and the editor. Rust reads the folders, reads and saves the text, and decides whether a save went through (unit tests); here the screen is checked: what it asks of Rust, and how it draws the answers.
 describe("orca: files and editor (A-18)", () => {
@@ -74,7 +74,7 @@ describe("orca: files and editor (A-18)", () => {
       path,
       onceId(),
     );
-  const text = (content: string, signature = "sig-1", language = "plaintext", highlight: string | null = null): OrcaFileText => ({ content, crlf: false, signature, language, highlight });
+  const text = (content: string, signature = "sig-1", language = "plaintext"): OrcaFileText => ({ content, crlf: false, signature, language });
   const saved = (signature: string): OrcaSaved => ({ state: "saved", signature });
   const names = () => textsOf("#orca-files-tree .orca-file-name");
   const toggleBoxes = () =>
@@ -102,7 +102,7 @@ describe("orca: files and editor (A-18)", () => {
   // The window gets the focus back (the app is activated): the file pane reads again what it shows (A-18, A-27).
   const focusBack = () => browser.execute(() => window.dispatchEvent(new Event("focus")));
 
-  // The page's own double press on a file of the tree, and typing in the editor shown (value, then input).
+  // The page's own double press on a file of the tree.
   const doublePress = (path: string) =>
     browser.execute(
       (p, once) => {
@@ -112,29 +112,19 @@ describe("orca: files and editor (A-18)", () => {
       path,
       onceId(),
     );
-  const type = (add: string) =>
-    browser.execute(
-      (t, once) => {
-        if (!window.__e2e_once__(once)) return;
-        const area = document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!;
-        area.value += t;
-        area.dispatchEvent(new Event("input", { bubbles: true }));
-      },
-      add,
-      onceId(),
-    );
-  // highlight.js is read the first time a file is colored (#414), so the colors come a little after the text: waits for the library and for the frame that draws the layer again.
+  // Typing in the editor shown: real keys at the end of its text (a line feed is Enter).
+  const type = typeIn;
+  // highlight.js is read the first time a diff is colored (#414, A-24), so the colors of a diff come a little after its rows: waits for the library and for the frame that draws the rows again.
   const waitForColors = async () => {
     await browser.waitUntil(() => browser.execute("return typeof hljs !== 'undefined'"), { timeoutMsg: "highlight.js was never read" });
     await browser.execute("return new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))");
   };
-  // Opens a.rs with the answer of the read and waits for its text (and for its colors, when the answer has a grammar).
+  // Opens a.rs with the answer of the read and waits for its text (`rows` is how many rows the tree has).
   async function openFileWith(read: OrcaFileText, rows = 4) {
     await mock("orca_file_read", read);
     await waitForCount("#orca-files-tree .orca-file", rows);
     await doublePress("a.rs");
-    await expect($(".orca-edit-area")).toHaveValue(read.content, { trim: false });
-    if (read.highlight) await waitForColors();
+    await waitForText(read.content);
   }
   // Opens a.rs with `content` and waits for its text (`rows` is how many rows the tree has).
   const openA = (content = "fn main() {}\n", signature = "sig-1", rows = 4) => openFileWith(text(content, signature), rows);
@@ -142,7 +132,7 @@ describe("orca: files and editor (A-18)", () => {
   it("draws the text of the editor with the family and size chosen in the settings (A-20), apart from the terminals", async () => {
     await openFiles({ font_settings: fontSettings({ editor: { family: "Menlo", size: 18, ghostty: false }, orcaWork: { family: null, size: 13, ghostty: false } }) });
     await openA();
-    const area = () => browser.execute(() => ({ size: getComputedStyle(document.querySelector(".orca-edit-area")!).fontSize, family: getComputedStyle(document.querySelector(".orca-edit-area")!).fontFamily }));
+    const area = () => browser.execute(() => ({ size: getComputedStyle(document.querySelector(".orca-edit-body .cm-line")!).fontSize, family: getComputedStyle(document.querySelector(".orca-edit-body .cm-line")!).fontFamily }));
     await browser.waitUntil(async () => (await area()).size === "18px", { timeoutMsg: "the editor never took the size" });
     expect((await area()).family).toContain("Menlo");
   });
@@ -154,7 +144,7 @@ describe("orca: files and editor (A-18)", () => {
     // The heading is 12px of its own: 12 * 21 / 14.
     await browser.waitUntil(async () => (await head()).size === "18px", { timeoutMsg: "the heading never took the size" });
     expect((await head()).family).toContain("Menlo");
-    expect(await browser.execute(() => getComputedStyle(document.querySelector(".orca-edit-area")!).fontSize)).toBe("12.5px");
+    expect(await browser.execute(() => getComputedStyle(document.querySelector(".orca-edit-body .cm-line")!).fontSize)).toBe("12.5px");
   });
 
   it("keeps the text of the tab bar, the tabs, the file pane's heading and the editor's heading inside their boxes at the largest size of the work pane (A-20)", async () => {
@@ -188,66 +178,67 @@ describe("orca: files and editor (A-18)", () => {
   it("draws the text of the editor with the first font while none is chosen", async () => {
     await openFiles();
     await openA();
-    expect(await browser.execute(() => getComputedStyle(document.querySelector(".orca-edit-area")!).fontSize)).toBe("12.5px");
+    expect(await browser.execute(() => getComputedStyle(document.querySelector(".orca-edit-body .cm-line")!).fontSize)).toBe("12.5px");
   });
 
-  // A-21: the colors of the editor. The language is Rust's (`orca_file_read` answers `language` and `highlight`); the tokens are the highlighter's elements under the textarea.
-  const tokens = (kind: string) => textsOf(`.orca-edit-hl .hljs-${kind}`);
-  const layerText = () => browser.execute(() => document.querySelector(".orca-edit-hl")!.textContent);
-  const rust = (content: string) => text(content, "sig-1", "rust", "rust");
+  // A-21: the colors of the editor. The language is Rust's (`orca_file_read` answers `language`); the tokens are the elements that CodeMirror's highlighter gives its classes `tok-*`.
+  const tokens = (kind: string) => textsOf(`.orca-edit-body .tok-${kind}`);
+  const rust = (content: string) => text(content, "sig-1", "rust");
 
-  it("colors the text of a file by its language, in a layer under the textarea that holds the same text (A-21)", async () => {
+  it("colors the text of a file by its language, with the classes of the highlighter in the lines of the editor (A-21)", async () => {
     await openFiles();
     await openFileWith(rust('fn main() {\n    let x = "a"; // note\n}\n'));
     expect(await tokens("keyword")).toEqual(["fn", "let"]);
     expect(await tokens("string")).toEqual(['"a"']);
     expect(await tokens("comment")).toEqual(["// note"]);
-    expect(await layerText()).toBe('fn main() {\n    let x = "a"; // note\n}\n');
-    await expect($(".orca-edit-hl")).toHaveAttribute("aria-hidden", "true");
+    expect(await editorText()).toBe('fn main() {\n    let x = "a"; // note\n}\n');
+    // The numbers are the editor's own box, apart from its text.
+    await expect($(".orca-edit-body .cm-gutters")).toHaveAttribute("aria-hidden", "true");
   });
 
-  it("reads xterm.js with the first terminal and highlight.js with the first colored file, and not at the start (#414)", async () => {
+  it("reads xterm.js with the first terminal and CodeMirror with the first file, and highlight.js with no file: only a diff is colored by it, and none of them is read at the start (#414)", async () => {
     const read = (name: string) => browser.execute(`return typeof ${name} !== 'undefined'`);
     await openOrca(orcaOverview(sample(), worktrees()), { orca_terminal_read: ["$"], orca_files_list: root(), orca_files_ignored: rootIgnored, editor_settings: { autosaveMs: 100 } });
+    expect(await read("TsunagiaiCodeMirror")).toBe(false);
     expect(await read("hljs")).toBe(false);
     await project("example-app").click();
     await browser.waitUntil(() => read("Terminal"), { timeoutMsg: "xterm.js was never read" });
+    expect(await read("TsunagiaiCodeMirror")).toBe(false);
     expect(await read("hljs")).toBe(false);
     await filesToggle().click();
     await openFileWith(rust("fn a() {}\n"));
-    expect(await read("hljs")).toBe(true);
+    expect(await read("TsunagiaiCodeMirror")).toBe(true);
+    expect(await read("hljs")).toBe(false);
     expect(await tokens("keyword")).toEqual(["fn"]);
   });
 
-  it("shows the colors of the tokens and the caret of the textarea, whose own text is transparent (A-21)", async () => {
+  it("shows the color of a token and the color of the plain text apart (A-21)", async () => {
     await openFiles();
     await openFileWith(rust("fn a() {}\n"));
     const colors = await browser.execute(() => ({
-      keyword: getComputedStyle(document.querySelector(".orca-edit-hl .hljs-keyword")!).color,
-      plain: getComputedStyle(document.querySelector(".orca-edit-hl code")!).color,
-      area: getComputedStyle(document.querySelector(".orca-edit-area")!).color,
+      keyword: getComputedStyle(document.querySelector(".orca-edit-body .tok-keyword")!).color,
+      plain: getComputedStyle(document.querySelector(".orca-edit-body .cm-line")!).color,
     }));
     expect(colors.keyword).toBe("rgb(207, 34, 46)");
-    expect(colors.area).toBe("rgba(0, 0, 0, 0)");
     expect(colors.plain).not.toBe(colors.keyword);
   });
 
-  it("draws the text plain, in the same layer, for a language the highlighter has no grammar for (A-21)", async () => {
+  it("draws the text plain for a language the editor has no grammar for (A-21)", async () => {
     await openFiles();
-    await openFileWith(text("const std = @import(\"std\");\n", "sig-1", "zig", null));
-    expect(await count(".orca-edit-hl [class^='hljs-']")).toBe(0);
-    expect(await layerText()).toBe('const std = @import("std");\n');
+    await openFileWith(text('const std = @import("std");\n', "sig-1", "zig"));
+    expect(await count(".orca-edit-body [class*='tok-']")).toBe(0);
+    expect(await editorText()).toBe('const std = @import("std");\n');
   });
 
-  it("escapes the text of the file in the layer, so a tag in it stays text (A-21)", async () => {
+  it("draws the text of the file as text, so a tag in it stays text (A-21)", async () => {
     await openFiles();
-    await openFileWith(text('<img src=x onerror="alert(1)"> &amp;\n', "sig-1", "plaintext", null));
-    expect(await count(".orca-edit-hl img")).toBe(0);
-    expect(await layerText()).toBe('<img src=x onerror="alert(1)"> &amp;\n');
+    await openFileWith(text('<img src=x onerror="alert(1)"> &amp;\n', "sig-1", "plaintext"));
+    expect(await count(".orca-edit-body .cm-line img:not(.cm-widgetBuffer)")).toBe(0);
+    expect(await editorText()).toBe('<img src=x onerror="alert(1)"> &amp;\n');
   });
 
   // A-26: a Markdown file (the language Rust names `markdown`) opens in the rich view that Milkdown draws, and has the buttons of the source (`<>`) and the rich view (the pencil) in its heading. `markdown_split` is Rust's cut of the front matter and `markdown_patch` puts the edit of the rich view into the text: the mocks answer them, and the spec checks what the page sends, draws and saves.
-  const markdown = (content: string) => text(content, "sig-1", "markdown", "markdown");
+  const markdown = (content: string) => text(content, "sig-1", "markdown");
   const parts = (body: string, front = ""): MarkdownParts => ({ front, body });
   const patched = (text: string): MarkdownPatchResult => ({ kind: "patched", text });
   type PatchCall = { original: string; before: string; after: string };
@@ -357,7 +348,7 @@ describe("orca: files and editor (A-18)", () => {
     expect(call.after).toContain("末尾X");
     // The source is the text, with the diagram's text to edit.
     await modeButton("ソース").click();
-    await expect($(".orca-edit-area")).toHaveValue(`${content}X`, { trim: false });
+    await waitForText(`${content}X`);
   });
 
   it("does not read Pele for a Markdown file with no mermaid block (A-26)", async () => {
@@ -442,7 +433,7 @@ describe("orca: files and editor (A-18)", () => {
     });
     await mock("markdown_split", parts(next));
     await mock("markdown_patch", patched(next));
-    await mock("orca_file_read", text(next, "sig-2", "markdown", "markdown"));
+    await mock("orca_file_read", text(next, "sig-2", "markdown"));
     await browser.waitUntil(async () => ((await diagramText()) ?? "").includes("再読"), { timeoutMsg: "the diagram was never drawn again" });
     expect(await diagramText()).not.toContain("開始");
     expect(await count(".orca-edit-rich .orca-diagram svg")).toBe(1);
@@ -513,7 +504,7 @@ describe("orca: files and editor (A-18)", () => {
     await modeButton("ソース").click();
     await expect($(".orca-edit-body")).toBeDisplayed();
     await expect($(".orca-edit-rich")).not.toBeDisplayed();
-    await expect($(".orca-edit-area")).toHaveValue("# 見出し\n", { trim: false });
+    await waitForText("# 見出し\n");
     await expect(modeButton("ソース")).toHaveAttribute("aria-pressed", "true");
     await expect(modeButton("リッチ")).toHaveAttribute("aria-pressed", "false");
     expect(await count(".orca-edit-rich .ProseMirror")).toBe(0);
@@ -533,7 +524,7 @@ describe("orca: files and editor (A-18)", () => {
     await modeButton("ソース").click();
     await tabOf(claude).$(".orca-tab-btn").click();
     await tabOf("file:1").$(".orca-tab-btn").click();
-    await expect($(".orca-edit-area")).toBeDisplayed();
+    await expect($(CONTENT)).toBeDisplayed();
     await expect($(".orca-edit-rich")).not.toBeDisplayed();
     await expect(modeButton("ソース")).toHaveAttribute("aria-pressed", "true");
   });
@@ -559,7 +550,7 @@ describe("orca: files and editor (A-18)", () => {
     // What is saved is Rust's answer, not the export of the editor.
     expect(await waitForCalls(write)).toEqual([{ path: "/work/example-app", relative: "a.rs", content: edited, crlf: false, signature: "sig-1", environment: null }]);
     await expect(stateText()).toHaveText("保存しました");
-    await expect($(".orca-edit-area")).toHaveValue(edited, { trim: false });
+    await waitForText(edited);
   });
 
   it("shows the states of the save for an edit of the rich view as for typing in the source (A-26)", async () => {
@@ -584,11 +575,9 @@ describe("orca: files and editor (A-18)", () => {
     await mock("markdown_patch", patched(edited));
     await mock("orca_file_write", saved("sig-2"));
     await typeRich("X");
-    // Pressed before the wait for more changes has passed: the edit is in the text area when the source is shown.
+    // Pressed before the wait for more changes has passed: the edit is in the editor when the source is shown.
     await modeButton("ソース").click();
-    await expect($(".orca-edit-area")).toHaveValue(edited, { trim: false });
-    // The layers under the text area are drawn when the source is shown, not at each edit of the rich view.
-    expect(await layerText()).toBe(edited);
+    await waitForText(edited);
     await expect($(".orca-edit-rich")).not.toBeDisplayed();
     await type("Y");
     await modeButton("リッチ").click();
@@ -600,8 +589,8 @@ describe("orca: files and editor (A-18)", () => {
     await openFiles();
     await startMarkdown(body, body, "", { kind: "conflict" });
     await expect(modeButton("ソース")).toHaveAttribute("aria-pressed", "true");
-    await expect($(".orca-edit-area")).toBeDisplayed();
-    await expect($(".orca-edit-area")).toHaveValue(body, { trim: false });
+    await expect($(CONTENT)).toBeDisplayed();
+    await waitForText(body);
     await modeButton("リッチ").click();
     await waitForCount(".orca-edit-rich .ProseMirror", 1);
     await waitForCalls("markdown_patch", 2);
@@ -617,7 +606,7 @@ describe("orca: files and editor (A-18)", () => {
     const write = await mock("orca_file_write", saved("sig-2"));
     await typeRich("X");
     await expect(modeButton("ソース")).toHaveAttribute("aria-pressed", "true");
-    await expect($(".orca-edit-area")).toHaveValue(body, { trim: false });
+    await waitForText(body);
     await browser.pause(800);
     expect(await callsOf(write)).toEqual([]);
   });
@@ -627,62 +616,46 @@ describe("orca: files and editor (A-18)", () => {
     await openFileWith(rust("fn main() {}\n"));
     await expect($(".orca-edit-modes")).not.toBeDisplayed();
     await expect($(".orca-edit-rich")).not.toBeDisplayed();
-    await expect($(".orca-edit-area")).toBeDisplayed();
+    await expect($(CONTENT)).toBeDisplayed();
     expect(await callsOf("markdown_split")).toEqual([]);
   });
 
-  it("colors the text again at each key, and the layer keeps the text of the textarea (A-21)", async () => {
+  it("colors the text again at each key (A-21)", async () => {
     await openFiles();
     await openFileWith(rust("let a = 1;\n"));
     expect(await tokens("comment")).toEqual([]);
-    await type("// typed\n");
+    await type("// typed");
     await browser.waitUntil(async () => (await tokens("comment")).length === 1, { timeoutMsg: "the typed line was never colored" });
     expect(await tokens("comment")).toEqual(["// typed"]);
-    expect(await layerText()).toBe("let a = 1;\n// typed\n");
+    expect(await editorText()).toBe("let a = 1;\n// typed");
   });
 
-  it("moves the layer with the scroll of the textarea (A-21)", async () => {
+  it("draws only the lines near the window, and colors them, for a long text (A-21)", async () => {
     await openFiles();
-    await openFileWith(rust("let a = 1;\n".repeat(200)));
-    await browser.execute(() => {
-      const area = document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!;
-      area.scrollTop = 48;
-      area.dispatchEvent(new Event("scroll"));
-    });
-    const moved = await browser.execute(() => document.querySelector<HTMLElement>(".orca-edit-hl code")!.style.transform);
-    expect(moved.replace(/\s/g, "")).toBe("translate(0px,-48px)");
+    await openFileWith(rust("let a = 1;\n".repeat(3000)));
+    await browser.waitUntil(async () => (await count(".orca-edit-body .tok-keyword")) > 0, { timeoutMsg: "the long text was never colored" });
+    expect(await count(".orca-edit-body .cm-line")).toBeLessThan(3000);
   });
 
-  // A-18: the band under the line of the caret (`.orca-edit-line`), and where it is on the page.
+  // A-18: the band under the line of the caret (`.cm-activeLine`, which the editor marks only while it has the focus and nothing is selected), and where it is on the page.
   const band = () =>
     browser.execute(() => {
-      const b = document.querySelector<HTMLElement>(".orca-edit-line")!;
-      const r = b.getBoundingClientRect();
-      return { hidden: b.hidden, line: b.dataset.line, top: r.top, bottom: r.bottom, width: r.width, textWidth: b.parentElement!.getBoundingClientRect().width, background: getComputedStyle(b).backgroundColor, beforeLayer: !!(b.compareDocumentPosition(document.querySelector(".orca-edit-hl")!) & Node.DOCUMENT_POSITION_FOLLOWING) };
+      const content = document.querySelector(".orca-edit-body .cm-content")!;
+      const lines = [...content.querySelectorAll(".cm-line")];
+      const at = lines.findIndex((l) => l.classList.contains("cm-activeLine"));
+      if (at === -1) return { shown: false, line: null, top: 0, bottom: 0, width: 0, textWidth: 0, background: "", count: 0 };
+      const r = lines[at].getBoundingClientRect();
+      return { shown: true, line: String(at), top: r.top, bottom: r.bottom, width: r.width, textWidth: content.getBoundingClientRect().width, background: getComputedStyle(lines[at]).backgroundColor, count: lines.filter((l) => l.classList.contains("cm-activeLine")).length };
     });
-  // The box of the letter at `index` of the text, drawn by the layer (a plain text file: the layer is one text node).
-  const glyph = (index: number) =>
-    browser.execute((i) => {
-      const node = document.querySelector(".orca-edit-hl code")!.firstChild as Text;
-      const range = document.createRange();
-      range.setStart(node, i);
-      range.setEnd(node, i + 1);
-      const r = range.getBoundingClientRect();
-      return { top: r.top, bottom: r.bottom };
-    }, index);
-  // Gives the text area the focus and puts the selection `start` to `end` in it. The window of the E2E build has no focus, so a click does not focus the text area and a key that moves the caret (the arrows, End) does not move it: the caret is moved by the script, as the rich view's is.
-  const caretAt = (start: number, end = start) =>
-    browser.execute(
-      (a, b) => {
-        const area = document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!;
-        area.focus();
-        area.setSelectionRange(a, b);
-      },
-      start,
-      end,
-    );
-  const bandOn = (line: string) => browser.waitUntil(async () => (await band()).line === line && !(await band()).hidden, { timeoutMsg: `the band never came to line ${line}` });
-  const bandHidden = () => browser.waitUntil(async () => (await band()).hidden, { timeoutMsg: "the band never went" });
+  // The box of the letter at `index` of the text.
+  const glyph = async (index: number) => {
+    const [box] = await charBoxes(index);
+    return { top: box!.top, bottom: box!.bottom };
+  };
+  // Gives the editor the focus and puts the selection `start` to `end` in it: the caret is moved by the script (the window of the E2E build has no focus, so a click does not focus the editor).
+  const caretAt = setCaret;
+  const bandOn = (line: string) => browser.waitUntil(async () => (await band()).line === line, { timeoutMsg: `the band never came to line ${line}` });
+  const bandHidden = () => browser.waitUntil(async () => !(await band()).shown, { timeoutMsg: "the band never went" });
 
   it("lays a faint band under the line of the caret, across the box of the text and under the letters, and moves it with the caret (A-18)", async () => {
     await openFiles();
@@ -694,12 +667,12 @@ describe("orca: files and editor (A-18)", () => {
     const b = await band();
     const letter = await glyph(6);
     const next = await glyph(11);
+    expect(b.count).toBe(1);
     expect(b.top).toBeLessThanOrEqual(letter.top);
     expect(b.bottom).toBeGreaterThanOrEqual(letter.bottom);
     expect(b.bottom).toBeLessThanOrEqual(next.top);
     expect(b.width).toBeCloseTo(b.textWidth, 0);
-    expect(b.background).not.toBe("rgba(0, 0, 0, 0)");
-    expect(b.beforeLayer).toBe(true);
+    expect(b.background).toBe("rgba(90, 107, 98, 0.1)");
     await caretAt(11);
     await bandOn("2");
     expect((await band()).top).toBeGreaterThan(b.top);
@@ -708,7 +681,7 @@ describe("orca: files and editor (A-18)", () => {
     expect((await band()).top).toBe(b.top);
   });
 
-  it("does not draw the band over a selected range, and takes it off when the text area loses the focus (A-18)", async () => {
+  it("does not draw the band over a selected range, and takes it off when the editor loses the focus (A-18)", async () => {
     await openFiles();
     await openA("alpha\nbeta\ngamma\n");
     await caretAt(6);
@@ -717,65 +690,69 @@ describe("orca: files and editor (A-18)", () => {
     await bandHidden();
     await caretAt(6);
     await bandOn("1");
-    await browser.execute(() => document.querySelector<HTMLElement>(".orca-edit-area")!.blur());
+    await blurEditor();
     await bandHidden();
   });
 
-  it("moves the band with the scroll of the textarea (A-18)", async () => {
+  it("keeps the band on its line while the text scrolls (A-18)", async () => {
     await openFiles();
     await openA("x\n".repeat(200));
     await caretAt(6);
     await bandOn("3");
     const before = (await band()).top;
     await browser.execute(() => {
-      const area = document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!;
-      area.scrollTop = 48;
-      area.dispatchEvent(new Event("scroll"));
+      document.querySelector(".orca-edit-body .cm-scroller")!.scrollTop = 48;
     });
     await browser.waitUntil(async () => Math.abs((await band()).top - (before - 48)) < 0.5, { timeoutMsg: "the band never followed the scroll" });
   });
 
-  // A-18: the numbers of the lines, in a box at the left of the text (`.orca-edit-gutter`, one text node of the numbers in lines).
-  const numbers = () => browser.execute(() => document.querySelector(".orca-edit-nums")!.textContent!.split("\n"));
-  const countTo = (n: number) => Array.from({ length: n }, (_, i) => String(i + 1));
-  const gutterWidth = () => browser.execute(() => document.querySelector(".orca-edit-gutter")!.getBoundingClientRect().width);
-  // The textarea's value set to `value`, as a deletion would.
-  const setText = (value: string) =>
-    browser.execute(
-      (v, once) => {
-        if (!window.__e2e_once__(once)) return;
-        const area = document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!;
-        area.value = v;
-        area.dispatchEvent(new Event("input", { bubbles: true }));
+  // A-18: the numbers of the lines, in the editor's own box at the left of the text (`.cm-gutters`): the numbers of the lines near the window, and the widest one in a hidden element that sets the width.
+  const numbers = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>(".orca-edit-body .cm-lineNumbers .cm-gutterElement")].filter((e) => e.style.visibility !== "hidden").map((e) => e.textContent));
+  // The number of the last line drawn (the first element is the hidden one that sets the width, with the digits of the last number as nines).
+  const lastNumber = () =>
+    browser.execute(() => {
+      const drawn = [...document.querySelectorAll<HTMLElement>(".orca-edit-body .cm-lineNumbers .cm-gutterElement")].filter((e) => e.style.visibility !== "hidden");
+      return drawn[drawn.length - 1].textContent;
+    });
+  // Scrolls the text to its end until the number `last` is the last one drawn (the heights of the lines not drawn are estimated, so the end moves while they are drawn).
+  const scrollTo = (last: string) =>
+    browser.waitUntil(
+      async () => {
+        await browser.execute(() => {
+          const scroller = document.querySelector(".orca-edit-body .cm-scroller")!;
+          scroller.scrollTop = scroller.scrollHeight;
+        });
+        return (await lastNumber()) === last;
       },
-      value,
-      onceId(),
+      { timeoutMsg: `the numbers never came to ${last}` },
     );
+  const countTo = (n: number) => Array.from({ length: n }, (_, i) => String(i + 1));
+  const gutterWidth = () => browser.execute(() => document.querySelector(".orca-edit-body .cm-gutters")!.getBoundingClientRect().width);
 
   it("numbers the lines of the text from 1, one number for each line, in the font of the text and in a fainter color (A-18)", async () => {
     await openFiles();
     await openA("fn main() {\n    run();\n}\n");
-    // The empty line after the last line break is a line of the textarea, and has its number.
+    // The empty line after the last line break is a line of the editor, and has its number.
     expect(await numbers()).toEqual(["1", "2", "3", "4"]);
     const look = await browser.execute(() => {
-      const g = getComputedStyle(document.querySelector(".orca-edit-gutter")!);
-      const a = getComputedStyle(document.querySelector(".orca-edit-area")!);
-      const h = getComputedStyle(document.querySelector(".orca-edit-hl code")!);
-      return { gutter: [g.fontFamily, g.fontSize, g.lineHeight, g.color, g.textAlign], area: [a.fontFamily, a.fontSize, a.lineHeight, a.color], code: h.color };
+      const g = getComputedStyle(document.querySelector(".orca-edit-body .cm-gutters")!);
+      const n = getComputedStyle([...document.querySelectorAll<HTMLElement>(".orca-edit-body .cm-lineNumbers .cm-gutterElement")].find((e) => e.style.visibility !== "hidden")!);
+      const a = getComputedStyle(document.querySelector(".orca-edit-body .cm-line")!);
+      return { gutter: [n.fontFamily, n.fontSize, n.lineHeight, g.color, n.textAlign], line: [a.fontFamily, a.fontSize, a.lineHeight, a.color] };
     });
-    expect(look.gutter.slice(0, 3)).toEqual(look.area.slice(0, 3));
+    expect(look.gutter.slice(0, 3)).toEqual(look.line.slice(0, 3));
     expect(look.gutter[4]).toBe("right");
-    expect(look.gutter[3]).not.toBe(look.code);
+    expect(look.gutter[3]).not.toBe(look.line[3]);
     expect(look.gutter[3]).toBe("rgb(90, 107, 98)");
   });
 
   it("numbers the lines with the family and size chosen for the editor (A-18, A-20)", async () => {
     await openFiles({ font_settings: fontSettings({ editor: { family: "Menlo", size: 18, ghostty: false }, orcaWork: { family: null, size: 13, ghostty: false } }) });
     await openA("a\nb\n");
-    await browser.waitUntil(async () => (await browser.execute(() => getComputedStyle(document.querySelector(".orca-edit-gutter")!).fontSize)) === "18px", { timeoutMsg: "the numbers never took the size" });
-    const font = await browser.execute(() => ({ gutter: getComputedStyle(document.querySelector(".orca-edit-gutter")!).fontFamily, area: getComputedStyle(document.querySelector(".orca-edit-area")!).fontFamily }));
+    await browser.waitUntil(async () => (await browser.execute(() => getComputedStyle(document.querySelector(".orca-edit-body .cm-gutters")!).fontSize)) === "18px", { timeoutMsg: "the numbers never took the size" });
+    const font = await browser.execute(() => ({ gutter: getComputedStyle(document.querySelector(".orca-edit-body .cm-gutters")!).fontFamily, line: getComputedStyle(document.querySelector(".orca-edit-body .cm-line")!).fontFamily }));
     expect(font.gutter).toContain("Menlo");
-    expect(font.gutter).toBe(font.area);
+    expect(font.gutter).toBe(font.line);
   });
 
   it("keeps the numbers in step with the lines as they are typed and deleted, and widens the box with the digits (A-18)", async () => {
@@ -803,83 +780,105 @@ describe("orca: files and editor (A-18)", () => {
   it("numbers a long text, and one line more at a key (A-18)", async () => {
     await openFiles();
     await openA("x\n".repeat(5000));
-    expect(await numbers()).toEqual(countTo(5001));
+    expect((await numbers()).slice(0, 3)).toEqual(["1", "2", "3"]);
+    await scrollTo("5001");
     await type("y\n");
-    await browser.waitUntil(async () => (await numbers()).length === 5002, { timeoutMsg: "the numbers never grew" });
-    expect(await numbers()).toEqual(countTo(5002));
+    await browser.waitUntil(async () => (await lastNumber()) === "5002", { timeoutMsg: "the numbers never grew" });
   });
 
-  it("moves the numbers with the vertical scroll of the text and not with the horizontal one (A-18)", async () => {
+  it("keeps the numbers at the left while the text scrolls sideways, and moves them with the vertical scroll (A-18)", async () => {
     await openFiles();
     await openA(`${"x".repeat(400)}\n`.repeat(200));
-    const before = await browser.execute(() => document.querySelector(".orca-edit-gutter")!.getBoundingClientRect().left);
+    const first = () =>
+      browser.execute(() => {
+        const one = [...document.querySelectorAll<HTMLElement>(".orca-edit-body .cm-lineNumbers .cm-gutterElement")].find((e) => e.style.visibility !== "hidden")!;
+        return {
+          left: document.querySelector(".orca-edit-body .cm-gutters")!.getBoundingClientRect().left,
+          numberLeft: one.getBoundingClientRect().left,
+          numberTop: one.getBoundingClientRect().top,
+          lineTop: document.querySelector(".orca-edit-body .cm-line")!.getBoundingClientRect().top,
+          text: one.textContent,
+        };
+      });
+    // The editor puts the numbers on the lines when it has measured the text, a frame after the text is drawn.
+    await browser.waitUntil(async () => {
+      const at = await first();
+      return Math.abs(at.numberTop - at.lineTop) < 0.5;
+    }, { timeoutMsg: "the first number never came to the first line" });
+    const before = await first();
     await browser.execute(() => {
-      const area = document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!;
-      area.scrollTop = 48;
-      area.scrollLeft = 60;
-      area.dispatchEvent(new Event("scroll"));
+      const scroller = document.querySelector(".orca-edit-body .cm-scroller")!;
+      scroller.scrollTop = 48;
+      scroller.scrollLeft = 60;
     });
-    const moved = await browser.execute(() => {
-      const nums = document.querySelector<HTMLElement>(".orca-edit-nums")!;
-      return { transform: nums.style.transform, left: document.querySelector(".orca-edit-gutter")!.getBoundingClientRect().left, numsLeft: nums.getBoundingClientRect().left };
-    });
-    expect(moved.transform.replace(/\s/g, "")).toBe("translateY(-48px)");
-    expect(moved.left).toBe(before);
-    expect(moved.numsLeft).toBe(before);
-    // The first number of the rows still in view sits on the line of the text it numbers: the text is 48 px up, and so are the numbers.
-    const rows = await browser.execute(() => {
-      const nums = document.querySelector(".orca-edit-nums")!.getBoundingClientRect();
-      const gutter = document.querySelector(".orca-edit-gutter")!.getBoundingClientRect();
-      return { up: gutter.top - nums.top };
-    });
-    expect(rows.up).toBe(48);
+    await browser.waitUntil(async () => Math.abs((await first()).numberTop - (before.numberTop - 48)) < 0.5, { timeoutMsg: "the numbers never followed the scroll" });
+    const moved = await first();
+    expect(moved.left).toBe(before.left);
+    expect(moved.numberLeft).toBe(before.numberLeft);
+    expect(moved.numberTop).toBeCloseTo(moved.lineTop, 0);
+    // The first number of the lines in view is that of the line the text shows there.
+    expect(moved.text).toBe("1");
   });
 
-  it("forwards the wheel over the numbers to the text (A-18)", async () => {
-    await openFiles();
-    await openA("x\n".repeat(300));
-    await browser.execute((once) => {
-      if (!window.__e2e_once__(once)) return;
-      document.querySelector(".orca-edit-gutter")!.dispatchEvent(new WheelEvent("wheel", { deltaY: 64, bubbles: true, cancelable: true }));
-    }, onceId());
-    await browser.waitUntil(async () => (await browser.execute(() => document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!.scrollTop)) === 64, { timeoutMsg: "the text never scrolled" });
-    // The numbers follow at the scroll event, which comes after the scroll itself.
-    await browser.waitUntil(async () => (await browser.execute(() => document.querySelector<HTMLElement>(".orca-edit-nums")!.style.transform.replace(/\s/g, ""))) === "translateY(-64px)", { timeoutMsg: "the numbers never followed" });
-  });
-
-  it("keeps the numbers out of the selection, the copy and the reading aloud, and out of the textarea (A-18)", async () => {
+  it("keeps the numbers out of the selection, the copy and the reading aloud, and out of the text (A-18)", async () => {
     await openFiles();
     await openA("alpha\nbeta\n");
     const gutter = await browser.execute(() => {
-      const g = document.querySelector<HTMLElement>(".orca-edit-gutter")!;
-      const area = document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!;
-      area.focus();
-      area.select();
-      return { hidden: g.getAttribute("aria-hidden"), userSelect: getComputedStyle(g).getPropertyValue("-webkit-user-select"), inArea: area.contains(g), selected: area.value.slice(area.selectionStart, area.selectionEnd), value: area.value };
+      const g = document.querySelector<HTMLElement>(".orca-edit-body .cm-gutters")!;
+      return { hidden: g.getAttribute("aria-hidden"), userSelect: getComputedStyle(g).getPropertyValue("-webkit-user-select"), inContent: document.querySelector(".orca-edit-body .cm-content")!.contains(g) };
     });
     expect(gutter.hidden).toBe("true");
     expect(gutter.userSelect).toBe("none");
-    expect(gutter.inArea).toBe(false);
+    expect(gutter.inContent).toBe(false);
     // What a copy of the text takes is the text and nothing of the numbers.
-    expect(gutter.selected).toBe("alpha\nbeta\n");
-    expect(gutter.value).toBe("alpha\nbeta\n");
+    expect(await editorText()).toBe("alpha\nbeta\n");
   });
 
-  it("colors a long text after it is read, and draws it again with the typed line within the wait (A-21)", async () => {
+  it("indents the line with Tab, and carries the indent of the line to the next one with Enter (A-18)", async () => {
     await openFiles();
-    const long = "let a = 1;\n".repeat(3000);
-    await openFileWith(rust(long));
-    await browser.waitUntil(async () => (await count(".orca-edit-hl .hljs-keyword")) > 0, { timeoutMsg: "the long text was never colored" });
-    await type("let b = 2;\n");
-    await browser.waitUntil(async () => (await tokens("keyword")).length === 3001, { timeoutMsg: "the typed line was never colored" });
-    expect(await layerText()).toBe(`${long}let b = 2;\n`);
+    await openA("a\n");
+    await setCaret(0);
+    await pressTab();
+    await waitForText("  a\n");
+    // The caret is at the end of "  a": Enter opens a line with the same indent.
+    await setCaret(3);
+    await pressEnter();
+    await waitForText("  a\n  \n");
+  });
+
+  it("says why the file is not shown when CodeMirror cannot be read, and shows it when the file is opened again (A-18)", async () => {
+    await openFiles();
+    await mock("orca_file_read", text("fn main() {}\n"));
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    // The read of the script fails, as a script that is gone does.
+    await browser.execute(() => {
+      const original = document.head.append.bind(document.head);
+      document.head.append = (...nodes: (Node | string)[]) => {
+        const mine = (n: Node | string) => n instanceof HTMLScriptElement && n.src.endsWith("/vendor/codemirror.js");
+        for (const n of nodes) if (mine(n)) setTimeout(() => (n as HTMLScriptElement).onerror?.(new Event("error")), 0);
+        original(...nodes.filter((n) => !mine(n)));
+      };
+    });
+    await doublePress("a.rs");
+    await expect($(".orca-edit .orca-empty")).toHaveText("vendor/codemirror.js を読めませんでした");
+    await expect($(CONTENT)).not.toBeDisplayed();
+    expect(await dirtyMarks()).toBe(0);
+    await browser.execute(() => {
+      delete (document.head as { append?: unknown }).append;
+    });
+    await tabOf("file:1").$(".orca-tab-close").click();
+    await expect(tabOf("file:1")).not.toBeExisting();
+    // The tree of the pane is read again when another tab is shown, and a press on a row waits for the rows.
+    await waitForCount("#orca-files-tree .orca-file", 4);
+    await doublePress("a.rs");
+    await waitForText("fn main() {}\n");
   });
 
   it("has the colors in variables of the page, apart from the layout (A-21)", async () => {
     await openFiles();
     await openFileWith(rust("fn a() {}\n"));
     await browser.execute(() => document.documentElement.style.setProperty("--hl-keyword", "rgb(1, 2, 3)"));
-    expect(await browser.execute(() => getComputedStyle(document.querySelector(".orca-edit-hl .hljs-keyword")!).color)).toBe("rgb(1, 2, 3)");
+    expect(await browser.execute(() => getComputedStyle(document.querySelector(".orca-edit-body .tok-keyword")!).color)).toBe("rgb(1, 2, 3)");
   });
 
   it("has one button that shows and hides the file pane: in the upper row of the pane while it is shown, at the right end of the tab strip while it is hidden", async () => {
@@ -1529,7 +1528,7 @@ describe("orca: files and editor (A-18)", () => {
     await expect(selectedTab().$(".orca-tab-title")).toHaveText("a.rs");
     expect(await count('.orca-tabs [data-tab="file:1"] .orca-file-tab-ic')).toBe(1);
     expect(await tabTitles()).toEqual(["Write the docs", "a.rs"]);
-    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n", { trim: false });
+    await waitForText("fn main() {}\n");
     await expect($(".orca-edit-path")).toHaveText("a.rs");
     await expect($(".orca-term")).not.toBeDisplayed();
     await expect(row("a.rs")).toHaveAttribute("data-open", "true");
@@ -1538,7 +1537,7 @@ describe("orca: files and editor (A-18)", () => {
     expect(asked[asked.length - 1]).toEqual([claude, "file:1"]);
     // The heading still names the worktree, with the file selected.
     await expect($("#orca-files-title")).toHaveText("example-app ・ feat/a");
-    expect(await browser.execute(() => document.activeElement?.classList.contains("orca-edit-area"))).toBe(true);
+    expect(await browser.execute(() => document.activeElement?.classList.contains("cm-content"))).toBe(true);
   });
 
   // A-17: the right button on a tab, as the page gets it.
@@ -1599,13 +1598,13 @@ describe("orca: files and editor (A-18)", () => {
     await openFiles();
     await openA();
     await tabOf(claude).$(".orca-tab-btn").click();
-    await expect($(".orca-edit-area")).not.toBeExisting();
+    await expect($(CONTENT)).not.toBeExisting();
     // The file changed on the disk while its tab was not shown.
     const read = await mock("orca_file_read", text("fn main() {}\n// outside\n", "sig-2"));
     await doublePress("a.rs");
     await expect(selectedTab().$(".orca-tab-title")).toHaveText("a.rs");
     expect(await count(".orca-tabs [data-file]")).toBe(1);
-    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n// outside\n", { trim: false });
+    await waitForText("fn main() {}\n// outside\n");
     expect((await callsOf(read))[0]).toEqual({ path: "/work/example-app", relative: "a.rs", environment: null });
     expect(await dirtyMarks()).toBe(0);
   });
@@ -1616,7 +1615,7 @@ describe("orca: files and editor (A-18)", () => {
     await type("// more\n");
     await tabOf(claude).$(".orca-tab-btn").click();
     await tabOf("file:1").$(".orca-tab-btn").click();
-    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n// more\n", { trim: false });
+    await waitForText("fn main() {}\n// more\n");
     expect(await callsOf("orca_file_read")).toHaveLength(1);
   });
 
@@ -1626,7 +1625,7 @@ describe("orca: files and editor (A-18)", () => {
     await mock("orca_file_read", rejects("バイナリのファイルは開けません"));
     await doublePress("a.rs");
     await expect($(".orca-edit .orca-empty")).toHaveText("バイナリのファイルは開けません");
-    await expect($(".orca-edit-area")).not.toBeDisplayed();
+    await expect($(CONTENT)).not.toBeDisplayed();
     expect(await dirtyMarks()).toBe(0);
   });
 
@@ -1661,7 +1660,7 @@ describe("orca: files and editor (A-18)", () => {
       await doublePress("logo.png");
       await expect($(".orca-edit-picture img")).toBeDisplayed();
       await expect($(".orca-edit-body")).not.toBeDisplayed();
-      await expect($(".orca-edit-area")).not.toBeDisplayed();
+      await expect($(CONTENT)).not.toBeDisplayed();
       const drawn = await picture();
       expect(drawn.natural).toBe(4000);
       expect(drawn.shown).toBe(drawn.room);
@@ -1689,7 +1688,7 @@ describe("orca: files and editor (A-18)", () => {
       await doublePress("logo.png");
       await expect($(".orca-edit .orca-empty")).toHaveText("画像が大きすぎます（4096 KiB。3072 KiB までに縮められませんでした）");
       await expect($(".orca-edit-picture")).not.toBeDisplayed();
-      await expect($(".orca-edit-area")).not.toBeDisplayed();
+      await expect($(CONTENT)).not.toBeDisplayed();
     });
 
     it("leaves a binary file that is no image to the text read, which refuses it", async () => {
@@ -1793,7 +1792,7 @@ describe("orca: files and editor (A-18)", () => {
     await type("b");
     await browser.pause(600);
     expect(await callsOf(write)).toHaveLength(1);
-    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\nab", { trim: false });
+    await waitForText("fn main() {}\nab");
     await expect($(CARDS)).not.toExist();
   });
 
@@ -1869,12 +1868,12 @@ describe("orca: files and editor (A-18)", () => {
     await openA("fn main() {}\n", "sig-1", 2);
     await mock("orca_file_read", text("pub fn b() {}\n", "sig-b"));
     await doublePress("b.rs");
-    await expect($(".orca-edit-area")).toHaveValue("pub fn b() {}\n", { trim: false });
+    await waitForText("pub fn b() {}\n");
     expect(await tabTitles()).toEqual(["Write the docs", "a.rs", "b.rs"]);
     // a.rs comes back into the pane and is read again: the disk still holds the text that was read, so it stays.
     const again = await mock("orca_file_read", text("fn main() {}\n", "sig-1"));
     await tabOf("file:1").$(".orca-tab-btn").click();
-    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n", { trim: false });
+    await waitForText("fn main() {}\n");
     expect((await waitForCalls(again))[0]).toEqual({ path: "/work/example-app", relative: "a.rs", environment: null });
   });
 
@@ -2016,7 +2015,7 @@ describe("orca: files and editor (A-18)", () => {
     await waitForCount("#orca-files-tree .orca-file", 7);
     expect(await treeOrder()).toEqual(["src", "src/lib", "src/main.rs", "src/new.rs", "target", "a.rs", "b.log"]);
     expect(await waitForCalls(read)).toEqual([{ path: "/work/example-app", relative: "src/new.rs", environment: null }]);
-    await expect($(".orca-edit-area")).toHaveValue("fn new() {}\n", { trim: false });
+    await waitForText("fn new() {}\n");
     await expect($(CARDS)).not.toExist();
   });
 
@@ -2034,7 +2033,7 @@ describe("orca: files and editor (A-18)", () => {
     expect(await treeOrder()).toEqual(["src", "src/gen", "src/lib", "src/main.rs", "target", "a.rs", "b.log"]);
     await browser.pause(300);
     expect(await callsOf(read)).toEqual([]);
-    await expect($(".orca-edit-area")).not.toExist();
+    await expect($(CONTENT)).not.toExist();
   });
 
   it("cancels on Escape and on a blank name, and calls nothing", async () => {
@@ -2086,7 +2085,7 @@ describe("orca: files and editor (A-18)", () => {
     expect(await treeOrder()).toEqual(["src", "src/lib", "src/main.rs", "target", "a.rs", "b.log"]);
     await browser.pause(300);
     expect(await callsOf(list)).toEqual([]);
-    await expect($(".orca-edit-area")).not.toExist();
+    await expect($(CONTENT)).not.toExist();
   });
 
   it("opens a menu of the new file and the new folder at the pointer on the right button on the empty part of the tree, and asks for the name at the root", async () => {
@@ -2190,7 +2189,7 @@ describe("orca: files and editor (A-18)", () => {
   it("deletes a file for good on 「削除」 with the worktree, the path and no recursion, reads its folder again, closes its tab and says nothing", async () => {
     await openFiles();
     await openA();
-    await expect($(".orca-edit-area")).toBeDisplayed();
+    await expect($(CONTENT)).toBeDisplayed();
     expect(await tabTitles()).toEqual(["Write the docs", "a.rs"]);
     const del = await mock("orca_files_delete", answered([["a.rs", false]]));
     const list = await mock("orca_files_list", dirOf("", [["src", true], ["target", true], ["b.log", false]]));
@@ -2201,7 +2200,7 @@ describe("orca: files and editor (A-18)", () => {
     expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: null }]);
     await waitForCount("#orca-files-tree .orca-file", 3);
     expect(await names()).toEqual(["src", "target", "b.log"]);
-    await expect($(".orca-edit-area")).not.toExist();
+    await expect($(CONTENT)).not.toExist();
     expect(await tabTitles()).toEqual(["Write the docs"]);
     await expect($('.pop[role="alertdialog"]')).not.toExist();
     await expect($(CARDS)).not.toExist();
@@ -2215,7 +2214,7 @@ describe("orca: files and editor (A-18)", () => {
     await waitForCount("#orca-files-tree .orca-file", 6);
     await mock("orca_file_read", text("fn main() {}\n", "sig-m"));
     await doublePress("src/main.rs");
-    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n", { trim: false });
+    await waitForText("fn main() {}\n");
     await mock("orca_file_read", text("a", "sig-a"));
     await doublePress("a.rs");
     await browser.waitUntil(async () => (await tabTitles()).length === 3, { timeoutMsg: "the second file never opened" });
@@ -2468,7 +2467,7 @@ describe("orca: files and editor (A-18)", () => {
     // A press on another row moves the selection, and nothing is read or opened by a single press.
     await row("b.log").click();
     expect(await selectedPaths()).toEqual(["b.log"]);
-    await expect($(".orca-edit-area")).not.toExist();
+    await expect($(CONTENT)).not.toExist();
   });
 
   it("adds a row to the selection and takes it off with ⌘, and selects from the row pressed before to this one with Shift", async () => {
@@ -2971,7 +2970,7 @@ describe("orca: files and editor (A-18)", () => {
     await release(move, null);
     await browser.waitUntil(async () => (await tabTitles())[1] === "c.rs", { timeoutMsg: "the tab never took the new name" });
     await expect($(".orca-edit-path")).toHaveText("c.rs");
-    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n// x\n", { trim: false });
+    await waitForText("fn main() {}\n// x\n");
     expect(await waitForCalls(write)).toEqual([{ path: HERE, relative: "c.rs", content: "fn main() {}\n// x\n", crlf: false, signature: "sig-1", environment: null }]);
     await expect(stateText()).toHaveText("保存しました");
     // The moved file is the one drawn as open.
@@ -2982,7 +2981,7 @@ describe("orca: files and editor (A-18)", () => {
     await openSrc();
     await mock("orca_file_read", text("fn main() {}\n", "sig-m"));
     await doublePress("src/main.rs");
-    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n", { trim: false });
+    await waitForText("fn main() {}\n");
     const move = await mock("orca_file_move", rejects("Orca がエラーを返しました（forbidden）"));
     await dragRow("src", "target");
     await waitForCalls(move);
@@ -3101,7 +3100,7 @@ describe("orca: files and editor (A-18)", () => {
   // A-42: an HTML file opens in the preview, a frame that shows the address `orca_file_preview_url` returns. Rust makes the address and serves the file (unit tests): the mock answers a made-up one, and the spec checks what the page asks, draws and saves.
   const PREVIEW_URL = "http://127.0.0.1:12345/tok/page.html";
   const previewArgs = { path: "/work/example-app", relative: "page.html", environment: null };
-  const html = (content: string) => text(content, "sig-1", "html", "xml");
+  const html = (content: string) => text(content, "sig-1", "html");
   const frameOf = () =>
     browser.execute(() => {
       const frame = document.querySelector<HTMLIFrameElement>(".orca-edit-preview iframe");
@@ -3129,7 +3128,7 @@ describe("orca: files and editor (A-18)", () => {
     await expect(modeButton("リッチ")).not.toBeDisplayed();
     await expect(modeButton("再読み込み")).toBeDisplayed();
     // The text stays in the editor for the source.
-    await expect($(".orca-edit-area")).toHaveValue("<h1>見出し</h1>\n", { trim: false });
+    await waitForText("<h1>見出し</h1>\n");
   });
 
   it("opens a file whose name ends with .html in capitals in the preview too (A-42)", async () => {
@@ -3143,7 +3142,7 @@ describe("orca: files and editor (A-18)", () => {
     await modeButton("ソース").click();
     await expect($(".orca-edit-body")).toBeDisplayed();
     await expect($(".orca-edit-preview")).not.toBeDisplayed();
-    await expect($(".orca-edit-area")).toHaveValue("<h1>見出し</h1>\n", { trim: false });
+    await waitForText("<h1>見出し</h1>\n");
     await expect(modeButton("ソース")).toHaveAttribute("aria-pressed", "true");
     await expect(modeButton("プレビュー")).toHaveAttribute("aria-pressed", "false");
     await expect(modeButton("再読み込み")).not.toBeDisplayed();
@@ -3192,8 +3191,8 @@ describe("orca: files and editor (A-18)", () => {
     await mock("orca_file_read", html("<h1>a</h1>\n"));
     await doublePress("page.html");
     await expect($(CARD)).toHaveText("プレビューを開けません");
-    await expect($(".orca-edit-area")).toBeDisplayed();
-    await expect($(".orca-edit-area")).toHaveValue("<h1>a</h1>\n", { trim: false });
+    await expect($(CONTENT)).toBeDisplayed();
+    await waitForText("<h1>a</h1>\n");
     await expect(modeButton("ソース")).toHaveAttribute("aria-pressed", "true");
     await expect(modeButton("再読み込み")).not.toBeDisplayed();
     expect(await count(".orca-edit-preview iframe")).toBe(0);
@@ -3696,7 +3695,7 @@ describe("orca: files and editor (A-18)", () => {
     // The open file stays: its tab, and its text.
     expect(await tabTitles()).toEqual(["Write the docs", "a.rs"]);
     await expect(tabOf("file:1").$(".orca-tab-btn")).toHaveAttribute("aria-selected", "true");
-    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n", { trim: false });
+    await waitForText("fn main() {}\n");
     await expect($(CARDS)).not.toExist();
   });
 
@@ -4739,11 +4738,11 @@ describe("orca: files and editor (A-18)", () => {
     await mock("orca_files_list", dirOf("", [["src", true], ["target", true], ["a.rs", false], ["b.log", false], ["new.rs", false]]));
     await browser.waitUntil(async () => (await names()).includes("new.rs"), { timeoutMsg: "the new file never showed" });
     // The text changed outside the app: it takes the place of the one shown, and the caret stays.
-    await browser.execute(() => document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!.setSelectionRange(3, 3));
+    await setCaret(3);
     const read = await mock("orca_file_read", text("fn main() {}\n// outside\n", "sig-2"));
-    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n// outside\n", { trim: false });
+    await waitForText("fn main() {}\n// outside\n");
     expect((await callsOf(read))[0]).toEqual({ path: "/work/example-app", relative: "a.rs", environment: null });
-    expect(await browser.execute(() => document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!.selectionStart)).toBe(3);
+    expect(await caretOffset()).toBe(3);
     expect(await dirtyMarks()).toBe(0);
     // Typing that is not saved yet: the file is not read, and the text stays.
     await type("x");
@@ -4753,7 +4752,7 @@ describe("orca: files and editor (A-18)", () => {
     await mock("orca_files_list", rejects("Orca に接続できません"));
     await browser.pause(1200);
     expect(await callsOf(later)).toEqual([]);
-    await expect($(".orca-edit-area")).toHaveValue("fn main() {}\n// outside\nx", { trim: false });
+    await waitForText("fn main() {}\n// outside\nx");
     expect(await count("#orca-files-tree .orca-file-note.fail")).toBe(0);
     expect(await names()).toContain("new.rs");
     await expect($(CARDS)).not.toExist();
@@ -4770,14 +4769,14 @@ describe("orca: files and editor (A-18)", () => {
     const next = "# 後\n\n本文\n";
     await mock("markdown_split", parts(next));
     await mock("markdown_patch", patched(next));
-    const read = await mock("orca_file_read", text(next, "sig-2", "markdown", "markdown"));
+    const read = await mock("orca_file_read", text(next, "sig-2", "markdown"));
     await browser.waitUntil(async () => (await rich("h1")).join() === "後", { timeoutMsg: "the rich view never followed the disk" });
     expect((await callsOf(read))[0]).toEqual({ path: "/work/example-app", relative: "a.rs", environment: null });
     // The source follows it too.
     await modeButton("ソース").click();
     await expect(modeButton("ソース")).toHaveAttribute("aria-pressed", "true");
-    await mock("orca_file_read", text("# 三\n", "sig-3", "markdown", "markdown"));
-    await expect($(".orca-edit-area")).toHaveValue("# 三\n", { trim: false });
+    await mock("orca_file_read", text("# 三\n", "sig-3", "markdown"));
+    await waitForText("# 三\n");
     // Two more periods: the tree is not read while the pane is hidden.
     await browser.pause(2200);
     expect(await callsOf(tree)).toEqual([]);
@@ -4825,7 +4824,7 @@ describe("orca: files and editor (A-18)", () => {
     await expect(branchButton()).toHaveText("feat/c");
     expect(await waitForCalls(list)).toEqual([{ path: "/work/example-app", dir: "", ignored: false, environment: null }]);
     await browser.waitUntil(async () => (await names()).join() === "a.rs,only-c.rs", { timeoutMsg: "the tree of the new branch never showed" });
-    await expect($(".orca-edit-area")).toHaveValue("fn c() {}\n", { trim: false });
+    await waitForText("fn c() {}\n");
     expect((await callsOf(read))[0]).toEqual({ path: "/work/example-app", relative: "a.rs", environment: null });
     expect(await callsOf("orca_switch_branch")).toEqual([]);
   });
@@ -4915,11 +4914,11 @@ describe("orca: files and editor (A-18)", () => {
       await waitForCalls("orca_stream_files");
       // The watch is not ready: the clock reads the file.
       await mock("orca_file_read", text("by the clock\n", "sig-2"));
-      await expect($(".orca-edit-area")).toHaveValue("by the clock\n", { trim: false });
+      await waitForText("by the clock\n");
       // Ready: everything shown is read once, and the clock reads no more.
       const read = await mock("orca_file_read", text("at ready\n", "sig-3"));
       await sendFiles({ kind: "ready" });
-      await expect($(".orca-edit-area")).toHaveValue("at ready\n", { trim: false });
+      await waitForText("at ready\n");
       expect((await callsOf(read))[0]).toEqual({ path: WORK, relative: "a.rs", environment: "Studio" });
       await browser.pause(300);
       const after = (await callsOf(read)).length;
@@ -4929,22 +4928,22 @@ describe("orca: files and editor (A-18)", () => {
       await mock("orca_file_read", text("after a change\n", "sig-4"));
       await changed(`${WORK}/other.rs`);
       await browser.pause(500);
-      await expect($(".orca-edit-area")).toHaveValue("at ready\n", { trim: false });
+      await waitForText("at ready\n");
       // One that names it reads it at once (the clock is a second away at the longest, so the wait is no clock's).
       await changed(`${WORK}/other.rs`, `${WORK}/a.rs`);
-      await expect($(".orca-edit-area")).toHaveValue("after a change\n", { trim: false });
+      await waitForText("after a change\n");
       // A path that is not under the worktree (Orca named the real path of a link) cannot be matched: every file of the worktree is read.
       await mock("orca_file_read", text("by the real path\n", "sig-5"));
       await changed("/private/work/example-app/a.rs");
-      await expect($(".orca-edit-area")).toHaveValue("by the real path\n", { trim: false });
+      await waitForText("by the real path\n");
       // A folder that is named (or a deleted path, which may have been one) reaches every file under it.
       await mock("orca_file_read", text("under a folder\n", "sig-6"));
       await sendFiles({ kind: "changed", paths: [`${WORK}/gone`], directories: [WORK] });
-      await expect($(".orca-edit-area")).toHaveValue("under a folder\n", { trim: false });
+      await waitForText("under a folder\n");
       // The end of the watch gives the file back to the clock.
       await sendFiles({ kind: "ended", message: "" });
       await mock("orca_file_read", text("by the clock again\n", "sig-7"));
-      await expect($(".orca-edit-area")).toHaveValue("by the clock again\n", { trim: false });
+      await waitForText("by the clock again\n");
     });
 
     it("reads the diff shown at once for a change that names its file and not for another, and by the clock as well while the watch is ready (A-24)", async () => {
@@ -5064,13 +5063,13 @@ describe("orca: files and editor (A-18)", () => {
       await waitForCount("#orca-files-tree .orca-file", 3);
       await mock("orca_file_read", text("in node_modules\n", "sig-1"));
       await doublePress("node_modules/x.js");
-      await expect($(".orca-edit-area")).toHaveValue("in node_modules\n", { trim: false });
+      await waitForText("in node_modules\n");
       await sendFiles({ kind: "ready" });
       await browser.pause(300);
       // Orca watches nothing in it, so the clock reads the tree and the file all the same.
       const list = await mock("orca_files_list", dirOf("node_modules", [["x.js", false]]));
       await mock("orca_file_read", text("by the clock\n", "sig-2"));
-      await expect($(".orca-edit-area")).toHaveValue("by the clock\n", { trim: false });
+      await waitForText("by the clock\n");
       await waitForCalls(list);
     });
 
@@ -5078,7 +5077,7 @@ describe("orca: files and editor (A-18)", () => {
       await openFiles({ ...timers({ orcaClock: 1000 }), editor_settings: { autosaveMs: 60000 } });
       await openA();
       await mock("orca_file_read", text("by the clock\n", "sig-2"));
-      await expect($(".orca-edit-area")).toHaveValue("by the clock\n", { trim: false });
+      await waitForText("by the clock\n");
       expect(await callsOf("orca_stream_files")).toEqual([]);
     });
   });

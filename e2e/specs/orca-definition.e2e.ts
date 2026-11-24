@@ -11,7 +11,7 @@ import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import type { PaneLayout } from "../../ts/bindings/PaneLayout";
 import type { PaneNode } from "../../ts/bindings/PaneNode";
 import { callsOf, count, emitEvent, holds, mock, onceId, orcaRow, orcaWorktree, popoutTab, rejects, release, sendPopout, textsOf, timers, waitForCalls, waitForCount } from "../support";
-import { claudeTab, filesToggle, openOrca, orcaOverview, pickItem, project, sample, selectedTab, showAgain, studio, tabOf, tabTitles, worktrees } from "../orca-support";
+import { caretOffset, charBoxes, claimFocus, claudeTab, CONTENT, filesToggle, openOrca, orcaOverview, pickItem, project, sample, selectedTab, setCaret, showAgain, studio, tabOf, tabTitles, typeIn, waitForText, worktrees } from "../orca-support";
 
 // A-34: the definition tab under the pane of the editor, and the editor's Command and right button. Rust asks the language server, reads the name under the mouse and decides how each place is drawn (unit tests); here the screen is checked: what it asks of Rust for a press, how it splits the work pane, and how it draws the answers and opens them. The language server in the file pane is checked below too: its state and settings, and when it is started and stopped.
 describe("orca: definition (A-34)", () => {
@@ -21,7 +21,7 @@ describe("orca: definition (A-34)", () => {
       ["a.rb", false],
       ["notes.txt", false],
     ]);
-  const text = (content: string, language = "ruby", highlight: string | null = language): OrcaFileText => ({ content, crlf: false, signature: "sig-1", language, highlight });
+  const text = (content: string, language = "ruby"): OrcaFileText => ({ content, crlf: false, signature: "sig-1", language });
   const source = "class A\n  def go\n    Rails.logger.info(x)\n  end\nend\n";
   const worktree = "/work/example-app";
   // Where the three places are: one in the worktree, and two in gems.
@@ -63,43 +63,28 @@ describe("orca: definition (A-34)", () => {
       path,
       onceId(),
     );
-  // Opens the file of the tree with the answer of the read, and waits for its text and its colors (highlight.js is read the first time a file is colored).
+  // Opens the file of the tree with the answer of the read, and waits for its text.
   async function openFileWith(path: string, read: OrcaFileText) {
     await mock("orca_file_read", read);
     await doublePress(path);
-    await expect($(".orca-edit-area")).toHaveValue(read.content, { trim: false });
-    if (read.highlight) {
-      await browser.waitUntil(() => browser.execute("return typeof hljs !== 'undefined'"), { timeoutMsg: "highlight.js was never read" });
-      await browser.execute("return new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))");
-    }
+    await waitForText(read.content);
   }
 
   // The page's own `contextmenu` event on the text, at the middle of the character at `offset` of its text (`dx` moves the point to the right), with or without the Command key. Whether the event was left to the default menu is read after it (`prevented`).
-  const contextAt = (offset: number, meta = true, dx = 0) =>
-    browser.execute(
-      (o, withMeta, shift, once) => {
+  const contextAt = async (offset: number, meta = true, dx = 0) => {
+    const [box] = await charBoxes(offset);
+    await browser.execute(
+      (b, withMeta, shift, once) => {
         if (!window.__e2e_once__(once)) return;
-        const walker = document.createTreeWalker(document.querySelector(".orca-edit-hl code")!, NodeFilter.SHOW_TEXT);
-        let left = o;
-        for (let node = walker.nextNode() as Text | null; node !== null; node = walker.nextNode() as Text | null) {
-          if (left >= node.length) {
-            left -= node.length;
-            continue;
-          }
-          const range = document.createRange();
-          range.setStart(node, left);
-          range.setEnd(node, left + 1);
-          const box = range.getBoundingClientRect();
-          const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, metaKey: withMeta, clientX: box.left + box.width / 2 + shift, clientY: box.top + box.height / 2 });
-          (window as unknown as { __e2e_prevented__: boolean }).__e2e_prevented__ = !document.querySelector(".orca-edit-area")!.dispatchEvent(event);
-          return;
-        }
+        const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, metaKey: withMeta, clientX: b!.left + b!.width / 2 + shift, clientY: b!.top + b!.height / 2 });
+        (window as unknown as { __e2e_prevented__: boolean }).__e2e_prevented__ = !document.querySelector(".orca-edit-body .cm-content")!.dispatchEvent(event);
       },
-      offset,
+      box,
       meta,
       dx,
       onceId(),
     );
+  };
   const prevented = () => browser.execute(() => (window as unknown as { __e2e_prevented__?: boolean }).__e2e_prevented__);
   // The offset of the 'i' of "Rails" in the source: the third character of the name.
   const onRails = () => source.indexOf("Rails") + 2;
@@ -110,7 +95,7 @@ describe("orca: definition (A-34)", () => {
     await mock("lsp_definition", locations);
     await mock("lsp_places", places);
     await mock("orca_file_read", text(rows(12)));
-    await mock("lsp_read_outside", { path: gem.path, text: rows(30), language: "ruby", highlight: "ruby" });
+    await mock("lsp_read_outside", { path: gem.path, text: rows(30), language: "ruby" });
   }
   // Opens a.rb, answers, makes `orca_panes` answer the split with the definition tab below, and presses on "Rails" with the Command key.
   async function define(locations?: LspLocation[], places?: LspPlace[], shown = true) {
@@ -123,7 +108,8 @@ describe("orca: definition (A-34)", () => {
   }
   // Where the caret is in `content` for the line from 0 and the character.
   const caretOf = (content: string, line: number, character: number) => content.split("\n").slice(0, line).reduce((n, l) => n + l.length + 1, 0) + character;
-  const caret = () => browser.execute(() => document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!.selectionStart);
+  // Where the caret is: the editor puts its selection in the page only while the page says the window has the focus (`claimFocus`, before the place is gone to).
+  const caret = caretOffset;
 
   const mode = (label: string) => $(`#orca-files-bar [aria-label="${label}"]`);
   const defRow = (n: number) => $(`.orca-definition .orca-def[data-index="${n}"]`);
@@ -182,7 +168,7 @@ describe("orca: definition (A-34)", () => {
     await answer();
     await mock("orca_panes", below([claude, "file:1"], "file:1"));
     // The caret is at the start; the press is on "Rails" (line 2, character 6).
-    await browser.execute(() => document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!.setSelectionRange(0, 0));
+    await setCaret(0);
     await contextAt(onRails());
     expect(await waitForCalls("lsp_word")).toEqual([{ line: "    Rails.logger.info(x)", character: 6 }]);
     expect(await waitForCalls("lsp_definition")).toEqual([{ environment: null, worktree, server: "ruby", relative: "a.rb", text: source, line: 2, character: 6 }]);
@@ -198,18 +184,9 @@ describe("orca: definition (A-34)", () => {
     await openFiles();
     await openFileWith("a.rb", text(source));
     await answer();
-    const typed = `${source}x = Rails\n`;
+    const typed = `${source}x = Rails`;
     await mock("orca_file_write", { state: "saved", signature: "sig-2" });
-    await browser.execute(
-      (t, once) => {
-        if (!window.__e2e_once__(once)) return;
-        const area = document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!;
-        area.value = t;
-        area.dispatchEvent(new Event("input", { bubbles: true }));
-      },
-      typed,
-      onceId(),
-    );
+    await typeIn("x = Rails");
     await browser.pause(150);
     await contextAt(typed.lastIndexOf("Rails") + 4);
     const [call] = await waitForCalls("lsp_definition");
@@ -223,7 +200,7 @@ describe("orca: definition (A-34)", () => {
     expect((await callsOf("orca_panes")).at(0)).toMatchObject({ tabs: [claude, "file:1", "definition:1"] });
     await waitForCount(".orca-pane", 2);
     await expect($('.orca-pane[data-pane="p2"] .orca-definition')).toBeDisplayed();
-    await expect($('.orca-pane[data-pane="p1"] .orca-edit-area')).toBeDisplayed();
+    await expect($('.orca-pane[data-pane="p1"] .cm-content')).toBeDisplayed();
     expect(await tabTitles()).toEqual(["Write the docs", "a.rb", "定義 ・ Rails"]);
   });
 
@@ -301,7 +278,7 @@ describe("orca: definition (A-34)", () => {
     // The focus goes back to the pane of the editor, which shows the definition tab nowhere.
     await mock("orca_panes", below([claude, "file:1"], "file:1", "p1"));
     await tabOf("file:1").$(".orca-tab-btn").click();
-    await expect($('.orca-pane[data-pane="p1"] .orca-edit-area')).toBeDisplayed();
+    await expect($('.orca-pane[data-pane="p1"] .cm-content')).toBeDisplayed();
     await contextAt(onRails());
     expect(await waitForCalls("lsp_definition", 2)).toHaveLength(2);
     expect(await ops("select")).toEqual(expect.arrayContaining([{ kind: "select", tab: "definition:1" }]));
@@ -344,13 +321,14 @@ describe("orca: definition (A-34)", () => {
     await waitForCount(".orca-definition .orca-def", 3);
     const read = await mock("orca_file_read", text(rows(40), "ruby"));
     await mock("orca_panes", below([claude, "file:1", "file:2"], "file:2", "p1"));
+    await claimFocus();
     await press(0);
     expect(await waitForCalls(read)).toEqual([{ path: worktree, relative: "app/lib/rails_ext.rb", environment: null }]);
     expect(await moves()).toEqual([{ kind: "move", tab: "file:2", pane: "p1", edge: "center" }]);
-    await expect($(".orca-edit-area")).toHaveValue(rows(40), { trim: false });
+    await waitForText(rows(40));
     expect(await tabTitles()).toEqual(expect.arrayContaining(["a.rb", "rails_ext.rb", "定義 ・ Rails"]));
     await expect($(".orca-edit-path")).toHaveText("app/lib/rails_ext.rb");
-    await expect($('.orca-pane[data-pane="p1"] .orca-edit-area')).toBeDisplayed();
+    await expect($('.orca-pane[data-pane="p1"] .cm-content')).toBeDisplayed();
     await browser.waitUntil(async () => (await caret()) === caretOf(rows(40), 6, 2), { timeoutMsg: "the caret never went to the line of the definition" });
     expect(await count(".orca-tab-gem")).toBe(0);
   });
@@ -359,8 +337,9 @@ describe("orca: definition (A-34)", () => {
     await define([{ path: "a.rb", outside: false, line: 2, character: 4 }], [{ file: "a.rb", line: 3, place: ".", outside: false, language: "ruby" }]);
     await waitForCount(".orca-definition .orca-def", 1);
     await mock("orca_panes", below([claude, "file:1"], "file:1", "p1"));
+    await claimFocus();
     await press(0);
-    await expect($(".orca-edit-area")).toHaveValue(source, { trim: false });
+    await waitForText(source);
     expect(await moves()).toEqual([]);
     expect(await ops("select")).toEqual([{ kind: "select", tab: "file:1" }]);
     await browser.waitUntil(async () => (await caret()) === caretOf(source, 2, 4), { timeoutMsg: "the caret never went to the line" });
@@ -371,13 +350,14 @@ describe("orca: definition (A-34)", () => {
     await define();
     await waitForCount(".orca-definition .orca-def", 3);
     const rails = rows(30);
-    const read = await mock("lsp_read_outside", { path: gem.path, text: rails, language: "ruby", highlight: "ruby" });
+    const read = await mock("lsp_read_outside", { path: gem.path, text: rails, language: "ruby" });
     const write = await mock("orca_file_write", { state: "saved", signature: "sig-2" });
     await mock("orca_panes", below([claude, "file:1", "file:2"], "file:2", "p1"));
+    await claimFocus();
     await press(1);
     expect(await waitForCalls(read)).toEqual([{ environment: null, project: "proj_example-app", worktree, server: "ruby", path: gem.path }]);
-    await expect($(".orca-edit-area")).toHaveValue(rails, { trim: false });
-    await expect($(".orca-edit-area")).toHaveAttribute("readonly");
+    await waitForText(rails);
+    await expect($(CONTENT)).toHaveAttribute("aria-readonly", "true");
     await expect($(".orca-edit-path")).toHaveText(gem.path);
     await expect($(".orca-edit-state")).toHaveText("gem");
     await expect($(".orca-edit-lock")).toBeDisplayed();
@@ -446,7 +426,7 @@ describe("orca: definition (A-34)", () => {
   it("asks for nothing in a file whose language no server takes, and leaves the default menu (A-34)", async () => {
     await openFiles();
     await mock("lsp_server_for", null);
-    await openFileWith("notes.txt", text("Rails is here\n", "plaintext", null));
+    await openFileWith("notes.txt", text("Rails is here\n", "plaintext"));
     await answer();
     await contextAt(2);
     await browser.pause(300);
@@ -459,7 +439,7 @@ describe("orca: definition (A-34)", () => {
   it("asks the server that takes the language of a file that is not Ruby (A-34)", async () => {
     await openFiles();
     await mock("lsp_server_for", "typescript");
-    await openFileWith("notes.txt", text("const x = Rails;\n", "typescript", null));
+    await openFileWith("notes.txt", text("const x = Rails;\n", "typescript"));
     await answer();
     await mock("orca_panes", below([claude, "file:1"], "file:1"));
     await contextAt(11);
@@ -1127,7 +1107,7 @@ describe("orca: definition (A-34)", () => {
     await mock("lsp_settings", two());
     await mock("lsp_server_for", "typescript");
     const start = await mock("lsp_start", status("indexing"));
-    await openFileWith("notes.txt", text("const x = 1;\n", "typescript", null));
+    await openFileWith("notes.txt", text("const x = 1;\n", "typescript"));
     expect(await waitForCalls(start)).toEqual([tsArgs]);
     expect(await callsOf("lsp_status")).toEqual([{ environment: null, worktree, server: "typescript" }]);
     expect(await callsOf("lsp_server_for")).toEqual([{ environment: null, project: repo, language: "typescript" }]);
@@ -1144,7 +1124,7 @@ describe("orca: definition (A-34)", () => {
     expect(await callsOf(start)).toEqual([]);
     await mock("lsp_settings", rubyOnly());
     await mock("lsp_server_for", null);
-    await openFileWith("notes.txt", text("Rails is here\n", "plaintext", null));
+    await openFileWith("notes.txt", text("Rails is here\n", "plaintext"));
     await browser.pause(300);
     expect(await callsOf(start)).toEqual([]);
     expect(await callsOf("lsp_settings")).toEqual([]);
@@ -1176,38 +1156,25 @@ describe("orca: definition (A-34)", () => {
     await mock("orca_file_read", text(rows(40), "ruby"));
     await mock("orca_panes", below([claude, "file:1", "file:2"], "file:2", "p1"));
     await press(0);
-    await expect($(".orca-edit-area")).toHaveValue(rows(40), { trim: false });
+    await waitForText(rows(40));
     await browser.pause(300);
     expect(await callsOf("lsp_start")).toEqual([worktreeArgs]);
   });
 
   // The page's own `mousemove` over the text, at the middle of each character of `offsets` in turn (in one run of the page, so that no wait of the app comes between two of them), with or without the Command key.
-  const moveAt = (meta: boolean, ...offsets: number[]) =>
-    browser.execute(
+  const moveAt = async (meta: boolean, ...offsets: number[]) => {
+    const boxes = await charBoxes(...offsets);
+    await browser.execute(
       (withMeta, list, once) => {
         if (!window.__e2e_once__(once)) return;
-        const area = document.querySelector(".orca-edit-area")!;
-        for (const o of list) {
-          const walker = document.createTreeWalker(document.querySelector(".orca-edit-hl code")!, NodeFilter.SHOW_TEXT);
-          let left = o;
-          for (let node = walker.nextNode() as Text | null; node !== null; node = walker.nextNode() as Text | null) {
-            if (left >= node.length) {
-              left -= node.length;
-              continue;
-            }
-            const range = document.createRange();
-            range.setStart(node, left);
-            range.setEnd(node, left + 1);
-            const box = range.getBoundingClientRect();
-            area.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, cancelable: true, metaKey: withMeta, clientX: box.left + box.width / 2, clientY: box.top + box.height / 2 }));
-            break;
-          }
-        }
+        const content = document.querySelector(".orca-edit-body .cm-content")!;
+        for (const box of list) content.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, cancelable: true, metaKey: withMeta, clientX: box!.left + box!.width / 2, clientY: box!.top + box!.height / 2 }));
       },
       meta,
-      offsets,
+      boxes,
       onceId(),
     );
+  };
   // The Command key going down or up, as the page sees it.
   const metaKey = (type: "keydown" | "keyup") =>
     browser.execute(
@@ -1221,9 +1188,9 @@ describe("orca: definition (A-34)", () => {
   const leave = () =>
     browser.execute((once) => {
       if (!window.__e2e_once__(once)) return;
-      document.querySelector(".orca-edit-area")!.dispatchEvent(new MouseEvent("mouseleave"));
+      document.querySelector(".orca-edit-body .cm-editor")!.dispatchEvent(new MouseEvent("mouseleave"));
     }, onceId());
-  const underline = () => browser.execute(() => ({ hidden: document.querySelector<HTMLElement>(".orca-edit-link")!.hidden, cursor: document.querySelector<HTMLElement>(".orca-edit-area")!.style.cursor }));
+  const underline = () => browser.execute(() => ({ hidden: document.querySelector<HTMLElement>(".orca-edit-link")!.hidden, cursor: document.querySelector<HTMLElement>(".orca-edit-body .cm-content")!.style.cursor }));
   const waitUnderline = () => browser.waitUntil(async () => !(await underline()).hidden, { timeoutMsg: "the underline was never drawn" });
   const noUnderline = async () => {
     await browser.pause(400);
@@ -1248,27 +1215,15 @@ describe("orca: definition (A-34)", () => {
     expect(await callsOf("lsp_word")).toEqual([{ line: "    Rails.logger.info(x)", character: 6 }]);
     await waitUnderline();
     expect((await underline()).cursor).toBe("pointer");
-    // The line is under the name: the same left edge and width as the letters of "Rails" in the layer, and at the foot of them.
-    const gap = await browser.execute((from, to) => {
-      const walker = document.createTreeWalker(document.querySelector(".orca-edit-hl code")!, NodeFilter.SHOW_TEXT);
-      const range = document.createRange();
-      let seen = 0;
-      let started = false;
-      for (let node = walker.nextNode() as Text | null; node !== null; node = walker.nextNode() as Text | null) {
-        if (!started && from < seen + node.length) {
-          range.setStart(node, from - seen);
-          started = true;
-        }
-        if (started && to <= seen + node.length) {
-          range.setEnd(node, to - seen);
-          break;
-        }
-        seen += node.length;
-      }
-      const word = range.getBoundingClientRect();
-      const line = document.querySelector(".orca-edit-link")!.getBoundingClientRect();
-      return { left: line.left - word.left, width: line.width - word.width, foot: line.bottom - word.bottom };
-    }, source.indexOf("Rails"), source.indexOf("Rails") + 5);
+    // The line is under the name: the same left edge and width as the letters of "Rails" in the editor, and at the foot of them.
+    const from = source.indexOf("Rails");
+    const letters = await charBoxes(from, from + 4);
+    const word = { left: letters[0]!.left, width: letters[1]!.right - letters[0]!.left, bottom: letters[0]!.bottom };
+    const line = await browser.execute(() => {
+      const r = document.querySelector(".orca-edit-link")!.getBoundingClientRect();
+      return { left: r.left, width: r.width, bottom: r.bottom };
+    });
+    const gap = { left: line.left - word.left, width: line.width - word.width, foot: line.bottom - word.bottom };
     expect(Math.abs(gap.left)).toBeLessThan(1);
     expect(Math.abs(gap.width)).toBeLessThan(1);
     expect(Math.abs(gap.foot)).toBeLessThan(1);
@@ -1329,18 +1284,9 @@ describe("orca: definition (A-34)", () => {
     await moveAt(true, onLogger());
     expect(await waitForCalls("lsp_definition_exists")).toEqual([existsArgs(2, 12)]);
     // The text changes: the same name is asked again, with the new text.
-    const typed = `${source}x = Rails\n`;
+    const typed = `${source}x = Rails`;
     await mock("orca_file_write", { state: "saved", signature: "sig-2" });
-    await browser.execute(
-      (t, once) => {
-        if (!window.__e2e_once__(once)) return;
-        const area = document.querySelector<HTMLTextAreaElement>(".orca-edit-area")!;
-        area.value = t;
-        area.dispatchEvent(new Event("input", { bubbles: true }));
-      },
-      typed,
-      onceId(),
-    );
+    await typeIn("x = Rails");
     await noUnderline();
     await mock("lsp_word", "Rails");
     await mock("lsp_definition_exists", true);
@@ -1358,7 +1304,7 @@ describe("orca: definition (A-34)", () => {
     await moveAt(true, onRails());
     await waitUnderline();
     await browser.execute(() => {
-      document.querySelector(".orca-edit-area")!.dispatchEvent(new Event("scroll"));
+      document.querySelector(".orca-edit-body .cm-scroller")!.dispatchEvent(new Event("scroll"));
     });
     await noUnderline();
   });
@@ -1500,7 +1446,7 @@ describe("orca: definition (A-34)", () => {
     await waitForCount(".orca-definition .orca-def", 2);
     expect(await textsOf(".orca-definition .orca-def-gem")).toEqual(["gem"]);
     expect(await count('.orca-definition .orca-def[data-index="0"] .orca-def-gem')).toBe(0);
-    const read = await mock("lsp_read_outside", { path: typed.path, text: "declare var x: number;\n", language: "typescript", highlight: "typescript" });
+    const read = await mock("lsp_read_outside", { path: typed.path, text: "declare var x: number;\n", language: "typescript" });
     await mock("orca_panes", below([claude, "file:1", "file:2"], "file:2", "p1"));
     await press(0);
     await waitForCalls(read);

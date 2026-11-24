@@ -2,6 +2,6 @@
 
 /**
  * The text of a file for the editor, with LF line ends (`crlf` says the file has CRLF, which the write brings back), and the signature of the text as the disk holds it.
- * `language` is the name Orca's editor gives the file (A-21), and `highlight` the name the page's highlighter knows it by (null: no grammar, the text is drawn plain).
+ * `language` is the name Orca's editor gives the file (A-21), which the editor takes its grammar by.
  */
-export type OrcaFileText = { content: string, crlf: boolean, signature: string, language: string, highlight: string | null, };
+export type OrcaFileText = { content: string, crlf: boolean, signature: string, language: string, };

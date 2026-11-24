@@ -14,7 +14,7 @@ use super::{
 };
 use crate::{
     orca_files::check_worktree_of_project,
-    orca_language::{detect_language, highlight_name},
+    orca_language::detect_language,
     ssh::{failure, Ran},
 };
 
@@ -28,7 +28,7 @@ const NOT_READ: &str = "ファイルを読めません";
 const TOO_LARGE: &str = "ファイルが大きすぎて読めません";
 const NOT_UTF8: &str = "ファイルが UTF-8 ではありません";
 
-/// A file outside the worktree, as the server sees it. `path` is the one asked for, `language` the name Orca's editor gives it (A-21, from the path and the text) and `highlight` the name the page's highlighter knows it by (null: no grammar).
+/// A file outside the worktree, as the server sees it. `path` is the one asked for, `language` the name Orca's editor gives it (A-21, from the path and the text) which the editor takes its grammar by.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -37,7 +37,6 @@ pub struct LspOutsideFile {
     pub path: String,
     pub text: String,
     pub language: String,
-    pub highlight: Option<String>,
 }
 
 /// The path of a file that may be read: absolute, not starting with `-`, no control character, no `.` or `..` or empty name between the slashes (the server's paths have none), and not longer than a setting.
@@ -112,7 +111,6 @@ pub async fn lsp_read_outside(
         let text = read_outside(&way, &worktree, &path, run_on)?;
         let language = detect_language(&path, &text);
         Ok(LspOutsideFile {
-            highlight: highlight_name(language).map(str::to_owned),
             language: language.to_owned(),
             path,
             text,

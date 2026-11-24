@@ -1762,34 +1762,34 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-edit-rich table { border-collapse: collapse; margin: .7em 0; }
 .orca-edit-rich th, .orca-edit-rich td { padding: 4px 10px; border: 1px solid var(--line); }
 .orca-edit-rich th { background: var(--soft); }
-/* A-21: the editor is two layers of the same text. The textarea is on top with its text transparent (the caret and the selection show), and under it a `pre` carries the same text in colors, moved by the scroll of the textarea; both take the same font, padding and line height, so the letters sit on one another. */
+/* A-21: the editor is CodeMirror 6 (src/vendor/codemirror.js, A-18): its own box (`.cm-editor`), numbers (`.cm-gutters`), lines (`.cm-line`) and band of the caret's line (`.cm-activeLine`). It takes the font of the editor (A-20) in the text and in the numbers, and the colors of the page. */
 .orca-edit-body { position: relative; flex: 1; min-height: 0; display: flex; background: var(--surface); }
-/* A numbers box at the left (as wide as the digits of its last number: `--digits` of them in ch, set by the script, and the padding of the numbers and the border) and the two layers of the text beside it. The numbers take the font of the text, are not selected, and follow the vertical scroll only. */
-.orca-edit-gutter { flex: none; width: calc(var(--digits, 1) * 1ch + 21px); overflow: hidden; box-sizing: border-box; border-right: 1px solid var(--line); background: var(--surface); color: var(--muted); text-align: right; user-select: none; -webkit-user-select: none; }
-.orca-edit-nums { padding: 8px 8px 8px 12px; white-space: pre; }
-.orca-edit-text { position: relative; flex: 1; min-width: 0; overflow: hidden; }
-/* The band of the line of the caret, under the layer and the textarea (A-18), across the box of the text; the script sets its height and its place. */
-.orca-edit-line { position: absolute; top: 0; left: 0; right: 0; pointer-events: none; background: var(--cursor-band); }
-/* A-34: the underline of a name that has a definition while the Command key is down, in the box of the text under the layer; the script sets its place and width. */
-.orca-edit-link { position: absolute; left: 0; top: 0; height: 1px; pointer-events: none; background: var(--accent); }
-.orca-edit-area, .orca-edit-gutter, .orca-edit-hl code { font-family: var(--editor-family, ui-monospace, Menlo, monospace); font-size: var(--editor-size, 12.5px); line-height: 1.6; tab-size: 2; white-space: pre; letter-spacing: normal; }
-.orca-edit-area { position: absolute; inset: 0; box-sizing: border-box; width: 100%; height: 100%; margin: 0; padding: 8px 12px; border: 0; border-radius: 0; background: transparent; color: transparent; caret-color: CanvasText; overflow: auto; resize: none; outline: none; }
-.orca-edit-area::selection { background: var(--hl-select); }
-.orca-edit-hl { position: absolute; inset: 0; margin: 0; overflow: hidden; pointer-events: none; }
-.orca-edit-hl code { display: block; box-sizing: border-box; width: max-content; min-width: 100%; padding: 8px 12px; color: CanvasText; }
-.orca-edit-hl .hljs-comment, .orca-edit-hl .hljs-quote { color: var(--hl-comment); font-style: italic; }
-.orca-edit-hl .hljs-keyword, .orca-edit-hl .hljs-selector-tag, .orca-edit-hl .hljs-doctag, .orca-edit-hl .hljs-template-tag, .orca-edit-hl .hljs-name { color: var(--hl-keyword); }
-.orca-edit-hl .hljs-string, .orca-edit-hl .hljs-regexp, .orca-edit-hl .hljs-meta .hljs-string { color: var(--hl-string); }
-.orca-edit-hl .hljs-number, .orca-edit-hl .hljs-literal, .orca-edit-hl .hljs-symbol, .orca-edit-hl .hljs-bullet, .orca-edit-hl .hljs-link { color: var(--hl-number); }
-.orca-edit-hl .hljs-title, .orca-edit-hl .hljs-section, .orca-edit-hl .hljs-selector-id, .orca-edit-hl .hljs-selector-class { color: var(--hl-title); }
-.orca-edit-hl .hljs-type, .orca-edit-hl .hljs-built_in, .orca-edit-hl .hljs-class .hljs-title { color: var(--hl-type); }
-.orca-edit-hl .hljs-attr, .orca-edit-hl .hljs-attribute, .orca-edit-hl .hljs-variable, .orca-edit-hl .hljs-property, .orca-edit-hl .hljs-template-variable, .orca-edit-hl .hljs-selector-attr, .orca-edit-hl .hljs-selector-pseudo { color: var(--hl-attr); }
-.orca-edit-hl .hljs-meta { color: var(--hl-meta); }
-.orca-edit-hl .hljs-addition { color: var(--ins); background: var(--soft); }
-.orca-edit-hl .hljs-deletion { color: var(--del); background: var(--del-bg); }
-.orca-edit-hl .hljs-emphasis { font-style: italic; }
-.orca-edit-hl .hljs-strong { font-weight: 700; }
-.orca-edit-area:disabled { opacity: .6; }
+.orca-edit-body .cm-editor { flex: 1; min-width: 0; min-height: 0; background: var(--surface); color: CanvasText; }
+.orca-edit-body .cm-editor.cm-focused { outline: none; }
+.orca-edit-body .cm-scroller { font-family: var(--editor-family, ui-monospace, Menlo, monospace); font-size: var(--editor-size, 12.5px); line-height: 1.6; }
+.orca-edit-body .cm-content { padding: 8px 0; tab-size: 2; caret-color: CanvasText; }
+.orca-edit-body .cm-line { padding: 0 12px; }
+.orca-edit-body .cm-content ::selection { background: var(--hl-select); }
+/* The numbers: not selected, in the muted color, as wide as the digits of the last number (CodeMirror measures them). */
+.orca-edit-body .cm-editor .cm-gutters { border-right: 1px solid var(--line); background: var(--surface); color: var(--muted); user-select: none; -webkit-user-select: none; }
+.orca-edit-body .cm-lineNumbers .cm-gutterElement { padding: 0 8px 0 12px; min-width: 0; }
+/* The band of the line of the caret (A-18): the editor marks the line only while it has the focus and nothing is selected. */
+.orca-edit-body .cm-editor .cm-activeLine { background: var(--cursor-band); }
+/* A-34: the underline of a name that has a definition while the Command key is down, over the editor; the script sets its place and width. */
+.orca-edit-link { position: absolute; z-index: 1; left: 0; top: 0; height: 1px; pointer-events: none; background: var(--accent); }
+/* The colors (A-21): the classes `tok-*` of the editor's highlighter on the variables of `:root`, as the colors of a diff (A-24) are. */
+.orca-edit-body .tok-comment { color: var(--hl-comment); font-style: italic; }
+.orca-edit-body .tok-keyword, .orca-edit-body .tok-labelName { color: var(--hl-keyword); }
+.orca-edit-body .tok-string, .orca-edit-body .tok-string2 { color: var(--hl-string); }
+.orca-edit-body .tok-number, .orca-edit-body .tok-atom, .orca-edit-body .tok-bool, .orca-edit-body .tok-literal, .orca-edit-body .tok-url, .orca-edit-body .tok-link { color: var(--hl-number); }
+.orca-edit-body .tok-definition, .orca-edit-body .tok-heading { color: var(--hl-title); }
+.orca-edit-body .tok-typeName, .orca-edit-body .tok-className, .orca-edit-body .tok-namespace { color: var(--hl-type); }
+.orca-edit-body .tok-propertyName, .orca-edit-body .tok-variableName2 { color: var(--hl-attr); }
+.orca-edit-body .tok-meta, .orca-edit-body .tok-macroName { color: var(--hl-meta); }
+.orca-edit-body .tok-inserted { color: var(--ins); background: var(--soft); }
+.orca-edit-body .tok-deleted { color: var(--del); background: var(--del-bg); }
+.orca-edit-body .tok-emphasis { font-style: italic; }
+.orca-edit-body .tok-heading, .orca-edit-body .tok-strong { font-weight: 700; }
 .orca-diff { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .orca-diff .orca-empty { margin: 0; padding: 48px 24px; }
 .orca-diff-head { gap: 4px; }
