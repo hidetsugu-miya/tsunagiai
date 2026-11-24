@@ -3,12 +3,14 @@
 //! Only Atlassian Cloud is spoken to: the site is `https://{name}.atlassian.net` and nothing else (`site_url`), and a token goes to that site or to `api.atlassian.com` only, never to another host.
 //! An email address makes the token a Basic credential (`email:token`, an API token of an account) sent to the site; with none it is a Bearer token (a scoped token) sent through the gateway `api.atlassian.com/ex/jira/{cloudId}`, which is the only place Atlassian takes it (`api_base` chooses).
 //! The token is never returned to the screen, logged or written to a file; a save with no token keeps the stored one.
+//!
+//! The boards, the sprints and their tickets are read through the Agile API (`/rest/agile/1.0`, J-2, #869): the commands `jira_boards`, `jira_sprints`, `jira_sprint_issues` and `jira_backlog` read the saved connection and call it where `api_base` says. They only read; the answers are turned into the types below by pure functions.
 
 use std::{path::Path, time::Duration};
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use reqwest::header::{HeaderValue, ACCEPT, AUTHORIZATION};
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tauri::AppHandle;
 #[cfg(test)]
 use ts_rs::TS;
@@ -35,6 +37,17 @@ const TIMEOUT: Duration = Duration::from_secs(15);
 /// How much of an error body goes into the message.
 const BODY_LIMIT: usize = 200;
 const TOKEN_MISSING: &str = "API トークンを入力してください";
+const NOT_SAVED: &str = "Jira の接続が保存されていません";
+/// The Agile API, after `api_base`.
+const BOARD_PATH: &str = "/rest/agile/1.0/board";
+const SPRINT_PATH: &str = "/rest/agile/1.0/sprint";
+/// What each call asks for a page, and how many items one command reads in all (a command stops at the page that reaches the limit).
+const PAGE_SIZE: usize = 50;
+const MAX_BOARDS: usize = 200;
+const MAX_SPRINTS: usize = 100;
+const MAX_ISSUES: usize = 500;
+/// The fields of a ticket that `JiraIssue` holds, and nothing else is asked for.
+const ISSUE_FIELDS: &str = "fields=summary,status,assignee,priority";
 
 /// What `jira-settings.json` holds.
 #[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
@@ -64,6 +77,61 @@ pub struct JiraUser {
     pub display_name: String,
     #[serde(default)]
     pub email_address: Option<String>,
+}
+
+/// A board of Jira Software. `type` is Jira's own word: `scrum`, `kanban` or `simple` (only a scrum board has sprints).
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct JiraBoard {
+    #[cfg_attr(test, ts(type = "number"))]
+    pub id: u64,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default, rename = "type")]
+    pub board_type: String,
+}
+
+/// A sprint of a board. `state` is Jira's own word: `active`, `future` or `closed`; the dates are Jira's ISO 8601 text, and a sprint that has not started has none.
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct JiraSprint {
+    #[cfg_attr(test, ts(type = "number"))]
+    pub id: u64,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub start_date: Option<String>,
+    #[serde(default)]
+    pub end_date: Option<String>,
+}
+
+/// A ticket as the list draws it. `statusCategory` is the key of the status's category: `new`, `indeterminate` or `done` (`undefined` when Jira gave none). `assignee` is the display name, `null` when unassigned, and `priority` is `null` when the project has none.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct JiraIssue {
+    pub key: String,
+    pub summary: String,
+    pub status: String,
+    pub status_category: String,
+    pub assignee: Option<String>,
+    pub priority: Option<String>,
+}
+
+/// The tickets of a sprint or of a backlog. `truncated` is true when there were more than the command reads (`MAX_ISSUES`).
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct JiraIssues {
+    pub issues: Vec<JiraIssue>,
+    pub truncated: bool,
 }
 
 /// The origin of a site: `https://{name}.atlassian.net` only. Another scheme, host, port, user info or an empty or dotted name is refused, and a path is dropped.
@@ -123,17 +191,104 @@ fn authorization(email: &str, token: &str) -> String {
     }
 }
 
+/// The message for an answer that is not a success.
+fn failure_of(status: u16, body: &str) -> String {
+    match status {
+        401 | 403 => format!("Jira が認証を拒否しました（{status}）"),
+        _ => {
+            let shown: String = body.chars().take(BODY_LIMIT).collect();
+            format!("Jira が {status} を返しました: {shown}")
+        }
+    }
+}
+
 /// What Jira's answer to the call of `MYSELF_PATH` means.
 fn user_of(status: u16, body: &str) -> Result<JiraUser, String> {
     match status {
         200..=299 => {
             serde_json::from_str(body).map_err(|e| format!("Jira の応答を読めません: {e}"))
         }
-        401 | 403 => Err(format!("Jira が認証を拒否しました（{status}）")),
-        _ => {
-            let shown: String = body.chars().take(BODY_LIMIT).collect();
-            Err(format!("Jira が {status} を返しました: {shown}"))
-        }
+        _ => Err(failure_of(status, body)),
+    }
+}
+
+/// One page of the Agile API: the boards and the sprints are under `values`, the tickets under `issues`. Jira gives `isLast` for the first two and `total` for the last (and for some of the first).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Page<T> {
+    #[serde(default = "Vec::new", alias = "values", alias = "issues")]
+    items: Vec<T>,
+    total: Option<usize>,
+    is_last: Option<bool>,
+}
+
+fn page_of<T: DeserializeOwned>(status: u16, body: &str) -> Result<Page<T>, String> {
+    if !(200..=299).contains(&status) {
+        return Err(failure_of(status, body));
+    }
+    serde_json::from_str(body).map_err(|e| format!("Jira の応答を読めません: {e}"))
+}
+
+/// Where the next page starts, or `None` at the end: a page with nothing, `isLast`, or the count that `total` gives having been reached. It goes on by what was received, not by what was asked, because Jira may give fewer than `maxResults`.
+fn next_start(start: usize, page: &Page<impl Sized>) -> Option<usize> {
+    let next = start + page.items.len();
+    let done = page.items.is_empty()
+        || page.is_last == Some(true)
+        || page.total.is_some_and(|total| next >= total);
+    (!done).then_some(next)
+}
+
+#[derive(Deserialize)]
+struct RawIssue {
+    key: String,
+    fields: Option<RawFields>,
+}
+
+#[derive(Deserialize, Default)]
+struct RawFields {
+    summary: Option<String>,
+    status: Option<RawStatus>,
+    assignee: Option<RawUser>,
+    priority: Option<RawPriority>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawStatus {
+    name: Option<String>,
+    status_category: Option<RawCategory>,
+}
+
+#[derive(Deserialize)]
+struct RawCategory {
+    key: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawUser {
+    display_name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RawPriority {
+    name: Option<String>,
+}
+
+fn issue_of(raw: RawIssue) -> JiraIssue {
+    let fields = raw.fields.unwrap_or_default();
+    let status = fields.status;
+    JiraIssue {
+        key: raw.key,
+        summary: fields.summary.unwrap_or_default(),
+        status_category: status
+            .as_ref()
+            .and_then(|s| s.status_category.as_ref())
+            .and_then(|c| c.key.clone())
+            .unwrap_or_else(|| "undefined".to_owned()),
+        status: status.and_then(|s| s.name).unwrap_or_default(),
+        assignee: fields.assignee.and_then(|u| u.display_name),
+        priority: fields.priority.and_then(|p| p.name),
     }
 }
 
@@ -193,16 +348,31 @@ pub(crate) async fn api_base(
     Ok(format!("{gateway}/ex/jira/{}", cloud_id_of(status, &body)?))
 }
 
-/// Asks Jira who the credential belongs to. `base` is what `api_base` answered.
-async fn fetch_user(
-    http: &reqwest::Client,
-    base: &str,
-    authorization: &str,
-) -> Result<JiraUser, String> {
-    let mut header = HeaderValue::from_str(authorization).map_err(|e| e.to_string())?;
+/// What a call needs: the client, the base that `api_base` chose and the `Authorization` value.
+struct Conn {
+    http: reqwest::Client,
+    base: String,
+    authorization: String,
+}
+
+/// `api_base` for the credential, with the client and the header made once.
+async fn connect(site: &str, email: &str, token: &str, gateway: &str) -> Result<Conn, String> {
+    let http = client()?;
+    let base = api_base(&http, site, email, gateway).await?;
+    Ok(Conn {
+        http,
+        base,
+        authorization: authorization(email, token),
+    })
+}
+
+/// A GET of `path` (with its query) after the base, with the credential: the status and the body. The one place that sends it.
+async fn get(conn: &Conn, path: &str) -> Result<(u16, String), String> {
+    let mut header = HeaderValue::from_str(&conn.authorization).map_err(|e| e.to_string())?;
     header.set_sensitive(true);
-    let res = http
-        .get(format!("{base}{MYSELF_PATH}"))
+    let res = conn
+        .http
+        .get(format!("{}{path}", conn.base))
         .header(AUTHORIZATION, header)
         .header(ACCEPT, "application/json")
         .send()
@@ -210,14 +380,78 @@ async fn fetch_user(
         .map_err(|e| e.to_string())?;
     let status = res.status().as_u16();
     let body = res.text().await.map_err(|e| e.to_string())?;
+    Ok((status, body))
+}
+
+/// Asks Jira who the credential belongs to.
+async fn fetch_user(conn: &Conn) -> Result<JiraUser, String> {
+    let (status, body) = get(conn, MYSELF_PATH).await?;
     user_of(status, &body)
 }
 
-/// The test of a connection: `api_base`, then the call of `fetch_user` with the credential.
+/// The test of a connection: `connect`, then the call of `fetch_user`.
 async fn check(site: &str, email: &str, token: &str, gateway: &str) -> Result<JiraUser, String> {
-    let http = client()?;
-    let base = api_base(&http, site, email, gateway).await?;
-    fetch_user(&http, &base, &authorization(email, token)).await
+    fetch_user(&connect(site, email, token, gateway).await?).await
+}
+
+/// Reads the pages of a list one after another, until its end or until `limit` items are held; the items past `limit` are dropped and the second value says so. `query` has no `startAt` or `maxResults`.
+async fn fetch_all<T: DeserializeOwned>(
+    conn: &Conn,
+    path: &str,
+    query: &str,
+    limit: usize,
+) -> Result<(Vec<T>, bool), String> {
+    let mut items = Vec::new();
+    let mut start = 0;
+    loop {
+        let (status, body) = get(
+            conn,
+            &format!("{path}?{query}&startAt={start}&maxResults={PAGE_SIZE}"),
+        )
+        .await?;
+        let page = page_of::<T>(status, &body)?;
+        let next = next_start(start, &page);
+        items.extend(page.items);
+        let Some(next) = next else {
+            return Ok((items, false));
+        };
+        if items.len() >= limit {
+            items.truncate(limit);
+            return Ok((items, true));
+        }
+        start = next;
+    }
+}
+
+async fn boards(conn: &Conn) -> Result<Vec<JiraBoard>, String> {
+    Ok(fetch_all(conn, BOARD_PATH, "orderBy=name", MAX_BOARDS)
+        .await?
+        .0)
+}
+
+/// The sprints that are active or still to come, the active one first (Jira orders them by state, then by position).
+async fn sprints(conn: &Conn, board_id: u64) -> Result<Vec<JiraSprint>, String> {
+    let path = format!("{BOARD_PATH}/{board_id}/sprint");
+    Ok(fetch_all(conn, &path, "state=active,future", MAX_SPRINTS)
+        .await?
+        .0)
+}
+
+async fn issues(conn: &Conn, path: &str) -> Result<JiraIssues, String> {
+    let (raw, truncated) = fetch_all::<RawIssue>(conn, path, ISSUE_FIELDS, MAX_ISSUES).await?;
+    Ok(JiraIssues {
+        issues: raw.into_iter().map(issue_of).collect(),
+        truncated,
+    })
+}
+
+async fn sprint_issues(conn: &Conn, sprint_id: u64) -> Result<JiraIssues, String> {
+    issues(conn, &format!("{SPRINT_PATH}/{sprint_id}/issue")).await
+}
+
+/// The incomplete tickets of a board that no active or future sprint holds.
+async fn backlog(conn: &Conn, board_id: u64) -> Result<JiraIssues, String> {
+    issues(conn, &format!("{BOARD_PATH}/{board_id}/backlog")).await
 }
 
 fn load_file(dir: &Path) -> Result<Saved, String> {
@@ -248,6 +482,27 @@ async fn stored_token() -> Result<Option<String>, String> {
     tokio::task::spawn_blocking(|| keychain::read(TOKEN_SERVICE, TOKEN_USER))
         .await
         .map_err(|e| e.to_string())?
+}
+
+/// The saved site and email address with the stored token: an error when nothing is saved.
+fn saved_connection(
+    saved: Saved,
+    token: Option<String>,
+) -> Result<(String, String, String), String> {
+    if saved.site.is_empty() {
+        return Err(NOT_SAVED.into());
+    }
+    Ok((saved.site, saved.email, token.ok_or(TOKEN_MISSING)?))
+}
+
+/// The connection that the saved settings and the keychain give, for the commands that read.
+async fn saved_conn(app: &AppHandle) -> Result<Conn, String> {
+    let dir = config_dir(app)?;
+    let saved = tokio::task::spawn_blocking(move || load_file(&dir))
+        .await
+        .map_err(|e| e.to_string())??;
+    let (site, email, token) = saved_connection(saved, stored_token().await?)?;
+    connect(&site, &email, &token, GATEWAY).await
 }
 
 /// The saved site and email address, and whether a token is kept. Asks Jira nothing.
@@ -322,6 +577,38 @@ pub async fn jira_test(site: String, email: String, token: String) -> Result<Jir
     check(&site, &email, &token, GATEWAY)
         .await
         .map_err(|e| log_failure(command, LOG_ACCOUNT, e))
+}
+
+/// The boards that the credential can see, by name (at most `MAX_BOARDS`).
+#[tauri::command]
+pub async fn jira_boards(app: AppHandle) -> Result<Vec<JiraBoard>, String> {
+    let read = async { boards(&saved_conn(&app).await?).await };
+    read.await
+        .map_err(|e| log_failure("jira_boards", LOG_ACCOUNT, e))
+}
+
+/// The active and future sprints of a board (at most `MAX_SPRINTS`). A board without sprints (a kanban one) is Jira's refusal, with its message.
+#[tauri::command]
+pub async fn jira_sprints(app: AppHandle, board_id: u64) -> Result<Vec<JiraSprint>, String> {
+    let read = async { sprints(&saved_conn(&app).await?, board_id).await };
+    read.await
+        .map_err(|e| log_failure("jira_sprints", LOG_ACCOUNT, e))
+}
+
+/// The tickets of a sprint, in the order of the board's rank (at most `MAX_ISSUES`).
+#[tauri::command]
+pub async fn jira_sprint_issues(app: AppHandle, sprint_id: u64) -> Result<JiraIssues, String> {
+    let read = async { sprint_issues(&saved_conn(&app).await?, sprint_id).await };
+    read.await
+        .map_err(|e| log_failure("jira_sprint_issues", LOG_ACCOUNT, e))
+}
+
+/// The backlog of a board, in the order of its rank (at most `MAX_ISSUES`).
+#[tauri::command]
+pub async fn jira_backlog(app: AppHandle, board_id: u64) -> Result<JiraIssues, String> {
+    let read = async { backlog(&saved_conn(&app).await?, board_id).await };
+    read.await
+        .map_err(|e| log_failure("jira_backlog", LOG_ACCOUNT, e))
 }
 
 #[cfg(test)]
@@ -711,5 +998,325 @@ mod tests {
             .await
             .unwrap_err()
             .is_empty());
+    }
+
+    /// Serves one answer for each connection, in order, and returns the base URL and the requests that came.
+    async fn serve_each(answers: Vec<String>) -> (String, tokio::task::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let seen = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for answer in answers {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut buf = [0u8; 1024];
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let n = socket.read(&mut buf).await.unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buf[..n]);
+                }
+                socket.write_all(answer.as_bytes()).await.unwrap();
+                socket.shutdown().await.unwrap();
+                requests.push(lower(&String::from_utf8_lossy(&request)));
+            }
+            requests
+        });
+        (base, seen)
+    }
+
+    const BASIC: &str = "authorization: basic bwvazxhhbxbszs5jb206dg9r";
+
+    async fn basic_conn(site: &str) -> Conn {
+        connect(site, "me@example.com", "tok", "http://gateway.invalid")
+            .await
+            .unwrap()
+    }
+
+    #[test]
+    fn next_start_goes_on_by_what_was_received_and_stops_at_the_end() {
+        let page = |len: usize, total, is_last| Page::<u8> {
+            items: vec![0; len],
+            total,
+            is_last,
+        };
+        assert_eq!(next_start(0, &page(2, None, Some(false))), Some(2));
+        assert_eq!(next_start(2, &page(2, None, None)), Some(4));
+        assert_eq!(next_start(0, &page(2, Some(5), None)), Some(2));
+        assert_eq!(next_start(4, &page(1, Some(5), None)), None);
+        assert_eq!(next_start(0, &page(2, Some(5), Some(true))), None);
+        assert_eq!(next_start(0, &page(0, Some(5), Some(false))), None);
+    }
+
+    #[test]
+    fn page_of_reads_values_or_issues_and_says_why_for_a_failure() {
+        let boards = page_of::<JiraBoard>(
+            200,
+            r#"{"isLast":true,"maxResults":50,"startAt":0,"total":2,"values":[{"id":84,"name":"scrum board","type":"scrum","self":"https://x"},{"id":92,"type":"kanban"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            boards.items,
+            vec![
+                JiraBoard {
+                    id: 84,
+                    name: "scrum board".into(),
+                    board_type: "scrum".into()
+                },
+                JiraBoard {
+                    id: 92,
+                    name: String::new(),
+                    board_type: "kanban".into()
+                }
+            ]
+        );
+        assert_eq!((boards.total, boards.is_last), (Some(2), Some(true)));
+        let issues = page_of::<RawIssue>(
+            200,
+            r#"{"startAt":0,"maxResults":50,"total":1,"issues":[{"key":"A-1"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(issues.items.len(), 1);
+        assert!(page_of::<JiraBoard>(200, "{}").unwrap().items.is_empty());
+        assert!(page_of::<JiraBoard>(200, "<html></html>")
+            .err()
+            .unwrap()
+            .starts_with("Jira の応答を読めません"));
+        assert_eq!(
+            page_of::<JiraBoard>(401, "{}").err(),
+            Some("Jira が認証を拒否しました（401）".into())
+        );
+        assert_eq!(
+            page_of::<JiraBoard>(404, "no board").err(),
+            Some("Jira が 404 を返しました: no board".into())
+        );
+    }
+
+    #[test]
+    fn sprints_are_read_with_or_without_dates() {
+        let page = page_of::<JiraSprint>(
+            200,
+            r#"{"isLast":true,"values":[{"id":37,"self":"https://x","state":"active","name":"sprint 1","startDate":"2015-04-11T15:22:00.000+10:00","endDate":"2015-04-20T01:22:00.000+10:00","originBoardId":5,"goal":"g"},{"id":72,"state":"future","name":"sprint 2"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            page.items,
+            vec![
+                JiraSprint {
+                    id: 37,
+                    name: "sprint 1".into(),
+                    state: "active".into(),
+                    start_date: Some("2015-04-11T15:22:00.000+10:00".into()),
+                    end_date: Some("2015-04-20T01:22:00.000+10:00".into()),
+                },
+                JiraSprint {
+                    id: 72,
+                    name: "sprint 2".into(),
+                    state: "future".into(),
+                    start_date: None,
+                    end_date: None,
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn issue_of_takes_the_five_fields_and_leaves_out_what_jira_did_not_give() {
+        let raw = |json: &str| serde_json::from_str::<RawIssue>(json).unwrap();
+        assert_eq!(
+            issue_of(raw(
+                r#"{"id":"10001","key":"HSP-1","self":"https://x","fields":{"summary":"Fix it","status":{"name":"In Progress","statusCategory":{"key":"indeterminate","name":"In Progress"}},"assignee":{"accountId":"1","displayName":"Mia Krystof"},"priority":{"name":"High","id":"2"},"flagged":true}}"#
+            )),
+            JiraIssue {
+                key: "HSP-1".into(),
+                summary: "Fix it".into(),
+                status: "In Progress".into(),
+                status_category: "indeterminate".into(),
+                assignee: Some("Mia Krystof".into()),
+                priority: Some("High".into()),
+            }
+        );
+        // An unassigned ticket has a null assignee, and a project may have no priority field.
+        assert_eq!(
+            issue_of(raw(
+                r#"{"key":"HSP-2","fields":{"summary":"s","status":{"name":"Done","statusCategory":{"key":"done"}},"assignee":null}}"#
+            )),
+            JiraIssue {
+                key: "HSP-2".into(),
+                summary: "s".into(),
+                status: "Done".into(),
+                status_category: "done".into(),
+                assignee: None,
+                priority: None,
+            }
+        );
+        assert_eq!(
+            issue_of(raw(r#"{"key":"HSP-3","fields":null}"#)),
+            JiraIssue {
+                key: "HSP-3".into(),
+                summary: String::new(),
+                status: String::new(),
+                status_category: "undefined".into(),
+                assignee: None,
+                priority: None,
+            }
+        );
+    }
+
+    #[test]
+    fn saved_connection_needs_a_site_and_a_token() {
+        let saved = |site: &str| Saved {
+            site: site.into(),
+            email: "me@example.com".into(),
+        };
+        assert_eq!(
+            saved_connection(saved("https://example.atlassian.net"), Some("tok".into())),
+            Ok((
+                "https://example.atlassian.net".into(),
+                "me@example.com".into(),
+                "tok".into()
+            ))
+        );
+        assert_eq!(
+            saved_connection(Saved::default(), Some("tok".into())),
+            Err(NOT_SAVED.into())
+        );
+        assert_eq!(
+            saved_connection(saved("https://example.atlassian.net"), None),
+            Err(TOKEN_MISSING.into())
+        );
+    }
+
+    #[tokio::test]
+    async fn boards_are_read_by_name_page_by_page_with_the_credential() {
+        let first = json_answer(
+            r#"{"isLast":false,"maxResults":2,"startAt":0,"total":3,"values":[{"id":1,"name":"A","type":"scrum"},{"id":2,"name":"B","type":"kanban"}]}"#,
+        );
+        let second = json_answer(
+            r#"{"isLast":true,"maxResults":2,"startAt":2,"total":3,"values":[{"id":3,"name":"C","type":"simple"}]}"#,
+        );
+        let (site, seen) = serve_each(vec![first, second]).await;
+        let list = boards(&basic_conn(&site).await).await.unwrap();
+        assert_eq!(list.iter().map(|b| b.id).collect::<Vec<_>>(), vec![1, 2, 3]);
+        assert_eq!(list[1].board_type, "kanban");
+        let requests = seen.await.unwrap();
+        assert!(
+            requests[0].starts_with(
+                "get /rest/agile/1.0/board?orderby=name&startat=0&maxresults=50 http/1.1"
+            ),
+            "{}",
+            requests[0]
+        );
+        assert!(
+            requests[1].starts_with(
+                "get /rest/agile/1.0/board?orderby=name&startat=2&maxresults=50 http/1.1"
+            ),
+            "{}",
+            requests[1]
+        );
+        assert!(requests.iter().all(|r| r.contains(BASIC)));
+    }
+
+    #[tokio::test]
+    async fn sprints_of_a_board_are_asked_through_the_gateway_for_a_bearer_credential() {
+        let (site, tenant_seen) = serve_once(tenant_answer()).await;
+        let (gateway, seen) = serve_each(vec![json_answer(
+            r#"{"isLast":true,"values":[{"id":37,"state":"active","name":"sprint 1"}]}"#,
+        )])
+        .await;
+        let conn = connect(&site, "", "tok", &gateway).await.unwrap();
+        let list = sprints(&conn, 7).await.unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].state, "active");
+        let requests = seen.await.unwrap();
+        assert!(
+            requests[0].starts_with(&format!(
+                "get /ex/jira/{TENANT_ANSWER_ID}/rest/agile/1.0/board/7/sprint?state=active,future&startat=0&maxresults=50 http/1.1"
+            )),
+            "{}",
+            requests[0]
+        );
+        assert!(requests[0].contains("authorization: bearer tok\r\n"));
+        assert!(!lower(&tenant_seen.await.unwrap()).contains("authorization"));
+    }
+
+    #[tokio::test]
+    async fn the_tickets_of_a_sprint_and_of_a_backlog_come_with_the_five_fields() {
+        let body = r#"{"expand":"schema,names","startAt":0,"maxResults":50,"total":2,"issues":[{"key":"HSP-1","fields":{"summary":"One","status":{"name":"To Do","statusCategory":{"key":"new"}},"assignee":{"displayName":"Mia"},"priority":{"name":"Low"}}},{"key":"HSP-2","fields":{"summary":"Two","status":{"name":"Done","statusCategory":{"key":"done"}},"assignee":null,"priority":null}}]}"#;
+        // One answer each: the total is reached on the first page, so no second page is asked.
+        let (site, seen) = serve_each(vec![json_answer(body), json_answer(body)]).await;
+        let conn = basic_conn(&site).await;
+        let sprint = sprint_issues(&conn, 12).await.unwrap();
+        let back = backlog(&conn, 7).await.unwrap();
+        assert_eq!(sprint, back);
+        assert!(!sprint.truncated);
+        assert_eq!(sprint.issues[0].key, "HSP-1");
+        assert_eq!(sprint.issues[0].assignee.as_deref(), Some("Mia"));
+        assert_eq!(sprint.issues[1].status_category, "done");
+        assert_eq!(sprint.issues[1].priority, None);
+        let requests = seen.await.unwrap();
+        assert!(
+            requests[0].starts_with("get /rest/agile/1.0/sprint/12/issue?fields=summary,status,assignee,priority&startat=0&maxresults=50 http/1.1"),
+            "{}",
+            requests[0]
+        );
+        assert!(
+            requests[1].starts_with("get /rest/agile/1.0/board/7/backlog?fields=summary,status,assignee,priority&startat=0&maxresults=50 http/1.1"),
+            "{}",
+            requests[1]
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_all_stops_at_the_limit_and_says_that_more_were_left() {
+        let page = |ids: [u32; 2], total: u32| {
+            json_answer(&format!(
+                r#"{{"isLast":false,"total":{total},"values":[{{"id":{},"name":"a"}},{{"id":{},"name":"b"}}]}}"#,
+                ids[0], ids[1]
+            ))
+        };
+        // The second page would not be asked for after the limit; it is not served.
+        let (site, seen) = serve_each(vec![page([1, 2], 9), page([3, 4], 9)]).await;
+        let conn = basic_conn(&site).await;
+        let (items, truncated) = fetch_all::<JiraBoard>(&conn, BOARD_PATH, "orderBy=name", 3)
+            .await
+            .unwrap();
+        assert_eq!(
+            items.iter().map(|b| b.id).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert!(truncated);
+        assert_eq!(seen.await.unwrap().len(), 2);
+        // A list that ends exactly at the limit is not truncated.
+        let (site, _seen) = serve_each(vec![json_answer(
+            r#"{"isLast":true,"values":[{"id":1},{"id":2}]}"#,
+        )])
+        .await;
+        let (items, truncated) =
+            fetch_all::<JiraBoard>(&basic_conn(&site).await, BOARD_PATH, "orderBy=name", 2)
+                .await
+                .unwrap();
+        assert_eq!(items.len(), 2);
+        assert!(!truncated);
+    }
+
+    #[tokio::test]
+    async fn a_refused_read_is_the_error_and_a_redirect_is_not_followed() {
+        let (site, _seen) = serve_each(vec![
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
+        ])
+        .await;
+        assert_eq!(
+            sprint_issues(&basic_conn(&site).await, 99).await,
+            Err("Jira が 404 を返しました: ".into())
+        );
+        let redirect = "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/elsewhere\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let (site, seen) = serve_each(vec![redirect.into()]).await;
+        assert_eq!(
+            backlog(&basic_conn(&site).await, 7).await,
+            Err("Jira が 302 を返しました: ".into())
+        );
+        assert_eq!(seen.await.unwrap().len(), 1);
     }
 }

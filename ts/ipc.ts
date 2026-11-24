@@ -69,7 +69,10 @@ import type { Skill } from "./bindings/Skill";
 import type { ClaudeCodePermissionMode } from "./bindings/ClaudeCodePermissionMode";
 import type { SkillScreen } from "./bindings/SkillScreen";
 import type { NewEvent } from "./bindings/NewEvent";
+import type { JiraBoard } from "./bindings/JiraBoard";
+import type { JiraIssues } from "./bindings/JiraIssues";
 import type { JiraSettings } from "./bindings/JiraSettings";
+import type { JiraSprint } from "./bindings/JiraSprint";
 import type { JiraUser } from "./bindings/JiraUser";
 import type { NotionAccount } from "./bindings/NotionAccount";
 import type { OrcaBranchSwitched } from "./bindings/OrcaBranchSwitched";
@@ -248,6 +251,14 @@ export interface Commands {
   jira_save: { args: { site: string; email: string; token: string }; result: JiraSettings };
   // J-1: asks the site who the credential of the form is (an empty token takes the stored one); saves nothing.
   jira_test: { args: { site: string; email: string; token: string }; result: JiraUser };
+  // J-2: the boards that the saved connection can see, by name (at most 200). Fails with a message when no connection is saved.
+  jira_boards: { args: undefined; result: JiraBoard[] };
+  // J-2: the active and future sprints of a board (at most 100), the active one first. A board that has no sprints (a kanban one) is Jira's refusal.
+  jira_sprints: { args: { boardId: number }; result: JiraSprint[] };
+  // J-2: the tickets of a sprint in the board's rank (at most 500; `truncated` says there were more).
+  jira_sprint_issues: { args: { sprintId: number }; result: JiraIssues };
+  // J-2: the backlog of a board in the board's rank (at most 500; `truncated` says there were more).
+  jira_backlog: { args: { boardId: number }; result: JiraIssues };
   slack_channels: { args: { teamId: string; refresh: boolean }; result: Channel[] };
   // The newest 10 unread rows of each joined channel (no direct messages) of every workspace, newest first: the unread messages (S-8) and the threads with unread replies (S-14, each with `unreadReplies`), and `watched`, the watched threads (S-13, each with `watch`, the newest activity first); `failed` are workspaces whose read failed (the messages their earlier reads kept are still listed),
   // `missing` the scopes a token lacks (users:read, files:read, channels:write, groups:write among them), `refreshSecs` the wait until the next read, `pendingChannels` the channels no read has reached yet,
