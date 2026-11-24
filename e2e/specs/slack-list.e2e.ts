@@ -2064,7 +2064,48 @@ describe("slack list: the history of a channel (S-20)", () => {
     expect(await browser.execute(() => [...document.querySelectorAll("#sc-feed .feed-item")[1].querySelector(".feed-main")!.children].map((e) => e.className.split(" ")[0]))).toEqual(["feed-meta", "feed-text", "reactions", "feed-thread-open"]);
     // The row's press goes through the box of the reactions to the row (it still opens its thread); only each reaction, a button (S-25), takes its own press.
     expect(await browser.execute(() => getComputedStyle(document.querySelector("#sc-feed .reactions")!).pointerEvents)).toBe("none");
-    expect(await browser.execute(() => [...document.querySelectorAll("#sc-feed .reaction, #sc-feed .reaction-add")].map((r) => `${r.tagName}:${getComputedStyle(r).pointerEvents}`))).toEqual(["BUTTON:auto", "BUTTON:auto", "BUTTON:auto", "BUTTON:auto"]);
+    // The button of a message without reactions takes no press while it is transparent (S-25).
+    expect(await browser.execute(() => [...document.querySelectorAll("#sc-feed .reaction, #sc-feed .reaction-add")].map((r) => `${r.tagName}:${getComputedStyle(r).pointerEvents}`))).toEqual(["BUTTON:none", "BUTTON:auto", "BUTTON:auto", "BUTTON:auto"]);
+  });
+
+  it("lays the button of a message without reactions over the top right of its row, left of the bookmark, transparent and taking no press until it is shown, reachable by the keyboard, and moves no row (S-25)", async () => {
+    const history = await openHistory([timelineMessage(oldTs, "Bob Example", "dev", "old"), timelineMessage(firstTs, "Alice Example", "dev", "first")]);
+    await pressChannel();
+    await waitForCalls(history);
+    await waitForCount("#sc-feed .feed-row", 2);
+    const state = () =>
+      browser.execute(() => {
+        const items = [...document.querySelectorAll<HTMLElement>("#sc-feed .feed-item")];
+        const add = items[0].querySelector<HTMLElement>(".reaction-add")!;
+        const box = add.getBoundingClientRect();
+        const item = items[0].getBoundingClientRect();
+        const watch = items[0].querySelector<HTMLElement>(".feed-watch")!.getBoundingClientRect();
+        const middle = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        return {
+          next: items[1].getBoundingClientRect().top,
+          height: item.height,
+          opacity: getComputedStyle(add.parentElement!).opacity,
+          insideRow: box.top >= item.top && box.bottom <= item.bottom,
+          leftOfBookmark: box.right <= watch.left,
+          taken: middle === add || add.contains(middle),
+        };
+      });
+    const before = await state();
+    expect(before.opacity).toBe("0");
+    expect(before.taken).toBe(false);
+    // The E2E window has no pointer and no focus (slack-thread.e2e.ts), so the shown state is checked through the open picker's mark (aria-expanded), and the keyboard's reach by the focus the button takes while it is transparent.
+    await browser.execute(() => document.querySelector<HTMLElement>("#sc-feed .feed-item .reaction-add")!.focus());
+    expect(await browser.execute(() => document.activeElement === document.querySelector("#sc-feed .feed-item .reaction-add"))).toBe(true);
+    await browser.execute(() => document.querySelector("#sc-feed .feed-item .reaction-add")!.setAttribute("aria-expanded", "true"));
+    const after = await state();
+    expect(after.opacity).toBe("1");
+    expect(after.insideRow).toBe(true);
+    expect(after.leftOfBookmark).toBe(true);
+    expect(after.taken).toBe(true);
+    expect(after.next).toBe(before.next);
+    expect(after.height).toBe(before.height);
+    await browser.execute(() => document.querySelector("#sc-feed .feed-item .reaction-add")!.removeAttribute("aria-expanded"));
+    expect((await state()).opacity).toBe("0");
   });
 
   describe("add and take off a reaction (S-25)", () => {

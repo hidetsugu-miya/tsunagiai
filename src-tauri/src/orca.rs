@@ -2563,6 +2563,46 @@ pub fn orca_link_relative(uri: String, path: String) -> Result<String, String> {
     link_relative(&uri, &path)
 }
 
+const BAD_LINK: &str = "このリンクのファイルは開けません";
+
+/// The absolute path that a `file:` link of a terminal names (A-8), for a file outside the worktree of this machine: the link is read by the `url` crate, the host part is ignored, the query and the fragment are dropped, and the percent escapes are taken out before the path is checked as `check_relative` checks the part under the root (no `..`, no `.`, no empty part, no control character, no more than `MAX_PATH`), so an escaped `..` or `/` is seen as what it is. A path that is not valid UTF-8 once decoded is refused. The file system is not looked at.
+fn link_absolute(uri: &str) -> Result<String, String> {
+    let url = url::Url::parse(uri).map_err(|_| BAD_LINK.to_string())?;
+    if url.scheme() != "file" {
+        return Err(BAD_LINK.into());
+    }
+    let path = crate::images::percent_decode(url.path());
+    let below_root = path
+        .strip_prefix('/')
+        .filter(|rest| !rest.contains('\u{FFFD}'))
+        .ok_or_else(|| BAD_LINK.to_string())?;
+    crate::orca_files::check_relative(below_root, false).map_err(|_| BAD_LINK.to_string())?;
+    Ok(path)
+}
+
+/// Opens the file of a `file:` link that was ⌘+clicked in a terminal of this machine and names a file outside the worktree (A-8) in Zed (`open -a Zed {path}`). The path is an argument of the process and never goes through a shell, and what is opened is that file in Zed alone, never by its kind (a `.command` or an `.app` would run). The file must exist.
+#[tauri::command]
+pub fn orca_link_open_in_zed(uri: String) -> Result<(), String> {
+    let path = link_absolute(&uri)?;
+    if std::fs::metadata(&path).is_err() {
+        return Err(format!("ファイルがありません: {path}"));
+    }
+    let out = std::process::Command::new("open")
+        .args(["-a", "Zed"])
+        .arg(&path)
+        .output()
+        .map_err(|e| format!("Zed を開けません: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if stderr.contains("Unable to find application") {
+        Err("Zed が見つかりません。Zed を入れてください".into())
+    } else {
+        Err(format!("Zed で開けません: {}", stderr.trim()))
+    }
+}
+
 /// Checks the keys and the terminal.
 fn check_input(
     mirror: &OrcaMirror,
@@ -2951,6 +2991,53 @@ mod tests {
             long.as_str(),
         ] {
             assert!(link_relative(uri, wt).is_err(), "{uri} was accepted");
+        }
+    }
+
+    #[test]
+    fn a_file_link_gives_the_absolute_path_of_a_file_outside_the_worktree() {
+        for (uri, want) in [
+            ("file:///etc/hosts", "/etc/hosts"),
+            (
+                "file://localhost/Users/me/notes/proposal.html",
+                "/Users/me/notes/proposal.html",
+            ),
+            ("file://my-pc.local/Users/me/a.txt", "/Users/me/a.txt"),
+            ("file:///Users/me/a%20b/%E3%81%82.md", "/Users/me/a b/あ.md"),
+            ("file:///Users/me/日本語.md", "/Users/me/日本語.md"),
+            ("file:///Users/me/a.html?x=1#L10", "/Users/me/a.html"),
+            ("file:///Users/me/100%25.txt", "/Users/me/100%.txt"),
+            ("FILE:///a.txt", "/a.txt"),
+            // The `url` crate resolves the dot segments of the link itself, so the path is the one the link names and holds none.
+            ("file:///Users/me/../secret.txt", "/Users/secret.txt"),
+            ("file:///Users/me/./a.txt", "/Users/me/a.txt"),
+            ("file:///Users/me/%2e%2e/secret.txt", "/Users/secret.txt"),
+        ] {
+            assert_eq!(link_absolute(uri).as_deref(), Ok(want), "{uri}");
+        }
+    }
+
+    #[test]
+    fn an_odd_file_link_gives_no_absolute_path() {
+        let long = format!("file:///{}", "a/".repeat(2100));
+        for uri in [
+            "file:///",
+            "file:///Users/me/dir/",
+            "file:///Users/me/a%2F..%2F..%2Fsecret.txt",
+            "file:///Users/me/a%2F%2Fb.txt",
+            "file:///Users/me/a%00b.txt",
+            "file:///Users/me/a%0Ab.txt",
+            "file:///Users/me/a%7Fb.txt",
+            "file:///Users/me/a%FFb.txt",
+            "https://example.com/Users/me/a.txt",
+            "javascript:alert(1)",
+            "/Users/me/a.txt",
+            "tmp/a.html",
+            "file:",
+            "",
+            long.as_str(),
+        ] {
+            assert!(link_absolute(uri).is_err(), "{uri} was accepted");
         }
     }
 
