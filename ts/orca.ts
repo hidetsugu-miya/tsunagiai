@@ -181,12 +181,15 @@ export function elapsed(ms: number, now: number, done: boolean) {
 // An agent that stopped: finished, failed or interrupted (Orca says an interrupted one as `done` with `interrupted` true).
 const isStopped = (r: OrcaRow) => r.group === "done" || r.status === "failed" || r.status === "interrupted";
 
-// The pane of the session this screen shows now: the screen is shown, the window is not hidden, and the session is the selected tab (the side pane of A-9 does not count).
-const viewedPane = () => {
+// The panes of the sessions that are shown now: the session that is the selected tab while the screen is shown and the window is not hidden (the side pane of A-9 does not count), and every session whose tab is in a window of its own (A-46).
+const viewedPanes = () => {
   const tab = selectedTab();
-  if (tab === null || tab === undefined || !shown() || document.hidden) return null;
+  const here = tab === null || tab === undefined || !shown() || document.hidden ? null : tab;
   // The tab of another AI's row is its handle's (`rowTabId`): the pane is the one of the row that has that tab.
-  return mix.rows.find((r) => r.paneKey !== null && rowTabId(r) === tab)?.paneKey ?? null;
+  return mix.rows.flatMap((r) => {
+    const id = rowTabId(r);
+    return r.paneKey !== null && id !== null && (id === here || isAway(id)) ? [r.paneKey] : [];
+  });
 };
 
 // Takes the rows of a read as the one the count follows (the rows of one read, whatever its scope). The first read of a target is only the base: a notice is made for a row that went from not stopped to stopped,
@@ -363,8 +366,7 @@ const selectedTab = () => focusedTab(currentLayout());
 // ---- drawing ----
 
 function drawBadge() {
-  const viewed = viewedPane();
-  if (viewed !== null) notified.delete(viewed);
+  for (const viewed of viewedPanes()) notified.delete(viewed);
   const waiting = waitingCount + notified.size;
   setNavCount("nav-orca", waiting, "開発", "確認待ち");
   badgeCount = waiting;

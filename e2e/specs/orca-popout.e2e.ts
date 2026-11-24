@@ -9,14 +9,14 @@ import { boot, callsOf, copiedTexts, count, databaseCell, databaseColumn, databa
 
 type Bridge = { __TAURI_INTERNALS__: { invoke: (command: string, args: object) => Promise<unknown> }; __TAURI__: { core: { Channel: new () => object } } };
 
-// Calls a command of Rust from the page that is shown, past the fixtures; a refusal is answered as {error}.
+// Calls a command of Rust from the page that is shown, past the fixtures; a refusal is answered as {refused} (an `error` key would be read by the driver as its own failure).
 const real = (command: string, args: object = {}) =>
   browser.execute(
     async (c, a) => {
       try {
         return await (window as unknown as Bridge).__TAURI_INTERNALS__.invoke(c, a);
       } catch (e) {
-        return { error: String(e) };
+        return { refused: String(e) };
       }
     },
     command,
@@ -260,6 +260,21 @@ describe("orca: the window of a tab (A-46)", () => {
       await expect(area()).toHaveValue("a note, changed\n", { trim: false });
     });
 
+    it("does not read the disk again by the clock while the window is hidden, and reads it once when it is seen again", async () => {
+      await openFileWindow(memo, timers({ orcaClock: 500 }));
+      const hide = (hidden: boolean) =>
+        browser.execute((h) => {
+          Object.defineProperty(document, "hidden", { get: () => h, configurable: true });
+          if (!h) document.dispatchEvent(new Event("visibilitychange"));
+        }, hidden);
+      await hide(true);
+      await mock("orca_file_read", { ...text("a note, changed\n"), signature: "sig-2" });
+      await browser.pause(1200);
+      expect(await callsOf("orca_file_read")).toEqual([]);
+      await hide(false);
+      await expect(area()).toHaveValue("a note, changed\n", { trim: false });
+    });
+
     it("takes the font of the editor from the settings", async () => {
       await openFileWindow(memo, { font_settings: { app: { family: null, size: 14, ghostty: false }, mail: { family: null, size: 14, ghostty: false }, calendar: { family: null, size: 14, ghostty: false }, todoList: { family: null, size: 14, ghostty: false }, todoWork: { family: null, size: 14, ghostty: false }, slack: { family: null, size: 14, ghostty: false }, orcaList: { family: null, size: 14, ghostty: false }, orcaPane: { family: null, size: 14, ghostty: false }, orcaWork: { family: null, size: 13, ghostty: true }, editor: { family: "Menlo", size: 16, ghostty: false }, mono: { family: null, size: 14, ghostty: false } } });
       expect(await browser.execute(() => [document.documentElement.style.getPropertyValue("--editor-family"), document.documentElement.style.getPropertyValue("--editor-size")])).toEqual(['"Menlo", ui-monospace, Menlo, monospace', "16px"]);
@@ -458,12 +473,27 @@ describe("orca: the window of a tab (A-46)", () => {
       try {
         return await w.__TAURI_INTERNALS__.invoke("orca_popout_attach", { channel: new w.__TAURI__.core.Channel() });
       } catch (e) {
-        return { error: String(e) };
+        return { refused: String(e) };
       }
     });
     expect(attached).toEqual(shell);
     expect(await real("orca_popout_pin", { pinned: true })).toBeNull();
     expect(await real("orca_popout_pin", { pinned: false })).toBeNull();
+    // The commands of the screen are refused to a window made here: it cannot end, bring up, give or take the windows of the others.
+    const refused = { refused: "本体の画面だけが使えます" };
+    expect(await real("orca_popout_end", { tab: shell.tab })).toEqual(refused);
+    expect(await real("orca_popout_focus", { tab: shell.tab })).toEqual(refused);
+    expect(await real("orca_popout_update", { was: shell.tab, tab: shell })).toEqual(refused);
+    expect(await real("orca_popout_open", { tab: popoutTab("orca:term_b", "term_b", "bash") })).toEqual(refused);
+    const asked = await browser.execute(async () => {
+      const w = window as unknown as Bridge;
+      try {
+        return await w.__TAURI_INTERNALS__.invoke("orca_popout_main", { channel: new w.__TAURI__.core.Channel() });
+      } catch (e) {
+        return { refused: String(e) };
+      }
+    });
+    expect(asked).toEqual(refused);
     // A tab that has its window is given the same one, not a second.
     await browser.switchToWindow("main");
     expect(await real("orca_popout_open", { tab: shell })).toBe(label);

@@ -174,10 +174,14 @@ async function init() {
       fail(e);
     }
   });
-  window.setInterval(() => {
+  // The files and the diffs are read again by the clock while the window is seen, and once when it is seen again (the main screen does the same, A-18).
+  const reread = () => {
+    if (document.hidden) return;
     refreshEditors();
     refreshDiffs();
-  }, periodMs("orcaClock", 10_000));
+  };
+  window.setInterval(reread, periodMs("orcaClock", 10_000));
+  document.addEventListener("visibilitychange", reread);
   const pin = $<HTMLButtonElement>("popout-pin");
   pin.onclick = () => {
     const pinned = pin.getAttribute("aria-pressed") !== "true";

@@ -185,6 +185,8 @@ struct Slot {
     tab: PopoutTab,
     /// The channel of the page of the window, once it asked what it shows.
     page: Option<Channel<PopoutPage>>,
+    /// Whether the screen ended the window (`orca_popout_end`): the destroy that follows is then not told back to it.
+    ended: bool,
 }
 
 #[derive(Default)]
@@ -204,6 +206,20 @@ pub struct Popouts(Mutex<Table>);
 impl Popouts {
     fn table(&self) -> std::sync::MutexGuard<'_, Table> {
         self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+/// Whether `label` is the label of the main window, the only one that gives the screen's channel and asks for, keeps and ends the windows.
+fn is_main(label: &str) -> bool {
+    label == crate::MAIN_WINDOW
+}
+
+/// Refuses a command of the screen that another window calls (a window made here has no business with the table of the others).
+fn from_main(webview: &Webview) -> Result<(), String> {
+    if is_main(webview.label()) {
+        Ok(())
+    } else {
+        Err("本体の画面だけが使えます".into())
     }
 }
 
@@ -345,8 +361,28 @@ impl Table {
         }
         self.next += 1;
         let label = format!("{PREFIX}{}", self.next);
-        self.slots.insert(label.clone(), Slot { tab, page: None });
+        self.slots.insert(
+            label.clone(),
+            Slot {
+                tab,
+                page: None,
+                ended: false,
+            },
+        );
         Ok((label, true))
+    }
+
+    /// The screen ends the window of the tab `tab`: its label, with the slot marked so that the destroy that follows is not told back to the screen. None when the tab has no window.
+    fn end(&mut self, tab: &str) -> Option<String> {
+        let label = self.label_of(tab)?;
+        self.slots.get_mut(&label)?.ended = true;
+        Some(label)
+    }
+
+    /// The window `label` is gone, and its slot with it. A window that the screen did not end (Rust destroyed it because the screen could not be asked, or it went by itself) leaves its tab away from its pane with no window, so the screen is told to put it back.
+    fn gone(&mut self, label: &str) -> Option<PopoutAction> {
+        let slot = self.slots.remove(label)?;
+        (!slot.ended).then_some(PopoutAction::Restore { tab: slot.tab.tab })
     }
 
     /// The windows' tabs, in the order the windows were made.
@@ -453,9 +489,11 @@ fn build_window(app: &AppHandle, label: &str, title: &str) -> tauri::Result<()> 
 #[tauri::command]
 pub async fn orca_popout_open(
     app: AppHandle,
+    webview: Webview,
     state: State<'_, Popouts>,
     tab: PopoutTab,
 ) -> Result<String, String> {
+    from_main(&webview)?;
     check(&tab)?;
     let title = tab.title.clone();
     let (label, made) = state.table().open(tab)?;
@@ -482,9 +520,11 @@ fn focus(app: &AppHandle, label: &str) {
 #[tauri::command]
 pub fn orca_popout_focus(
     app: AppHandle,
+    webview: Webview,
     state: State<'_, Popouts>,
     tab: String,
 ) -> Result<(), String> {
+    from_main(&webview)?;
     let label = state.table().label_of(&tab);
     if let Some(label) = label {
         focus(&app, &label);
@@ -496,10 +536,12 @@ pub fn orca_popout_focus(
 #[tauri::command]
 pub fn orca_popout_end(
     app: AppHandle,
+    webview: Webview,
     state: State<'_, Popouts>,
     tab: String,
 ) -> Result<(), String> {
-    let label = state.table().label_of(&tab);
+    from_main(&webview)?;
+    let label = state.table().end(&tab);
     if let Some(label) = label {
         destroy(&app, &label);
     }
@@ -509,21 +551,25 @@ pub fn orca_popout_end(
 /// Gives the screen's channel, and answers the tabs that are in a window now (a page that was loaded again has lost what it held).
 #[tauri::command]
 pub fn orca_popout_main(
+    webview: Webview,
     state: State<'_, Popouts>,
     channel: Channel<PopoutAction>,
-) -> Vec<PopoutTab> {
+) -> Result<Vec<PopoutTab>, String> {
+    from_main(&webview)?;
     let mut table = state.table();
     table.screen = Some(channel);
-    table.tabs()
+    Ok(table.tabs())
 }
 
 /// Gives what the screen knows of a tab in a window now (its name, its status, where its terminal comes from); the page of the window draws it. The id of the tab it was held under is `was` (a plain terminal where Claude starts has a new id and the same window).
 #[tauri::command]
 pub fn orca_popout_update(
+    webview: Webview,
     state: State<'_, Popouts>,
     was: String,
     tab: PopoutTab,
 ) -> Result<(), String> {
+    from_main(&webview)?;
     check(&tab)?;
     let mut table = state.table();
     let Some(label) = table.label_of(&was) else {
@@ -692,22 +738,25 @@ pub fn on_window_event(window: &tauri::Window, event: &WindowEvent) {
             }
         }
         WindowEvent::Destroyed if is_popout(label) => {
-            window
-                .app_handle()
-                .state::<Popouts>()
-                .table()
-                .slots
-                .remove(label);
+            let state = window.app_handle().state::<Popouts>();
+            let (action, screen) = {
+                let mut table = state.table();
+                (table.gone(label), table.screen.clone())
+            };
+            // A window that the screen did not end is put back by the screen (the send may fail, and the screen is then gone too).
+            if let (Some(action), Some(screen)) = (action, screen) {
+                let _ = screen.send(action);
+            }
         }
-        WindowEvent::Destroyed if label == crate::MAIN_WINDOW => {
+        WindowEvent::Destroyed if is_main(label) => {
             let app = window.app_handle();
-            let labels: Vec<String> = app
-                .state::<Popouts>()
-                .table()
-                .slots
-                .keys()
-                .cloned()
-                .collect();
+            // The screen is going too: the windows that end with it tell it nothing.
+            let labels: Vec<String> = {
+                let state = app.state::<Popouts>();
+                let mut table = state.table();
+                table.screen = None;
+                table.slots.keys().cloned().collect()
+            };
             for label in labels {
                 destroy(app, &label);
             }
@@ -812,6 +861,35 @@ mod tests {
         );
         // A window that holds no tab has nobody to tell.
         assert_eq!(table.action_of("tab-2", true), None);
+    }
+
+    #[test]
+    fn a_window_that_the_screen_did_not_end_puts_its_tab_back() {
+        let mut table = Table::default();
+        table.open(tab("claude:p1", "h1")).unwrap();
+        table.open(tab("claude:p2", "h2")).unwrap();
+        // Rust destroyed the first on its own: the screen is told to restore it.
+        assert_eq!(
+            table.gone("tab-1"),
+            Some(PopoutAction::Restore {
+                tab: "claude:p1".into()
+            })
+        );
+        assert_eq!(table.label_of("claude:p1"), None);
+        // The screen ended the second itself: nothing is told back.
+        assert_eq!(table.end("claude:p2"), Some("tab-2".into()));
+        assert_eq!(table.gone("tab-2"), None);
+        // A window that is not there, or a tab with no window, has nothing to tell.
+        assert_eq!(table.gone("tab-3"), None);
+        assert_eq!(table.end("claude:none"), None);
+    }
+
+    #[test]
+    fn only_the_main_window_is_the_screen() {
+        assert!(is_main("main"));
+        for other in ["tab-1", "Main", "", "main "] {
+            assert!(!is_main(other), "{other}");
+        }
     }
 
     #[test]

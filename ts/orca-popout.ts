@@ -89,6 +89,14 @@ async function act(action: PopoutAction) {
   host.changed();
 }
 
+// Whether two values of JSON are equal, compared in place: a definition tab holds the text of its file (up to 1 MiB), which is no string to make at each draw.
+const same = (a: unknown, b: unknown): boolean => {
+  if (a === b) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  const [x, y] = [a as Record<string, unknown>, b as Record<string, unknown>];
+  return Object.keys(x).length === Object.keys(y).length && Object.keys(x).every((k) => same(x[k], y[k]));
+};
+
 // Gives each window what the list says of its tab now: `look` answers the tab as it is (its id may have changed, a plain terminal where Claude starts), null when the list no longer has it (its window ends), and undefined when the list cannot say (it is not read, or not on the screen).
 export function syncPopouts(look: (entry: PopoutTab) => PopoutTab | null | undefined) {
   for (const [id, entry] of [...windows]) {
@@ -97,7 +105,7 @@ export function syncPopouts(look: (entry: PopoutTab) => PopoutTab | null | undef
     if (now === null) {
       windows.delete(id);
       invoke("orca_popout_end", { tab: id }).catch(host.failed);
-    } else if (JSON.stringify(now) !== JSON.stringify(entry)) {
+    } else if (!same(now, entry)) {
       windows.delete(id);
       windows.set(now.tab, now);
       invoke("orca_popout_update", { was: id, tab: now }).catch(host.failed);

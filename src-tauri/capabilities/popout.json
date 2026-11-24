@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "popout",
+  "description": "The windows of the tabs that the Orca screen shows apart (`tab-*`, A-46) are moved by the drag region of their header. They get no other permission: their buttons are commands of the app, and what the pages tell each other goes through channels, which need no event permission.",
+  "windows": ["tab-*"],
+  "permissions": ["core:window:allow-start-dragging"]
+}

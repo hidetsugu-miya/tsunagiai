@@ -6,6 +6,7 @@
     "security": {
       "capabilities": [
         "default",
+        "popout",
         {
           "identifier": "e2e",
           "windows": ["main", "tab-*"],

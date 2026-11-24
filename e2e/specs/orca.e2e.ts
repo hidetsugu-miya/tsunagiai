@@ -4094,6 +4094,21 @@ describe("orca: a tab in a window of its own (A-46)", () => {
     expect(call).toEqual({ was: claude, tab: { ...session, title: "Read the page" } });
   });
 
+  it("makes no notice for a session that stops while its tab is in a window, as for one the screen shows", async () => {
+    await open(timers({ orcaClock: 1000 }));
+    // The shell is the selected tab, so the screen shows no session; the waiting agent of the sample is the one in the count.
+    await $(`.orca-tabs [data-tab="${bash}"] [role="tab"]`).click();
+    await popOut(claude);
+    await awayIs([claude]);
+    await expectCount(1);
+    const updated = await mock("orca_popout_update", null);
+    await mock("orca_overview", overview([orcaRow("example-app", "feat/a", "Write the docs", { group: "done", atMs: STOPPED_AT }), ...sample().slice(1)]));
+    const [call] = (await waitForCalls(updated)) as { tab: { status: string } }[];
+    expect(call.tab.status).toBe("done");
+    await expectCount(1);
+    await expect($("#nav-orca")).toHaveAttribute("aria-label", "開発（確認待ち 1 件、作業中 1 件）");
+  });
+
   it("takes the windows that are open back from Rust when the page is loaded again: their tabs stay out of the panes", async () => {
     await open({ orca_popout_main: [shell] });
     await awayIs([zsh]);
