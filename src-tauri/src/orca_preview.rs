@@ -480,11 +480,12 @@ pub(crate) fn is_issued_token(token: &str) -> bool {
 
 // ---- the command ----
 
-/// The path of a file the browser is opened on: a path inside the worktree (the checks of A-18) whose name ends with `.html`, whatever the case, and that has no part starting with `.` (the server would answer it 404).
+/// The path of a file the browser is opened on: a path inside the worktree (the checks of A-18) whose name ends with `.html` or `.htm`, whatever the case, and that has no part starting with `.` (the server would answer it 404).
 fn check_html(relative: &str) -> Result<(), String> {
     check_relative(relative, false)?;
     let name = relative.rsplit('/').next().unwrap_or(relative);
-    if name.to_ascii_lowercase().ends_with(".html") && !has_hidden_part(relative) {
+    let name = name.to_ascii_lowercase();
+    if (name.ends_with(".html") || name.ends_with(".htm")) && !has_hidden_part(relative) {
         Ok(())
     } else {
         Err(NOT_HTML.into())
@@ -543,7 +544,7 @@ pub struct OpenParams {
     pub relative: String,
 }
 
-/// The checks of the tool before anything is sent: the worktree is an absolute path with no control character (the app checks it against the list of the target, as for A-31), and the file is the one A-31 opens (`check_html`: inside the worktree, `.html`, no part that starts with `.`).
+/// The checks of the tool before anything is sent: the worktree is an absolute path with no control character (the app checks it against the list of the target, as for A-31), and the file is the one A-31 opens (`check_html`: inside the worktree, `.html` or `.htm`, no part that starts with `.`) that the editor shows as a preview (A-42), which is a `.html` name alone.
 fn check_open(path: &str, relative: &str) -> Result<(), String> {
     if !path.starts_with('/')
         || path.len() > crate::orca_files::MAX_PATH
@@ -551,13 +552,21 @@ fn check_open(path: &str, relative: &str) -> Result<(), String> {
     {
         return Err(NOT_WORKTREE.into());
     }
-    check_html(relative).map_err(|e| {
-        if e == NOT_HTML {
-            NOT_HTML_PREVIEW.into()
-        } else {
-            e
-        }
-    })
+    check_html(relative)
+        .and_then(|()| {
+            if relative.to_ascii_lowercase().ends_with(".html") {
+                Ok(())
+            } else {
+                Err(NOT_HTML.into())
+            }
+        })
+        .map_err(|e| {
+            if e == NOT_HTML {
+                NOT_HTML_PREVIEW.into()
+            } else {
+                e
+            }
+        })
 }
 
 /// The push for a saved environment's PC: `preview.open` with the worktree and the file.
@@ -878,14 +887,38 @@ mod tests {
 
     #[test]
     fn only_an_html_file_inside_the_worktree_is_opened() {
-        for good in ["a.html", "docs/Report.HTML", "a b/あ.Html", "a.b/c.d.html"] {
+        for good in [
+            "a.html",
+            "docs/Report.HTML",
+            "a b/あ.Html",
+            "a.b/c.d.html",
+            "a.htm",
+            "docs/Report.HTM",
+            "a b/あ.Htm",
+        ] {
             assert_eq!(check_html(good), Ok(()), "{good}");
         }
-        for bad in ["a.htm", "a.html.txt", "html", "a.md", "docs/a.html/x.js"] {
+        for bad in [
+            "a.html.txt",
+            "a.htm.txt",
+            "a.htmx",
+            "html",
+            "htm",
+            "a.md",
+            "docs/a.html/x.js",
+            "docs/a.htm/x.js",
+        ] {
             assert_eq!(check_html(bad), Err(NOT_HTML.into()), "{bad}");
         }
         // A part that starts with `.` would be answered 404, so it is not opened.
-        for hidden in [".html", ".a.html", ".git/a.html", "a/.b/c.html"] {
+        for hidden in [
+            ".html",
+            ".htm",
+            ".a.htm",
+            ".a.html",
+            ".git/a.html",
+            "a/.b/c.htm",
+        ] {
             assert_eq!(check_html(hidden), Err(NOT_HTML.into()), "{hidden}");
         }
         for bad in ["", "../a.html", "/a.html", "a//b.html", "a/./b.html"] {

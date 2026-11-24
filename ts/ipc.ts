@@ -346,6 +346,9 @@ export interface Commands {
   orca_browse_dir: { args: { environment: string; path: string }; result: BrowsedDir };
   // A-10: puts the file `data` (base64, any kind, up to 20 MiB) in `.orca/drops/` of the worktree at `path` of the target `environment`, under its own `name` (a taken name gets `copy`, `copy 2`, ...), and answers `AttachedFile { text, bracketed }`: the text to type for it (the absolute path, one blank after it) and whether the terminal gets it as a bracketed paste (an image) or as typed text. Not tried again: a failure carries its message.
   orca_attach_file: { args: { path: string; name: string; data: string; environment: string | null }; result: AttachedFile };
+  orca_drop_taken: { args: { path: string; dir: string; names: string[]; environment: string | null }; result: string[] };
+  orca_drop_dir: { args: { path: string; dir: string; environment: string | null }; result: null };
+  orca_drop_file: { args: { path: string; dir: string; name: string; data: string; onTaken: "overwrite" | "copy"; environment: string | null }; result: string };
   // Closes the tab of an Orca terminal (a Claude session or a plain terminal); `environment` is the target the screen shows. On `terminal_handle_stale` it closes once more without `--tab`, and a failure of that is an error.
   orca_close: { args: { handle: string; environment: string | null }; result: null };
   // The lines on the screen of the terminal `handle` (a Claude session's or a plain one) of this machine, or of the saved environment `environment` when given, for the mirror (no colors).
@@ -356,8 +359,8 @@ export interface Commands {
   orca_open_url: { args: { url: string }; result: null };
   // A-8: the path inside the worktree `path` that the `file:` link `uri` of a terminal names (the host part is ignored, percent escapes are decoded). Fails with the message when the link is no `file:` link or names a file outside the worktree, a `..` or a control character. The file system is not looked at.
   orca_link_relative: { args: { uri: string; path: string }; result: string };
-  // A-8: opens the file of the `file:` link `uri` in Zed (`open -a Zed`), for a link ⌘+clicked in a terminal of this machine that names a file outside the worktree. Fails with the message when the link names no file (a `..`, a control character), the file is missing, or Zed is not installed.
-  orca_link_open_in_zed: { args: { uri: string }; result: null };
+  // A-8: opens the file of the `file:` link `uri`, for a link ⌘+clicked in a terminal of this machine that names a file outside the worktree: a regular HTML file (`.html` or `.htm`, also what a symbolic link leads to) with `open`, any other file in Zed (`open -a Zed`). Fails with the message when the link names no file (a `..`, a control character), the file is missing, or Zed is not installed.
+  orca_link_open: { args: { uri: string }; result: null };
   // A-12: whether this machine's Orca is paired (the pairing is in the keychain, never returned). Asks Orca nothing.
   orca_pairing_status: { args: undefined; result: OrcaPairing };
   // A-12: keeps the pairing of a link that Orca made for "This computer" (the token is exchanged with Orca, which must run, and stored in the keychain); answers whether a pairing is kept.

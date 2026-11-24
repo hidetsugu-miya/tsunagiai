@@ -125,6 +125,20 @@
         "担当が編集していない `orca-handoff` も、`run-e2e.sh --only orca-handoff` として単独で回すと書いている",
         "全件の `run-e2e.sh` をこの時点で回すコマンドは書いていない"
       ]
+    },
+    {
+      "id": 10,
+      "name": "hover-part-shown-by-attribute-not-moveto",
+      "prompt": "あなたは implement の実行の手順 3 で起動された `code-implementer` です。`.claude/rules/e2e.md` を読み、`.claude/evals/files/implement/hover-item.md` の issue の E2E spec で、ホバーで出る「コピー」ボタンを出す操作と、その確かめ方をどう書くかを決めてください。この記録が、あなたの持つ実行の文脈です。ファイルは編集せず、spec の該当部分の擬似コードを書き出してください。",
+      "expected_output": "E2E のアプリはポインタもフォーカスも持たないので、`moveTo()` や `focus()` でボタンを出さない。同じ CSS 規則が拾う属性があればその属性で表示状態にし、無ければ（この fixture の `.reply:hover .copy` と `.reply:focus-within .copy` は属性を拾わない）、テストのためだけに属性を足さず、隠れているときの計算後のスタイルと、出す規則のセレクターをスタイルシートから読んで確かめる。",
+      "files": [
+        ".claude/evals/files/implement/hover-item.md"
+      ],
+      "assertions": [
+        "ボタンを出すために `moveTo()` も `focus()` も使わない",
+        "出し方が、規則が拾う属性があればその属性で表示状態にする形か、拾う属性が無ければ（この fixture の CSS は属性を拾わない）計算後のスタイルで隠れていることと、出す規則のセレクター（`.reply:hover .copy`、`.reply:focus-within .copy`）をスタイルシートから読んで確かめる形で、テストのためだけの属性を足していない",
+        "E2E のアプリはポインタとフォーカスを持たないことを理由に挙げている"
+      ]
     }
   ]
 }

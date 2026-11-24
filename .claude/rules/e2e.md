@@ -11,7 +11,7 @@ paths:
 
 ### Keep one `e2e/specs/{screen}.e2e.ts` per screen
 
-A spec checks how a screen behaves. One `it` checks one operation and its result (what is drawn, and the arguments of the commands called).
+A spec checks how a screen behaves through clicks and typing: the E2E app has no pointer and no focus (`moveTo()` sets no `:hover`, and `document.hasFocus()` is false), so a part that `:hover` or `:focus-within` shows is made visible by the attribute that the same CSS rule also matches (for example `aria-expanded`), and a part whose rule matches no attribute is checked by its computed style while hidden and by the selectors of the rule that shows it, read from the stylesheet, never by `moveTo()` or `focus()` and never by an attribute added only for the test. One `it` checks one operation and its result (what is drawn, and the arguments of the commands called).
 It does not check the processing inside Rust (`testing.md`).
 With one spec per screen, the spec for the screen you are fixing is easy to find.
 A screen whose spec runs much longer than the others is split by its parts, each part a spec named `{screen}-{part}.e2e.ts`, so that the parts run in different apps (#613): the Orca screen is `orca.e2e.ts` and `orca-files.e2e.ts` (the file pane and the editor, A-18 and the requirements built on it).
