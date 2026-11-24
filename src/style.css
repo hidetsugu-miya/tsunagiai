@@ -1775,6 +1775,16 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-edit-body .cm-lineNumbers .cm-gutterElement { padding: 0 8px 0 12px; min-width: 0; }
 /* The band of the line of the caret (A-18): the editor marks the line only while it has the focus and nothing is selected. */
 .orca-edit-body .cm-editor .cm-activeLine { background: var(--cursor-band); }
+/* The arrows of folding (A-18), right of the numbers: a line that is open shows its arrow (down) only while the pointer is over the numbers, a folded line (right) always. The range that is folded is a small `…` that opens it. */
+.orca-edit-body .cm-foldGutter .cm-gutterElement { padding: 0 4px 0 0; cursor: pointer; }
+.orca-edit-body .orca-fold { height: 100%; width: 14px; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+.orca-edit-body .orca-fold svg { width: 12px; height: 12px; stroke-width: 2; }
+.orca-edit-body .orca-fold.open { visibility: hidden; }
+.orca-edit-body .orca-fold.open svg { transform: rotate(90deg); }
+.orca-edit-body .cm-gutters:hover .orca-fold.open { visibility: visible; }
+.orca-edit-body .orca-fold:hover { color: var(--ink-soft); }
+.orca-edit-body .cm-editor .cm-foldPlaceholder { margin: 0 2px; padding: 0 5px; border: 1px solid var(--code-line); border-radius: 4px; background: var(--code); color: var(--muted); cursor: pointer; }
+.orca-edit-body .cm-editor .cm-foldPlaceholder:hover { color: var(--ink-soft); }
 /* A-34: the underline of a name that has a definition while the Command key is down, over the editor; the script sets its place and width. */
 .orca-edit-link { position: absolute; z-index: 1; left: 0; top: 0; height: 1px; pointer-events: none; background: var(--accent); }
 /* The colors (A-21): the classes `tok-*` of the editor's highlighter on the variables of `:root`, as the colors of a diff (A-24) are. */

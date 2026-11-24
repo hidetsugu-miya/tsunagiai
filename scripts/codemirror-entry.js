@@ -193,17 +193,27 @@ const changeTo = (old, next) => {
   return { from, to: old.length - end, insert: next.slice(from, next.length - end) };
 };
 
+// What stands for a folded range: a small `…` that opens the range when it is pressed. It has no title, so no tooltip comes with it.
+const foldPlaceholder = (view, onclick) => {
+  const element = document.createElement("span");
+  element.textContent = "…";
+  element.setAttribute("aria-label", view.state.phrase("folded code"));
+  element.className = "cm-foldPlaceholder";
+  element.onclick = onclick;
+  return element;
+};
+
 const labelAttributes = (label) => EditorView.contentAttributes.of({ "aria-label": label });
 
 // Draws `text` in `host` as the editor of a file of the language `language` (Orca's name, "plaintext" for the rest).
-// `marker(open)` makes the arrow of a foldable line (an element, `open` for a line that is not folded); with none, the editor draws no arrow and still folds by its keys.
+// `marker(open)` makes the arrow of a foldable line (an element, `open` for a line that is not folded); with none, the editor draws no arrow and still folds by its keys (⌥⌘[ and ⌥⌘]). A folded range is drawn as `…` and does not change the text, which `text()` and `onChange` see.
 // `onChange()` is called after each change that the owner makes (a key, a paste, an undo) and after `edit`, never after `replace`.
 export function create(host, { text, language, readOnly, label, marker, onChange }) {
   const labelSlot = new Compartment();
   const extensions = [
     lineNumbers(),
     marker ? foldGutter({ markerDOM: marker }) : [],
-    codeFolding(),
+    codeFolding({ placeholderDOM: foldPlaceholder }),
     history(),
     syntaxHighlighting(classHighlighter),
     languageOf(language),

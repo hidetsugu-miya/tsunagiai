@@ -262,6 +262,11 @@ export async function setText(value: string) {
   });
 }
 
+// The keys that fold and open the range at the caret: Option and Command with [ and with ] (A-18).
+const ALT = "\u{E00A}";
+export const pressFold = () => browser.keys([ALT, META, "["]);
+export const pressUnfold = () => browser.keys([ALT, META, "]"]);
+
 // The key Tab and Enter at the caret, with nothing typed before them.
 export const pressTab = () => browser.keys(TAB);
 export const pressEnter = () => browser.keys(ENTER);

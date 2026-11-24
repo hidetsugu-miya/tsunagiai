@@ -18,7 +18,7 @@ import type { OrcaSaved } from "../../ts/bindings/OrcaSaved";
 import type { PaneLayout } from "../../ts/bindings/PaneLayout";
 import type { PaneNode } from "../../ts/bindings/PaneNode";
 import { callsOf, copiedTexts, count, databaseCell, databaseColumn, databaseProfile, databaseRecords, databaseSqlResult, databaseStructure, databaseTable, emitEvent, fontSettings, holds, mock, onceId, orcaRow, orcaTerminal, orcaWorktree, popoutTab, rejects, release, sendFiles, sendPopout, sendStream, stubClipboard, textsOf, timers, waitForCalls, waitForCount, CARDS, CARD } from "../support";
-import { blurEditor, caretOffset, charBoxes, claudeTab, CONTENT, editorText, filesToggle, onThisMachine, openOrca, orcaOverview, pickItem, pressEnter, pressTab, project, sample, selectedTab, setCaret, setText, showAgain, streamList, studio, tabOf, tabTitles, typeIn, waitForText, worktrees } from "../orca-support";
+import { blurEditor, caretOffset, charBoxes, claudeTab, CONTENT, editorText, filesToggle, onThisMachine, openOrca, orcaOverview, pickItem, pressEnter, pressFold, pressTab, pressUnfold, project, sample, selectedTab, setCaret, setText, showAgain, streamList, studio, tabOf, tabTitles, typeIn, waitForText, worktrees } from "../orca-support";
 
 // A-18: the file pane and the editor. Rust reads the folders, reads and saves the text, and decides whether a save went through (unit tests); here the screen is checked: what it asks of Rust, and how it draws the answers.
 describe("orca: files and editor (A-18)", () => {
@@ -832,6 +832,113 @@ describe("orca: files and editor (A-18)", () => {
     expect(gutter.inContent).toBe(false);
     // What a copy of the text takes is the text and nothing of the numbers.
     expect(await editorText()).toBe("alpha\nbeta\n");
+  });
+
+  // A-18: folding. The arrows are the elements `.orca-fold` of the lines that can fold, in the gutter right of the numbers; the lines drawn and the `…` are read from the page.
+  const json = '{\n  "a": {\n    "b": 1\n  },\n  "c": 2\n}\n';
+  const ruby = "class A\n  def b\n    1\n  end\nend\n";
+  const lineTexts = () => browser.execute(() => [...document.querySelectorAll(".orca-edit-body .cm-line")].map((l) => l.textContent));
+  // The n-th arrow (from 1) of the lines that can fold; the first element of the gutter is the hidden one that sets its width.
+  const arrow = (n: number) => $(`(//div[contains(@class,"cm-foldGutter")]//div[contains(@class,"cm-gutterElement")][not(contains(@style,"hidden"))]//span[contains(@class,"orca-fold")])[${n}]`);
+  const arrows = () =>
+    browser.execute(() =>
+      [...document.querySelectorAll<HTMLElement>(".orca-edit-body .cm-foldGutter .cm-gutterElement")]
+        .filter((e) => e.style.visibility !== "hidden" && e.querySelector(".orca-fold") !== null)
+        .map((e) => {
+          const mark = e.querySelector<HTMLElement>(".orca-fold")!;
+          return { open: mark.classList.contains("open"), visibility: getComputedStyle(mark).visibility, title: mark.title, sameRow: e.getBoundingClientRect().top >= document.querySelector(".orca-edit-body .cm-lineNumbers")!.getBoundingClientRect().top };
+        }),
+    );
+  const waitForArrows = (n: number) => browser.waitUntil(async () => (await arrows()).length === n, { timeoutMsg: `there were never ${n} arrows of folding` });
+  // The pointer over the gutter, and away from it (over the heading of the editor).
+  const overGutter = () => browser.action("pointer").move({ origin: $(".orca-edit-body .cm-foldGutter") }).perform();
+  const awayFromGutter = () => browser.action("pointer").move({ origin: $(".orca-edit-head") }).perform();
+  const pressOn = async (target: ChainablePromiseElement) => {
+    await overGutter();
+    await browser.action("pointer").move({ origin: target }).down().up().perform();
+  };
+  const placeholders = () => browser.execute(() => [...document.querySelectorAll(".orca-edit-body .cm-foldPlaceholder")].map((p) => ({ text: p.textContent, title: p.getAttribute("title") })));
+  const openJson = async () => {
+    await openFiles();
+    await openFileWith(text(json, "sig-1", "json"));
+    await waitForArrows(2);
+  };
+
+  it("draws the arrow of a line of JSON that can fold right of the numbers, only while the pointer is over them, and folds the lines with a press (A-18)", async () => {
+    await openJson();
+    await awayFromGutter();
+    expect(await arrows()).toEqual([
+      { open: true, visibility: "hidden", title: "", sameRow: true },
+      { open: true, visibility: "hidden", title: "", sameRow: true },
+    ]);
+    // It is at the right of the numbers.
+    expect(await browser.execute(() => document.querySelector(".orca-edit-body .cm-foldGutter")!.getBoundingClientRect().left >= document.querySelector(".orca-edit-body .cm-lineNumbers")!.getBoundingClientRect().right - 0.5)).toBe(true);
+    // :hover never matches in the E2E window (it is hidden): the rule that shows an open line's arrow is read from the stylesheet, and it is the pointer over the numbers.
+    const showing = await browser.execute(() => {
+      for (const sheet of document.styleSheets)
+        for (const rule of sheet.cssRules) if (rule instanceof CSSStyleRule && rule.selectorText.includes(".orca-fold.open") && rule.style.visibility === "visible") return rule.selectorText;
+      return null;
+    });
+    expect(showing).toContain(".cm-gutters:hover");
+    await pressOn(arrow(2));
+    await browser.waitUntil(async () => (await placeholders()).length === 1, { timeoutMsg: "the line never folded" });
+    expect(await lineTexts()).toEqual(["{", '  "a": {…},', '  "c": 2', "}", ""]);
+    expect(await placeholders()).toEqual([{ text: "…", title: null }]);
+    // A folded line keeps its arrow (right) without the pointer over the numbers.
+    await awayFromGutter();
+    expect((await arrows()).map((a) => [a.open, a.visibility])).toEqual([[true, "hidden"], [false, "visible"]]);
+    await waitForText(json);
+  });
+
+  it("opens a fold with a press on the `…` or on the arrow of the folded line (A-18)", async () => {
+    await openJson();
+    await pressOn(arrow(2));
+    await waitForCount(".orca-edit-body .cm-foldPlaceholder", 1);
+    await browser.action("pointer").move({ origin: $(".orca-edit-body .cm-foldPlaceholder") }).down().up().perform();
+    await waitForCount(".orca-edit-body .cm-foldPlaceholder", 0);
+    expect(await lineTexts()).toEqual(["{", '  "a": {', '    "b": 1', "  },", '  "c": 2', "}", ""]);
+    await pressOn(arrow(2));
+    await waitForCount(".orca-edit-body .cm-foldPlaceholder", 1);
+    await pressOn(arrow(2));
+    await waitForCount(".orca-edit-body .cm-foldPlaceholder", 0);
+    expect(await lineTexts()).toHaveLength(7);
+  });
+
+  it("folds a Ruby file by the indentation, and keeps the line of its end (A-18)", async () => {
+    await openFiles();
+    await openFileWith(text(ruby, "sig-1", "ruby"));
+    await waitForArrows(2);
+    await pressOn(arrow(2));
+    await waitForCount(".orca-edit-body .cm-foldPlaceholder", 1);
+    expect(await lineTexts()).toEqual(["class A", "  def b…", "  end", "end", ""]);
+    await pressOn(arrow(1));
+    await waitForCount(".orca-edit-body .cm-foldPlaceholder", 1);
+    // The outer fold takes the inner one with the lines, and its last line, the `end` of the class, stays.
+    expect(await lineTexts()).toEqual(["class A…", "end", ""]);
+  });
+
+  it("folds the range at the caret with Option and Command with [ and opens it with ] (A-18)", async () => {
+    await openJson();
+    await setCaret(5);
+    await pressFold();
+    await waitForCount(".orca-edit-body .cm-foldPlaceholder", 1);
+    expect(await lineTexts()).toEqual(["{", '  "a": {…},', '  "c": 2', "}", ""]);
+    await pressUnfold();
+    await waitForCount(".orca-edit-body .cm-foldPlaceholder", 0);
+    expect(await lineTexts()).toHaveLength(7);
+  });
+
+  it("saves the whole text of a file with a range folded, and a fold alone saves nothing (A-18)", async () => {
+    await openJson();
+    const write = await mock("orca_file_write", saved("sig-2"));
+    await pressOn(arrow(2));
+    await waitForCount(".orca-edit-body .cm-foldPlaceholder", 1);
+    await browser.pause(500);
+    expect(await callsOf(write)).toEqual([]);
+    expect(await editorText()).toBe(json);
+    await typeIn("x");
+    const [call] = (await waitForCalls(write)) as { content: string }[];
+    expect(call.content).toBe(`${json}x`);
   });
 
   it("indents the line with Tab, and carries the indent of the line to the next one with Enter (A-18)", async () => {

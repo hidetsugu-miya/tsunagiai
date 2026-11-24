@@ -10,7 +10,7 @@
 // A Markdown file (the language Rust names `markdown`) has two buttons in its heading, the source (`<>`) and the rich view (the pencil), and opens in the rich view (A-26): Milkdown draws the text, without its front matter. The rich view is edited (the edit is put into the text of the editor by Rust, `markdown_patch`, and saved as any typing is) unless the file does not load and export the same twice or Rust cannot put an edit into it; then it is read only and the file opens in the source. The choice is kept for the file while it is open, in memory only.
 // An HTML file (its name ends with `.html`, whatever the case) has the source and the preview (the eye) in its heading, and opens in the preview (A-42): a frame that shows the address `orca_file_preview_url` gives (A-31), after the typing that waits is saved. While the preview is shown a button of the heading makes the frame again, which reads the file again; nothing else does.
 import { tag } from "./dom.js";
-import { CODE_SVG, EDIT_SVG, EYE_SVG, LOCK_SVG, RELOAD_SVG } from "./icons.js";
+import { CHEVRON_SVG, CODE_SVG, EDIT_SVG, EYE_SVG, LOCK_SVG, RELOAD_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import type { DefinitionQuery } from "./orca-definition.js";
 import { loadCodeMirror, loadMilkdown, loadPele } from "./vendor-load.js";
@@ -441,6 +441,13 @@ async function loadImage(f: EditorFile) {
   f.read = "ready";
 }
 
+// The arrow of a line that can be folded (A-18), drawn right of the line number: it points down while the line is open and right while it is folded, and the style shows an open one only while the pointer is over the numbers.
+function foldMarker(open: boolean): HTMLElement {
+  const mark = tag("span", open ? "orca-fold open" : "orca-fold");
+  mark.innerHTML = CHEVRON_SVG;
+  return mark;
+}
+
 async function load(f: EditorFile) {
   try {
     if (f.image) {
@@ -461,6 +468,7 @@ async function load(f: EditorFile) {
       language: text.language,
       readOnly: f.outside,
       label: f.relative,
+      marker: foldMarker,
       onChange: () => {
         f.edits++;
         hideLink(f);
