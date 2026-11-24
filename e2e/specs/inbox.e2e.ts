@@ -38,8 +38,8 @@ describe("inbox", () => {
   });
 
   it("reads none of the libraries that only the Orca screens use while the list is shown (#414)", async () => {
-    const found = await browser.execute("return [typeof Terminal, typeof FitAddon, typeof Unicode11Addon, typeof WebLinksAddon, typeof hljs, document.querySelectorAll('script[src*=\"vendor/xterm\"], script[src*=\"vendor/addon-\"], script[src*=\"vendor/highlight\"]').length]");
-    expect(found).toEqual(["undefined", "undefined", "undefined", "undefined", "undefined", 0]);
+    const found = await browser.execute("return [typeof Terminal, typeof FitAddon, typeof Unicode11Addon, typeof WebLinksAddon, typeof hljs, typeof TsunagiaiCodeMirror, document.querySelectorAll('script[src*=\"vendor/xterm\"], script[src*=\"vendor/addon-\"], script[src*=\"vendor/highlight\"], script[src*=\"vendor/codemirror\"]').length]");
+    expect(found).toEqual(["undefined", "undefined", "undefined", "undefined", "undefined", "undefined", 0]);
   });
 
   it("makes the header of the list a place to drag the window by", async () => {

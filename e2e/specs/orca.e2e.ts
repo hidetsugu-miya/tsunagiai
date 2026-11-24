@@ -5,7 +5,7 @@ import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import type { PaneLayout } from "../../ts/bindings/PaneLayout";
 import type { PaneNode } from "../../ts/bindings/PaneNode";
 import { askScreen, boot, callsOf, claudeReady, chooseAppearance, chooseOption, chooseTheme, copiedTexts, count, fire, fontSettings, ghosttyImport, holds, huge, image, inbox, isoDate, logged, mock, note, onceId, orcaRow, orcaTerminal, orcaWorktree, PNG, popoutTab, rejects, release, sendPopout, sendStream, sendTerm, setClock, slackLoad, setDark, stubClipboard, terminalThemes, textsOf, timers, todoData, waitForCalls, waitForCount, CARD, CARDS } from "../support";
-import { beside, claudeTab, filesToggle, onThisMachine, openOrca, orcaOverview, pickItem, project, sample, selectedTab, showAgain, streamList, studio, tabOf, tabTitles, worktrees } from "../orca-support";
+import { beside, claudeTab, CONTENT, filesToggle, onThisMachine, openOrca, orcaOverview, pickItem, project, sample, selectedTab, showAgain, streamList, studio, tabOf, tabTitles, typeIn, waitForText, worktrees } from "../orca-support";
 
 // example-app with a second worktree, so that the plus asks which one (A-16); example-api keeps its one.
 const twoWorktrees = () => [orcaWorktree("example-app", "feat/a"), orcaWorktree("example-app", "feat/b", { path: "/work/example-app-b" }), orcaWorktree("example-api", "main")];
@@ -3301,7 +3301,7 @@ describe("orca: links in a terminal (A-8, A-12)", () => {
   const FILE_URI = `file://${WORKTREE}/tmp/page.html`;
   const PREVIEW_URL = "http://127.0.0.1:12345/tok/tmp/page.html";
   // What the editor reads and the preview asks for when a file of the worktree is opened as a tab.
-  const text: OrcaFileText = { content: "fn main() {}\n", crlf: false, signature: "sig-1", language: "rust", highlight: null };
+  const text: OrcaFileText = { content: "fn main() {}\n", crlf: false, signature: "sig-1", language: "rust" };
   const opened = { orca_files_list: { entries: [], total: 0 }, orca_files_ignored: [], orca_file_read: text, orca_file_preview_url: PREVIEW_URL };
   const shownBox = ".orca-term .orca-term-box:not([hidden])";
 
@@ -3791,7 +3791,7 @@ describe("orca: split panes (A-17)", () => {
   });
 
   it("makes the iframe of an HTML preview take no pointer while a tab or a divider is dragged, and again when the drag ends", async () => {
-    const page: OrcaFileText = { content: "<h1>見出し</h1>\n", crlf: false, signature: "sig-1", language: "html", highlight: null };
+    const page: OrcaFileText = { content: "<h1>見出し</h1>\n", crlf: false, signature: "sig-1", language: "html" };
     const preview = "file:1";
     await openSplit(overview(), layout(row(pane("p1", [claude, bash, preview], preview), pane("p2", [zsh])), "p1"), {
       orca_files_list: { entries: [], total: 0 },
@@ -4159,10 +4159,10 @@ describe("orca: a tab in a window of its own (A-46)", () => {
   // A file (A-18) and the scratchpad (A-29): the editor of a tab is held by the page that shows it, so the tab is saved and closed here before the window opens it again.
   describe("a file", () => {
     const memo = { relative: ".orca/scratchpad/memo.md", existed: false };
-    const fileText = (content: string): OrcaFileText => ({ content, crlf: false, signature: "sig-1", language: "plaintext", highlight: null });
+    const fileText = (content: string): OrcaFileText => ({ content, crlf: false, signature: "sig-1", language: "plaintext" });
     const FILE = "file:1";
     const inWindow = popoutTab(FILE, "", "memo.md", { label: "", content: { kind: "file", path: "/work/example-app", relative: memo.relative, server: null } });
-    const area = () => $(".orca-edit-area");
+    const area = () => $(CONTENT);
     // Opens the scratchpad file of example-app as a tab (the first file of the page: `file:1`).
     async function openMemo(fixtures: Record<string, unknown> = {}) {
       await open({ editor_settings: { autosaveMs: 100 }, ...fixtures });
@@ -4170,13 +4170,12 @@ describe("orca: a tab in a window of its own (A-46)", () => {
       await mock("orca_file_read", fileText("a note\n"));
       await plus("example-app", SCRATCHPAD);
       await browser.keys("Enter");
-      await expect(area()).toHaveValue("a note\n", { trim: false });
+      await waitForText("a note\n");
       await expect(tabOf(FILE)).toBeDisplayed();
     }
     // Types a letter in the editor (the autosave of 100 ms is not waited for: the close of the tab saves it).
     async function typeX() {
-      await area().click();
-      await browser.keys("x");
+      await typeIn("x");
     }
     const saved = (signature: string): OrcaSaved => ({ state: "saved", signature });
 
@@ -4216,7 +4215,7 @@ describe("orca: a tab in a window of its own (A-46)", () => {
       await expect($(CARD)).toHaveText("保存できませんでした");
       expect(await callsOf("orca_popout_open")).toEqual([]);
       expect(await tabTitles()).toEqual(["Write the docs", "zsh", "bash", "memo.md"]);
-      await expect(area()).toHaveValue("a note\nx", { trim: false });
+      await waitForText("a note\nx");
       expect(await away()).toEqual([]);
     });
 
@@ -4228,7 +4227,7 @@ describe("orca: a tab in a window of its own (A-46)", () => {
       await expect($(".orca-edit-state")).toHaveText("ディスクのファイルが変わっています");
       expect(await callsOf("orca_popout_open")).toEqual([]);
       expect(await tabTitles()).toEqual(["Write the docs", "zsh", "bash", "memo.md"]);
-      await expect(area()).toHaveValue("a note\nx", { trim: false });
+      await waitForText("a note\nx");
     });
 
     it("opens the file in its pane again, with the id it had and the disk's text, when the window is made no more", async () => {
@@ -4237,7 +4236,7 @@ describe("orca: a tab in a window of its own (A-46)", () => {
       await popOut(FILE);
       await expect($(CARD)).toHaveText("別ウィンドウを開けませんでした: test");
       await expect(tabOf(FILE)).toBeDisplayed();
-      await expect(area()).toHaveValue("a note\n", { trim: false });
+      await waitForText("a note\n");
       expect(await callsOf("orca_file_read")).toHaveLength(2);
       await awayIs([]);
     });
@@ -4251,7 +4250,7 @@ describe("orca: a tab in a window of its own (A-46)", () => {
       expect(await waitForCalls("orca_popout_end")).toEqual([{ tab: FILE }]);
       await awayIs([]);
       await expect(tabOf(FILE)).toBeDisplayed();
-      await expect(area()).toHaveValue("a note, changed\n", { trim: false });
+      await waitForText("a note, changed\n");
     });
 
     it("ends the window, and asks nothing of Orca, when the page of a file window asked for the close", async () => {
@@ -4645,7 +4644,7 @@ describe("orca: search the list (A-19)", () => {
 // A-29: the scratchpad of the work pane's plus. Rust makes the file (and answers the existing one when the name is taken, unit tests); here the screen is checked: the item, the popover, what it asks of Rust, and what opens.
 describe("orca: scratchpad (A-29)", () => {
   const MADE = { relative: ".orca/scratchpad/memo.md", existed: false };
-  const fileText = (content: string): OrcaFileText => ({ content, crlf: false, signature: "sig-s", language: "plaintext", highlight: null });
+  const fileText = (content: string): OrcaFileText => ({ content, crlf: false, signature: "sig-s", language: "plaintext" });
   const pop = () => $('.orca-scratch-pop[role="dialog"]');
   const field = () => $('.orca-scratch-pop input[aria-label="ファイル名"]');
   const primary = () => $(".orca-scratch-actions .text-btn.primary");
@@ -4698,7 +4697,7 @@ describe("orca: scratchpad (A-29)", () => {
     await browser.keys("Enter");
     expect(await waitForCalls(create)).toEqual([{ path: "/work/example-app", name: "notes.md", environment: null }]);
     expect(await waitForCalls(read)).toEqual([{ path: "/work/example-app", relative: ".orca/scratchpad/notes.md", environment: null }]);
-    await expect($(".orca-edit-area")).toHaveValue("a note\n", { trim: false });
+    await waitForText("a note\n");
     await expect(pop()).not.toExist();
     await expect(selectedTab()).toHaveText(expect.stringContaining("notes.md"));
     await expect($(CARDS)).not.toExist();
@@ -4712,7 +4711,7 @@ describe("orca: scratchpad (A-29)", () => {
     await primary().click();
     expect(await waitForCalls(create)).toEqual([{ path: "/work/example-app", name: "memo.md", environment: "Studio" }]);
     await expect(pop()).not.toExist();
-    await expect($(".orca-edit-area")).toBeDisplayed();
+    await expect($(CONTENT)).toBeDisplayed();
   });
 
   it("opens the file that is there already when the name is taken, with no error", async () => {
@@ -4723,7 +4722,7 @@ describe("orca: scratchpad (A-29)", () => {
     await browser.keys("Enter");
     await waitForCalls(create);
     expect(await waitForCalls(read)).toEqual([{ path: "/work/example-app", relative: ".orca/scratchpad/memo.md", environment: null }]);
-    await expect($(".orca-edit-area")).toHaveValue("old memo\n", { trim: false });
+    await waitForText("old memo\n");
     await expect(pop()).not.toExist();
     await expect($(CARDS)).not.toExist();
   });
@@ -4749,7 +4748,7 @@ describe("orca: scratchpad (A-29)", () => {
     await expect(pop()).not.toExist();
     await browser.pause(200);
     expect(await callsOf(create)).toEqual([]);
-    await expect($(".orca-edit-area")).not.toExist();
+    await expect($(CONTENT)).not.toExist();
   });
 
   it("does nothing for a blank name and keeps the popover open", async () => {
@@ -4776,11 +4775,11 @@ describe("orca: scratchpad (A-29)", () => {
     await expect(pop()).toBeDisplayed();
     await expect(field()).toHaveValue("a/b.md");
     await expect(primary()).toBeEnabled();
-    await expect($(".orca-edit-area")).not.toExist();
+    await expect($(CONTENT)).not.toExist();
     await mock("orca_scratchpad_create", { relative: ".orca/scratchpad/b.md", existed: false });
     await field().setValue("b.md");
     await browser.keys("Enter");
-    await expect($(".orca-edit-area")).toBeDisplayed();
+    await expect($(CONTENT)).toBeDisplayed();
     await expect(pop()).not.toExist();
   });
 
@@ -5627,7 +5626,7 @@ describe("orca: add a project (A-38)", () => {
 describe("orca: Claude Code opens an HTML preview (A-45)", () => {
   const request = { path: "/work/example-app", relative: "docs/page.html" };
   const PREVIEW_URL = "http://127.0.0.1:12345/tok/docs/page.html";
-  const page: OrcaFileText = { content: "<h1>見出し</h1>\n", crlf: false, signature: "sig-1", language: "html", highlight: null };
+  const page: OrcaFileText = { content: "<h1>見出し</h1>\n", crlf: false, signature: "sig-1", language: "html" };
   const checkArgs = { ...request, environment: null };
   // The screen open with the answers of the file that is opened and of the check that Rust makes again.
   const ready = () => openOrca(orcaOverview(sample(), worktrees()), { orca_files_list: { entries: [], total: 0 }, orca_files_ignored: [], orca_file_read: page, orca_file_preview_url: PREVIEW_URL, orca_preview_check: null });

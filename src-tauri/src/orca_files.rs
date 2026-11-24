@@ -5,7 +5,7 @@
 //! They are not a public interface of Orca: this was read in the `app.asar` of Orca 1.4.253 and tried on this machine's Orca. A token is in no log line, no error text and no return value, and the text of a file is in no log line.
 //!
 //! A file is saved with `files.writeIfUnchanged`: Orca writes only when the disk still holds the text that was read, by a signature of it (`disk_signature`, the one of Orca's `disk-baseline-signature.js`), and answers `diskConflict` when it does not, so a file changed elsewhere is never overwritten.
-//! The text goes through a textarea, which turns CRLF into LF and cannot hold a lone CR, so only a file with no CR or with a CRLF at every line end is opened (`line_ending`), and a CRLF file is written back with CRLF.
+//! The editor holds the text with LF line ends (a lone CR would be a line end of its own there), so only a file with no CR or with a CRLF at every line end is opened (`line_ending`), and a CRLF file is written back with CRLF.
 //! The time of the automatic save is saved in `editor-settings.json` in the app config directory.
 //! The difference of a file from HEAD (A-24, `orca_file_diff`) is Orca's `git.diff` (`staged` false, `compareAgainstHead` true): the text at HEAD and the text in the working tree, which `orca_diff.rs` turns into rows.
 //! The branches of a worktree (`orca_local_branches`, `git.localBranches`) and the remote branches found by a text (`orca_remote_branches`, `repo.searchRefs` with `namespace` `remote`) are read here too, for the branch button of the file pane. The remote branches picked in the list are remembered for each repository of each Orca (`orca_branch_used`, `orca-branch-recent.json`), and `orca_remote_branches` puts them first when the text is empty.
@@ -174,7 +174,7 @@ pub struct OrcaDeleted {
 }
 
 /// The text of a file for the editor, with LF line ends (`crlf` says the file has CRLF, which the write brings back), and the signature of the text as the disk holds it.
-/// `language` is the name Orca's editor gives the file (A-21), and `highlight` the name the page's highlighter knows it by (null: no grammar, the text is drawn plain).
+/// `language` is the name Orca's editor gives the file (A-21), which the editor takes its grammar by.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -183,7 +183,6 @@ pub struct OrcaFileText {
     pub crlf: bool,
     pub signature: String,
     pub language: String,
-    pub highlight: Option<String>,
 }
 
 /// The difference of a file from HEAD for the diff tab (A-24): the lines of HEAD and of the working tree (LF, no line end; the rows hold the numbers of the lines), the rows of the side by side view and of the inline view, the blocks of changes, and the language of the file as `OrcaFileText` has it.
@@ -746,7 +745,6 @@ pub(crate) fn editor_text(
         crlf,
         signature,
         language: language.to_owned(),
-        highlight: highlight_name(language).map(str::to_owned),
     })
 }
 
@@ -4551,7 +4549,6 @@ mod tests {
                 crlf: false,
                 signature: disk_signature("a\nb\n"),
                 language: "plaintext".into(),
-                highlight: None,
             }
         );
         // A CRLF file reaches the editor with LF, and its signature is of the bytes on the disk.
@@ -4564,14 +4561,13 @@ mod tests {
     fn a_read_names_the_language_of_the_file() {
         let text = parse_text(&json!({"content": "fn main() {}\n"}), "src/main.rs").unwrap();
         assert_eq!(text.language, "rust");
-        assert_eq!(text.highlight.as_deref(), Some("rust"));
-        // A name decides, and so does a `#!` line of a name with no extension; a language without a grammar has no highlight name.
+        // A name decides, and so does a `#!` line of a name with no extension.
         let text = parse_text(&json!({"content": "FROM x\n"}), "docker/Dockerfile").unwrap();
-        assert_eq!(text.highlight.as_deref(), Some("dockerfile"));
+        assert_eq!(text.language, "dockerfile");
         let text = parse_text(&json!({"content": "#!/bin/sh\n"}), "bin/run").unwrap();
-        assert_eq!(text.highlight.as_deref(), Some("bash"));
+        assert_eq!(text.language, "shell");
         let text = parse_text(&json!({"content": "x"}), "main.zig").unwrap();
-        assert_eq!((text.language.as_str(), text.highlight), ("zig", None));
+        assert_eq!(text.language, "zig");
     }
 
     #[test]

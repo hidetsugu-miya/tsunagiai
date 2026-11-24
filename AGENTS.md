@@ -64,13 +64,13 @@ Read an area's section there before you change a behavior it covers, and when a 
 ## Stack and layout
 
 ```text
-ts/            TypeScript, compiled by tsc to src/js/ (gitignored). No framework, no bundler
+ts/            TypeScript, compiled by tsc to src/js/ (gitignored). No framework, and no bundler in the app's build (a library that needs one is bundled by hand into src/vendor/, see scripts/)
 ts/bindings/   Rust struct types written by ts-rs (generated, committed)
 src/           index.html, CSS, vendored libraries (src/vendor/) and the JetBrains file icons (src/vendor/jetbrains-icons/)
 src-tauri/     Rust backend (Tauri v2); src/bin/tsunagiai-mcp.rs is the MCP server
 src-tauri/formation/  the leader's skill and the children's plugin of A-41, embedded in the binary by build.rs
 e2e/           WebdriverIO specs, fixtures and mocks
-scripts/       check-version.sh, install-app.sh, make-latest-json.sh, build-milkdown.mjs and milkdown-entry.js (bundle src/vendor/milkdown.js)
+scripts/       check-version.sh, install-app.sh, make-latest-json.sh, build-milkdown.mjs and milkdown-entry.js (bundle src/vendor/milkdown.js), build-codemirror.mjs and codemirror-entry.js (bundle src/vendor/codemirror.js)
 docs/          public documentation (GitHub Pages)
 requirements/  the requirements, one file per area, and constraints.md (the technical constraints of each integration)
 tmp/           scratch files, gitignored except .keep
