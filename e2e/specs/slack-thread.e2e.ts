@@ -1088,12 +1088,41 @@ describe("slack thread: the emoji picker (S-25)", () => {
     expect(await callsOf("slack_emoji_catalog")).toEqual([]);
   });
 
-  it("takes no room under a message without reactions while the pointer and the focus are elsewhere, and a message with reactions always shows the button", async () => {
-    await openDetail({}, thread());
-    const height = (message: number) => browser.execute((i) => document.querySelectorAll<HTMLElement>("#st-msgs .st-msg")[i].querySelector<HTMLElement>(".reactions")!.getBoundingClientRect().height, message);
-    expect(await height(1)).toBe(0);
-    expect(await height(0)).toBeGreaterThan(0);
-    expect(await browser.execute(() => document.querySelector<HTMLElement>("#st-msgs .st-msg .reactions .reaction-add")!.getBoundingClientRect().height)).toBeGreaterThan(0);
+  it("lays the button of a message without reactions over its top right, transparent and taking no press until it is shown, reachable by the keyboard, moving no message and pressable once shown, and a message with reactions always shows the button", async () => {
+    await openDetail({}, slackThread([threadMessage(root, "Alice Example", rootText), threadMessage(reply1, "Bob Example", "Looks fine to me."), threadMessage(slackTs(40, 3), "Carol Example", "Merged.", { reactions: [reaction("tada", "🎉", 3)] })]));
+    const state = () =>
+      browser.execute(() => {
+        const msgs = [...document.querySelectorAll<HTMLElement>("#st-msgs .st-msg")];
+        const add = msgs[0].querySelector<HTMLElement>(".reaction-add")!;
+        const box = add.getBoundingClientRect();
+        const msg = msgs[0].getBoundingClientRect();
+        const middle = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        return {
+          next: msgs[1].getBoundingClientRect().top,
+          height: msg.height,
+          opacity: getComputedStyle(add.parentElement!).opacity,
+          overTopRight: box.top >= msg.top && box.top - msg.top < 8 && Math.abs(msg.right - box.right) < 1,
+          taken: middle === add || add.contains(middle),
+          always: getComputedStyle(msgs[2].querySelector<HTMLElement>(".reactions")!).opacity,
+        };
+      });
+    const before = await state();
+    expect(before.opacity).toBe("0");
+    expect(before.taken).toBe(false);
+    expect(before.always).toBe("1");
+    // The E2E window is never focused and has no pointer (measured: document.hasFocus() is false and no element matches :hover or :focus), so what :hover and :focus-within show is not checked here.
+    // The button takes the focus while it is transparent, so the keyboard reaches it; the shown state is checked through the open picker's mark (aria-expanded), which the same rule covers.
+    await browser.execute(() => document.querySelector<HTMLElement>("#st-msgs .st-msg .reaction-add")!.focus());
+    expect(await browser.execute(() => document.activeElement === document.querySelector("#st-msgs .st-msg .reaction-add"))).toBe(true);
+    await browser.execute(() => document.querySelector("#st-msgs .st-msg .reaction-add")!.setAttribute("aria-expanded", "true"));
+    const after = await state();
+    expect(after.opacity).toBe("1");
+    expect(after.overTopRight).toBe(true);
+    expect(after.taken).toBe(true);
+    expect(after.next).toBe(before.next);
+    expect(after.height).toBe(before.height);
+    await browser.execute(() => document.querySelector("#st-msgs .st-msg .reaction-add")!.removeAttribute("aria-expanded"));
+    expect((await state()).opacity).toBe("0");
   });
 
   it("opens under the button with the search field first, then the workspace's custom emoji and the standard emoji (no よく使う while Rust gives no name), and asks Rust for the workspace's list once", async () => {

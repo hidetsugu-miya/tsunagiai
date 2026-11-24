@@ -2215,7 +2215,7 @@ body.orca-dragging .orca-edit-preview iframe, #orca-panes[data-resizing] .orca-e
 #st-head small, #sc-head small { margin-left: 8px; font-size: calc(12px * var(--fs)); font-weight: normal; color: var(--muted); }
 a.icon-btn { text-decoration: none; }
 #st-msgs { flex: 1; min-height: 0; overflow-y: auto; padding: 20px 32px 8px; }
-.st-msg { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 14px; margin-bottom: 18px; }
+.st-msg { position: relative; display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 14px; margin-bottom: 18px; }
 .st-avatar { width: 40px; height: 40px; font-size: calc(14px * var(--fs)); }
 .st-meta { display: flex; align-items: baseline; gap: 8px; }
 .st-meta b { font-weight: 600; }
@@ -2240,13 +2240,18 @@ a.icon-btn { text-decoration: none; }
 .reaction-count { color: var(--muted); font-weight: 600; }
 /* S-26: the image of a custom emoji in a reaction. */
 .reaction-img { display: block; height: calc(16px * var(--fs)); width: auto; }
-/* S-25: the button that opens the emoji picker, last in the box. A message with no reaction has the box with this button alone, which takes no room until the pointer is on the message or the focus is in the box (or the picker is open). */
+/* S-25: the button that opens the emoji picker, last in the box. A message with no reaction has the box with this button alone, laid over the top right of the message (left of the bookmark in a row of a list) and transparent, taking no press, until the pointer is on the message or the focus is in it (or the picker is open), so it takes no room and moves no line and the keyboard still reaches it. */
 .reaction-add { display: inline-flex; align-items: center; justify-content: center; width: 32px; padding: 2px 0; border: 1px solid var(--chip-line); border-radius: 999px; background: var(--bar); color: var(--ink-soft); cursor: pointer; }
 .reaction-add:hover { background: var(--soft); }
 .reaction-add:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .reaction-add svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.reactions.empty { height: 0; margin: 0; overflow: hidden; }
-.st-msg:hover .reactions.empty, .feed-item:hover .reactions.empty, .reactions.empty:focus-within, .reactions.empty:has([aria-expanded="true"]) { height: auto; margin-top: 6px; overflow: visible; }
+.reactions.empty { position: absolute; top: 0; right: 0; margin: 0; opacity: 0; pointer-events: none; }
+.reactions.empty .reaction-add { pointer-events: inherit; }
+.st-msg:hover .reactions.empty, .st-msg:focus-within .reactions.empty, .feed-item:hover .reactions.empty, .feed-item:focus-within .reactions.empty, .reactions.empty:focus-within, .reactions.empty:has([aria-expanded="true"]) { opacity: 1; pointer-events: auto; }
+/* In a row of a list the box is laid over the row, not over the text column: the text column stops being the containing block (it keeps its place above the row's button as a grid item with z-index), and the box sits left of the bookmark, over the date, which stays hidden while the box shows. */
+.feed-row > .feed-main:has(> .reactions.empty) { position: static; }
+.feed-item .reactions.empty { top: 10px; right: 52px; z-index: 1; }
+.feed-item:has(.reactions.empty [aria-expanded="true"]) .feed-date { visibility: hidden; }
 /* S-25: the emoji picker. The list scrolls under the search field; a cell is an emoji, or the image of a custom emoji (the grey slot until it is fetched). */
 .emoji-pop { width: 336px; }
 .emoji-scroll { height: 264px; overflow-y: auto; }
