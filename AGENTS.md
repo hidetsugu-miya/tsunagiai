@@ -55,6 +55,11 @@ A new requirement gets a section there and an entry here.
 - The list of accounts (email addresses only) is saved in `accounts.json` in the app config directory.
 - The name the app shows is つなぎAI (the window title, the name in Finder and the Dock, which `LSHasLocalizedDisplayName` in `src-tauri/Info.plist` reads from `src-tauri/macos/ja.lproj/InfoPlist.strings` (`bundle.macOS.files` puts it in the app; `CFBundleDisplayName` stays `tsunagiai`, because Finder shows the file name when the two differ), the texts of the screens, #764). The internal name stays `tsunagiai`: `productName`, `tsunagiai.app`, the crate, `tsunagiai-mcp`, the config folder and the keychain.
 - The identifier is `jp.mysis.tsunagiai`. The config directory and the keychain services of the old identifier `jp.mysis.cookapps` are moved to the new ones by the app (`requirements/constraints.md`, "Settings files").
+- A feature of the Orca integration runs in more than one place: this Mac, a saved environment (the paired PC, A-6 and A-33), and an SSH host.
+  - Decide and check what it does in each place, never taking this Mac alone as the premise.
+  - A file of a saved environment's PC is not on this Mac, so `open` cannot reach it, and it is read only through Orca's runtime RPC (`files.*`).
+  - An SSH host's worktree is refused by the file commands (A-18), and the screen draws no SSH host (A-8).
+  - Read A-6, A-12 and A-33 in `requirements/orca.md` and the Orca section of `requirements/constraints.md` first.
 - If the OAuth consent screen is "External" and in "Testing", refresh tokens expire after 7 days.
   - Use an "Internal" consent screen, or publish an "External" one.
 
