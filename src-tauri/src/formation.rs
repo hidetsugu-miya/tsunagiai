@@ -768,7 +768,7 @@ fn repos_of(result: &Value) -> Vec<Repo> {
 }
 
 /// A saved environment of `orca environment list`: the name and the id the CLI takes as `--environment`.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 struct Environment {
     id: String,
     name: String,
@@ -2965,6 +2965,11 @@ fn locate_child(
         })?;
     let environment = if child.environment == LOCAL {
         LOCAL.to_owned()
+    } else if let Some(recorded) = child.environment.strip_prefix(UNRESOLVED_PREFIX) {
+        // A child of a PC's record whose environment this Mac does not resolve to exactly one (`child_from_pc`): the name is the leader's Orca's, so nothing of it is closed from here, and its entry stays.
+        return Err(Refusal::from(format!(
+            "「{name}」の環境「{recorded}」を、この Mac の Orca の環境の一覧からただ 1 つに決められないので、何も閉じていません。リーダーの PC で閉じてください"
+        )));
     } else {
         // The record is a file the orchestrator can write: only this Mac or exactly one saved environment reaches the CLI and the connection.
         let saved = read(&environment_list_args())
@@ -3499,31 +3504,61 @@ fn with_pc_access<T>(
     })
 }
 
-/// A child of a PC's record as this Mac names it. On its own PC a child is in `local`, and every child of the record is: from here that PC is `environment`, the saved environment of the formation, so its commands and its terminals go to that Orca.
-fn child_from_pc(child: Child, environment: &str) -> Child {
+/// What stands in front of the name of an environment in a child of a PC's record that this Mac cannot resolve (`child_from_pc`).
+const UNRESOLVED_PREFIX: &str = "unresolved:";
+
+/// A child of a PC's record as this Mac names it. A child in `local` on its own PC runs on the PC of the formation: from here that PC is `environment`, the saved environment of the formation, so its commands and its terminals go to that Orca. A child that the leader launched in a saved environment of its PC's Orca (#1239, #1240) has that environment's name in the record, which is the leader's Orca's name and may mean another PC here: it is kept only when `saved` (this Mac's `orca environment list`, none when it could not be read) resolves it to exactly one environment (`resolve_environment`), as the name this Mac holds. Any other child keeps its name behind `UNRESOLVED_PREFIX`, so that no command of this Mac reaches an Orca by a name that a file of the leader's PC chose (`locate_child` refuses to close it, and a read of its state fails).
+fn child_from_pc(child: Child, environment: &str, saved: Option<&[Environment]>) -> Child {
+    let named = if child.environment == LOCAL {
+        environment.to_owned()
+    } else {
+        saved
+            .and_then(|saved| resolve_environment(saved, &child.environment).ok())
+            .unwrap_or_else(|| format!("{UNRESOLVED_PREFIX}{}", child.environment))
+    };
     Child {
-        environment: environment.to_owned(),
+        environment: named,
         ..child
     }
 }
 
-/// The children of a PC's record as this Mac names them (`child_from_pc`), from what its read gave (`pulled`). A PC that was taken off `orca environment list` (`gone`, asked only when the read failed) cannot be asked: its record reads as none, so that its formation can still be shown and deleted. Any other failure is the message.
+/// The children of a PC's record as this Mac names them (`child_from_pc`), from what its read gave (`pulled`). `saved` reads this Mac's `orca environment list` (none when it cannot be read), and is asked only when a child names an environment other than `local`, or when the read failed. A PC that is not in that list cannot be asked: its record reads as none, so that its formation can still be shown and deleted. Any other failure is the message.
 fn pc_children_settled(
     environment: &str,
     pulled: Result<Vec<Child>, String>,
-    gone: impl FnOnce() -> bool,
+    saved: impl FnOnce() -> Option<Vec<Environment>>,
 ) -> Result<Vec<Child>, String> {
     match pulled {
-        Ok(children) => Ok(children
-            .into_iter()
-            .map(|c| child_from_pc(c, environment))
-            .collect()),
-        Err(_) if gone() => Ok(Vec::new()),
-        Err(e) => Err(format!(
-            "環境「{environment}」の子の記録を読めません: {}",
-            first_line(&e)
-        )),
+        Ok(children) => {
+            let list = children
+                .iter()
+                .any(|c| c.environment != LOCAL)
+                .then(saved)
+                .flatten();
+            Ok(children
+                .into_iter()
+                .map(|c| child_from_pc(c, environment, list.as_deref()))
+                .collect())
+        }
+        Err(e) => {
+            if saved().is_some_and(|list| environment_is_gone(&list, environment)) {
+                return Ok(Vec::new());
+            }
+            Err(format!(
+                "環境「{environment}」の子の記録を読めません: {}",
+                first_line(&e)
+            ))
+        }
     }
+}
+
+/// This Mac's `orca environment list`, none when it cannot be read.
+fn saved_environments(
+    read: &dyn Fn(&[String]) -> Result<Value, String>,
+) -> Option<Vec<Environment>> {
+    read(&environment_list_args())
+        .ok()
+        .map(|list| environments_listed(&list))
 }
 
 /// Whether `environment` is gone from `orca environment list` (a list that cannot be read does not say it is).
@@ -3544,7 +3579,7 @@ fn pc_children_with(
         return Ok(Vec::new());
     }
     pc_children_settled(environment, pull(environment, formation), || {
-        environment_gone(read, environment)
+        saved_environments(read)
     })
 }
 
@@ -4264,15 +4299,14 @@ fn list_core(
             (pulled, terminals)
         });
     let listed: OnceCell<Option<Vec<Environment>>> = OnceCell::new();
-    let gone = |environment: &str| {
+    let saved_list = || {
         listed
             .get_or_init(|| {
                 read(&environment_list_args(), SAVED_PS_TIMEOUT)
                     .ok()
                     .map(|list| environments_listed(&list))
             })
-            .as_ref()
-            .is_some_and(|saved| environment_is_gone(saved, environment))
+            .clone()
     };
     // A formation whose PC's record could not be read has no child counted, and the first reason is the list's `read_error`.
     let mut record_error: Option<String> = None;
@@ -4294,9 +4328,7 @@ fn list_core(
                         .map(|(_, a)| &a.records[at])
                 });
             let children = match answer {
-                Some(answer) => {
-                    pc_children_settled(&environment, answer.clone(), || gone(&environment))
-                }
+                Some(answer) => pc_children_settled(&environment, answer.clone(), saved_list),
                 None => Ok(Vec::new()),
             };
             match children {
@@ -12609,21 +12641,132 @@ mod tests {
             *pc.pulls.lock().unwrap(),
             [("mac-studio".to_owned(), "api-work".to_owned())]
         );
-        // An environment the PC wrote that is not its own is read as the PC's too: no other Orca is reached by it.
-        let pc = Pc::with(vec![Child {
-            environment: "lab".into(),
-            ..on_pc("a")
-        }]);
-        let access = access!(pc);
-        let got = pc_children_with(
-            "mac-studio",
-            Some("term_orch"),
-            "api-work",
-            access.read,
-            access.pull,
-        )
+        // An environment that the PC wrote is used only when this Mac's own list resolves it to exactly one environment (#1240), so a name that a file of the PC chose reaches no Orca that this Mac does not list.
+        let in_lab = |recorded: &str, listed: Value| {
+            let mut pc = Pc::with(vec![
+                on_pc("a"),
+                Child {
+                    environment: recorded.into(),
+                    ..on_pc("b")
+                },
+            ]);
+            pc.environments = listed;
+            let access = access!(pc);
+            let got = pc_children_with(
+                "mac-studio",
+                Some("term_orch"),
+                "api-work",
+                access.read,
+                access.pull,
+            )
+            .unwrap();
+            // The child in `local` of the PC is the PC's in any case.
+            assert_eq!(got[0].environment, "mac-studio");
+            got[1].environment.clone()
+        };
+        let both = json!({"environments": [
+            {"id": "env-1", "name": "mac-studio"}, {"id": "env-2", "name": "lab"}
+        ]});
+        // By its name or by its id, the name that this Mac holds is kept.
+        assert_eq!(in_lab("lab", both.clone()), "lab");
+        assert_eq!(in_lab("env-2", both.clone()), "lab");
+        // Not listed here, listed twice, or a list that cannot be read: not resolved, and the name stays behind the mark.
+        assert_eq!(
+            in_lab(
+                "lab",
+                json!({"environments": [{"id": "env-1", "name": "mac-studio"}]})
+            ),
+            "unresolved:lab"
+        );
+        assert_eq!(
+            in_lab(
+                "lab",
+                json!({"environments": [
+                    {"id": "env-2", "name": "lab"}, {"id": "env-3", "name": "lab"}
+                ]})
+            ),
+            "unresolved:lab"
+        );
+        assert_eq!(in_lab("lab", json!("not a list")), "unresolved:lab");
+        assert_eq!(
+            child_from_pc(on_pc("b"), "mac-studio", None).environment,
+            "mac-studio"
+        );
+        assert_eq!(
+            child_from_pc(
+                Child {
+                    environment: "lab".into(),
+                    ..on_pc("b")
+                },
+                "mac-studio",
+                None
+            )
+            .environment,
+            "unresolved:lab"
+        );
+    }
+
+    #[test]
+    fn the_list_of_environments_is_read_only_for_a_record_that_names_another_environment() {
+        // Every child in `local` of the PC: no read of this Mac's list is needed.
+        let got = pc_children_settled("mac-studio", Ok(vec![on_pc("a")]), || {
+            panic!("the list was read")
+        })
         .unwrap();
         assert_eq!(got[0].environment, "mac-studio");
+        // A record that names another environment reads it once, for all its children.
+        let reads = std::cell::Cell::new(0);
+        let two = vec![
+            Child {
+                environment: "lab".into(),
+                ..on_pc("a")
+            },
+            Child {
+                environment: "lab".into(),
+                ..on_pc("b")
+            },
+        ];
+        let got = pc_children_settled("mac-studio", Ok(two), || {
+            reads.set(reads.get() + 1);
+            Some(environments_listed(
+                &json!({"environments": [{"id": "env-2", "name": "lab"}]}),
+            ))
+        })
+        .unwrap();
+        assert_eq!(reads.get(), 1);
+        assert!(got.iter().all(|c| c.environment == "lab"));
+    }
+
+    #[test]
+    fn a_child_of_a_pcs_record_that_this_mac_cannot_resolve_is_not_closed_from_here() {
+        let config = temp_dir("close-unresolved");
+        recorded(&config, REMOTE_PATH, "term_a", "me/a");
+        let mut children = read_children(&config, F);
+        children[1].environment = "unresolved:lab".into();
+        write_children(&config, F, &children).unwrap();
+        let err = close_with(
+            &config,
+            F,
+            "a",
+            None,
+            &|args| panic!("Orca was read: {args:?}"),
+            &|args| panic!("Orca was written: {args:?}"),
+            &|environment, path| panic!("git was read: {environment} {path}"),
+        )
+        .unwrap_err();
+        assert!(err.error.contains("環境「lab」"), "{}", err.error);
+        assert!(err.error.contains("何も閉じていません"), "{}", err.error);
+        // The entry stays, and a stop is refused the same way.
+        assert_eq!(names(&read_children(&config, F)), ["p", "a"]);
+        let stopped = stop_with(
+            &config,
+            F,
+            "a",
+            &|args| panic!("Orca was read: {args:?}"),
+            &|args| panic!("Orca was written: {args:?}"),
+        );
+        assert!(stopped.is_err());
+        std::fs::remove_dir_all(&config).unwrap();
     }
 
     #[test]
@@ -13239,6 +13382,39 @@ mod tests {
             check_one_environment(&[project("mac-studio", "api"), project("mac-studio", "web")]),
             Ok(())
         );
+    }
+
+    #[test]
+    fn a_child_of_a_saved_environment_is_stopped_in_that_environment_with_no_dispatch_to_fence() {
+        let config = temp_dir("stop-saved");
+        recorded_saved(&config, "mac-studio");
+        // The child is no Dispatch (#1239): the record has none for it, so nothing is fenced.
+        let saved = Saved::new(Ok(ps_with(remote_child())));
+        let orca = Calls::new();
+        let done = stop_with(&config, F, "a", &|args| saved.read(args), &|args| {
+            orca.run(args)
+        })
+        .unwrap();
+        assert_eq!(done["terminalClosed"], true);
+        assert!(done.get("dispatchStopped").is_none());
+        assert_eq!(
+            orca.0.borrow().clone(),
+            [terminal_close_args("term_a", "mac-studio")]
+        );
+        assert_eq!(saved.reads(), ["environment list", "worktree ps"]);
+        // Nothing else is removed, and the entry stays.
+        assert_eq!(names(&read_children(&config, F)), ["p", "a"]);
+        // Orca's list of that environment must say that the terminal is the child's.
+        let saved = Saved::new(Ok(ps_with(json!({"path": REMOTE_PATH, "agents": []}))));
+        let orca = Calls::new();
+        assert!(
+            stop_with(&config, F, "a", &|args| saved.read(args), &|args| {
+                orca.run(args)
+            })
+            .is_err()
+        );
+        assert!(orca.0.borrow().is_empty());
+        std::fs::remove_dir_all(&config).unwrap();
     }
 
     macro_rules! flow_access {
