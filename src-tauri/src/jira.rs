@@ -6,13 +6,14 @@
 //!
 //! The boards, the sprints and their tickets are read through the Agile API (`/rest/agile/1.0`, J-2, #869): the commands `jira_boards`, `jira_sprints`, `jira_sprint_issues` and `jira_backlog` read the saved connection and call it where `api_base` says. They only read; the answers are turned into the types below by pure functions.
 //! A ticket is read for its tab (J-2, #871) by `jira_issue`: the ticket with its description (REST API v3, where the description is ADF, read as Markdown by `adf`), its sprint (the Agile API) and its comments.
+//! The tab changes four fields of a ticket (J-2, #872): the status (`jira_transitions` lists what the ticket can take now and `jira_transition` takes one), the assignee (`jira_assignable`, `jira_assign`), the priority (`jira_priorities`, `jira_set_priority`) and the sprint (`jira_set_sprint`). These are the only calls that write to Jira; every id that reaches a path or a body is checked first (`key_of`, `numeric_id_of`, `account_id_of`).
 
 mod adf;
 
 use std::{path::Path, time::Duration};
 
 use base64::{engine::general_purpose::STANDARD, Engine};
-use reqwest::header::{HeaderValue, ACCEPT, AUTHORIZATION};
+use reqwest::header::{HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 use tauri::AppHandle;
@@ -59,6 +60,11 @@ const DETAIL_FIELDS: &str = "summary,description,status,assignee,priority,labels
 const MAX_COMMENTS: usize = 200;
 /// The longest ticket key taken (a project key of letters, digits and underscores, a hyphen and a number).
 const KEY_LIMIT: usize = 64;
+/// The most people that the list of assignable users holds.
+const MAX_ASSIGNABLE: usize = 100;
+/// The longest id of a transition or of a priority (Jira's are numbers) and of an account taken.
+const ID_LIMIT: usize = 18;
+const ACCOUNT_ID_LIMIT: usize = 128;
 
 /// What `jira-settings.json` holds.
 #[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
@@ -181,6 +187,36 @@ pub struct JiraComment {
     pub author: String,
     pub created: String,
     pub body: String,
+}
+
+/// A change of status that the ticket can take now (J-2, #872). `status` is the name of the status it leads to and `statusCategory` the key of that status's category, the same as the list has them.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct JiraTransition {
+    pub id: String,
+    pub status: String,
+    pub status_category: String,
+}
+
+/// A person that the ticket can be assigned to.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct JiraPerson {
+    pub account_id: String,
+    pub display_name: String,
+}
+
+/// A priority that the ticket can be given.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct JiraPriority {
+    pub id: String,
+    pub name: String,
 }
 
 /// The origin of a site: `https://{name}.atlassian.net` only. Another scheme, host, port, user info or an empty or dotted name is refused, and a path is dropped.
@@ -541,21 +577,34 @@ async fn connect(site: &str, email: &str, token: &str, gateway: &str) -> Result<
     })
 }
 
-/// A GET of `path` (with its query) after the base, with the credential: the status and the body. The one place that sends it.
-async fn get(conn: &Conn, path: &str) -> Result<(u16, String), String> {
+/// A call of `path` (with its query) after the base, with the credential: the status and the body. The one place that sends it. `body` is the JSON of a write (J-2, #872), none for a read.
+async fn send(
+    conn: &Conn,
+    method: reqwest::Method,
+    path: &str,
+    body: Option<&Value>,
+) -> Result<(u16, String), String> {
     let mut header = HeaderValue::from_str(&conn.authorization).map_err(|e| e.to_string())?;
     header.set_sensitive(true);
-    let res = conn
+    let mut request = conn
         .http
-        .get(format!("{}{path}", conn.base))
+        .request(method, format!("{}{path}", conn.base))
         .header(AUTHORIZATION, header)
-        .header(ACCEPT, "application/json")
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+        .header(ACCEPT, "application/json");
+    if let Some(body) = body {
+        request = request
+            .header(CONTENT_TYPE, "application/json")
+            .body(body.to_string());
+    }
+    let res = request.send().await.map_err(|e| e.to_string())?;
     let status = res.status().as_u16();
-    let body = res.text().await.map_err(|e| e.to_string())?;
-    Ok((status, body))
+    let text = res.text().await.map_err(|e| e.to_string())?;
+    Ok((status, text))
+}
+
+/// A GET of `path`: the status and the body.
+async fn get(conn: &Conn, path: &str) -> Result<(u16, String), String> {
+    send(conn, reqwest::Method::GET, path, None).await
 }
 
 /// Asks Jira who the credential belongs to.
@@ -644,6 +693,224 @@ async fn issue_detail(conn: &Conn, key: &str) -> Result<JiraIssueDetail, String>
     )
     .await?;
     Ok(detail_of(raw, sprint, comments, truncated))
+}
+
+/// A transition id or a priority id as the screen gives it back: Jira's are numbers, and one goes into a path or a body, so nothing else is let through.
+fn numeric_id_of(input: &str) -> Result<&str, String> {
+    if !input.is_empty() && input.len() <= ID_LIMIT && input.chars().all(|c| c.is_ascii_digit()) {
+        Ok(input)
+    } else {
+        Err("ID の形が正しくありません".into())
+    }
+}
+
+/// An account id as the screen gives it back: letters and digits, then also `:`, `-` and `_` (`5b10ac8d82e05b22cc7d4ef5`, `712020:{uuid}`). It starts with a letter or a digit, so that `-1` (Jira's "the default assignee") is never sent.
+fn account_id_of(input: &str) -> Result<&str, String> {
+    let mut chars = input.chars();
+    let ok = input.len() <= ACCOUNT_ID_LIMIT
+        && chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '-' | '_'));
+    if ok {
+        Ok(input)
+    } else {
+        Err("アカウント ID の形が正しくありません".into())
+    }
+}
+
+/// The status changes that Jira's answer to the read of the transitions of a ticket gives: those it can take now (`isAvailable` is not false) and whose id is a number, each with the status it leads to (the name of the transition when Jira names no status).
+fn transitions_of(status: u16, body: &str) -> Result<Vec<JiraTransition>, String> {
+    #[derive(Deserialize)]
+    struct Answer {
+        #[serde(default)]
+        transitions: Vec<Raw>,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Raw {
+        id: String,
+        name: Option<String>,
+        to: Option<RawStatus>,
+        is_available: Option<bool>,
+    }
+    if !(200..=299).contains(&status) {
+        return Err(failure_of(status, body));
+    }
+    let answer: Answer =
+        serde_json::from_str(body).map_err(|e| format!("Jira の応答を読めません: {e}"))?;
+    Ok(answer
+        .transitions
+        .into_iter()
+        .filter(|t| t.is_available != Some(false) && numeric_id_of(&t.id).is_ok())
+        .map(|t| {
+            let to = t.to;
+            let category = to
+                .as_ref()
+                .and_then(|s| s.status_category.as_ref())
+                .and_then(|c| c.key.clone())
+                .unwrap_or_else(|| "undefined".to_owned());
+            JiraTransition {
+                id: t.id,
+                status: to
+                    .and_then(|s| s.name)
+                    .filter(|n| !n.is_empty())
+                    .or(t.name)
+                    .unwrap_or_default(),
+                status_category: category,
+            }
+        })
+        .collect())
+}
+
+/// The people that Jira's answer to the search of assignable users gives: the active ones, with an account id of the form taken and a name.
+fn assignable_of(status: u16, body: &str) -> Result<Vec<JiraPerson>, String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Raw {
+        account_id: Option<String>,
+        display_name: Option<String>,
+        active: Option<bool>,
+    }
+    if !(200..=299).contains(&status) {
+        return Err(failure_of(status, body));
+    }
+    let people: Vec<Raw> =
+        serde_json::from_str(body).map_err(|e| format!("Jira の応答を読めません: {e}"))?;
+    Ok(people
+        .into_iter()
+        .filter(|p| p.active != Some(false))
+        .filter_map(|p| {
+            let account_id = p.account_id.filter(|id| account_id_of(id).is_ok())?;
+            let display_name = p.display_name.filter(|n| !n.is_empty())?;
+            Some(JiraPerson {
+                account_id,
+                display_name,
+            })
+        })
+        .collect())
+}
+
+/// The priorities that Jira's answer to the edit metadata of a ticket allows (`fields.priority.allowedValues`): none when the ticket's priority cannot be edited by this credential. Only those with a numeric id are kept.
+fn priorities_of(status: u16, body: &str) -> Result<Vec<JiraPriority>, String> {
+    #[derive(Deserialize)]
+    struct Allowed {
+        id: Option<String>,
+        name: Option<String>,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Field {
+        #[serde(default)]
+        allowed_values: Vec<Allowed>,
+    }
+    #[derive(Deserialize)]
+    struct Fields {
+        priority: Option<Field>,
+    }
+    #[derive(Deserialize)]
+    struct Answer {
+        fields: Option<Fields>,
+    }
+    if !(200..=299).contains(&status) {
+        return Err(failure_of(status, body));
+    }
+    let answer: Answer =
+        serde_json::from_str(body).map_err(|e| format!("Jira の応答を読めません: {e}"))?;
+    Ok(answer
+        .fields
+        .and_then(|f| f.priority)
+        .map(|p| p.allowed_values)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|v| {
+            let id = v.id.filter(|id| numeric_id_of(id).is_ok())?;
+            Some(JiraPriority {
+                id,
+                name: v.name.unwrap_or_default(),
+            })
+        })
+        .collect())
+}
+
+/// What Jira's answer to a write means: any 2xx is done (Jira answers 204 with no body), the rest is the failure with its reason.
+fn done_of(status: u16, body: &str) -> Result<(), String> {
+    if (200..=299).contains(&status) {
+        Ok(())
+    } else {
+        Err(failure_of(status, body))
+    }
+}
+
+async fn transitions(conn: &Conn, key: &str) -> Result<Vec<JiraTransition>, String> {
+    let key = key_of(key)?;
+    let (status, body) = get(conn, &format!("{ISSUE_PATH}/{key}/transitions")).await?;
+    transitions_of(status, &body)
+}
+
+async fn transition(conn: &Conn, key: &str, id: &str) -> Result<(), String> {
+    let (key, id) = (key_of(key)?, numeric_id_of(id)?);
+    let body = serde_json::json!({ "transition": { "id": id } });
+    let (status, text) = send(
+        conn,
+        reqwest::Method::POST,
+        &format!("{ISSUE_PATH}/{key}/transitions"),
+        Some(&body),
+    )
+    .await?;
+    done_of(status, &text)
+}
+
+async fn assignable(conn: &Conn, key: &str) -> Result<Vec<JiraPerson>, String> {
+    let key = key_of(key)?;
+    let path =
+        format!("/rest/api/3/user/assignable/search?issueKey={key}&maxResults={MAX_ASSIGNABLE}");
+    let (status, body) = get(conn, &path).await?;
+    assignable_of(status, &body)
+}
+
+/// Assigns the ticket to the account, or to no one (`None`).
+async fn assign(conn: &Conn, key: &str, account_id: Option<&str>) -> Result<(), String> {
+    let key = key_of(key)?;
+    let account_id = account_id.map(account_id_of).transpose()?;
+    let body = serde_json::json!({ "accountId": account_id });
+    let (status, text) = send(
+        conn,
+        reqwest::Method::PUT,
+        &format!("{ISSUE_PATH}/{key}/assignee"),
+        Some(&body),
+    )
+    .await?;
+    done_of(status, &text)
+}
+
+async fn priorities(conn: &Conn, key: &str) -> Result<Vec<JiraPriority>, String> {
+    let key = key_of(key)?;
+    let (status, body) = get(conn, &format!("{ISSUE_PATH}/{key}/editmeta")).await?;
+    priorities_of(status, &body)
+}
+
+async fn set_priority(conn: &Conn, key: &str, id: &str) -> Result<(), String> {
+    let (key, id) = (key_of(key)?, numeric_id_of(id)?);
+    let body = serde_json::json!({ "fields": { "priority": { "id": id } } });
+    let (status, text) = send(
+        conn,
+        reqwest::Method::PUT,
+        &format!("{ISSUE_PATH}/{key}"),
+        Some(&body),
+    )
+    .await?;
+    done_of(status, &text)
+}
+
+/// Puts the ticket in the sprint (an active or future one, which the Agile API takes), or back in the backlog (`None`), which takes it out of its sprints.
+async fn move_to_sprint(conn: &Conn, key: &str, sprint_id: Option<u64>) -> Result<(), String> {
+    let key = key_of(key)?;
+    let path = match sprint_id {
+        Some(id) => format!("{SPRINT_PATH}/{id}/issue"),
+        None => "/rest/agile/1.0/backlog/issue".to_owned(),
+    };
+    let body = serde_json::json!({ "issues": [key] });
+    let (status, text) = send(conn, reqwest::Method::POST, &path, Some(&body)).await?;
+    done_of(status, &text)
 }
 
 fn load_file(dir: &Path) -> Result<Saved, String> {
@@ -809,6 +1076,82 @@ pub async fn jira_issue(app: AppHandle, key: String) -> Result<JiraIssueDetail, 
     let read = async { issue_detail(&saved_conn(&app).await?, &key).await };
     read.await
         .map_err(|e| log_failure("jira_issue", LOG_ACCOUNT, e))
+}
+
+/// The status changes that the ticket can take now (J-2, #872), each with the status it leads to.
+#[tauri::command]
+pub async fn jira_transitions(app: AppHandle, key: String) -> Result<Vec<JiraTransition>, String> {
+    let read = async { transitions(&saved_conn(&app).await?, &key).await };
+    read.await
+        .map_err(|e| log_failure("jira_transitions", LOG_ACCOUNT, e))
+}
+
+/// Takes the transition `transition_id` of the ticket (J-2, #872). Changes the status in Jira.
+#[tauri::command]
+pub async fn jira_transition(
+    app: AppHandle,
+    key: String,
+    transition_id: String,
+) -> Result<(), String> {
+    let write = async { transition(&saved_conn(&app).await?, &key, &transition_id).await };
+    write
+        .await
+        .map_err(|e| log_failure("jira_transition", LOG_ACCOUNT, e))
+}
+
+/// The people the ticket can be assigned to (J-2, #872), at most `MAX_ASSIGNABLE`.
+#[tauri::command]
+pub async fn jira_assignable(app: AppHandle, key: String) -> Result<Vec<JiraPerson>, String> {
+    let read = async { assignable(&saved_conn(&app).await?, &key).await };
+    read.await
+        .map_err(|e| log_failure("jira_assignable", LOG_ACCOUNT, e))
+}
+
+/// Assigns the ticket to `account_id`, or to no one when it is none (J-2, #872). Changes the assignee in Jira.
+#[tauri::command]
+pub async fn jira_assign(
+    app: AppHandle,
+    key: String,
+    account_id: Option<String>,
+) -> Result<(), String> {
+    let write = async { assign(&saved_conn(&app).await?, &key, account_id.as_deref()).await };
+    write
+        .await
+        .map_err(|e| log_failure("jira_assign", LOG_ACCOUNT, e))
+}
+
+/// The priorities the ticket can be given (J-2, #872): none when its priority cannot be edited.
+#[tauri::command]
+pub async fn jira_priorities(app: AppHandle, key: String) -> Result<Vec<JiraPriority>, String> {
+    let read = async { priorities(&saved_conn(&app).await?, &key).await };
+    read.await
+        .map_err(|e| log_failure("jira_priorities", LOG_ACCOUNT, e))
+}
+
+/// Gives the ticket the priority `priority_id` (J-2, #872). Changes the priority in Jira.
+#[tauri::command]
+pub async fn jira_set_priority(
+    app: AppHandle,
+    key: String,
+    priority_id: String,
+) -> Result<(), String> {
+    let write = async { set_priority(&saved_conn(&app).await?, &key, &priority_id).await };
+    write
+        .await
+        .map_err(|e| log_failure("jira_set_priority", LOG_ACCOUNT, e))
+}
+
+/// Puts the ticket in the sprint `sprint_id`, or in the backlog when it is none (J-2, #872). Changes the sprint in Jira.
+#[tauri::command]
+pub async fn jira_set_sprint(
+    app: AppHandle,
+    key: String,
+    sprint_id: Option<u64>,
+) -> Result<(), String> {
+    let write = async { move_to_sprint(&saved_conn(&app).await?, &key, sprint_id).await };
+    write
+        .await
+        .map_err(|e| log_failure("jira_set_sprint", LOG_ACCOUNT, e))
 }
 
 #[cfg(test)]
@@ -1210,7 +1553,21 @@ mod tests {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut request = Vec::new();
                 let mut buf = [0u8; 1024];
-                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                // The headers, and then the body that `content-length` announces (a write has one).
+                let mut needed = None;
+                loop {
+                    if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let head = lower(&String::from_utf8_lossy(&request[..end]));
+                        let length = head
+                            .lines()
+                            .find_map(|l| l.strip_prefix("content-length: "))
+                            .and_then(|n| n.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        needed = Some(end + 4 + length);
+                    }
+                    if needed.is_some_and(|n| request.len() >= n) {
+                        break;
+                    }
                     let n = socket.read(&mut buf).await.unwrap();
                     if n == 0 {
                         break;
@@ -1733,5 +2090,344 @@ mod tests {
             issue_detail(&basic_conn(&site).await, "EX-7").await,
             Err("Jira が認証を拒否しました（403）".into())
         );
+    }
+
+    const NO_CONTENT: &str = "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n";
+
+    #[test]
+    fn numeric_id_of_takes_numbers_only() {
+        for ok in ["1", "31", "10001", "123456789012345678"] {
+            assert_eq!(numeric_id_of(ok), Ok(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "-1",
+            "1a",
+            "../1",
+            "1/2",
+            "1?x=1",
+            " 1",
+            "１",
+            "1234567890123456789",
+        ] {
+            assert!(numeric_id_of(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn account_id_of_takes_an_account_id_and_never_the_default_assignee() {
+        for ok in [
+            "5b10ac8d82e05b22cc7d4ef5",
+            "712020:0aa1b2c3-d4e5-46f7-8899-aabbccddeeff",
+            "a_b-c",
+        ] {
+            assert_eq!(account_id_of(ok), Ok(ok), "{ok}");
+        }
+        for bad in ["", "-1", ":a", "a b", "a/b", "a\"b", "a?b", "é"] {
+            assert!(account_id_of(bad).is_err(), "{bad}");
+        }
+        assert!(account_id_of(&"a".repeat(ACCOUNT_ID_LIMIT + 1)).is_err());
+    }
+
+    #[test]
+    fn transitions_of_keeps_what_can_be_taken_with_the_status_it_leads_to() {
+        let body = r#"{"expand":"transitions","transitions":[
+            {"id":"11","name":"Start","to":{"name":"In Progress","statusCategory":{"key":"indeterminate"}}},
+            {"id":"21","name":"Finish","isAvailable":true,"to":{"name":"Done","statusCategory":{"key":"done"}}},
+            {"id":"31","name":"Blocked","isAvailable":false,"to":{"name":"Blocked","statusCategory":{"key":"new"}}},
+            {"id":"../41","name":"Bad","to":{"name":"Bad"}},
+            {"id":"51","name":"Reopen"}]}"#;
+        let list = transitions_of(200, body).unwrap();
+        assert_eq!(
+            list,
+            vec![
+                JiraTransition {
+                    id: "11".into(),
+                    status: "In Progress".into(),
+                    status_category: "indeterminate".into()
+                },
+                JiraTransition {
+                    id: "21".into(),
+                    status: "Done".into(),
+                    status_category: "done".into()
+                },
+                JiraTransition {
+                    id: "51".into(),
+                    status: "Reopen".into(),
+                    status_category: "undefined".into()
+                },
+            ]
+        );
+        assert_eq!(transitions_of(200, "{}"), Ok(vec![]));
+        assert!(transitions_of(200, "<html>").is_err());
+        assert_eq!(
+            transitions_of(403, ""),
+            Err("Jira が認証を拒否しました（403）".into())
+        );
+        assert_eq!(
+            transitions_of(404, "no"),
+            Err("Jira が 404 を返しました: no".into())
+        );
+    }
+
+    #[test]
+    fn assignable_of_keeps_the_active_people_with_a_usable_account_id() {
+        let body = r#"[
+            {"accountId":"5b10","displayName":"Mia","active":true},
+            {"accountId":"712020:abc","displayName":"Ann"},
+            {"accountId":"6c20","displayName":"Gone","active":false},
+            {"accountId":"-1","displayName":"Default"},
+            {"accountId":"7d30","displayName":""},
+            {"displayName":"No id"}]"#;
+        let list = assignable_of(200, body).unwrap();
+        assert_eq!(
+            list.iter()
+                .map(|p| (p.account_id.as_str(), p.display_name.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("5b10", "Mia"), ("712020:abc", "Ann")]
+        );
+        assert!(assignable_of(200, "{}").is_err());
+        assert_eq!(
+            assignable_of(401, ""),
+            Err("Jira が認証を拒否しました（401）".into())
+        );
+    }
+
+    #[test]
+    fn priorities_of_reads_the_allowed_values_of_the_edit_metadata() {
+        let body = r#"{"fields":{"summary":{"required":true},"priority":{"required":false,"allowedValues":[
+            {"id":"1","name":"Highest"},{"id":"3","name":"Medium"},{"id":"x","name":"Bad"},{"name":"No id"}]}}}"#;
+        let list = priorities_of(200, body).unwrap();
+        assert_eq!(
+            list,
+            vec![
+                JiraPriority {
+                    id: "1".into(),
+                    name: "Highest".into()
+                },
+                JiraPriority {
+                    id: "3".into(),
+                    name: "Medium".into()
+                },
+            ]
+        );
+        // A ticket whose priority is not editable has no such field.
+        assert_eq!(priorities_of(200, r#"{"fields":{}}"#), Ok(vec![]));
+        assert_eq!(priorities_of(200, "{}"), Ok(vec![]));
+        assert!(priorities_of(200, "<html>").is_err());
+        assert_eq!(
+            priorities_of(500, "boom"),
+            Err("Jira が 500 を返しました: boom".into())
+        );
+    }
+
+    #[test]
+    fn done_of_is_a_success_for_any_2xx_and_the_reason_otherwise() {
+        assert_eq!(done_of(204, ""), Ok(()));
+        assert_eq!(done_of(200, "{}"), Ok(()));
+        assert_eq!(
+            done_of(400, r#"{"errors":{"resolution":"Resolution is required"}}"#),
+            Err(
+                r#"Jira が 400 を返しました: {"errors":{"resolution":"Resolution is required"}}"#
+                    .into()
+            )
+        );
+        assert_eq!(
+            done_of(403, ""),
+            Err("Jira が認証を拒否しました（403）".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn the_transitions_of_a_ticket_are_read_with_the_credential() {
+        let (site, seen) = serve_each(vec![json_answer(
+            r#"{"transitions":[{"id":"11","name":"Start","to":{"name":"In Progress","statusCategory":{"key":"indeterminate"}}}]}"#,
+        )])
+        .await;
+        let list = transitions(&basic_conn(&site).await, "EX-7").await.unwrap();
+        assert_eq!(list[0].status, "In Progress");
+        let requests = seen.await.unwrap();
+        assert!(
+            requests[0].starts_with("get /rest/api/3/issue/ex-7/transitions http/1.1"),
+            "{}",
+            requests[0]
+        );
+        assert!(requests[0].contains(BASIC));
+    }
+
+    #[tokio::test]
+    async fn a_transition_is_posted_with_its_id_and_a_bad_one_asks_nothing() {
+        let (site, seen) = serve_each(vec![NO_CONTENT.into()]).await;
+        let conn = basic_conn(&site).await;
+        transition(&conn, "EX-7", "31").await.unwrap();
+        let requests = seen.await.unwrap();
+        assert!(
+            requests[0].starts_with("post /rest/api/3/issue/ex-7/transitions http/1.1"),
+            "{}",
+            requests[0]
+        );
+        assert!(requests[0].contains(BASIC));
+        assert!(requests[0].contains("content-type: application/json"));
+        assert!(
+            requests[0].ends_with(r#"{"transition":{"id":"31"}}"#),
+            "{}",
+            requests[0]
+        );
+        let dead = basic_conn("http://127.0.0.1:1").await;
+        assert_eq!(
+            transition(&dead, "EX-7", "../1").await,
+            Err("ID の形が正しくありません".into())
+        );
+        assert_eq!(
+            transition(&dead, "ex-7", "1").await,
+            Err("チケットのキーの形が正しくありません".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_transition_is_the_error_with_jiras_reason() {
+        let (site, _seen) = serve_each(vec![
+            "HTTP/1.1 400 Bad Request\r\nContent-Length: 29\r\nConnection: close\r\n\r\n{\"errors\":{\"resolution\":\"r\"}}".into(),
+        ])
+        .await;
+        assert_eq!(
+            transition(&basic_conn(&site).await, "EX-7", "31").await,
+            Err(r#"Jira が 400 を返しました: {"errors":{"resolution":"r"}}"#.into())
+        );
+    }
+
+    #[tokio::test]
+    async fn the_assignable_people_are_asked_for_the_ticket_and_an_assignment_puts_the_account_id_or_null(
+    ) {
+        let (site, seen) = serve_each(vec![
+            json_answer(r#"[{"accountId":"5b10","displayName":"Mia"}]"#),
+            NO_CONTENT.into(),
+            NO_CONTENT.into(),
+        ])
+        .await;
+        let conn = basic_conn(&site).await;
+        assert_eq!(assignable(&conn, "EX-7").await.unwrap().len(), 1);
+        assign(&conn, "EX-7", Some("5b10")).await.unwrap();
+        assign(&conn, "EX-7", None).await.unwrap();
+        let requests = seen.await.unwrap();
+        assert!(
+            requests[0].starts_with(
+                "get /rest/api/3/user/assignable/search?issuekey=ex-7&maxresults=100 http/1.1"
+            ),
+            "{}",
+            requests[0]
+        );
+        assert!(
+            requests[1].starts_with("put /rest/api/3/issue/ex-7/assignee http/1.1"),
+            "{}",
+            requests[1]
+        );
+        assert!(
+            requests[1].ends_with(r#"{"accountid":"5b10"}"#),
+            "{}",
+            requests[1]
+        );
+        assert!(
+            requests[2].ends_with(r#"{"accountid":null}"#),
+            "{}",
+            requests[2]
+        );
+        assert!(requests.iter().all(|r| r.contains(BASIC)));
+        let dead = basic_conn("http://127.0.0.1:1").await;
+        assert_eq!(
+            assign(&dead, "EX-7", Some("-1")).await,
+            Err("アカウント ID の形が正しくありません".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn the_priorities_come_from_the_edit_metadata_and_a_priority_is_put_by_its_id() {
+        let (site, seen) = serve_each(vec![
+            json_answer(r#"{"fields":{"priority":{"allowedValues":[{"id":"2","name":"High"}]}}}"#),
+            NO_CONTENT.into(),
+        ])
+        .await;
+        let conn = basic_conn(&site).await;
+        assert_eq!(priorities(&conn, "EX-7").await.unwrap()[0].name, "High");
+        set_priority(&conn, "EX-7", "2").await.unwrap();
+        let requests = seen.await.unwrap();
+        assert!(
+            requests[0].starts_with("get /rest/api/3/issue/ex-7/editmeta http/1.1"),
+            "{}",
+            requests[0]
+        );
+        assert!(
+            requests[1].starts_with("put /rest/api/3/issue/ex-7 http/1.1"),
+            "{}",
+            requests[1]
+        );
+        assert!(
+            requests[1].ends_with(r#"{"fields":{"priority":{"id":"2"}}}"#),
+            "{}",
+            requests[1]
+        );
+        let dead = basic_conn("http://127.0.0.1:1").await;
+        assert_eq!(
+            set_priority(&dead, "EX-7", "High").await,
+            Err("ID の形が正しくありません".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_ticket_goes_into_a_sprint_or_back_to_the_backlog() {
+        let (site, seen) = serve_each(vec![NO_CONTENT.into(), NO_CONTENT.into()]).await;
+        let conn = basic_conn(&site).await;
+        move_to_sprint(&conn, "EX-7", Some(37)).await.unwrap();
+        move_to_sprint(&conn, "EX-7", None).await.unwrap();
+        let requests = seen.await.unwrap();
+        assert!(
+            requests[0].starts_with("post /rest/agile/1.0/sprint/37/issue http/1.1"),
+            "{}",
+            requests[0]
+        );
+        assert!(
+            // The helper lowercases what it saw.
+            requests[0].ends_with(r#"{"issues":["ex-7"]}"#),
+            "{}",
+            requests[0]
+        );
+        assert!(
+            requests[1].starts_with("post /rest/agile/1.0/backlog/issue http/1.1"),
+            "{}",
+            requests[1]
+        );
+        assert!(requests.iter().all(|r| r.contains(BASIC)));
+        assert_eq!(
+            move_to_sprint(&basic_conn("http://127.0.0.1:1").await, "x", Some(1)).await,
+            Err("チケットのキーの形が正しくありません".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_write_through_the_gateway_sends_the_bearer_credential_and_a_redirect_is_not_followed(
+    ) {
+        let (site, tenant_seen) = serve_once(tenant_answer()).await;
+        let (gateway, seen) = serve_each(vec![NO_CONTENT.into()]).await;
+        let conn = connect(&site, "", "tok", &gateway).await.unwrap();
+        transition(&conn, "EX-7", "31").await.unwrap();
+        let requests = seen.await.unwrap();
+        assert!(
+            requests[0].starts_with(&format!(
+                "post /ex/jira/{TENANT_ANSWER_ID}/rest/api/3/issue/ex-7/transitions http/1.1"
+            )),
+            "{}",
+            requests[0]
+        );
+        assert!(requests[0].contains("authorization: bearer tok\r\n"));
+        assert!(!lower(&tenant_seen.await.unwrap()).contains("authorization"));
+        let (site, seen) = serve_each(vec![
+            "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
+        ])
+        .await;
+        assert_eq!(
+            transition(&basic_conn(&site).await, "EX-7", "31").await,
+            Err("Jira が 302 を返しました: ".into())
+        );
+        assert_eq!(seen.await.unwrap().len(), 1);
     }
 }

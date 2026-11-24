@@ -22,8 +22,8 @@ interface Section {
   error: string | null;
 }
 
-// A row was pressed twice: the screen opens the ticket as a tab of the work pane (orca-jira-tab.ts, #871).
-let openIssue: (key: string) => void = () => {};
+// A row was pressed twice: the screen opens the ticket as a tab of the work pane (orca-jira-tab.ts, #871), with the board the list shows (the sprints that the tab offers are the board's).
+let openIssue: (key: string, boardId: number) => void = () => {};
 
 const BACKLOG = "backlog";
 const ALL = "all";
@@ -107,7 +107,7 @@ function issueRow(issue: JiraIssue) {
   const row = tag("div", "orca-jira-issue");
   row.dataset.key = issue.key;
   row.dataset.category = issue.statusCategory;
-  row.ondblclick = () => openIssue(issue.key);
+  row.ondblclick = () => boardId !== null && openIssue(issue.key, boardId);
   row.append(span("orca-jira-key", issue.key), span("orca-jira-summary", issue.summary), span("orca-jira-status", issue.status));
   return row;
 }
@@ -244,12 +244,25 @@ export function syncOrcaJira(shown: boolean) {
   on = shown;
 }
 
+// A ticket was changed in its tab (#872): its rows take the new values.
+export function applyJiraChange(key: string, patch: Partial<JiraIssue>) {
+  for (const s of sections.values()) for (const i of s.issues) if (i.key === key) Object.assign(i, patch);
+  draw();
+}
+
+// A ticket changed its sprint in its tab (#872): where it stands is Jira's, so the sections that were read are read again. A part that is not shown reads everything when it is shown.
+export async function reloadJiraSections() {
+  if (!on || stage !== "ready") return;
+  const run = seq;
+  for (const key of [...sections.keys()]) if (run === seq) await readSection(run, key);
+}
+
 // The window got the focus back: a connection that was missing, or a first read that failed, is tried again.
 export function refreshOrcaJira() {
   if (stage === "none" || stage === "failed") void read();
 }
 
-export function initOrcaJira(on: { open: (key: string) => void }) {
+export function initOrcaJira(on: { open: (key: string, boardId: number) => void }) {
   openIssue = on.open;
   $("orca-jira-reload").innerHTML = RELOAD_SVG;
   $("orca-jira-reload").onclick = () => void read();

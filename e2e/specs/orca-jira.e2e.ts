@@ -1,4 +1,4 @@
-import { callsOf, count, jiraBoard, jiraDetail, jiraIssue, jiraIssues, jiraSprint, logged, mock, onceId, rejects, textsOf, waitForCalls, waitForCount, waitForLog } from "../support";
+import { callsOf, CARD, CARDS, count, holds, jiraBoard, jiraDetail, jiraIssue, jiraIssues, jiraSprint, logged, mock, onceId, rejects, release, textsOf, waitForCalls, waitForCount, waitForLog } from "../support";
 import { filesToggle, openOrca, orcaOverview, project, sample, selectedTab, tabOf, worktrees } from "../orca-support";
 
 // J-2: the Jira part of the file pane (#870). Rust reads the boards, the sprints and the tickets (unit tests); here the screen is checked: what it asks of Rust, and how it draws the answers.
@@ -373,5 +373,179 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await openTicket("EX-1");
     await expect($(".orca-jira-tab .orca-jira-title")).toHaveText("Write the page");
     expect(await callsOf("jira_issue")).toHaveLength(2);
+  });
+
+  // J-2 (#872): the status, the assignee, the sprint and the priority are changed in the right column.
+  const FIELD = { status: 1, assignee: 2, sprint: 3, priority: 4 };
+  const editButton = (field: number) => $(`.orca-jira-side-row:nth-child(${field}) .orca-jira-edit`);
+  const sideTexts = () => textsOf(".orca-jira-side-row");
+  const menuTexts = () => textsOf('.menu[role="menu"] [role="menuitem"]');
+  const menuItem = async (index: number) => (await $$('.menu[role="menu"] [role="menuitem"]'))[index];
+  // The ticket EX-1 open in its tab, with the tickets of the list drawn.
+  async function openEditable() {
+    await openJira(withTickets());
+    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    await openTicket("EX-1");
+    await expect($(".orca-jira-tab .orca-jira-title")).toBeDisplayed();
+  }
+  const transitions = [
+    { id: "11", status: "To Do", statusCategory: "new" },
+    { id: "21", status: "Done", statusCategory: "done" },
+    { id: "31", status: "In Progress", statusCategory: "indeterminate" },
+  ];
+
+  it("makes the four fields buttons, and leaves the labels and the parent as they are (J-2)", async () => {
+    await openEditable();
+    expect(await count(".orca-jira-side .orca-jira-edit")).toBe(4);
+    expect(await count(".orca-jira-side-row:nth-child(5) button, .orca-jira-side-row:nth-child(6) button")).toBe(0);
+    expect(await sideTexts()).toEqual(["ステータスIn Progress", "担当Mia", "スプリントSprint 12", "優先度High", "ラベルuiready", "親EX-100The epic"]);
+    // The options are asked when a button is pressed, not when the ticket is read.
+    expect(await callsOf("jira_transitions")).toEqual([]);
+    expect(await callsOf("jira_assignable")).toEqual([]);
+    expect(await callsOf("jira_priorities")).toEqual([]);
+  });
+
+  it("offers the transitions of the ticket except its own status, takes one, and draws the new status in the tab and in the list (J-2)", async () => {
+    await openEditable();
+    await mock("jira_transitions", transitions);
+    await mock("jira_transition", null);
+    await editButton(FIELD.status).click();
+    expect(await waitForCalls("jira_transitions")).toEqual([{ key: "EX-1" }]);
+    await waitForCount('.menu[role="menu"]', 1);
+    expect(await menuTexts()).toEqual(["To Do", "Done"]);
+    await (await menuItem(1)).click();
+    expect(await waitForCalls("jira_transition")).toEqual([{ key: "EX-1", transitionId: "21" }]);
+    await expect($(".orca-jira-side-row:nth-child(1) .orca-jira-pill")).toHaveText("Done");
+    await expect($(".orca-jira-side-row:nth-child(1) .orca-jira-pill")).toHaveAttribute("data-category", "done");
+    expect(await rowOf("EX-1")).toMatchObject({ status: "Done", category: "done", keyLine: "line-through" });
+    expect(await count(CARDS)).toBe(0);
+    await expect(editButton(FIELD.status)).toBeEnabled();
+  });
+
+  it("shows the new value at once, keeps the fields off while Jira answers, and puts the old value back with the reason when Jira refuses (J-2)", async () => {
+    await openEditable();
+    await mock("jira_transitions", transitions);
+    await mock("jira_transition", holds);
+    await editButton(FIELD.status).click();
+    await waitForCount('.menu[role="menu"]', 1);
+    await (await menuItem(1)).click();
+    await waitForCalls("jira_transition");
+    await expect($(".orca-jira-side-row:nth-child(1) .orca-jira-pill")).toHaveText("Done");
+    for (const field of Object.values(FIELD)) await expect(editButton(field)).toBeDisabled();
+    await expect($('.orca-jira-tab-head .icon-btn[aria-label="読み直す"]')).toBeDisabled();
+    await release("jira_transition", rejects("Jira が 400 を返しました: resolution is required"));
+    await expect($(".orca-jira-side-row:nth-child(1) .orca-jira-pill")).toHaveText("In Progress");
+    await expect($(".orca-jira-side-row:nth-child(1) .orca-jira-pill")).toHaveAttribute("data-category", "indeterminate");
+    expect(await textsOf(CARD)).toEqual(["Jira が 400 を返しました: resolution is required"]);
+    expect((await logged()).some((l) => l.level === "error" && l.source === "orca-jira")).toBe(true);
+    // The list still has the old value, and the fields work again.
+    expect(await rowOf("EX-1")).toMatchObject({ status: "In Progress", category: "indeterminate" });
+    for (const field of Object.values(FIELD)) await expect(editButton(field)).toBeEnabled();
+  });
+
+  it("shows a card and no menu when the options cannot be read (J-2)", async () => {
+    await openEditable();
+    await mock("jira_transitions", rejects("Jira が認証を拒否しました（403）"));
+    await editButton(FIELD.status).click();
+    await waitForCount(CARDS, 1);
+    expect(await textsOf(CARD)).toEqual(["Jira が認証を拒否しました（403）"]);
+    expect(await count(".menu")).toBe(0);
+    await expect(editButton(FIELD.status)).toBeEnabled();
+    expect(await callsOf("jira_transition")).toEqual([]);
+  });
+
+  it("assigns the ticket to a person of the list, to no one, and not again to the one it has (J-2)", async () => {
+    await openEditable();
+    await mock("jira_assignable", [
+      { accountId: "a1", displayName: "Ann" },
+      { accountId: "m2", displayName: "Mia" },
+    ]);
+    await mock("jira_assign", null);
+    await editButton(FIELD.assignee).click();
+    expect(await waitForCalls("jira_assignable")).toEqual([{ key: "EX-1" }]);
+    await waitForCount('.menu[role="menu"]', 1);
+    expect(await menuTexts()).toEqual(["未割り当て", "Ann", "Mia"]);
+    await expect($('.menu .menu-search[aria-label="担当を探す"]')).toBeDisplayed();
+    // Mia has it already: nothing is sent.
+    await (await menuItem(2)).click();
+    expect(await callsOf("jira_assign")).toEqual([]);
+    await editButton(FIELD.assignee).click();
+    await waitForCount('.menu[role="menu"]', 1);
+    await (await menuItem(1)).click();
+    expect(await waitForCalls("jira_assign")).toEqual([{ key: "EX-1", accountId: "a1" }]);
+    await expect(editButton(FIELD.assignee)).toHaveText("Ann");
+    await editButton(FIELD.assignee).click();
+    await waitForCount('.menu[role="menu"]', 1);
+    await (await menuItem(0)).click();
+    await waitForCalls("jira_assign", 2);
+    expect(await callsOf("jira_assign")).toEqual([
+      { key: "EX-1", accountId: "a1" },
+      { key: "EX-1", accountId: null },
+    ]);
+    await expect(editButton(FIELD.assignee)).toHaveText("未割り当て");
+    await expect(editButton(FIELD.assignee)).toHaveElementClass("none");
+  });
+
+  it("gives the ticket a priority of the list that Jira allows it, and says so when there is none to choose (J-2)", async () => {
+    await openEditable();
+    await mock("jira_priorities", [
+      { id: "1", name: "Highest" },
+      { id: "2", name: "High" },
+    ]);
+    await mock("jira_set_priority", null);
+    await editButton(FIELD.priority).click();
+    expect(await waitForCalls("jira_priorities")).toEqual([{ key: "EX-1" }]);
+    await waitForCount('.menu[role="menu"]', 1);
+    expect(await menuTexts()).toEqual(["Highest", "High"]);
+    await (await menuItem(0)).click();
+    expect(await waitForCalls("jira_set_priority")).toEqual([{ key: "EX-1", priorityId: "1" }]);
+    await expect(editButton(FIELD.priority)).toHaveText("Highest");
+    await mock("jira_priorities", []);
+    await editButton(FIELD.priority).click();
+    await waitForCount('.menu[role="menu"]', 1);
+    expect(await menuTexts()).toEqual(["選べるものがありません"]);
+    await expect(await menuItem(0)).toBeDisabled();
+  });
+
+  it("moves the ticket to a sprint of its board or to the backlog, and reads the sections of the list again (J-2)", async () => {
+    await openEditable();
+    await mock("jira_sprints", [sprint12, sprint13]);
+    await mock("jira_set_sprint", null);
+    const before = { sprint: (await callsOf("jira_sprint_issues")).length, backlog: (await callsOf("jira_backlog")).length };
+    await editButton(FIELD.sprint).click();
+    expect(await waitForCalls("jira_sprints")).toEqual([{ boardId: 1 }]);
+    await waitForCount('.menu[role="menu"]', 1);
+    expect(await menuTexts()).toEqual(["バックログ", "Sprint 12", "Sprint 13"]);
+    await (await menuItem(2)).click();
+    expect(await waitForCalls("jira_set_sprint")).toEqual([{ key: "EX-1", sprintId: 13 }]);
+    await expect(editButton(FIELD.sprint)).toHaveText("Sprint 13");
+    await waitForCalls("jira_sprint_issues", before.sprint + 1);
+    await waitForCalls("jira_backlog", before.backlog + 1);
+    await editButton(FIELD.sprint).click();
+    await waitForCount('.menu[role="menu"]', 1);
+    await (await menuItem(0)).click();
+    await waitForCalls("jira_set_sprint", 2);
+    expect(await callsOf("jira_set_sprint")).toEqual([
+      { key: "EX-1", sprintId: 13 },
+      { key: "EX-1", sprintId: null },
+    ]);
+    await expect(editButton(FIELD.sprint)).toHaveText("なし");
+    expect(await count(CARDS)).toBe(0);
+  });
+
+  it("keeps the other rows of the list as they are, and does not read the ticket again after a change (J-2)", async () => {
+    await openEditable();
+    await mock("jira_transitions", transitions);
+    await mock("jira_transition", null);
+    await editButton(FIELD.status).click();
+    await waitForCount('.menu[role="menu"]', 1);
+    await (await menuItem(0)).click();
+    await waitForCalls("jira_transition");
+    await expect($(".orca-jira-side-row:nth-child(1) .orca-jira-pill")).toHaveText("To Do");
+    expect(await rowOf("EX-1")).toMatchObject({ status: "To Do", category: "new" });
+    expect(await rowOf("EX-3")).toMatchObject({ status: "To Do", category: "new" });
+    expect(await rowOf("EX-2")).toMatchObject({ status: "Done", category: "done" });
+    // The change is taken as it is: the ticket is not read again.
+    expect(await callsOf("jira_issue")).toEqual([{ key: "EX-1" }]);
   });
 });

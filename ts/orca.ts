@@ -1186,10 +1186,10 @@ function openDatabaseQuery(profile: DatabaseProfileView, database: string) {
 }
 
 // A ticket of the Jira part of the file pane was pressed twice (J-2): it opens as a tab in the focused pane and is selected, and is read; one that is open already is selected and read again.
-function openJiraIssue(key: string) {
+function openJiraIssue(key: string, boardId: number) {
   if (projectKey === null || view === null) return;
   started = null;
-  chooseTab(openJiraTab(projectPlace(projectKey), projectKey, key).tab.id);
+  chooseTab(openJiraTab(projectPlace(projectKey), projectKey, key, boardId).tab.id);
   draw();
 }
 

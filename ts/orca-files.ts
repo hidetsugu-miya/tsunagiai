@@ -1187,7 +1187,7 @@ export function syncFiles(next: FilesContext | null, open: Set<string>) {
   branchMoved();
 }
 
-export function initOrcaFiles(on: { open: (relative: string) => void; jira: (key: string) => void; diff: (relative: string) => void; commitDiff: (relative: string, commit: DiffCommit) => void; toggle: () => void; switched: (here: FilesContext, branch: string) => void; picked: (here: FilesContext, worktree: OrcaGitWorktree) => void; read: (here: FilesContext, worktrees: OrcaGitWorktree[]) => void; moved: () => void; watching: () => void; deleted: (here: FilesContext, deleted: OrcaDeleteEntry[]) => void; moving: (here: FilesContext, relative: string) => Promise<(to: string | null) => void> }) {
+export function initOrcaFiles(on: { open: (relative: string) => void; jira: (key: string, boardId: number) => void; diff: (relative: string) => void; commitDiff: (relative: string, commit: DiffCommit) => void; toggle: () => void; switched: (here: FilesContext, branch: string) => void; picked: (here: FilesContext, worktree: OrcaGitWorktree) => void; read: (here: FilesContext, worktrees: OrcaGitWorktree[]) => void; moved: () => void; watching: () => void; deleted: (here: FilesContext, deleted: OrcaDeleteEntry[]) => void; moving: (here: FilesContext, relative: string) => Promise<(to: string | null) => void> }) {
   openFile = on.open;
   openDiff = on.diff;
   branchSwitched = on.switched;

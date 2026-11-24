@@ -1716,6 +1716,11 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-jira-side-name { margin-bottom: 2px; color: var(--muted); font-size: calc(11.5px * var(--fs)); }
 .orca-jira-side-value { overflow-wrap: anywhere; }
 .orca-jira-side-value.none { color: var(--muted); }
+/* #872: a value that can be changed is a button of the same look, with a hover. */
+.orca-jira-edit { display: block; width: calc(100% + 12px); margin: 0 -6px; padding: 2px 6px; border: 0; border-radius: 8px; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.orca-jira-edit.none { color: var(--muted); }
+.orca-jira-edit:hover:not(:disabled) { background: var(--hover); }
+.orca-jira-edit:disabled { cursor: default; opacity: 0.6; }
 .orca-jira-pill { display: inline-block; padding: 0 8px; border-radius: 9px; background: var(--effort-low-bg); color: var(--effort-low); font-size: calc(11px * var(--fs)); line-height: 18px; }
 .orca-jira-pill[data-category="indeterminate"] { background: var(--codex-bg); color: var(--codex-fg); }
 .orca-jira-pill[data-category="done"] { background: var(--soft); color: var(--accent-text); }
