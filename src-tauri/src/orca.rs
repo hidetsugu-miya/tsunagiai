@@ -2582,14 +2582,19 @@ fn link_absolute(uri: &str) -> Result<String, String> {
 
 /// Opens the file of a `file:` link that was ⌘+clicked in a terminal of this machine and names a file outside the worktree (A-8) in Zed (`open -a Zed {path}`). The path is an argument of the process and never goes through a shell, and what is opened is that file in Zed alone, never by its kind (a `.command` or an `.app` would run). The file must exist.
 #[tauri::command]
-pub fn orca_link_open_in_zed(uri: String) -> Result<(), String> {
+pub async fn orca_link_open_in_zed(uri: String) -> Result<(), String> {
     let path = link_absolute(&uri)?;
-    if std::fs::metadata(&path).is_err() {
+    blocking(move || open_in_zed(&path)).await?
+}
+
+/// The file check and the wait for `open` of `orca_link_open_in_zed`, run off the async runtime so the screen does not stall while `open` runs.
+fn open_in_zed(path: &str) -> Result<(), String> {
+    if std::fs::metadata(path).is_err() {
         return Err(format!("ファイルがありません: {path}"));
     }
     let out = std::process::Command::new("open")
         .args(["-a", "Zed"])
-        .arg(&path)
+        .arg(path)
         .output()
         .map_err(|e| format!("Zed を開けません: {e}"))?;
     if out.status.success() {
