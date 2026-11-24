@@ -286,13 +286,13 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await expect($(".orca-jira-tab .orca-jira-title")).toBeDisplayed();
     expect(await textsOf(".orca-jira-tab-head .orca-edit-path")).toEqual(["EX-1"]);
     expect(await textsOf(".orca-jira-crumb")).toEqual(["EX-100/EX-1"]);
-    const html = await browser.execute(() => document.querySelector(".orca-jira-main > .md")!.innerHTML);
+    const html = await browser.execute(() => document.querySelector(".orca-jira-main .orca-jira-desc > .md")!.innerHTML);
     expect(html).toContain("<strong>the ticket</strong>");
     expect(html).toContain("<li>one</li>");
     expect(html).toContain('href="https://example.com/spec"');
     // What the sanitizer of the Todo comments drops: an address that is not http(s), and a form.
     expect(html).not.toContain("javascript:");
-    expect(await count(".orca-jira-main > .md form, .orca-jira-main > .md input")).toBe(0);
+    expect(await count(".orca-jira-main .orca-jira-desc > .md form, .orca-jira-main .orca-jira-desc > .md input")).toBe(0);
     expect(await textsOf(".orca-jira-comments-head")).toEqual(["コメント 2 件"]);
     expect(await textsOf(".orca-jira-comment")).toEqual(["Ann2026-11-20 09:30Looks good", "Bob2026-11-21 18:05"]);
     expect(await textsOf(".orca-jira-side-row")).toEqual(["ステータスIn Progress", "担当Mia", "スプリントSprint 12", "優先度High", "ラベルuiready", "親EX-100The epic"]);
@@ -308,7 +308,7 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     expect(await textsOf(".orca-jira-crumb")).toEqual(["EX-2"]);
     expect(await textsOf(".orca-jira-side-row")).toEqual(["ステータスDone", "担当未割り当て", "スプリントなし", "優先度なし", "ラベルなし", "親なし"]);
     expect(await textsOf(".orca-jira-comments-head")).toEqual(["コメント 0 件"]);
-    expect(await count(".orca-jira-main > .md")).toBe(0);
+    expect(await count(".orca-jira-main .orca-jira-desc > .md")).toBe(0);
     await expect($(".orca-jira-pill")).toHaveAttribute("data-category", "done");
   });
 
@@ -547,5 +547,137 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     expect(await rowOf("EX-2")).toMatchObject({ status: "Done", category: "done" });
     // The change is taken as it is: the ticket is not read again.
     expect(await callsOf("jira_issue")).toEqual([{ key: "EX-1" }]);
+  });
+
+  // J-2 (#873): the description and the comments are edited in the rich Markdown editor of A-26.
+  const descField = () => $("#orca-jira-desc-input .ProseMirror");
+  const commentField = () => $("#orca-jira-comment-input .ProseMirror");
+  const descText = () => browser.execute(() => document.querySelector<HTMLElement>(".orca-jira-main .orca-jira-desc > .md")?.innerText.trim() ?? null);
+  // Replaces the text of a field of the editor (once Milkdown has made it editable) with `text`.
+  const typeInto = async (field: () => ChainablePromiseElement, text: string) => {
+    await browser.waitUntil(async () => (await field().getAttribute("contenteditable")) === "true");
+    await field().click();
+    await browser.keys(["Meta", "a"]);
+    await browser.keys(text.split(""));
+  };
+  // Cmd+Enter (Ctrl+Enter off macOS) in a field, as the key event the page listens for.
+  const pressSubmit = (selector: string) =>
+    browser.execute(
+      (s, once) => {
+        if (!window.__e2e_once__(once)) return;
+        const isMac = /Mac/.test(navigator.platform);
+        document.querySelector(s)!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: isMac, ctrlKey: !isMac, bubbles: true, cancelable: true }));
+      },
+      selector,
+      onceId(),
+    );
+  const original = detailOf["EX-1"].description;
+
+  it("opens the editor on the description with its Markdown, and the cancel button gives the text back and sends nothing (J-2, #873)", async () => {
+    await openEditable();
+    expect(await count(".orca-jira-desc-edit")).toBe(1);
+    expect(await count("#orca-jira-desc-input")).toBe(0);
+    await $(".orca-jira-desc-edit").click();
+    await waitForCount("#orca-jira-desc-input .ProseMirror", 1);
+    await browser.waitUntil(async () => (await descField().getText()).includes("Show the ticket."));
+    expect(await count(".orca-jira-main .orca-jira-desc > .md")).toBe(0);
+    expect(await count(".orca-jira-desc-edit")).toBe(0);
+    await expect($(".orca-jira-save")).toHaveText("保存");
+    await expect($(".orca-jira-cancel")).toHaveText("キャンセル");
+    await expect($('.orca-jira-tab-head .icon-btn[aria-label="読み直す"]')).toBeDisabled();
+    expect(await count(".orca-jira-tab [placeholder]")).toBe(0);
+    await $(".orca-jira-cancel").click();
+    expect(await count("#orca-jira-desc-input")).toBe(0);
+    expect(await descText()).toContain("Show the ticket.");
+    await expect($('.orca-jira-tab-head .icon-btn[aria-label="読み直す"]')).toBeEnabled();
+    expect(await callsOf("jira_set_description")).toEqual([]);
+  });
+
+  it("sends the key, the Markdown it started from and the Markdown of the editor, and draws what Jira answers with (J-2, #873)", async () => {
+    await openEditable();
+    await mock("jira_set_description", "The new **description**");
+    await $(".orca-jira-desc-edit").click();
+    await typeInto(descField, "The new description");
+    await $(".orca-jira-save").click();
+    expect(await waitForCalls("jira_set_description")).toEqual([{ key: "EX-1", base: original, markdown: "The new description\n" }]);
+    await waitForCount("#orca-jira-desc-input", 0);
+    expect(await descText()).toBe("The new description");
+    expect(await $(".orca-jira-main .orca-jira-desc > .md strong").getText()).toBe("description");
+    // The ticket is not read again, and the description is what Rust gave back for the next edit.
+    expect(await callsOf("jira_issue")).toEqual([{ key: "EX-1" }]);
+    await $(".orca-jira-desc-edit").click();
+    await browser.waitUntil(async () => (await descField().getText()).includes("The new description"));
+    await $(".orca-jira-cancel").click();
+    await mock("jira_set_description", "Again");
+    await $(".orca-jira-desc-edit").click();
+    await typeInto(descField, "Again");
+    await pressSubmit("#orca-jira-desc-input .ProseMirror");
+    // `mock` cleared the record of the first save.
+    expect(await waitForCalls("jira_set_description")).toEqual([{ key: "EX-1", base: "The new **description**", markdown: "Again\n" }]);
+  });
+
+  it("keeps the editor off while Jira answers, and keeps the typing with the reason in a card when Jira refuses (J-2, #873)", async () => {
+    await openEditable();
+    await mock("jira_set_description", holds);
+    await $(".orca-jira-desc-edit").click();
+    await typeInto(descField, "Typed text");
+    await $(".orca-jira-save").click();
+    await waitForCalls("jira_set_description");
+    await expect($(".orca-jira-save")).toBeDisabled();
+    await expect($(".orca-jira-cancel")).toBeDisabled();
+    await expect(editButton(FIELD.status)).toBeDisabled();
+    await expect(descField()).toHaveAttribute("contenteditable", "false");
+    await release("jira_set_description", rejects("説明が Jira で変更されています。読み直してください"));
+    await waitForCount(CARDS, 1);
+    expect(await textsOf(CARD)).toEqual(["説明が Jira で変更されています。読み直してください"]);
+    expect((await logged()).some((l) => l.level === "error" && l.source === "orca-jira")).toBe(true);
+    // Still editing, with the typing in the editor and the buttons working again.
+    await expect($(".orca-jira-save")).toBeEnabled();
+    await expect(descField()).toHaveAttribute("contenteditable", "true");
+    expect(await descField().getText()).toBe("Typed text");
+    await expect(editButton(FIELD.status)).toBeEnabled();
+    // The ticket shows the description it had.
+    await $(".orca-jira-cancel").click();
+    expect(await descText()).toContain("Show the ticket.");
+  });
+
+  it("opens the field of a new comment, keeps its button off while it is empty, and adds the comment under the others (J-2, #873)", async () => {
+    await openEditable();
+    expect(await count("#orca-jira-comment-input")).toBe(0);
+    const added = { author: "Me", created: "2026-11-25 10:00", body: "A **new** comment" };
+    await mock("jira_add_comment", added);
+    await $(".orca-jira-comment-add").click();
+    await waitForCount("#orca-jira-comment-input .ProseMirror", 1);
+    await expect($(".orca-jira-comment-submit")).toBeDisabled();
+    await typeInto(commentField, "A new comment");
+    await expect($(".orca-jira-comment-submit")).toBeEnabled();
+    await $(".orca-jira-comment-submit").click();
+    expect(await waitForCalls("jira_add_comment")).toEqual([{ key: "EX-1", markdown: "A new comment\n" }]);
+    await waitForCount("#orca-jira-comment-input", 0);
+    expect(await textsOf(".orca-jira-comments-head")).toEqual(["コメント 3 件"]);
+    expect((await textsOf(".orca-jira-comment"))[2]).toBe("Me2026-11-25 10:00A new comment");
+    expect(await count(".orca-jira-comment-add")).toBe(1);
+    expect(await callsOf("jira_issue")).toEqual([{ key: "EX-1" }]);
+  });
+
+  it("keeps the comment in its field with the reason in a card when Jira refuses, and drops it with the cancel button (J-2, #873)", async () => {
+    await openEditable();
+    await mock("jira_add_comment", holds);
+    await $(".orca-jira-comment-add").click();
+    await typeInto(commentField, "Kept text");
+    await pressSubmit("#orca-jira-comment-input .ProseMirror");
+    await waitForCalls("jira_add_comment");
+    await expect($(".orca-jira-comment-submit")).toBeDisabled();
+    await expect($(".orca-jira-comment-cancel")).toBeDisabled();
+    await release("jira_add_comment", rejects("Jira が 403 を返しました: no permission"));
+    await waitForCount(CARDS, 1);
+    expect(await textsOf(CARD)).toEqual(["Jira が 403 を返しました: no permission"]);
+    expect(await commentField().getText()).toBe("Kept text");
+    expect(await textsOf(".orca-jira-comments-head")).toEqual(["コメント 2 件"]);
+    await $(".orca-jira-comment-cancel").click();
+    expect(await count("#orca-jira-comment-input")).toBe(0);
+    await $(".orca-jira-comment-add").click();
+    await browser.waitUntil(async () => (await commentField().getAttribute("contenteditable")) === "true");
+    expect(await commentField().getText()).toBe("");
   });
 });

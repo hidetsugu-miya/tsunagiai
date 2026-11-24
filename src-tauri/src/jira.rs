@@ -6,9 +6,11 @@
 //!
 //! The boards, the sprints and their tickets are read through the Agile API (`/rest/agile/1.0`, J-2, #869): the commands `jira_boards`, `jira_sprints`, `jira_sprint_issues` and `jira_backlog` read the saved connection and call it where `api_base` says. They only read; the answers are turned into the types below by pure functions.
 //! A ticket is read for its tab (J-2, #871) by `jira_issue`: the ticket with its description (REST API v3, where the description is ADF, read as Markdown by `adf`), its sprint (the Agile API) and its comments.
-//! The tab changes four fields of a ticket (J-2, #872): the status (`jira_transitions` lists what the ticket can take now and `jira_transition` takes one), the assignee (`jira_assignable`, `jira_assign`), the priority (`jira_priorities`, `jira_set_priority`) and the sprint (`jira_set_sprint`). These are the only calls that write to Jira; every id that reaches a path or a body is checked first (`key_of`, `numeric_id_of`, `account_id_of`).
+//! The tab changes four fields of a ticket (J-2, #872): the status (`jira_transitions` lists what the ticket can take now and `jira_transition` takes one), the assignee (`jira_assignable`, `jira_assign`), the priority (`jira_priorities`, `jira_set_priority`) and the sprint (`jira_set_sprint`). These are the calls that write to Jira, with the two of #873 below; every id that reaches a path or a body is checked first (`key_of`, `numeric_id_of`, `account_id_of`).
+//! The tab also saves the description (`jira_set_description`) and adds a comment (`jira_add_comment`, J-2, #873): the Markdown of the editor is turned back into ADF by `markdown` (a pure function), the description being put into the document that Jira holds now so that what Markdown cannot say stays.
 
 mod adf;
+mod markdown;
 
 use std::{path::Path, time::Duration};
 
@@ -65,6 +67,8 @@ const MAX_ASSIGNABLE: usize = 100;
 /// The longest id of a transition or of a priority (Jira's are numbers) and of an account taken.
 const ID_LIMIT: usize = 18;
 const ACCOUNT_ID_LIMIT: usize = 128;
+/// The longest Markdown that is written back as ADF (J-2, #873), in bytes.
+const MARKDOWN_LIMIT: usize = 200_000;
 
 /// What `jira-settings.json` holds.
 #[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
@@ -913,6 +917,92 @@ async fn move_to_sprint(conn: &Conn, key: &str, sprint_id: Option<u64>) -> Resul
     done_of(status, &text)
 }
 
+/// Markdown that is written back as ADF: at most `MARKDOWN_LIMIT` bytes.
+fn markdown_of(markdown: &str) -> Result<&str, String> {
+    if markdown.len() <= MARKDOWN_LIMIT {
+        Ok(markdown)
+    } else {
+        Err("文章が長すぎます".into())
+    }
+}
+
+/// The description saved from the editor (J-2, #873). The description that Jira holds now is read, and it must be the one that the editor started from (`base`, the Markdown the tab was given): another change in between is refused, so that it is never overwritten. `markdown` is then put into that document (`markdown::merged`), which keeps what Markdown cannot say of every block that was not changed, and the result is put as the description (null when it is empty). Nothing is sent when it changes nothing. Gives the Markdown of what was saved.
+async fn set_description(
+    conn: &Conn,
+    key: &str,
+    base: &str,
+    markdown: &str,
+) -> Result<String, String> {
+    let (key, markdown) = (key_of(key)?, markdown_of(markdown)?);
+    let (status, body) = get(conn, &format!("{ISSUE_PATH}/{key}?fields=description")).await?;
+    let current = raw_issue_of(status, &body)?
+        .fields
+        .and_then(|f| f.description)
+        .unwrap_or(Value::Null);
+    if adf::adf_to_markdown(&current) != base {
+        return Err("説明が Jira で変更されています。読み直してください".into());
+    }
+    let old: Vec<Value> = current
+        .get("content")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut blocks = markdown::merged(&old, markdown);
+    if blocks == old && current.is_object() {
+        return Ok(base.to_owned());
+    }
+    markdown::with_ids(&mut blocks);
+    let description = if blocks.is_empty() {
+        Value::Null
+    } else {
+        serde_json::json!({"version": 1, "type": "doc", "content": blocks})
+    };
+    let body = serde_json::json!({ "fields": { "description": description } });
+    let (status, text) = send(
+        conn,
+        reqwest::Method::PUT,
+        &format!("{ISSUE_PATH}/{key}"),
+        Some(&body),
+    )
+    .await?;
+    done_of(status, &text)?;
+    Ok(adf::adf_to_markdown(&description))
+}
+
+/// The comment that Jira answers a new one with: its author, its time and its text as Markdown.
+fn comment_of(status: u16, body: &str) -> Result<JiraComment, String> {
+    if !(200..=299).contains(&status) {
+        return Err(failure_of(status, body));
+    }
+    let raw: RawComment = serde_json::from_str(body).map_err(|_| {
+        "コメントは追加されましたが、応答を読めません。読み直してください".to_owned()
+    })?;
+    Ok(JiraComment {
+        author: raw.author.and_then(|u| u.display_name).unwrap_or_default(),
+        created: shown_time(&raw.created.unwrap_or_default()),
+        body: adf::adf_to_markdown(&raw.body.unwrap_or(Value::Null)),
+    })
+}
+
+/// Adds a comment to the ticket (J-2, #873): the Markdown as ADF, which `POST /rest/api/3/issue/{key}/comment` takes as `body`.
+async fn add_comment(conn: &Conn, key: &str, markdown: &str) -> Result<JiraComment, String> {
+    let (key, markdown) = (key_of(key)?, markdown_of(markdown)?);
+    let mut blocks = markdown::markdown_to_blocks(markdown);
+    if blocks.is_empty() {
+        return Err("コメントを入力してください".into());
+    }
+    markdown::with_ids(&mut blocks);
+    let body = serde_json::json!({ "body": {"version": 1, "type": "doc", "content": blocks} });
+    let (status, text) = send(
+        conn,
+        reqwest::Method::POST,
+        &format!("{ISSUE_PATH}/{key}/comment"),
+        Some(&body),
+    )
+    .await?;
+    comment_of(status, &text)
+}
+
 fn load_file(dir: &Path) -> Result<Saved, String> {
     let path = dir.join(FILE);
     match std::fs::read_to_string(&path) {
@@ -1152,6 +1242,33 @@ pub async fn jira_set_sprint(
     write
         .await
         .map_err(|e| log_failure("jira_set_sprint", LOG_ACCOUNT, e))
+}
+
+/// Saves the description of the ticket (J-2, #873) from the Markdown of the editor; `base` is the description the tab was given (the editor's start). Changes the description in Jira, and gives the Markdown of what it now is.
+#[tauri::command]
+pub async fn jira_set_description(
+    app: AppHandle,
+    key: String,
+    base: String,
+    markdown: String,
+) -> Result<String, String> {
+    let write = async { set_description(&saved_conn(&app).await?, &key, &base, &markdown).await };
+    write
+        .await
+        .map_err(|e| log_failure("jira_set_description", LOG_ACCOUNT, e))
+}
+
+/// Adds a comment to the ticket (J-2, #873) from Markdown, and gives it as Jira answers it. Adds a comment in Jira.
+#[tauri::command]
+pub async fn jira_add_comment(
+    app: AppHandle,
+    key: String,
+    markdown: String,
+) -> Result<JiraComment, String> {
+    let write = async { add_comment(&saved_conn(&app).await?, &key, &markdown).await };
+    write
+        .await
+        .map_err(|e| log_failure("jira_add_comment", LOG_ACCOUNT, e))
 }
 
 #[cfg(test)]
@@ -2429,5 +2546,240 @@ mod tests {
             Err("Jira が 302 を返しました: ".into())
         );
         assert_eq!(seen.await.unwrap().len(), 1);
+    }
+
+    fn description_answer(description: &Value) -> String {
+        json_answer(
+            &serde_json::json!({"key": "EX-7", "fields": {"description": description}}).to_string(),
+        )
+    }
+
+    fn adf_doc(content: Value) -> Value {
+        serde_json::json!({"version": 1, "type": "doc", "content": content})
+    }
+
+    fn body_of(request: &str) -> Value {
+        serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap()
+    }
+
+    fn described() -> Value {
+        adf_doc(serde_json::json!([
+            {"type": "paragraph", "content": [
+                {"type": "text", "text": "Ask "},
+                {"type": "mention", "attrs": {"id": "u1", "text": "@Taro"}}
+            ]},
+            {"type": "paragraph", "content": [{"type": "text", "text": "second"}]}
+        ]))
+    }
+
+    #[tokio::test]
+    async fn the_description_is_read_merged_with_the_markdown_and_put_back() {
+        let current = described();
+        let base = adf::adf_to_markdown(&current);
+        assert_eq!(base, "Ask @Taro\n\nsecond");
+        let (site, seen) = serve_each(vec![description_answer(&current), NO_CONTENT.into()]).await;
+        let saved = set_description(
+            &basic_conn(&site).await,
+            "EX-7",
+            &base,
+            "Ask @Taro\n\nsecond, edited\n\n- [ ] new task",
+        )
+        .await
+        .unwrap();
+        assert_eq!(saved, "Ask @Taro\n\nsecond, edited\n\n- ☐ new task");
+        let requests = seen.await.unwrap();
+        assert!(
+            requests[0].starts_with("get /rest/api/3/issue/ex-7?fields=description http/1.1"),
+            "{}",
+            requests[0]
+        );
+        assert!(
+            requests[1].starts_with("put /rest/api/3/issue/ex-7 http/1.1"),
+            "{}",
+            requests[1]
+        );
+        assert!(requests[1].contains(BASIC));
+        assert!(requests[1].contains("content-type: application/json"));
+        let sent = body_of(&requests[1]);
+        let doc = &sent["fields"]["description"];
+        assert_eq!(doc["type"], "doc");
+        assert_eq!(doc["version"], 1);
+        // The paragraph that was not edited is the one Jira holds, with its mention.
+        assert_eq!(
+            doc["content"][0],
+            serde_json::from_str::<Value>(&current["content"][0].to_string().to_lowercase())
+                .unwrap()
+        );
+        assert_eq!(doc["content"][1]["content"][0]["text"], "second, edited");
+        let task = &doc["content"][2];
+        // The request is lowercased by `lower`.
+        assert_eq!(task["type"], "tasklist");
+        assert!(task["attrs"]["localid"].is_string());
+        assert!(task["content"][0]["attrs"]["localid"].is_string());
+        assert_eq!(task["content"][0]["attrs"]["state"], "todo");
+    }
+
+    #[tokio::test]
+    async fn a_description_that_changed_in_jira_meanwhile_is_not_overwritten() {
+        let (site, seen) = serve_each(vec![description_answer(&described())]).await;
+        let err = set_description(&basic_conn(&site).await, "EX-7", "Ask someone else", "new")
+            .await
+            .unwrap_err();
+        assert_eq!(err, "説明が Jira で変更されています。読み直してください");
+        assert_eq!(seen.await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_description_that_changes_nothing_sends_nothing_and_an_empty_one_is_null() {
+        let current = described();
+        let base = adf::adf_to_markdown(&current);
+        let (site, seen) = serve_each(vec![description_answer(&current)]).await;
+        assert_eq!(
+            set_description(
+                &basic_conn(&site).await,
+                "EX-7",
+                &base,
+                "Ask @Taro\n\nsecond"
+            )
+            .await
+            .unwrap(),
+            base
+        );
+        assert_eq!(seen.await.unwrap().len(), 1);
+        let plain = adf_doc(
+            serde_json::json!([{"type": "paragraph", "content": [{"type": "text", "text": "x"}]}]),
+        );
+        let (site, seen) = serve_each(vec![description_answer(&plain), NO_CONTENT.into()]).await;
+        assert_eq!(
+            set_description(&basic_conn(&site).await, "EX-7", "x", "  \n")
+                .await
+                .unwrap(),
+            ""
+        );
+        let requests = seen.await.unwrap();
+        assert_eq!(
+            body_of(&requests[1]),
+            serde_json::json!({"fields": {"description": null}})
+        );
+        // A ticket with no description takes the new one.
+        let (site, seen) =
+            serve_each(vec![description_answer(&Value::Null), NO_CONTENT.into()]).await;
+        set_description(&basic_conn(&site).await, "EX-7", "", "hello")
+            .await
+            .unwrap();
+        let requests = seen.await.unwrap();
+        assert_eq!(
+            body_of(&requests[1])["fields"]["description"]["content"][0]["content"][0]["text"],
+            "hello"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_bad_key_or_a_huge_text_asks_nothing_and_a_refusal_is_the_error() {
+        let dead = basic_conn("http://127.0.0.1:1").await;
+        assert_eq!(
+            set_description(&dead, "ex-7", "", "x").await,
+            Err("チケットのキーの形が正しくありません".into())
+        );
+        assert_eq!(
+            set_description(&dead, "EX-7", "", &"x".repeat(MARKDOWN_LIMIT + 1)).await,
+            Err("文章が長すぎます".into())
+        );
+        assert_eq!(
+            add_comment(&dead, "../x", "x").await,
+            Err("チケットのキーの形が正しくありません".into())
+        );
+        let current = described();
+        let base = adf::adf_to_markdown(&current);
+        let (site, _seen) = serve_each(vec![
+            description_answer(&current),
+            "HTTP/1.1 400 Bad Request\r\nContent-Length: 12\r\nConnection: close\r\n\r\n{\"errors\":1}".into(),
+        ])
+        .await;
+        assert_eq!(
+            set_description(&basic_conn(&site).await, "EX-7", &base, "changed").await,
+            Err(r#"Jira が 400 を返しました: {"errors":1}"#.into())
+        );
+    }
+
+    #[test]
+    fn comment_of_reads_the_comment_that_jira_answers_with() {
+        let body = serde_json::json!({
+            "author": {"displayName": "Taro"},
+            "created": "2026-11-25T09:30:12.345+0900",
+            "body": adf_doc(serde_json::json!([{"type": "paragraph", "content": [{"type": "text", "text": "hi"}]}]))
+        })
+        .to_string();
+        assert_eq!(
+            comment_of(201, &body),
+            Ok(JiraComment {
+                author: "Taro".into(),
+                created: "2026-11-25 09:30".into(),
+                body: "hi".into()
+            })
+        );
+        assert_eq!(
+            comment_of(403, ""),
+            Err("Jira が認証を拒否しました（401）".replace("401", "403"))
+        );
+        assert!(comment_of(201, "not json")
+            .unwrap_err()
+            .contains("追加されました"));
+    }
+
+    #[tokio::test]
+    async fn a_comment_is_posted_as_adf_and_a_blank_one_asks_nothing() {
+        let answer = serde_json::json!({
+            "author": {"displayName": "Me"},
+            "created": "2026-11-25T10:00:00.000+0900",
+            "body": adf_doc(serde_json::json!([{"type": "paragraph", "content": [{"type": "text", "text": "ok"}]}]))
+        })
+        .to_string();
+        let created = format!(
+            "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
+            answer.len()
+        );
+        let (site, seen) = serve_each(vec![created]).await;
+        let conn = basic_conn(&site).await;
+        let comment = add_comment(&conn, "EX-7", "**ok**\n\n- [x] done")
+            .await
+            .unwrap();
+        assert_eq!(comment.author, "Me");
+        assert_eq!(comment.body, "ok");
+        let requests = seen.await.unwrap();
+        assert!(
+            requests[0].starts_with("post /rest/api/3/issue/ex-7/comment http/1.1"),
+            "{}",
+            requests[0]
+        );
+        assert!(requests[0].contains(BASIC));
+        let sent = body_of(&requests[0]);
+        assert_eq!(sent["body"]["type"], "doc");
+        assert_eq!(
+            sent["body"]["content"][0]["content"][0]["marks"][0]["type"],
+            "strong"
+        );
+        assert_eq!(sent["body"]["content"][1]["type"], "tasklist");
+        assert!(sent["body"]["content"][1]["attrs"]["localid"].is_string());
+        let dead = basic_conn("http://127.0.0.1:1").await;
+        assert_eq!(
+            add_comment(&dead, "EX-7", " \n\n ").await,
+            Err("コメントを入力してください".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn the_two_writes_of_the_tab_go_through_the_gateway_with_the_bearer_credential() {
+        let (site, tenant_seen) = serve_once(tenant_answer()).await;
+        let (gateway, seen) =
+            serve_each(vec![description_answer(&Value::Null), NO_CONTENT.into()]).await;
+        let conn = connect(&site, "", "tok", &gateway).await.unwrap();
+        set_description(&conn, "EX-7", "", "hello").await.unwrap();
+        let requests = seen.await.unwrap();
+        assert!(requests[1].starts_with(&format!(
+            "put /ex/jira/{TENANT_ANSWER_ID}/rest/api/3/issue/ex-7 http/1.1"
+        )));
+        assert!(requests[1].contains("authorization: bearer tok\r\n"));
+        assert!(!lower(&tenant_seen.await.unwrap()).contains("authorization"));
     }
 }

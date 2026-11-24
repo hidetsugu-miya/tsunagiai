@@ -1712,6 +1712,14 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-jira-comment-author { font-weight: 600; }
 .orca-jira-comment-time { color: var(--muted); font-size: calc(12px * var(--fs)); }
 .orca-jira-comments .orca-file-note { padding: 8px 0 0; }
+.orca-jira-desc { position: relative; min-height: 24px; padding-right: 28px; }
+.orca-jira-desc.editing { padding-right: 0; }
+.orca-jira-desc-edit { position: absolute; top: 0; right: 0; width: 24px; height: 24px; color: var(--ink-soft); }
+.orca-jira-desc-edit svg { width: 14px; height: 14px; }
+.orca-jira-desc-edit:disabled { opacity: 0.4; cursor: default; }
+.orca-jira-edit-bar { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.orca-jira-edit-bar .text-btn:disabled, .orca-jira-comment-add:disabled { opacity: 0.4; cursor: default; }
+.orca-jira-comment-form { padding: 10px 0 0; }
 .orca-jira-side { flex: none; width: 220px; display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; }
 .orca-jira-side-name { margin-bottom: 2px; color: var(--muted); font-size: calc(11.5px * var(--fs)); }
 .orca-jira-side-value { overflow-wrap: anywhere; }

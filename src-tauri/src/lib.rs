@@ -348,6 +348,8 @@ pub fn run() {
             jira::jira_priorities,
             jira::jira_set_priority,
             jira::jira_set_sprint,
+            jira::jira_set_description,
+            jira::jira_add_comment,
             todoist::todoist_add,
             todoist::todoist_add_subtask,
             todoist::todoist_task_from_mail,

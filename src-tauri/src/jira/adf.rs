@@ -21,11 +21,11 @@ pub(super) fn adf_to_markdown(doc: &Value) -> String {
     }
 }
 
-fn kind(node: &Value) -> &str {
+pub(super) fn kind(node: &Value) -> &str {
     node.get("type").and_then(Value::as_str).unwrap_or("")
 }
 
-fn content(node: &Value) -> &[Value] {
+pub(super) fn content(node: &Value) -> &[Value] {
     node.get("content")
         .and_then(Value::as_array)
         .map_or(&[], Vec::as_slice)
@@ -35,7 +35,7 @@ fn attr<'a>(node: &'a Value, name: &str) -> Option<&'a Value> {
     node.get("attrs")?.get(name)
 }
 
-fn attr_str<'a>(node: &'a Value, name: &str) -> Option<&'a str> {
+pub(super) fn attr_str<'a>(node: &'a Value, name: &str) -> Option<&'a str> {
     attr(node, name)?.as_str().filter(|s| !s.is_empty())
 }
 
@@ -64,7 +64,7 @@ fn is_list(node: &Value) -> bool {
 }
 
 /// Blocks one after another, with a blank line between them.
-fn blocks(nodes: &[Value], depth: usize) -> String {
+pub(super) fn blocks(nodes: &[Value], depth: usize) -> String {
     join_blocks(nodes.iter().map(|n| block(n, depth)))
 }
 
@@ -274,10 +274,7 @@ fn inline(node: &Value, depth: usize, line_start: bool) -> String {
                 .unwrap_or(""),
             false,
         ),
-        "date" => attr_str(node, "timestamp")
-            .and_then(|t| t.parse::<i64>().ok())
-            .and_then(DateTime::from_timestamp_millis)
-            .map_or_else(String::new, |d| d.format("%Y-%m-%d").to_string()),
+        "date" => date_text(node).unwrap_or_default(),
         "status" => {
             attr_str(node, "text").map_or_else(String::new, |t| escape(&format!("[{t}]"), false))
         }
@@ -346,7 +343,7 @@ fn code_span(code: &str) -> String {
 }
 
 /// `http` and `https` addresses only: anything else is not a link.
-fn web_url(url: &str) -> Option<&str> {
+pub(super) fn web_url(url: &str) -> Option<&str> {
     let lower = url.to_ascii_lowercase();
     (lower.starts_with("http://") || lower.starts_with("https://")).then_some(url)
 }
@@ -367,15 +364,27 @@ fn destination(url: &str) -> String {
         .collect()
 }
 
-/// A card is an address: the address as a link, or nothing when it is not a web address.
-fn card(node: &Value) -> String {
-    let url = attr_str(node, "url").or_else(|| {
+/// The date of a date node as `YYYY-MM-DD` (in UTC), `None` when it has no usable timestamp.
+pub(super) fn date_text(node: &Value) -> Option<String> {
+    attr_str(node, "timestamp")
+        .and_then(|t| t.parse::<i64>().ok())
+        .and_then(DateTime::from_timestamp_millis)
+        .map(|d| d.format("%Y-%m-%d").to_string())
+}
+
+/// The address a card holds, as the node gives it (not yet checked to be a web address).
+pub(super) fn card_url(node: &Value) -> Option<&str> {
+    attr_str(node, "url").or_else(|| {
         attr(node, "data")?
             .get("url")?
             .as_str()
             .filter(|s| !s.is_empty())
-    });
-    match url.and_then(web_url) {
+    })
+}
+
+/// A card is an address: the address as a link, or nothing when it is not a web address.
+fn card(node: &Value) -> String {
+    match card_url(node).and_then(web_url) {
         Some(url) => format!("[{}]({})", escape(url, false), destination(url)),
         None => String::new(),
     }

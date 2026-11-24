@@ -70,6 +70,7 @@ import type { ClaudeCodePermissionMode } from "./bindings/ClaudeCodePermissionMo
 import type { SkillScreen } from "./bindings/SkillScreen";
 import type { NewEvent } from "./bindings/NewEvent";
 import type { JiraBoard } from "./bindings/JiraBoard";
+import type { JiraComment } from "./bindings/JiraComment";
 import type { JiraIssueDetail } from "./bindings/JiraIssueDetail";
 import type { JiraIssues } from "./bindings/JiraIssues";
 import type { JiraPerson } from "./bindings/JiraPerson";
@@ -279,6 +280,10 @@ export interface Commands {
   jira_set_priority: { args: { key: string; priorityId: string }; result: null };
   // J-2 (#872): puts the ticket in the sprint (an active or future one), or in the backlog for `null` (changes its sprint in Jira).
   jira_set_sprint: { args: { key: string; sprintId: number | null }; result: null };
+  // J-2 (#873): saves the description of the ticket from the Markdown of the editor (`base` is the Markdown the editor started from: Rust refuses when Jira's description is no longer that), and gives the Markdown of what Jira now holds. Rust puts the Markdown into the ADF that Jira holds, so what Markdown cannot say stays in the blocks that were not changed.
+  jira_set_description: { args: { key: string; base: string; markdown: string }; result: string };
+  // J-2 (#873): adds a comment from Markdown and gives it as Jira answers it (the author, the time, the text as Markdown).
+  jira_add_comment: { args: { key: string; markdown: string }; result: JiraComment };
   slack_channels: { args: { teamId: string; refresh: boolean }; result: Channel[] };
   // The newest 10 unread rows of each joined channel (no direct messages) of every workspace, newest first: the unread messages (S-8) and the threads with unread replies (S-14, each with `unreadReplies`), and `watched`, the watched threads (S-13, each with `watch`, the newest activity first); `failed` are workspaces whose read failed (the messages their earlier reads kept are still listed),
   // `missing` the scopes a token lacks (users:read, files:read, channels:write, groups:write among them), `refreshSecs` the wait until the next read, `pendingChannels` the channels no read has reached yet,
