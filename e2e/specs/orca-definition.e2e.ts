@@ -10,8 +10,8 @@ import type { OrcaFileText } from "../../ts/bindings/OrcaFileText";
 import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import type { PaneLayout } from "../../ts/bindings/PaneLayout";
 import type { PaneNode } from "../../ts/bindings/PaneNode";
-import { callsOf, count, emitEvent, holds, mock, onceId, orcaRow, orcaWorktree, rejects, release, textsOf, timers, waitForCalls, waitForCount } from "../support";
-import { claudeTab, filesToggle, openOrca, orcaOverview, project, sample, selectedTab, showAgain, studio, tabOf, tabTitles, worktrees } from "../orca-support";
+import { callsOf, count, emitEvent, holds, mock, onceId, orcaRow, orcaWorktree, popoutTab, rejects, release, sendPopout, textsOf, timers, waitForCalls, waitForCount } from "../support";
+import { claudeTab, filesToggle, openOrca, orcaOverview, pickItem, project, sample, selectedTab, showAgain, studio, tabOf, tabTitles, worktrees } from "../orca-support";
 
 // A-34: the definition tab under the pane of the editor, and the editor's Command and right button. Rust asks the language server, reads the name under the mouse and decides how each place is drawn (unit tests); here the screen is checked: what it asks of Rust for a press, how it splits the work pane, and how it draws the answers and opens them. The language server in the file pane is checked below too: its state and settings, and when it is started and stopped.
 describe("orca: definition (A-34)", () => {
@@ -138,6 +138,43 @@ describe("orca: definition (A-34)", () => {
       n,
       onceId(),
     );
+
+
+  // A-46: the definition tab in a window of its own. The window asks the server again with the question of the tab, and a place that it opens is shown by the screen.
+  const rightClickTab = (tab: string) =>
+    browser.execute(
+      (id, once) => {
+        if (!window.__e2e_once__(once)) return;
+        document.querySelector(`[data-tab="${id}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 }));
+      },
+      tab,
+      onceId(),
+    );
+  const question = { target: null, project: "proj_example-app", path: worktree, server: "ruby", relative: "a.rb", text: source, line: 2, character: 6, word: "Rails" };
+
+  it("opens the definition tab in a window with the question it asked, and the tab leaves the panes (A-46)", async () => {
+    await define();
+    await rightClickTab("definition:1");
+    await pickItem("別ウィンドウで開く");
+    expect(await waitForCalls("orca_popout_open")).toEqual([{ tab: popoutTab("definition:1", "", "定義 ・ Rails", { label: "", content: { kind: "definition", ...question } }) }]);
+    await browser.waitUntil(async () => !(await tabTitles()).includes("定義 ・ Rails"), { timeoutMsg: "the tab never left the strip" });
+    expect(((await callsOf("orca_panes")).at(-1) as { away: string[] }).away).toEqual(["definition:1"]);
+  });
+
+  it("opens the place that the definition tab of a window asked for as a tab of the pane of the project, beside the first pane that is not the definition's (A-46)", async () => {
+    await define();
+    // Rust answers the layout without the tab that is away.
+    await mock("orca_panes", { root: pane("p1", [claude, "file:1"], "file:1"), focus: "p1" } satisfies PaneLayout);
+    await rightClickTab("definition:1");
+    await pickItem("別ウィンドウで開く");
+    await waitForCalls("orca_popout_open");
+    await waitForCalls("orca_panes");
+    await mock("orca_file_read", text(rows(12)));
+    await sendPopout({ kind: "place", tab: "definition:1", query: question, path: inside.path, outside: false, line: inside.line, character: inside.character });
+    await browser.waitUntil(async () => (await moves()).length > 0, { timeoutMsg: "the place never took a pane" });
+    expect(await moves()).toEqual([{ kind: "move", tab: "file:2", pane: "p1", edge: "center" }]);
+    expect(await waitForCalls("orca_file_read")).toContainEqual({ path: worktree, relative: inside.path, environment: null });
+  });
 
   it("asks where the mouse is, not the caret, with the text of the editor, and opens the definition tab without changing the file pane (A-34)", async () => {
     await openFiles();

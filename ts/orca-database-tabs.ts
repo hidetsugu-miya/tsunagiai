@@ -1,10 +1,8 @@
 // The database tabs of the work pane of the Orca screen (A-43): a table of the tree of the database part opens as a tab with the tabs of D-4 to D-6 (records, structure, SQL), and the menu of a database opens the SQL of that database as a tab of its own. Drawing is `drawTableTab` of database-work.ts, which the database screen's work pane shares; this module holds what each tab shows and reads it (`database_records`, `database_structure`, `database_sql`), as the database screen does for its tabs (D-4 to D-6).
 // The tabs are kept in memory only, by target and project, as the tabs of the files are (their ids are `database:{n}`). A tab that is not shown keeps its box and what it read; a read that ends after its tab was closed is dropped. Nothing is read by the clock.
-import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import { drawTableTab, focusSqlField, type RecordsState, type SqlState, type StructureState, type TabActions } from "./database-work.js";
 import { tag } from "./dom.js";
 import { invoke } from "./ipc.js";
-import { lostConnection } from "./orca-database.js";
 
 export interface DatabaseTab {
   id: string;
@@ -31,6 +29,25 @@ export interface DatabaseTab {
 
 const tabs = new Map<string, DatabaseTab>();
 let lastId = 0;
+// Tells that a read of a tab showed its connection lost: the screen drops the connection (`lostConnection` of `orca-database.ts`), and the window of a tab (A-46) tells the screen.
+let lost: (connection: string, error: string) => void = () => {};
+
+export function initDatabaseTabs(on: { lost: (connection: string, error: string) => void }) {
+  lost = on.lost;
+}
+
+// What a tab shows, as the window of a tab (A-46) opens the same one: the connection and its name, the database, the table (none for the SQL of the database), the selected tab of the table, the page of its records and the text of its SQL.
+export interface DatabaseCondition {
+  connection: string;
+  name: string;
+  database: string;
+  table: string | null;
+  tab: string;
+  page: number;
+  sql: string;
+}
+
+export const conditionOf = (t: DatabaseTab): DatabaseCondition => ({ connection: t.connection, name: t.name, database: t.database, table: t.table, tab: t.tab, page: t.records?.page ?? 0, sql: t.sql.text });
 
 const draw = (t: DatabaseTab) => drawTableTab(t.el, { connection: t.connection, database: t.database, table: t.table, tab: t.tab, records: t.records, structure: t.structure, sql: t.sql }, t.actions);
 
@@ -47,7 +64,7 @@ async function readRecords(t: DatabaseTab, page: number, typed?: string) {
   } catch (e) {
     mine.data = null;
     mine.error = String(e);
-    if (t.records === mine && tabs.has(t.id)) lostConnection(id, mine.error);
+    if (t.records === mine && tabs.has(t.id)) lost(id, mine.error);
   }
   mine.loading = false;
   draw(t);
@@ -64,7 +81,7 @@ async function readStructure(t: DatabaseTab) {
     mine.data = await invoke("database_structure", { id, database, table });
   } catch (e) {
     mine.error = String(e);
-    if (t.structure === mine && tabs.has(t.id)) lostConnection(id, mine.error);
+    if (t.structure === mine && tabs.has(t.id)) lost(id, mine.error);
   }
   mine.loading = false;
   draw(t);
@@ -82,13 +99,13 @@ async function runSql(t: DatabaseTab) {
   } catch (e) {
     mine.data = null;
     mine.error = String(e);
-    if (tabs.has(t.id)) lostConnection(t.connection, mine.error);
+    if (tabs.has(t.id)) lost(t.connection, mine.error);
   }
   mine.loading = false;
   draw(t);
 }
 
-function create(target: string | null, project: string, profile: DatabaseProfileView, database: string, table: string | null): DatabaseTab {
+function create(target: string | null, project: string, profile: { id: string; name: string }, database: string, table: string | null): DatabaseTab {
   const id = `database:${++lastId}`;
   const el = tag("div", "orca-database-tab");
   el.dataset.databaseTab = id;
@@ -133,7 +150,7 @@ function create(target: string | null, project: string, profile: DatabaseProfile
 }
 
 // Opens the table in a tab of the project (made when there is none) with the first page of its records, read again at every press, and gives the tab and whether it was made now.
-export function openTable(target: string | null, project: string, profile: DatabaseProfileView, database: string, table: string) {
+export function openTable(target: string | null, project: string, profile: { id: string; name: string }, database: string, table: string) {
   const held = [...tabs.values()].find((t) => t.target === target && t.project === project && t.connection === profile.id && t.database === database && t.table === table);
   const t = held ?? create(target, project, profile, database, table);
   t.tab = "records";
@@ -143,10 +160,24 @@ export function openTable(target: string | null, project: string, profile: Datab
 }
 
 // Opens the SQL of the database in a tab of its own, with an empty field that takes the focus when the tab is shown. It calls nothing.
-export function openQuery(target: string | null, project: string, profile: DatabaseProfileView, database: string) {
+export function openQuery(target: string | null, project: string, profile: { id: string; name: string }, database: string) {
   const t = create(target, project, profile, database, null);
   t.wantFocus = true;
   draw(t);
+  return t;
+}
+
+// Opens the tab that `c` names (the window of a tab, A-46): the table with the page of its records read, or the structure, or the SQL with its text, and gives it. Nothing else is read, and no SQL is run.
+export function restoreDatabaseTab(target: string | null, project: string, c: DatabaseCondition) {
+  const t = create(target, project, { id: c.connection, name: c.name }, c.database, c.table);
+  t.sql.text = c.sql;
+  if (c.table === null) {
+    draw(t);
+    return t;
+  }
+  t.tab = c.tab;
+  void readRecords(t, c.page);
+  if (c.tab === "structure") void readStructure(t);
   return t;
 }
 

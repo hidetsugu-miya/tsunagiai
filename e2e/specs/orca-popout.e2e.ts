@@ -1,9 +1,11 @@
 // A-46: the page of the window of a tab (`popout.html`, `ts/popout.ts`). Rust makes the window (`orca_popout_open`, which this spec calls through the app's own bridge, the fixtures of the page being cut off for it), and the page runs with the answers of its own fixtures:
 // the commands the window sends are mocked, as in every spec. What the Orca screen does with a window is in `orca.e2e.ts`; the red button, the pin that keeps the window on top and the end of the main window are checked by hand (`tauri dev`), as WebDriver cannot press them.
+import type { OrcaDiffRow } from "../../ts/bindings/OrcaDiffRow";
+import type { OrcaFileDiff } from "../../ts/bindings/OrcaFileDiff";
 import type { OrcaFileText } from "../../ts/bindings/OrcaFileText";
 import type { OrcaSaved } from "../../ts/bindings/OrcaSaved";
 import type { PopoutTab } from "../../ts/bindings/PopoutTab";
-import { boot, callsOf, count, mock, onceId, popoutTab, rejects, sendPopoutClose, sendPopoutTab, sendTerm, textsOf, timers, waitForCalls, CARD } from "../support";
+import { boot, callsOf, copiedTexts, count, databaseCell, databaseColumn, databaseRecords, databaseSqlResult, databaseStructure, mock, onceId, popoutTab, rejects, sendPopoutClose, sendPopoutTab, sendTerm, stubClipboard, textsOf, timers, waitForCalls, waitForCount, CARD } from "../support";
 
 type Bridge = { __TAURI_INTERNALS__: { invoke: (command: string, args: object) => Promise<unknown> }; __TAURI__: { core: { Channel: new () => object } } };
 
@@ -296,6 +298,151 @@ describe("orca: the window of a tab (A-46)", () => {
       });
       // The question is the editor's own, with no tab: Rust knows the tab of the window.
       expect((await callsOf(asked))[0]).toEqual({ query: { target: null, project: "proj_example-app", path: "/work/example-app", server: "ruby", relative: "a.rb", text: source, line: 2, character: 6, word: "Rails" } });
+    });
+  });
+
+
+  // A diff (A-24): the page of the window reads the difference again from the file of its worktree, and from the commit when it is the file of one (A-27).
+  describe("a diff", () => {
+    const diff: OrcaFileDiff = {
+      oldLines: ["a", "b"],
+      newLines: ["a", "c", "d"],
+      side: [row("same", 1, 1), row("changed", 2, 2), row("added", null, 3)],
+      inline: [row("same", 1, 1), row("removed", 2, null), row("added", null, 2), row("added", null, 3)],
+      changes: [{ side: 1, inline: 1 }],
+      language: "plaintext",
+      highlight: null,
+    };
+    function row(kind: OrcaDiffRow["kind"], old: number | null, now: number | null): OrcaDiffRow {
+      return { kind, old, new: now };
+    }
+    const work = popoutTab("diff:4", "", "a.rs", { label: "", content: { kind: "diff", path: "/work/example-app", relative: "a.rs", commit: null } });
+    const rows = () => count(".orca-diff-rows .odf-row");
+
+    it("draws the icon and the name of the tab in the header, and reads the difference from HEAD of the worktree and its target, in place of a terminal", async () => {
+      await openWindow(work, { orca_file_diff: diff });
+      await expect($("#popout-name")).toHaveText("a.rs");
+      expect(await count("#popout-icon .orca-file-tab-ic svg")).toBe(1);
+      expect(await waitForCalls("orca_file_diff")).toEqual([{ path: "/work/example-app", relative: "a.rs", environment: null }]);
+      await browser.waitUntil(async () => (await rows()) === 3, { timeoutMsg: "the rows never drew" });
+      await expect($("#popout-term")).not.toBeDisplayed();
+      await expect($("#popout-file .orca-diff")).toBeDisplayed();
+      expect(await count(".orca-term")).toBe(0);
+    });
+
+    it("reads the difference of a file of a commit with the commit, its parent and the old path, and of a saved environment with its target", async () => {
+      const commit = { id: "abc123def", shortId: "abc123d", parentId: "p0", oldRelative: "old.rs" };
+      await openWindow({ ...work, environment: "Studio", content: { kind: "diff", path: "/work/example-app", relative: "a.rs", commit } }, { orca_commit_file_diff: diff });
+      expect(await waitForCalls("orca_commit_file_diff")).toEqual([{ path: "/work/example-app", commitId: "abc123def", parentId: "p0", relative: "a.rs", oldRelative: "old.rs", environment: "Studio" }]);
+      await expect($(".orca-diff-commit")).toHaveText("abc123d");
+      expect(await callsOf("orca_file_diff")).toEqual([]);
+    });
+
+    it("reads the difference from HEAD again by the clock, and draws the rows that came", async () => {
+      await openWindow(work, { orca_file_diff: diff, ...timers({ orcaClock: 500 }) });
+      await browser.waitUntil(async () => (await rows()) === 3, { timeoutMsg: "the rows never drew" });
+      await mock("orca_file_diff", { ...diff, newLines: [...diff.newLines, "e"], side: [...diff.side, row("added", null, 4)] });
+      await browser.waitUntil(async () => (await rows()) === 4, { timeoutMsg: "the rows were never read again" });
+    });
+
+    it("does not read the difference again when the screen gives the same tab with another name", async () => {
+      await openWindow(work, { orca_file_diff: diff });
+      await waitForCalls("orca_file_diff");
+      await sendPopoutTab({ ...work, title: "b.rs" });
+      await expect($("#popout-name")).toHaveText("b.rs");
+      expect(await callsOf("orca_file_diff")).toHaveLength(1);
+    });
+  });
+
+  // A definition (A-34): the page of the window asks the server again with the question of the tab, and what its open button asks goes to Rust, for the Orca screen to show.
+  describe("a definition", () => {
+    const query = { target: null, project: "proj_example-app", path: "/work/example-app", server: "ruby", relative: "a.rb", text: "Rails.logger\n", line: 0, character: 2, word: "Rails" };
+    const asked = popoutTab("definition:1", "", "定義 ・ Rails", { label: "", content: { kind: "definition", ...query } });
+    const answers = {
+      lsp_definition: [{ path: "app/lib/rails_ext.rb", outside: false, line: 6, character: 2 }],
+      lsp_places: [{ file: "rails_ext.rb", line: 7, place: "app/lib", outside: false, language: "ruby" }],
+      orca_file_read: { content: "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\n", crlf: false, signature: "sig-1", language: "ruby", highlight: null } satisfies OrcaFileText,
+    };
+
+    it("asks the server for the definition with the question of the tab, and draws its places", async () => {
+      await openWindow(asked, answers);
+      await expect($("#popout-name")).toHaveText("定義 ・ Rails");
+      expect(await waitForCalls("lsp_definition")).toEqual([{ environment: null, worktree: "/work/example-app", server: "ruby", relative: "a.rb", text: "Rails.logger\n", line: 0, character: 2 }]);
+      expect(await waitForCalls("lsp_places")).toEqual([{ locations: answers.lsp_definition }]);
+      await waitForCount(".orca-definition .orca-def", 1);
+      expect(await textsOf(".orca-definition-head > span")).toEqual(["Rails", "1 件"]);
+      expect(await textsOf(".orca-definition .orca-def-file")).toEqual(["app/lib/rails_ext.rb:7"]);
+      expect(await waitForCalls("orca_file_read")).toEqual([{ path: "/work/example-app", relative: "app/lib/rails_ext.rb", environment: null }]);
+    });
+
+    it("asks the server of a saved environment with its target", async () => {
+      await openWindow({ ...asked, environment: "Studio", content: { kind: "definition", ...query, target: "Studio" } }, answers);
+      expect((await waitForCalls("lsp_definition"))[0]).toMatchObject({ environment: "Studio" });
+    });
+
+    it("tells Rust the place of the row when its open button is pressed, and opens nothing here", async () => {
+      await openWindow(asked, { ...answers, orca_popout_place: null });
+      await waitForCount(".orca-definition .orca-def", 1);
+      await $(".orca-definition .orca-def-open").click();
+      expect(await waitForCalls("orca_popout_place")).toEqual([{ path: "app/lib/rails_ext.rb", outside: false, line: 6, character: 2 }]);
+      expect(await count(".orca-edit-area")).toBe(0);
+    });
+
+    it("asks again with the new question when the screen gives the tab with one", async () => {
+      await openWindow(asked, answers);
+      await waitForCount(".orca-definition .orca-def", 1);
+      await sendPopoutTab({ ...asked, title: "定義 ・ Logger", content: { kind: "definition", ...query, word: "Logger", character: 8 } });
+      await expect($("#popout-name")).toHaveText("定義 ・ Logger");
+      await browser.waitUntil(async () => (await callsOf("lsp_definition")).length === 2, { timeoutMsg: "the server was never asked again" });
+      expect((await callsOf("lsp_definition")).at(-1)).toMatchObject({ character: 8 });
+      expect(await textsOf(".orca-definition-head > span")).toEqual(["Logger", "1 件"]);
+    });
+  });
+
+  // A database tab (A-43): the page of the window reads the table of the connection again, at the page, in the tab and with the SQL it was given; a lost connection is told to Rust.
+  describe("a database", () => {
+    const content = { kind: "database" as const, connection: "p1", name: "Example direct", database: "shop", table: "orders" as string | null, tab: "records", page: 2, sql: "select 1" };
+    const orders = popoutTab("database:2", "", "orders · Example direct", { label: "", content });
+    const records = databaseRecords(["id", "name"], [[databaseCell("1", "number"), databaseCell("Alice")]], { summary: "1–1 行目", tsv: "id\tname\n1\tAlice" });
+    const cells = () => browser.execute(() => [...document.querySelectorAll(".orca-database-tab .database-grid tbody tr")].map((tr) => [...tr.children].map((td) => td.textContent)));
+
+    it("reads the page of the table that the tab had, and draws it with the tabs of the table", async () => {
+      await openWindow(orders, { database_records: records });
+      await expect($("#popout-name")).toHaveText("orders · Example direct");
+      expect(await count("#popout-icon .orca-file-tab-ic svg")).toBe(1);
+      expect(await waitForCalls("database_records")).toEqual([{ id: "p1", database: "shop", table: "orders", page: 2, estimate: null }]);
+      await waitForCount(".orca-database-tab .database-grid", 1);
+      expect(await cells()).toEqual([["1", "Alice"]]);
+      expect(await textsOf(".orca-database-tab .database-tab")).toEqual(["レコード", "構造", "SQL"]);
+    });
+
+    it("reads the structure too when the tab of the table was the structure", async () => {
+      await openWindow({ ...orders, content: { ...content, tab: "structure" } }, { database_records: records, database_structure: databaseStructure([databaseColumn("id", "int")]) });
+      expect(await waitForCalls("database_structure")).toEqual([{ id: "p1", database: "shop", table: "orders" }]);
+      await waitForCount(".orca-database-tab .database-grid", 1);
+    });
+
+    it("opens the SQL of a database with its text, reads nothing, and runs it on the connection and database of the tab", async () => {
+      await openWindow({ ...orders, title: "SQL · shop · Example direct", content: { ...content, table: null, tab: "sql", page: 0 } }, { database_sql: databaseSqlResult(["n"], [[databaseCell("1", "number")]]) });
+      await expect($(".orca-database-tab [data-key='sql-input']")).toHaveValue("select 1");
+      expect(await callsOf("database_records")).toEqual([]);
+      await $('.orca-database-tab [data-key="run"]').click();
+      expect(await waitForCalls("database_sql")).toEqual([{ id: "p1", database: "shop", sql: "select 1" }]);
+    });
+
+    it("tells Rust which connection was lost, with Rust's words, when the read of the records fails", async () => {
+      await openWindow(orders, { database_records: rejects("接続が切れました"), orca_popout_lost: null });
+      expect(await waitForCalls("orca_popout_lost")).toEqual([{ connection: "p1", error: "接続が切れました" }]);
+    });
+
+    it("copies the list that is shown to the clipboard as Rust made its text, and shows no failure", async () => {
+      await openWindow(orders, { database_records: records });
+      await waitForCount(".orca-database-tab .database-grid", 1);
+      await stubClipboard();
+      await $(".orca-database-tab [data-key='copy']").click();
+      await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "the list was never copied" });
+      expect(await copiedTexts()).toEqual(["id\tname\n1\tAlice"]);
+      expect(await count(CARD)).toBe(0);
     });
   });
 

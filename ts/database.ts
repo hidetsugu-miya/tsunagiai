@@ -10,7 +10,7 @@ import { changesOf, cellKey, emptyEdit, type EditState, markable, originalText }
 import { drawDatabaseSide, showScriptOutput, type Selected, type SideActions, type SideState } from "./database-side.js";
 import { openDatabaseForm, syncDatabaseForm } from "./database-form.js";
 import { initDatabaseTerminal } from "./database-terminal.js";
-import { drawDatabaseWork, type EditActions, focusSqlField, type RecordsState, type StructureState, type WorkActions, type WorkBody, type WorkState } from "./database-work.js";
+import { drawDatabaseWork, type EditActions, focusSqlField, setCopy, type RecordsState, type StructureState, type WorkActions, type WorkBody, type WorkState } from "./database-work.js";
 import { $ } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
 import { confirmDelete, confirmDiscardChanges } from "./hint.js";
@@ -18,7 +18,7 @@ import { PLUS_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { initSplit } from "./split.js";
 import { logError, showFailure } from "./error-card.js";
-import { show } from "./view.js";
+import { copyText, show } from "./view.js";
 
 interface DatabaseState {
   expanded: boolean;
@@ -734,6 +734,7 @@ export function showDatabase() {
 }
 
 export function initDatabase() {
+  setCopy(copyText);
   const add = $("database-add");
   add.innerHTML = PLUS_SVG;
   add.onclick = () => openDatabaseForm(null, save, test);

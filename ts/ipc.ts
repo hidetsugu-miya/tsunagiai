@@ -430,6 +430,8 @@ export interface Commands {
   orca_popout_restore: { args: undefined; result: null };
   orca_popout_close: { args: undefined; result: null };
   orca_popout_definition: { args: { query: PopoutDefinition }; result: null };
+  orca_popout_place: { args: { path: string; outside: boolean; line: number; character: number }; result: null };
+  orca_popout_lost: { args: { connection: string; error: string }; result: null };
   // A-18: the entries of the folder `dir` (relative to the worktree; "" is its own folder) of the worktree at `path` of the target `environment`: the folders first, each with whether git ignores it. Not tried again: a failure carries its message.
   orca_files_list: { args: { path: string; dir: string; ignored: boolean; environment: string | null }; result: OrcaDir };
   orca_files_ignored: { args: { path: string; paths: string[]; environment: string | null }; result: string[] };

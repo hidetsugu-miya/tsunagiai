@@ -6,6 +6,8 @@
 //! The screen's channel (`orca_popout_main`) carries what the owner did in a window, the close (the red button, which is stopped here and left to the screen, so the tab is closed as the × of its pane closes it), the restore,
 //! and the definition that the editor of a file window asked for (`orca_popout_definition`), which the screen shows as a tab of its own pane;
 //! the window's channel (`orca_popout_attach`) carries what the screen knows of the tab now (its name, its status, where its terminal comes from) and, for a file, the red button.
+//! A diff, a definition and a database tab are held by their conditions (`PopoutDiff`, `PopoutDefinition`, `PopoutDatabase`): the page of the window reads them again, the screen keeps its own copy of the tab in memory, and the red button is left to the screen.
+//! A place that the definition tab of a window asks to open (`orca_popout_place`) is shown by the screen in its own pane, and a connection that a database tab of a window found lost (`orca_popout_lost`) is told to the screen, which closes its tabs as it does for its own.
 //! A file is held by the page of its window (its text, its save): the red button is left to that page, which closes the file and then tells `orca_popout_close`, which asks the screen as the red button of a terminal does.
 //! A window that the screen cannot be asked about (no channel, or a send that failed) is destroyed. The window ends with `orca_popout_end`, when the screen has done what the owner asked, and with the main window.
 //! The table is held in memory only (a window is not restored when the app starts).
@@ -52,7 +54,45 @@ pub struct PopoutFile {
     pub server: Option<String>,
 }
 
-/// What a window shows, by the kind of the tab. A kind that comes later (a diff, a definition, a database) is a variant of its own.
+/// The commit that a diff tab shows a file of (A-27): its full id and short one, its first parent (null for the first commit) and the path the file had at the parent when it was renamed.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct PopoutCommit {
+    pub id: String,
+    pub short_id: String,
+    pub parent_id: Option<String>,
+    pub old_relative: Option<String>,
+}
+
+/// The difference that a diff tab (A-24) shows: the worktree, the file in it (`relative`) and, for a file of a commit, the commit. The target is the tab's `environment`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct PopoutDiff {
+    pub path: String,
+    pub relative: String,
+    pub commit: Option<PopoutCommit>,
+}
+
+/// The table or the SQL that a database tab (A-43) shows, as it was when the window was made: the connection and its name, the database, the table (none for the SQL of a database), the selected tab of the table (`records`, `structure` or `sql`), the page of its records and the text of its SQL field.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct PopoutDatabase {
+    pub connection: String,
+    pub name: String,
+    pub database: String,
+    pub table: Option<String>,
+    pub tab: String,
+    pub page: u32,
+    pub sql: String,
+}
+
+/// What a window shows, by the kind of the tab.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -61,6 +101,9 @@ pub enum PopoutContent {
     Claude(PopoutTerminal),
     Terminal(PopoutTerminal),
     File(PopoutFile),
+    Diff(PopoutDiff),
+    Definition(PopoutDefinition),
+    Database(PopoutDatabase),
 }
 
 /// A tab of the screen that is in a window: its id and project (which `orca_panes` keeps its place under), the name and the status its header shows, where it is (`environment`: null for this machine) and what it shows.
@@ -79,7 +122,7 @@ pub struct PopoutTab {
     pub content: PopoutContent,
 }
 
-/// The question of the editor of a file window about the definition of a name (A-34), as the screen takes it for the definition tab (`DefinitionQuery` of `ts/orca-definition.ts`, whose `tab` the screen fills from the window).
+/// The question about the definition of a name (A-34), as the screen takes it for the definition tab (`DefinitionQuery` of `ts/orca-definition.ts`, whose `tab` the screen fills from the window): the question of the editor of a file window, and what a definition tab shows.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -96,7 +139,8 @@ pub struct PopoutDefinition {
     pub word: String,
 }
 
-/// What the owner did in a window, which the screen carries out: the tab is closed (the red button), it goes back to its pane, or its editor asked for the definition of a name, which the screen shows in its own pane.
+/// What the owner did in a window, which the screen carries out: the tab is closed (the red button), it goes back to its pane, its editor asked for the definition of a name, which the screen shows in its own pane,
+/// the definition tab of the window asked to open a place (`query` is the tab's question), or the database tab of the window found its connection lost.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -112,6 +156,19 @@ pub enum PopoutAction {
         tab: String,
         query: PopoutDefinition,
     },
+    Place {
+        tab: String,
+        query: PopoutDefinition,
+        path: String,
+        outside: bool,
+        line: u32,
+        character: u32,
+    },
+    Lost {
+        tab: String,
+        connection: String,
+        error: String,
+    },
 }
 
 /// What the page of a window is told: the tab as the screen knows it now, and the red button of a window whose page holds the tab's document (a file).
@@ -120,7 +177,7 @@ pub enum PopoutAction {
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum PopoutPage {
-    Tab { tab: PopoutTab },
+    Tab { tab: Box<PopoutTab> },
     Close,
 }
 
@@ -192,12 +249,56 @@ fn check(tab: &PopoutTab) -> Result<(), String> {
                 check_text("サーバー", server)?;
             }
         }
+        PopoutContent::Diff(d) => {
+            check_text("パス", &d.path)?;
+            check_text("ファイル", &d.relative)?;
+            if let Some(c) = &d.commit {
+                check_text("コミット", &c.id)?;
+                check_text("コミット", &c.short_id)?;
+                for text in [&c.parent_id, &c.old_relative].into_iter().flatten() {
+                    check_text("コミット", text)?;
+                }
+            }
+        }
+        PopoutContent::Definition(q) => {
+            // What a definition tab shows is the question it asked: the project and the place are the tab's, and the rest is checked as the editor's question is.
+            if q.target != tab.environment || q.project != tab.project {
+                return Err("定義の問い合わせがタブと合っていません".into());
+            }
+            check_text("パス", &q.path)?;
+            check_text("サーバー", &q.server)?;
+            check_text("ファイル", &q.relative)?;
+            check_text("名前", &q.word)?;
+            if q.text.len() > MAX_DEFINITION_TEXT {
+                return Err("ファイルが大きすぎます".into());
+            }
+        }
+        PopoutContent::Database(d) => {
+            check_text("接続", &d.connection)?;
+            check_text("データベース", &d.database)?;
+            if d.name.len() > MAX_TEXT || d.name.chars().any(char::is_control) {
+                return Err("接続の名前が正しくありません".into());
+            }
+            if let Some(table) = &d.table {
+                check_text("テーブル", table)?;
+            }
+            if !matches!(d.tab.as_str(), "records" | "structure" | "sql")
+                || (d.table.is_none() && d.tab != "sql")
+            {
+                return Err("テーブルのタブが正しくありません".into());
+            }
+            if d.sql.len() > MAX_SQL_TEXT {
+                return Err("SQL が大きすぎます".into());
+            }
+        }
     }
     Ok(())
 }
 
 /// The most that the text of a definition question holds: what `lsp_definition` takes.
 const MAX_DEFINITION_TEXT: usize = 1024 * 1024;
+/// The most that the text of the SQL field of a database tab holds.
+const MAX_SQL_TEXT: usize = 1024 * 1024;
 
 /// Checks a question of the editor of the window that holds `tab`: the window shows a file, and the question is about that file of that worktree (and, for a file outside it, to the server that gave it), so a window asks nothing of another file.
 fn check_definition(tab: &PopoutTab, query: &PopoutDefinition) -> Result<(), String> {
@@ -253,6 +354,49 @@ impl Table {
         let mut slots: Vec<(&String, &Slot)> = self.slots.iter().collect();
         slots.sort_by_key(|(label, _)| label[PREFIX.len()..].parse::<u64>().unwrap_or(0));
         slots.into_iter().map(|(_, s)| s.tab.clone()).collect()
+    }
+
+    /// The place that the definition tab of the window `label` asks to open, as the screen is told: the tab's own question with the place (`path` is relative to the worktree, or the server's absolute path when `outside`). A window of another kind, or a bad path, is refused.
+    fn place_of(
+        &self,
+        label: &str,
+        path: String,
+        outside: bool,
+        line: u32,
+        character: u32,
+    ) -> Result<PopoutAction, String> {
+        let slot = self
+            .slots
+            .get(label)
+            .ok_or("このウィンドウにタブがありません")?;
+        let PopoutContent::Definition(query) = &slot.tab.content else {
+            return Err("このウィンドウは定義を開いていません".into());
+        };
+        check_text("パス", &path)?;
+        Ok(PopoutAction::Place {
+            tab: slot.tab.tab.clone(),
+            query: query.clone(),
+            path,
+            outside,
+            line,
+            character,
+        })
+    }
+
+    /// The connection that the database tab of the window `label` found lost, as the screen is told; the connection must be the tab's own, and the text is cut to what a card shows.
+    fn lost_of(&self, label: &str, connection: &str, error: &str) -> Result<PopoutAction, String> {
+        let slot = self
+            .slots
+            .get(label)
+            .ok_or("このウィンドウにタブがありません")?;
+        match &slot.tab.content {
+            PopoutContent::Database(d) if d.connection == connection => Ok(PopoutAction::Lost {
+                tab: slot.tab.tab.clone(),
+                connection: connection.to_owned(),
+                error: error.chars().take(MAX_TEXT).collect(),
+            }),
+            _ => Err("このウィンドウの接続ではありません".into()),
+        }
     }
 
     /// What the owner did in the window `label`, as the screen is told; none for a window that holds no tab.
@@ -391,7 +535,7 @@ pub fn orca_popout_update(
         .ok_or("ウィンドウがありません")?;
     slot.tab = tab.clone();
     if let Some(page) = &slot.page {
-        let _ = page.send(PopoutPage::Tab { tab });
+        let _ = page.send(PopoutPage::Tab { tab: Box::new(tab) });
     }
     Ok(())
 }
@@ -429,6 +573,56 @@ pub fn orca_popout_restore(window: WebviewWindow) -> Result<(), String> {
     }
     ask(window.app_handle(), window.label(), true);
     Ok(())
+}
+
+/// Sends the screen what a window's page asked of it (`orca_popout_place`, `orca_popout_lost`).
+fn tell_screen(
+    state: &State<'_, Popouts>,
+    action: Result<PopoutAction, String>,
+) -> Result<(), String> {
+    let action = action?;
+    let screen = state
+        .table()
+        .screen
+        .clone()
+        .ok_or("本体の画面につながっていません")?;
+    screen
+        .send(action)
+        .map_err(|e| format!("本体の画面に送れませんでした: {e}"))
+}
+
+/// The definition tab of a window asks to open a place of its list (A-34): the screen opens it as a tab of its own pane. The place is the tab's own question's, which Rust holds.
+#[tauri::command]
+pub fn orca_popout_place(
+    window: WebviewWindow,
+    state: State<'_, Popouts>,
+    path: String,
+    outside: bool,
+    line: u32,
+    character: u32,
+) -> Result<(), String> {
+    if !is_popout(window.label()) {
+        return Err("このウィンドウは開けません".into());
+    }
+    let action = state
+        .table()
+        .place_of(window.label(), path, outside, line, character);
+    tell_screen(&state, action)
+}
+
+/// The database tab of a window found its connection lost (A-43): the screen is told, which drops the connection and closes its tabs, the window's too.
+#[tauri::command]
+pub fn orca_popout_lost(
+    window: WebviewWindow,
+    state: State<'_, Popouts>,
+    connection: String,
+    error: String,
+) -> Result<(), String> {
+    if !is_popout(window.label()) {
+        return Err("このウィンドウは知らせられません".into());
+    }
+    let action = state.table().lost_of(window.label(), &connection, &error);
+    tell_screen(&state, action)
 }
 
 /// The page of a window whose editor holds a file asks for the definition of a name (A-34): the screen shows it as a tab of its own pane, in the project of the file. The question must be about the window's own file.
@@ -752,7 +946,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_string(&PopoutPage::Tab {
-                tab: file_tab(None)
+                tab: Box::new(file_tab(None))
             })
             .unwrap(),
             format!(r#"{{"kind":"tab","tab":{text}}}"#)
@@ -782,5 +976,205 @@ mod tests {
             })
         );
         assert_eq!(serde_json::to_string(&read).unwrap(), text);
+    }
+
+    fn diff_tab(commit: Option<PopoutCommit>) -> PopoutTab {
+        PopoutTab {
+            tab: "diff:2".into(),
+            project: "proj_a".into(),
+            title: "main.rs".into(),
+            status: OrcaStatus::Done,
+            label: String::new(),
+            environment: None,
+            content: PopoutContent::Diff(PopoutDiff {
+                path: "/work/a".into(),
+                relative: "src/main.rs".into(),
+                commit,
+            }),
+        }
+    }
+
+    fn commit() -> PopoutCommit {
+        PopoutCommit {
+            id: "abc123".into(),
+            short_id: "abc".into(),
+            parent_id: Some("def456".into()),
+            old_relative: None,
+        }
+    }
+
+    fn definition_tab() -> PopoutTab {
+        PopoutTab {
+            tab: "definition:1".into(),
+            project: "proj_a".into(),
+            title: "定義 ・ main".into(),
+            status: OrcaStatus::Done,
+            label: String::new(),
+            environment: Some("Studio".into()),
+            content: PopoutContent::Definition(question()),
+        }
+    }
+
+    fn database(table: Option<&str>, tab: &str) -> PopoutTab {
+        PopoutTab {
+            tab: "database:3".into(),
+            project: "proj_a".into(),
+            title: "orders · shop".into(),
+            status: OrcaStatus::Done,
+            label: String::new(),
+            environment: None,
+            content: PopoutContent::Database(PopoutDatabase {
+                connection: "p1".into(),
+                name: "shop".into(),
+                database: "shop".into(),
+                table: table.map(str::to_owned),
+                tab: tab.into(),
+                page: 2,
+                sql: "select 1\nfrom t".into(),
+            }),
+        }
+    }
+
+    #[test]
+    fn a_diff_tab_is_checked_with_its_commit() {
+        assert!(check(&diff_tab(None)).is_ok());
+        assert!(check(&diff_tab(Some(commit()))).is_ok());
+        let bad_id = PopoutCommit {
+            id: String::new(),
+            ..commit()
+        };
+        let bad_parent = PopoutCommit {
+            parent_id: Some("a\nb".into()),
+            ..commit()
+        };
+        let bad_old = PopoutCommit {
+            old_relative: Some(String::new()),
+            ..commit()
+        };
+        for bad in [bad_id, bad_parent, bad_old] {
+            assert!(check(&diff_tab(Some(bad.clone()))).is_err(), "{bad:?}");
+        }
+        let mut no_file = diff_tab(None);
+        if let PopoutContent::Diff(d) = &mut no_file.content {
+            d.relative = String::new();
+        }
+        assert!(check(&no_file).is_err());
+        assert!(!has_document(&diff_tab(None).content));
+    }
+
+    #[test]
+    fn a_definition_tab_holds_its_own_question() {
+        assert!(check(&definition_tab()).is_ok());
+        let ask = |change: fn(&mut PopoutDefinition)| {
+            let mut tab = definition_tab();
+            if let PopoutContent::Definition(q) = &mut tab.content {
+                change(q);
+            }
+            check(&tab)
+        };
+        assert!(ask(|q| q.target = None).is_err());
+        assert!(ask(|q| q.project = "proj_b".into()).is_err());
+        assert!(ask(|q| q.word = String::new()).is_err());
+        assert!(ask(|q| q.server = String::new()).is_err());
+        assert!(ask(|q| q.text = "x".repeat(MAX_DEFINITION_TEXT + 1)).is_err());
+        assert!(!has_document(&definition_tab().content));
+    }
+
+    #[test]
+    fn a_database_tab_names_a_table_tab_or_the_sql_of_its_database() {
+        assert!(check(&database(Some("orders"), "records")).is_ok());
+        assert!(check(&database(Some("orders"), "structure")).is_ok());
+        assert!(check(&database(Some("orders"), "sql")).is_ok());
+        // The SQL of a database has no table, and only its own tab.
+        assert!(check(&database(None, "sql")).is_ok());
+        assert!(check(&database(None, "records")).is_err());
+        assert!(check(&database(Some("orders"), "other")).is_err());
+        assert!(check(&database(Some(""), "records")).is_err());
+        let mut long = database(None, "sql");
+        if let PopoutContent::Database(d) = &mut long.content {
+            d.sql = "x".repeat(MAX_SQL_TEXT + 1);
+        }
+        assert!(check(&long).is_err());
+        let mut nameless = database(None, "sql");
+        if let PopoutContent::Database(d) = &mut nameless.content {
+            d.connection = String::new();
+        }
+        assert!(check(&nameless).is_err());
+    }
+
+    #[test]
+    fn the_new_kinds_travel_as_the_screen_writes_them() {
+        let text = r#"{"tab":"diff:2","project":"proj_a","title":"main.rs","status":"done","label":"","environment":null,"content":{"kind":"diff","path":"/work/a","relative":"src/main.rs","commit":{"id":"abc123","shortId":"abc","parentId":"def456","oldRelative":null}}}"#;
+        let read: PopoutTab = serde_json::from_str(text).unwrap();
+        assert_eq!(read, diff_tab(Some(commit())));
+        assert_eq!(serde_json::to_string(&read).unwrap(), text);
+        let text = r#"{"tab":"database:3","project":"proj_a","title":"orders · shop","status":"done","label":"","environment":null,"content":{"kind":"database","connection":"p1","name":"shop","database":"shop","table":"orders","tab":"records","page":2,"sql":"select 1\nfrom t"}}"#;
+        let read: PopoutTab = serde_json::from_str(text).unwrap();
+        assert_eq!(read, database(Some("orders"), "records"));
+        assert_eq!(serde_json::to_string(&read).unwrap(), text);
+        let definition = serde_json::to_value(definition_tab()).unwrap();
+        assert_eq!(definition["content"]["kind"], "definition");
+        assert_eq!(definition["content"]["relative"], "src/main.rs");
+    }
+
+    #[test]
+    fn a_place_is_asked_only_by_the_window_of_a_definition_and_carries_its_question() {
+        let mut table = Table::default();
+        table.open(definition_tab()).unwrap();
+        table.open(file_tab(None)).unwrap();
+        let action = table
+            .place_of("tab-1", "src/lib.rs".into(), false, 4, 7)
+            .unwrap();
+        assert_eq!(
+            action,
+            PopoutAction::Place {
+                tab: "definition:1".into(),
+                query: question(),
+                path: "src/lib.rs".into(),
+                outside: false,
+                line: 4,
+                character: 7
+            }
+        );
+        let value = serde_json::to_value(&action).unwrap();
+        assert_eq!(value["kind"], "place");
+        assert_eq!(value["query"]["word"], "main");
+        assert!(table.place_of("tab-1", String::new(), false, 0, 0).is_err());
+        assert!(table.place_of("tab-1", "a\nb".into(), true, 0, 0).is_err());
+        // A window of a file, or of no tab, asks no place.
+        assert!(table
+            .place_of("tab-2", "src/lib.rs".into(), false, 0, 0)
+            .is_err());
+        assert!(table
+            .place_of("tab-9", "src/lib.rs".into(), false, 0, 0)
+            .is_err());
+    }
+
+    #[test]
+    fn a_lost_connection_is_told_only_for_the_connection_of_the_tab_of_the_window() {
+        let mut table = Table::default();
+        table.open(database(Some("orders"), "records")).unwrap();
+        table.open(tab("orca:t1", "t1")).unwrap();
+        let lost = table.lost_of("tab-1", "p1", "切れました").unwrap();
+        assert_eq!(
+            lost,
+            PopoutAction::Lost {
+                tab: "database:3".into(),
+                connection: "p1".into(),
+                error: "切れました".into()
+            }
+        );
+        // Another connection, a window of another kind and a window with no tab are refused.
+        assert!(table.lost_of("tab-1", "p2", "x").is_err());
+        assert!(table.lost_of("tab-2", "p1", "x").is_err());
+        assert!(table.lost_of("tab-9", "p1", "x").is_err());
+        // A text longer than a card shows is cut.
+        let PopoutAction::Lost { error, .. } = table
+            .lost_of("tab-1", "p1", &"あ".repeat(MAX_TEXT + 10))
+            .unwrap()
+        else {
+            panic!("not a Lost");
+        };
+        assert_eq!(error.chars().count(), MAX_TEXT);
     }
 }

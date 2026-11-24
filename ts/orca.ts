@@ -28,15 +28,15 @@ import type { PopoutTab } from "./bindings/PopoutTab";
 import { $, composing, isMac, partMatcher, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
 import { currentFormation, deselectFormation, isChildFolder, isChildSession, isChildWorktree, readForChoice } from "./formation-list.js";
-import { AGENT_SVG, CHEVRON_SVG, CLAUDE_SVG, CLOSE_SVG, COLUMNS_SVG, COPY_PATH_SVG, DATABASE_SVG, DEFINITION_SVG, DIFF_SVG, FORMATION_SVG, POPOUT_SVG, ROWS_SVG, SCRATCHPAD_SVG, TERMINAL_SVG, withClass } from "./icons.js";
+import { AGENT_SVG, CHEVRON_SVG, CLAUDE_SVG, CLOSE_SVG, COLUMNS_SVG, COPY_PATH_SVG, FORMATION_SVG, POPOUT_SVG, ROWS_SVG, SCRATCHPAD_SVG, TERMINAL_SVG, withClass } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
 import { closeMenu, type MenuItem, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { closeDefinition, type DefinitionOpen, type DefinitionQuery, definitionsOf, hasDefinitionIn, initDefinition, openDefinition, showDefinitions } from "./orca-definition.js";
 import { openAddProject } from "./orca-add.js";
-import { closeConnectionTabs, closeDatabaseTab, databaseTabsOf, openQuery, openTable, showDatabaseTabs } from "./orca-database-tabs.js";
-import { initOrcaDatabase } from "./orca-database.js";
+import { closeConnectionTabs, closeDatabaseTab, conditionOf, databaseTabsOf, initDatabaseTabs, openQuery, openTable, showDatabaseTabs } from "./orca-database-tabs.js";
+import { initOrcaDatabase, lostConnection } from "./orca-database.js";
 import { closeDiff, type DiffCommit, diffsOf, hasDiffIn, openDiff as openDiffTab, refreshDiffs, showDiffs } from "./orca-diff.js";
 import { closeFile, dirtyIds, discardFiles, filesOf, goTo, hasFileIn, holdFiles, initOrcaEditor, nameOf, openedIn, openFile as openFileHere, refreshEditors, resolveServers, saveFile, showEditors } from "./orca-editor.js";
 import { ensureServer, initLsp, mayAsk, pauseLsp, syncServers } from "./orca-lsp.js";
@@ -46,7 +46,7 @@ import { type PaneModel, drawTree, editorHostOf, initPaneTree, type TreeModel } 
 import { applyLocal, findTab, focusedTab, layoutOf, needsSync, type PaneTabs, panesOf, syncPanes } from "./orca-panes.js";
 import { closePeek, drawPeek, initPeek, openPeek, peeking } from "./orca-peek.js";
 import { awayFile, awayFileIn, awayIn, focusPopout, initPopout, isAway, popOut, syncPopouts } from "./orca-popout.js";
-import { fileIcon, lockIcon, STATUS_LABELS, statusIcon } from "./orca-status.js";
+import { databaseIcon, definitionIcon, diffIcon, fileIcon, lockIcon, STATUS_LABELS, statusIcon } from "./orca-status.js";
 import { openScratchpad } from "./orca-scratchpad.js";
 import { hideTerminals, initOrcaTerminal, type Placement, pruneTerminals, showTerminals, type TermSource } from "./orca-terminal.js";
 import { type Fields, registerDraftTarget } from "./screen-bridge.js";
@@ -929,27 +929,6 @@ function tabNode(t: Tab, selected: boolean) {
   return wrap;
 }
 
-// The mark of a diff's tab.
-function diffIcon() {
-  const icon = tag("span", "orca-ic orca-file-tab-ic");
-  icon.innerHTML = DIFF_SVG;
-  return icon;
-}
-
-// The mark of a definition's tab.
-function definitionIcon() {
-  const icon = tag("span", "orca-ic orca-file-tab-ic");
-  icon.innerHTML = DEFINITION_SVG;
-  return icon;
-}
-
-// The mark of a database tab.
-function databaseIcon() {
-  const icon = tag("span", "orca-ic orca-file-tab-ic");
-  icon.innerHTML = DATABASE_SVG;
-  return icon;
-}
-
 // The line under a pane's strip that says why it shows no terminal, else null.
 function emptyText(tabs: Tab[], tab: Tab | undefined) {
   if (started !== null) return null;
@@ -1719,7 +1698,7 @@ function pickTerminal(t: OrcaTerminal) {
 }
 
 // Closes a tab. An Orca terminal is closed in Orca, and the list is read at once: it leaves the tabs then, and a failure keeps the tab, shows the message and reads the list again.
-// It says whether the terminal was closed (the window of A-46 is ended by it); a tab of a document says no: a file in a window is closed by the page of its window, and the others are not in a window yet.
+// It says whether the tab was closed (the window of A-46 is ended by it); a file says no: a file in a window is closed by the page of its window. A diff, a definition and a database tab are closed here, whether a window shows them or not.
 async function closeTab(tab: Tab): Promise<boolean> {
   if (closing.has(tab.id)) return false;
   closing.add(tab.id);
@@ -1735,7 +1714,7 @@ async function closeTab(tab: Tab): Promise<boolean> {
     (tab.kind === "diff" ? closeDiff : tab.kind === "definition" ? closeDefinition : closeDatabaseTab)(tab.id);
     closing.delete(tab.id);
     draw();
-    return false;
+    return true;
   }
   try {
     await invoke("orca_close", { handle: tab.handle!, environment: tab.environment });
@@ -1754,7 +1733,7 @@ async function closeTab(tab: Tab): Promise<boolean> {
   return true;
 }
 
-// The menu of a tab (the right button): it splits its pane, which takes the tab to a new pane at its right or below it (a pane with one tab cannot be split, so it has no split); on a Claude session and a terminal it opens the tab in a window of its own, also when it is alone in its pane (A-46); and on a file of a worktree it copies the file's path and its path from the worktree, as the menu of the file pane does (A-18), after a line when the split is there. A tab with neither has no menu.
+// The menu of a tab (the right button): it splits its pane, which takes the tab to a new pane at its right or below it (a pane with one tab cannot be split, so it has no split); on a Claude session, a terminal, a file, a diff, a definition and a database tab it opens the tab in a window of its own, also when it is alone in its pane (A-46); and on a file of a worktree it copies the file's path and its path from the worktree, as the menu of the file pane does (A-18), after a line when the split is there. A tab with neither has no menu.
 function openTabMenu(anchor: Element, tab: string, pane: string) {
   const item = (label: string, icon: string, pick: () => unknown): MenuItem => ({ label, color: "var(--accent)", icon, current: false, pick });
   const split = (panesOf(currentLayout()?.root ?? null).find((p) => p.id === pane)?.tabs.length ?? 0) >= 2;
@@ -1772,8 +1751,24 @@ function openTabMenu(anchor: Element, tab: string, pane: string) {
 
 // ---- the windows of the tabs (A-46) ----
 
-// What the window of the tab `t` of the project `project` shows, null for a tab that has no window to show (only a Claude session and a terminal that have a terminal do, and a file: the scratchpad's too, and one outside the worktree that has its server).
+// What the window of the tab `t` of the project `project` shows, null for a tab that has no window to show (a Claude session and a terminal that have a terminal do, a file: the scratchpad's too, and one outside the worktree that has its server, and a diff, a definition and a database tab, which the window reads again from their conditions).
 function popoutTab(t: Tab, project: string): PopoutTab | null {
+  const place = projectPlace(project);
+  const doc = { tab: t.id, project, title: t.title, status: "done" as const, label: "", environment: t.environment };
+  if (t.kind === "diff") {
+    const d = diffsOf(place, project).find((x) => x.id === t.id);
+    return d === undefined ? null : { ...doc, content: { kind: "diff", path: d.path, relative: d.relative, commit: d.commit } };
+  }
+  if (t.kind === "definition") {
+    const d = definitionsOf(place, project).find((x) => x.id === t.id);
+    if (d === undefined) return null;
+    const { tab: _asked, ...query } = d.query;
+    return { ...doc, content: { kind: "definition", ...query } };
+  }
+  if (t.kind === "database") {
+    const d = databaseTabsOf(place, project).find((x) => x.id === t.id);
+    return d === undefined ? null : { ...doc, content: { kind: "database", ...conditionOf(d) } };
+  }
   if (t.kind === "file") {
     const f = filesOf(projectPlace(project), project).find((x) => x.id === t.id);
     if (f === undefined || (f.outside && f.server === null)) return null;
@@ -1788,10 +1783,12 @@ function popoutTab(t: Tab, project: string): PopoutTab | null {
 function lookPopout(entry: PopoutTab): PopoutTab | null | undefined {
   // A file is no row of the list: its window holds it until it is closed.
   if (entry.content.kind === "file") return entry;
-  if (!listRead(projectPlace(entry.project))) return undefined;
+  const documents = entry.content.kind === "diff" || entry.content.kind === "definition" || entry.content.kind === "database";
+  // A diff, a definition and a database tab are kept by this screen (not read from the list): the window follows the tab, which a new question of the definition tab changes.
+  if (!documents && !listRead(projectPlace(entry.project))) return undefined;
   const tabs = tabsOf(entry.project);
-  const { handle } = entry.content;
-  const found = tabs.find((t) => t.id === entry.tab) ?? tabs.find((t) => t.handle === handle);
+  const handle = entry.content.kind === "claude" || entry.content.kind === "terminal" ? entry.content.handle : null;
+  const found = tabs.find((t) => t.id === entry.tab) ?? (handle === null ? undefined : tabs.find((t) => t.handle === handle));
   return found === undefined ? null : popoutTab(found, entry.project);
 }
 
@@ -1814,6 +1811,17 @@ function askPopoutDefinition(query: DefinitionQuery) {
     openDefinition(query);
     draw();
   }
+}
+
+// The definition tab of a window asked to open a place (A-46): it opens in the pane of the project of the question when that project is selected, and otherwise as a tab of that project, which its pane shows when it is selected.
+function openPopoutPlace(place: DefinitionOpen) {
+  if (view === null) return;
+  if (projectKey === place.query.project) return openPlace(place);
+  const { query, path, outside, line, character } = place;
+  const id = openEditorFile(query.target, query.project, query.path, path, outside ? query.server : null);
+  if (focusPopout(id)) return;
+  draw();
+  goTo(id, line, character);
 }
 
 // A file whose window was put back, or could not be made, is opened again in its pane with the id it had, so the layout gives it its place.
@@ -2082,12 +2090,13 @@ function initSearch() {
 export function initOrca() {
   initOrcaTerminal((e) => showFailure("orca", e), (source, uri) => void openTerminalLink(source, uri).catch((e) => showFailure("orca", e)));
   initPeek(statusIcon, selectSession);
-  initPopout({ changed: draw, close: closeWindowTab, reopen: reopenFile, definition: askPopoutDefinition, failed: (e) => showFailure("orca", e) });
+  initPopout({ changed: draw, close: closeWindowTab, reopen: reopenFile, definition: askPopoutDefinition, place: openPopoutPlace, lost: (id, error) => void lostConnection(id, error), failed: (e) => showFailure("orca", e) });
   initSplit($("orca"), $("orca-split"), { side: "left", min: 0.15, max: 0.5, initial: 0.19, property: "--list-w" });
   initSplit($("orca"), $("orca-files-split"), { side: "right", min: 0.15, max: 0.4, initial: 0.22, property: "--files-w" });
   initOrcaEditor({ changed: draw, error: (e) => showFailure("orca", e), definition: askDefinition, serve: (target, project, path, server) => void ensureServer({ target, project, path }, server), mayAsk });
   initLsp({ changed: ({ target, project }) => resolveServers(target, project), started: followLsp });
   initDefinition({ open: openPlace });
+  initDatabaseTabs({ lost: (id, error) => void lostConnection(id, error) });
   initOrcaDatabase({ table: openDatabaseTable, query: openDatabaseQuery, gone: (id) => {
       if (closeConnectionTabs(id)) draw();
     } });

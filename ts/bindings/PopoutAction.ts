@@ -2,6 +2,7 @@
 import type { PopoutDefinition } from "./PopoutDefinition";
 
 /**
- * What the owner did in a window, which the screen carries out: the tab is closed (the red button), it goes back to its pane, or its editor asked for the definition of a name, which the screen shows in its own pane.
+ * What the owner did in a window, which the screen carries out: the tab is closed (the red button), it goes back to its pane, its editor asked for the definition of a name, which the screen shows in its own pane,
+ * the definition tab of the window asked to open a place (`query` is the tab's question), or the database tab of the window found its connection lost.
  */
-export type PopoutAction = { "kind": "close", tab: string, } | { "kind": "restore", tab: string, } | { "kind": "definition", tab: string, query: PopoutDefinition, };
+export type PopoutAction = { "kind": "close", tab: string, } | { "kind": "restore", tab: string, } | { "kind": "definition", tab: string, query: PopoutDefinition, } | { "kind": "place", tab: string, query: PopoutDefinition, path: string, outside: boolean, line: number, character: number, } | { "kind": "lost", tab: string, connection: string, error: string, };

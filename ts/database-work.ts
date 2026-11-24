@@ -9,7 +9,6 @@ import { canEditCell, cellKey, changesOf, type EditState, isAdded, markable, ori
 import { type GridEdit, gridNode, syncEdit } from "./database-grid.js";
 import { $, onEnter, tag } from "./dom.js";
 import { CHECK_SVG, CHEVRON_LEFT_SVG, CHEVRON_SVG, CLOSE_SVG, COPY_SVG, MINUS_SVG, PAGE_FIRST_SVG, PAGE_LAST_SVG, PLUS_SVG, RELOAD_SVG } from "./icons.js";
-import { copyText } from "./view.js";
 
 // The page of records that was asked for last. `data` stays while the next page is read, and is none after an error. `edit` is what the page has gathered to write (D-10); a screen that cannot write gives none, and its records tab has no control to write.
 export interface RecordsState {
@@ -252,6 +251,12 @@ function iconButton(key: string, label: string, svg: string, disabled: boolean, 
     onclick();
   };
   return button;
+}
+
+// Where a list is copied to the clipboard: the screens give `copyText` of `view.ts` (`setCopy`), and the window of a tab (A-46) its own, since this module is loaded there without the screens.
+let copyText: (text: string, done: string) => unknown = () => {};
+export function setCopy(copy: (text: string, done: string) => unknown) {
+  copyText = copy;
 }
 
 // The button at the left of the footer that copies the list that is shown, as Rust made its text (`tsv`, #668): off while it is read and when there is no column. The write is made straight from the press, as `copyText` needs.

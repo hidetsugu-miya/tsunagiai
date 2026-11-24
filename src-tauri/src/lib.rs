@@ -444,6 +444,8 @@ pub fn run() {
             orca_popout::orca_popout_pin,
             orca_popout::orca_popout_restore,
             orca_popout::orca_popout_definition,
+            orca_popout::orca_popout_place,
+            orca_popout::orca_popout_lost,
             orca_popout::orca_popout_close,
             orca_files::orca_files_list,
             orca_files::orca_files_ignored,
