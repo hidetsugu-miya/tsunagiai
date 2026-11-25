@@ -240,6 +240,7 @@ In v0.10.1, features kept being added during the review, and the range to read a
 
 The record is `.claude/reviews/{HEAD SHA}` in the main checkout, and `.claude/hooks/record-review.sh` writes it.
 `guard-review.sh` stops anyone other than release-verifier from touching these two, by the words of the command or the path of the file, with two exceptions (at the owner's instruction, 2026-11-25; #1375): a read-only command (`cat`, `head`, `grep`, `rg`, `sed -n`, `git diff`, `git show` or `git log`, run alone, with no chaining, redirection or substitution), and a Write, Edit or MultiEdit of `record-review*.sh` or `guard-review.sh` in a worktree under `.claude/worktrees/`. The main checkout's copy of the record script stays stopped, so a fix reaches it by the merge; running the script and writing `.claude/reviews/` stay stopped too.
+`record-review.sh` writes nothing and exits 2 when its stdin is empty or its first line does not start with `判定: 合格` (at the owner's instruction, 2026-11-25; #1375), so a record never holds a missing verdict; release-verifier gives the whole verdict on stdin (`.claude/agents/release-verifier.md`, step 8).
 `range-check.sh` calls `record-review.sh` itself after its checks, and the command that runs it names neither, so the guard lets it pass (at the owner's instruction, 2026-11-18; #932. It replaces "only release-verifier" of 2026-10-29).
 
 ```text

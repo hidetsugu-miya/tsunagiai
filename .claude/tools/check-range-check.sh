@@ -128,6 +128,23 @@ echo dirty >> "$work/ts/a.ts"
 run 1 "追跡しているファイルに未コミットの変更がある" "$base" "ts/a.ts" "コミットしていない変更"
 git -C "$work" checkout -q -- ts/a.ts
 
+# 記録の script: 空の stdin と、1 行目が「判定: 合格」で始まらない stdin では、記録を書かずに終了コード 2 で止める
+rec="$main/.claude/hooks/record-review.sh"
+rhead=$(git -C "$work" rev-parse HEAD)
+for case_name in "空の stdin" "判定: 不合格" "1 行目が空"; do
+  rm -f "$main/.claude/reviews/$rhead"
+  case "$case_name" in
+    "空の stdin") (cd "$work" && CLAUDE_PROJECT_DIR="$work" "$rec" </dev/null >/dev/null 2>&1); got=$? ;;
+    "判定: 不合格") (cd "$work" && printf '判定: 不合格\n' | CLAUDE_PROJECT_DIR="$work" "$rec" >/dev/null 2>&1); got=$? ;;
+    "1 行目が空") (cd "$work" && printf '\n判定: 合格\n' | CLAUDE_PROJECT_DIR="$work" "$rec" >/dev/null 2>&1); got=$? ;;
+  esac
+  if [ "$got" -eq 2 ] && [ ! -e "$main/.claude/reviews/$rhead" ]; then echo "ok   記録の script が止める（${case_name}）"; else echo "FAIL 記録の script が止める（${case_name}）(結果 $got)"; fail=1; fi
+done
+rm -f "$main/.claude/reviews/$rhead"
+(cd "$work" && printf '判定: 合格（確認）\n範囲: x\n' | CLAUDE_PROJECT_DIR="$work" "$rec" >/dev/null 2>&1); got=$?
+if [ "$got" -eq 0 ] && [ "$(sed -n 2p "$main/.claude/reviews/$rhead")" = "範囲: x" ]; then echo "ok   記録の script が判定の全文を書く"; else echo "FAIL 記録の script が判定の全文を書く (結果 $got)"; fail=1; fi
+rm -f "$main/.claude/reviews/$rhead"
+
 # 使い方の誤り
 (cd "$work" && "$rc" >/dev/null 2>&1); got=$?
 [ "$got" -eq 2 ] && echo "ok   引数なし" || { echo "FAIL 引数なし (期待 2、結果 ${got})"; fail=1; }
