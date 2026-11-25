@@ -26,6 +26,8 @@ const BINARY_TYPES: [&str; 8] = [
     "BIT",
 ];
 const NO_PLACE: &str = "保存先の場所が正しくありません";
+/// The words of a statement that gave a second result (a `CALL` of a procedure that selects more than once), whose rows do not fit the columns of the first.
+pub const MULTIPLE_RESULTS: &str = "結果が複数ある文は CSV に書き出せません";
 
 /// `bytes` as `0x` and two hexadecimal digits for each byte.
 fn hex(bytes: &[u8]) -> String {
@@ -83,6 +85,8 @@ pub enum Outcome {
     Done,
     /// The statement gave no row, so there are no column names to write.
     NoRows,
+    /// A row came after the end of a result, so the statement gives more than one result; none of it is kept.
+    MultipleResults,
     /// A row could not be written to the file.
     WriteFailed(String),
 }
@@ -153,6 +157,7 @@ pub fn finish(
             .map(|()| rows)
             .map_err(write_failed),
         Ok(Outcome::NoRows) => Err(no_rows.to_owned()),
+        Ok(Outcome::MultipleResults) => Err(MULTIPLE_RESULTS.to_owned()),
         Ok(Outcome::WriteFailed(message)) => Err(message),
         Err(message) => Err(message),
     };
@@ -300,6 +305,7 @@ mod tests {
         std::fs::write(&dest, "old").unwrap();
         let ends = [
             (Ok(Outcome::NoRows), "none"),
+            (Ok(Outcome::MultipleResults), MULTIPLE_RESULTS),
             (Ok(Outcome::WriteFailed("disk".to_owned())), "disk"),
             (
                 Err("MySQL との接続が切れました".to_owned()),
