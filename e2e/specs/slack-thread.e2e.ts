@@ -2073,7 +2073,12 @@ describe("slack thread: the pane under the thread", () => {
 });
 
 describe("slack thread: a Sentry notification (S-30)", () => {
-  const issue = { org: "acme", issueId: "123456", projectId: "22", buttons: [{ text: "Resolve", value: "resolve_dialog" }, { text: "Archive", value: "archive_dialog" }] };
+  const issue = { org: "acme", issueId: "123456", projectId: "22", buttons: [{ text: "Resolve", value: "resolve_dialog" }, { text: "Archive", value: "archive_dialog" }], assign: null };
+  const withMenu = { ...issue, assign: "Select Assignee..." };
+  const assignees = { teams: [{ name: "#backend", value: "team:7" }, { name: "#web", value: "team:8" }], members: [{ name: "Owner", value: "user:1" }, { name: "Tanaka", value: "user:2" }] };
+  const menu = () => $("#st-msgs .sentry-assign");
+  const pop = () => $(".sentry-pop");
+  const assigned = (assignee: string) => ({ teamId: workspace.teamId, org: "acme", issueId: "123456", assignee });
   const sentry = (extra: Parameters<typeof threadMessage>[3] = {}) =>
     slackThread([threadMessage(root, "Sentry", "Error", { blocks: [{ type: "section", text: plain("Error"), fields: [], accessory: null }], showText: false, sentry: issue, ...extra })]);
   const button = (name: string) => $("#st-msgs .st-sentry").$(`button=${name}`);
@@ -2159,5 +2164,90 @@ describe("slack thread: a Sentry notification (S-30)", () => {
     await expect($(".toast")).toHaveText(expect.stringContaining("Sentry に送れませんでした: トークンの権限が足りません。event:write のスコープを足してください"));
     await browser.waitUntil(async () => (await count("#st-msgs .st-sentry button:disabled")) === 0);
     expect((await callsOf(send)).length).toBe(1);
+  });
+
+  it("draws the menu to assign after the buttons, with its own text, and none when the message has no menu", async () => {
+    await openDetail({}, sentry({ sentry: withMenu }));
+    expect(await textsOf("#st-msgs .st-sentry button")).toEqual(["Resolve", "Archive", "Select Assignee..."]);
+    await expect(menu()).toHaveAttribute("aria-haspopup", "dialog");
+    expect(await count(".sentry-pop")).toBe(0);
+  });
+
+  it("reads the choices of the issue when the menu is pressed, and draws the teams and the members under a search field", async () => {
+    await openDetail({}, sentry({ sentry: withMenu }));
+    const read = await mock("sentry_assignees", assignees);
+    const send = await mock("sentry_assign", null);
+    await menu().click();
+    await expect(pop()).toBeDisplayed();
+    expect(await waitForCalls(read)).toEqual([{ teamId: workspace.teamId, org: "acme", issueId: "123456" }]);
+    await expect(pop().$(".sentry-search")).toHaveAttribute("placeholder", "検索");
+    await expect(pop().$(".sentry-search")).toBeFocused();
+    expect(await textsOf(".sentry-pop .sentry-group")).toEqual(["Teams", "Members"]);
+    expect(await textsOf(".sentry-pop .sentry-opt")).toEqual(["#backend", "#web", "Owner", "Tanaka"]);
+    expect(await callsOf(send)).toEqual([]);
+  });
+
+  it("narrows the choices as the search field is typed in, and drops a group with none", async () => {
+    await openDetail({}, sentry({ sentry: withMenu }));
+    await mock("sentry_assignees", assignees);
+    await menu().click();
+    await pop().$(".sentry-search").setValue("TAN");
+    expect(await textsOf(".sentry-pop .sentry-group")).toEqual(["Members"]);
+    expect(await textsOf(".sentry-pop .sentry-opt")).toEqual(["Tanaka"]);
+    await pop().$(".sentry-search").setValue("zzz");
+    expect(await count(".sentry-pop .sentry-opt")).toBe(0);
+    expect(await count(".sentry-pop .sentry-group")).toBe(0);
+  });
+
+  it("closes the popup with Escape, with a press elsewhere and with the menu again, and sends nothing", async () => {
+    await openDetail({}, sentry({ sentry: withMenu }));
+    await mock("sentry_assignees", assignees);
+    const send = await mock("sentry_assign", null);
+    await menu().click();
+    await browser.keys("Escape");
+    expect(await count(".sentry-pop")).toBe(0);
+    await menu().click();
+    await expect(pop()).toBeDisplayed();
+    await menu().click();
+    expect(await count(".sentry-pop")).toBe(0);
+    await menu().click();
+    await expect(pop()).toBeDisplayed();
+    // WebDriver's element click sends no pointerdown, which is what closes the popup: the page's own press elsewhere.
+    await browser.execute(() => document.querySelector("#st-msgs .st-meta")!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerId: 5, isPrimary: true })));
+    expect(await count(".sentry-pop")).toBe(0);
+    expect(await callsOf(send)).toEqual([]);
+  });
+
+  it("sends the chosen team or member at once, tells it, closes the popup and reads the thread again", async () => {
+    const read = await openDetail({}, sentry({ sentry: withMenu }));
+    await mock("sentry_assignees", assignees);
+    const send = await mock("sentry_assign", null);
+    await menu().click();
+    await pop().$("button=Tanaka").click();
+    expect(await waitForCalls(send)).toEqual([assigned("user:2")]);
+    expect(await count(".sentry-pop")).toBe(0);
+    await expect($(".toast")).toHaveText(expect.stringContaining("Sentry に送りました: 担当者 Tanaka"));
+    await waitForCalls(read, 2);
+    await menu().click();
+    await pop().$("button=#web").click();
+    expect((await waitForCalls(send, 2))[1]).toEqual(assigned("team:8"));
+  });
+
+  it("tells a failure to read the choices and opens no popup, and turns the buttons off while it sends and on again after a refusal", async () => {
+    await openDetail({}, sentry({ sentry: withMenu }));
+    await mock("sentry_assignees", rejects("トークンの権限が足りません。member:read、team:read、project:read のスコープを足してください"));
+    await menu().click();
+    await expect($(".toast")).toHaveText(expect.stringContaining("Sentry から読めませんでした: トークンの権限が足りません。member:read"));
+    expect(await count(".sentry-pop")).toBe(0);
+    expect(await count("#st-msgs .st-sentry button:disabled")).toBe(0);
+    await mock("sentry_assignees", assignees);
+    const send = await mock("sentry_assign", holds);
+    await menu().click();
+    await pop().$("button=Owner").click();
+    await waitForCalls(send);
+    expect(await count("#st-msgs .st-sentry button:disabled")).toBe(3);
+    await release("sentry_assign", rejects("トークンの権限が足りません。event:write のスコープを足してください"));
+    await expect($(".toast")).toHaveText(expect.stringContaining("Sentry に送れませんでした: トークンの権限が足りません。event:write のスコープを足してください"));
+    await browser.waitUntil(async () => (await count("#st-msgs .st-sentry button:disabled")) === 0);
   });
 });

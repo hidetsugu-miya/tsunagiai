@@ -2,6 +2,7 @@
 import type { SentryButton } from "./SentryButton";
 
 /**
- * The Sentry issue that a notification is about (S-30): `org` is the organization's name in the address of the title (`https://{org}.sentry.io/issues/{issue_id}/`), `project_id` the project's ID from the `action_id` of the buttons, and `buttons` the buttons the screen presses.
+ * The Sentry issue that a notification is about (S-30): `org` is the organization's name in the address of the title (`https://{org}.sentry.io/issues/{issue_id}/`), `project_id` the project's ID from the `action_id` of the buttons, `buttons` the buttons the screen presses,
+ * and `assign` the text of the menu to assign when the notification has one (its chosen option, else its placeholder).
  */
-export type SentryIssue = { org: string, issueId: string, projectId: string, buttons: Array<SentryButton>, };
+export type SentryIssue = { org: string, issueId: string, projectId: string, buttons: Array<SentryButton>, assign: string | null, };

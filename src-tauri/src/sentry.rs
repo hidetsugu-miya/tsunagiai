@@ -3,6 +3,7 @@
 //! It goes to `https://sentry.io/api/0` alone, as a Bearer credential, with a timeout and no redirect followed. A token is kept only once Sentry accepts it (`GET /organizations/`).
 //! Removing the Slack workspace removes its Sentry token with it (`forget_workspace`, called by `slack_remove_workspace`).
 //! The token is used to set the status of the issue of a Sentry notification (S-30, #1448): `sentry_set_status` sends one of a fixed list of values to `PUT /organizations/{org}/issues/{issue_id}/`, and `has_token` tells the thread whether the buttons can be pressed.
+//! It also assigns the issue (S-30, #1449): `sentry_assignees` reads the teams and the members of the issue's project, and `sentry_assign` sends `user:{id}` or `team:{id}` as `assignedTo`.
 
 use std::{path::Path, time::Duration};
 
@@ -35,6 +36,10 @@ const NO_TOKEN: &str = "このワークスペースには Sentry のトークン
 const NO_WRITE: &str = "トークンの権限が足りません。event:write のスコープを足してください";
 const NO_ISSUE: &str = "Sentry で issue が見つかりません";
 const BAD_STATUS: &str = "Sentry への操作が正しくありません";
+const NO_READ: &str =
+    "トークンの権限が足りません。member:read、team:read、project:read のスコープを足してください";
+const BAD_ANSWER: &str = "Sentry の答えを読めません";
+const BAD_ASSIGNEE: &str = "担当者が正しくありません";
 /// The values of Sentry's buttons (`webhooks/action.py`, `on_status`) that can be sent: nothing else goes to Sentry.
 const STATUS_VALUES: [&str; 9] = [
     "resolved",
@@ -47,6 +52,26 @@ const STATUS_VALUES: [&str; 9] = [
     "ignored:archived_until_condition_met:1000",
     "ignored:archived_forever",
 ];
+
+/// A team or a member that an issue can be assigned to: the name to show, and Sentry's own value for it (`team:{id}` or `user:{id}`).
+#[derive(Serialize, Debug, PartialEq, Clone)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct SentryAssignee {
+    name: String,
+    value: String,
+}
+
+/// The teams and the members of the project of an issue, as Sentry's own menu to assign has them.
+#[derive(Serialize, Debug, PartialEq, Clone)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct SentryAssignees {
+    teams: Vec<SentryAssignee>,
+    members: Vec<SentryAssignee>,
+}
 
 /// A workspace that has a Sentry token, and the last four characters of the token.
 #[derive(Serialize, Debug, PartialEq, Clone)]
@@ -147,6 +172,79 @@ fn status_body(value: &str) -> Option<Value> {
     Some(body)
 }
 
+/// `team:{digits}` or `user:{digits}`: the only values of an assignee that are sent.
+fn assignee_value(value: &str) -> bool {
+    value.split_once(':').is_some_and(|(kind, id)| {
+        matches!(kind, "team" | "user")
+            && !id.is_empty()
+            && id.len() <= 20
+            && id.bytes().all(|b| b.is_ascii_digit())
+    })
+}
+
+/// A project's slug as it goes into an address: letters, digits, hyphens and underscores.
+fn project_slug(slug: &str) -> bool {
+    !slug.is_empty()
+        && slug.len() <= 100
+        && slug
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// A Sentry ID as digits, from a string or a number.
+fn digits_of(v: &Value) -> Option<String> {
+    let id = match v {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        _ => return None,
+    };
+    (!id.is_empty() && id.len() <= 20 && id.bytes().all(|b| b.is_ascii_digit())).then_some(id)
+}
+
+/// The ID and the slug of the project that an issue (`GET /organizations/{org}/issues/{issue_id}/`) belongs to.
+fn project_of(issue: &Value) -> Option<(String, String)> {
+    let project = &issue["project"];
+    let slug = project["slug"].as_str().filter(|s| project_slug(s))?;
+    Some((digits_of(&project["id"])?, slug.to_owned()))
+}
+
+/// The first of the texts that is not blank.
+fn first_text<'a>(texts: &[&'a Value]) -> Option<&'a str> {
+    texts
+        .iter()
+        .filter_map(|v| v.as_str())
+        .map(str::trim)
+        .find(|s| !s.is_empty())
+}
+
+/// The teams (`GET /projects/{org}/{project_slug}/teams/`) and the members (`GET /organizations/{org}/users/?project={id}`) as the choices of the menu: a team is `#{slug}` with `team:{id}`, a member is its name (else the user's name, else the email address) with `user:{id of the user}`. An element with no usable ID is left out.
+fn assignees_of(teams: &Value, users: &Value) -> SentryAssignees {
+    let list = |v: &Value| v.as_array().cloned().unwrap_or_default();
+    SentryAssignees {
+        teams: list(teams)
+            .iter()
+            .filter_map(|t| {
+                let slug = t["slug"].as_str().filter(|s| !s.trim().is_empty())?;
+                Some(SentryAssignee {
+                    name: format!("#{}", slug.trim()),
+                    value: format!("team:{}", digits_of(&t["id"])?),
+                })
+            })
+            .collect(),
+        members: list(users)
+            .iter()
+            .filter_map(|m| {
+                let user = &m["user"];
+                let name = first_text(&[&m["name"], &user["name"], &m["email"], &user["email"]])?;
+                Some(SentryAssignee {
+                    name: name.to_owned(),
+                    value: format!("user:{}", digits_of(&user["id"])?),
+                })
+            })
+            .collect(),
+    }
+}
+
 fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -175,7 +273,7 @@ async fn check_token(http: &reqwest::Client, base: &str, token: &str) -> Result<
 }
 
 /// Sets the status of an issue (`base` is `API_URL`, a local port in the tests). `org` and `issue_id` are IDs that go into the address as they are (`sentry_id`).
-async fn put_status(
+async fn put_issue(
     http: &reqwest::Client,
     base: &str,
     token: &str,
@@ -191,6 +289,61 @@ async fn put_status(
         .await
         .map_err(|e| format!("Sentry に接続できません（{}）", e.without_url()))?;
     put_verdict(answer.status().as_u16())
+}
+
+/// What an answer of a `GET` that reads an issue, a project's teams or its members says.
+fn get_verdict(status: u16) -> Result<(), String> {
+    match status {
+        200..=299 => Ok(()),
+        401 => Err(BAD_TOKEN.into()),
+        403 => Err(NO_READ.into()),
+        404 => Err(NO_ISSUE.into()),
+        _ => Err(format!("Sentry から読めませんでした（{status}）")),
+    }
+}
+
+/// Reads `path` (it starts with `/`, and holds IDs that were checked) of Sentry (`base` is `API_URL`, a local port in the tests) as JSON.
+async fn get_json(
+    http: &reqwest::Client,
+    base: &str,
+    token: &str,
+    path: &str,
+) -> Result<Value, String> {
+    let answer = http
+        .get(format!("{base}{path}"))
+        .header(AUTHORIZATION, bearer(token)?)
+        .send()
+        .await
+        .map_err(|e| format!("Sentry に接続できません（{}）", e.without_url()))?;
+    get_verdict(answer.status().as_u16())?;
+    answer.json().await.map_err(|_| BAD_ANSWER.to_owned())
+}
+
+/// The teams and the members of the project that the issue belongs to, which Sentry says in the issue itself.
+async fn read_assignees(
+    http: &reqwest::Client,
+    base: &str,
+    token: &str,
+    org: &str,
+    issue_id: &str,
+) -> Result<SentryAssignees, String> {
+    let issue = get_json(
+        http,
+        base,
+        token,
+        &format!("/organizations/{org}/issues/{issue_id}/"),
+    )
+    .await?;
+    let (project_id, slug) = project_of(&issue).ok_or_else(|| BAD_ANSWER.to_owned())?;
+    let teams = get_json(http, base, token, &format!("/projects/{org}/{slug}/teams/")).await?;
+    let users = get_json(
+        http,
+        base,
+        token,
+        &format!("/organizations/{org}/users/?project={project_id}"),
+    )
+    .await?;
+    Ok(assignees_of(&teams, &users))
 }
 
 async fn read_secret(team_id: String) -> Result<Option<String>, String> {
@@ -264,9 +417,64 @@ pub async fn sentry_set_status(
         .map_err(|e| log_failure(command, &team_id, e))?
         .ok_or_else(|| log_failure(command, &team_id, NO_TOKEN))?;
     let http = client().map_err(|e| log_failure(command, &team_id, e))?;
-    put_status(&http, API_URL, &token, &org, &issue_id, &body)
+    put_issue(&http, API_URL, &token, &org, &issue_id, &body)
         .await
         .map_err(|e| log_failure(command, &team_id, e))
+}
+
+/// The teams and the members that the issue of a Sentry notification can be assigned to (S-30): those of the project that Sentry says the issue belongs to. `org` and `issue_id` are the ones in the address of the notification's title.
+#[tauri::command]
+pub async fn sentry_assignees(
+    team_id: String,
+    org: String,
+    issue_id: String,
+) -> Result<SentryAssignees, String> {
+    let command = "sentry_assignees";
+    let team = token_key(&team_id).map_err(|e| log_failure(command, &team_id, e))?;
+    if !(sentry_id(&org) && sentry_id(&issue_id)) {
+        return Err(log_failure(command, &team_id, BAD_STATUS));
+    }
+    let token = read_secret(team)
+        .await
+        .map_err(|e| log_failure(command, &team_id, e))?
+        .ok_or_else(|| log_failure(command, &team_id, NO_TOKEN))?;
+    let http = client().map_err(|e| log_failure(command, &team_id, e))?;
+    read_assignees(&http, API_URL, &token, &org, &issue_id)
+        .await
+        .map_err(|e| log_failure(command, &team_id, e))
+}
+
+/// Assigns the issue of a Sentry notification (S-30): `assignee` is `user:{id}` or `team:{id}` as `sentry_assignees` gave it.
+#[tauri::command]
+pub async fn sentry_assign(
+    team_id: String,
+    org: String,
+    issue_id: String,
+    assignee: String,
+) -> Result<(), String> {
+    let command = "sentry_assign";
+    let team = token_key(&team_id).map_err(|e| log_failure(command, &team_id, e))?;
+    if !(sentry_id(&org) && sentry_id(&issue_id)) {
+        return Err(log_failure(command, &team_id, BAD_STATUS));
+    }
+    if !assignee_value(&assignee) {
+        return Err(log_failure(command, &team_id, BAD_ASSIGNEE));
+    }
+    let token = read_secret(team)
+        .await
+        .map_err(|e| log_failure(command, &team_id, e))?
+        .ok_or_else(|| log_failure(command, &team_id, NO_TOKEN))?;
+    let http = client().map_err(|e| log_failure(command, &team_id, e))?;
+    put_issue(
+        &http,
+        API_URL,
+        &token,
+        &org,
+        &issue_id,
+        &json!({ "assignedTo": assignee }),
+    )
+    .await
+    .map_err(|e| log_failure(command, &team_id, e))
 }
 
 /// The workspaces that have a Sentry token, with the last four characters of each. Asks Sentry nothing.
@@ -426,38 +634,59 @@ mod tests {
         assert_eq!(verdict(500), Err("Sentry に確かめられません（500）".into()));
     }
 
-    /// Serves one answer on a local port, and returns the base URL and what the request said.
-    async fn serve_once(answer: &'static str) -> (String, tokio::task::JoinHandle<String>) {
+    /// Serves the answers one after another on a local port, one to each connection, and returns the base URL and what each request said.
+    async fn serve_each(answers: Vec<String>) -> (String, tokio::task::JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let seen = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut request = Vec::new();
-            let mut buf = [0u8; 1024];
-            // The head, and then the body that its `content-length` announces.
-            loop {
-                let text = String::from_utf8_lossy(&request).to_ascii_lowercase();
-                if let Some((head, body)) = text.split_once("\r\n\r\n") {
-                    let wanted = head
-                        .lines()
-                        .find_map(|l| l.strip_prefix("content-length: "))
-                        .and_then(|n| n.trim().parse::<usize>().ok())
-                        .unwrap_or(0);
-                    if body.len() >= wanted {
+            let mut requests = Vec::new();
+            for answer in answers {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut buf = [0u8; 1024];
+                // The head, and then the body that its `content-length` announces.
+                loop {
+                    let text = String::from_utf8_lossy(&request).to_ascii_lowercase();
+                    if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                        let wanted = head
+                            .lines()
+                            .find_map(|l| l.strip_prefix("content-length: "))
+                            .and_then(|n| n.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        if body.len() >= wanted {
+                            break;
+                        }
+                    }
+                    let n = socket.read(&mut buf).await.unwrap();
+                    if n == 0 {
                         break;
                     }
+                    request.extend_from_slice(&buf[..n]);
                 }
-                let n = socket.read(&mut buf).await.unwrap();
-                if n == 0 {
-                    break;
-                }
-                request.extend_from_slice(&buf[..n]);
+                socket.write_all(answer.as_bytes()).await.unwrap();
+                socket.shutdown().await.unwrap();
+                requests.push(String::from_utf8_lossy(&request).into_owned());
             }
-            socket.write_all(answer.as_bytes()).await.unwrap();
-            socket.shutdown().await.unwrap();
-            String::from_utf8_lossy(&request).into_owned()
+            requests
         });
         (base, seen)
+    }
+
+    /// Serves one answer on a local port, and returns the base URL and what the request said.
+    async fn serve_once(answer: &'static str) -> (String, tokio::task::JoinHandle<String>) {
+        let (base, seen) = serve_each(vec![answer.to_owned()]).await;
+        (
+            base,
+            tokio::spawn(async move { seen.await.unwrap().remove(0) }),
+        )
+    }
+
+    fn json_answer(body: &Value) -> String {
+        let body = body.to_string();
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
     }
 
     const OK: &str = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n[]";
@@ -580,7 +809,7 @@ mod tests {
         let http = client().unwrap();
         let body = status_body("ignored:archived_until_condition_met:100").unwrap();
         assert_eq!(
-            put_status(&http, &base, "sntryu_abc", "acme", "1234", &body).await,
+            put_issue(&http, &base, "sntryu_abc", "acme", "1234", &body).await,
             Ok(())
         );
         let request = seen.await.unwrap();
@@ -613,7 +842,7 @@ mod tests {
         ] {
             let (base, _seen) = serve_once(answer).await;
             assert_eq!(
-                put_status(&http, &base, "sntryu_abc", "acme", "1234", &body).await,
+                put_issue(&http, &base, "sntryu_abc", "acme", "1234", &body).await,
                 Err(want.into())
             );
         }
@@ -627,7 +856,7 @@ mod tests {
             Err(BAD_TOKEN.into())
         );
         assert_eq!(
-            put_status(
+            put_issue(
                 &http,
                 "http://127.0.0.1:9",
                 "a\r\nX: y",
@@ -637,6 +866,185 @@ mod tests {
             )
             .await,
             Err(BAD_TOKEN.into())
+        );
+    }
+
+    #[test]
+    fn only_a_team_or_a_user_with_digits_is_assigned() {
+        for good in ["user:1", "team:42", "user:12345678901234567890"] {
+            assert!(assignee_value(good), "{good}");
+        }
+        for bad in [
+            "",
+            "user",
+            "user:",
+            "user:abc",
+            "team:1/2",
+            "me:1",
+            "user:1 ",
+            "user:-1",
+            "user:+1",
+            "user:123456789012345678901",
+            "user:1\n",
+            "USER:1",
+            ":1",
+            "user:１",
+        ] {
+            assert!(!assignee_value(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_project_of_an_issue_has_digits_and_a_slug_that_fits_an_address() {
+        let of = |project: Value| project_of(&json!({ "project": project }));
+        assert_eq!(
+            of(json!({"id": "22", "slug": "example_front-1"})),
+            Some(("22".into(), "example_front-1".into()))
+        );
+        assert_eq!(
+            of(json!({"id": 22, "slug": "web"})),
+            Some(("22".into(), "web".into()))
+        );
+        for bad in [
+            json!({"id": "22", "slug": "a/b"}),
+            json!({"id": "22", "slug": "a?x=1"}),
+            json!({"id": "22", "slug": ""}),
+            json!({"id": "2x", "slug": "web"}),
+            json!({"id": "22"}),
+            json!({"slug": "web"}),
+            json!(null),
+        ] {
+            assert_eq!(of(bad.clone()), None, "{bad}");
+        }
+        assert_eq!(project_of(&json!({})), None);
+    }
+
+    #[test]
+    fn the_teams_and_the_members_become_the_choices_with_sentrys_values() {
+        let teams = json!([
+            {"id": "7", "slug": "backend", "name": "Backend"},
+            {"id": 8, "slug": " web "},
+            {"id": "x", "slug": "no-id"},
+            {"id": "9", "slug": " "}
+        ]);
+        let users = json!([
+            {"id": "100", "name": "Owner", "email": "owner@example.com", "user": {"id": "1", "name": "Other"}},
+            {"id": "101", "name": "", "email": "b@example.com", "user": {"id": 2, "name": "Tanaka"}},
+            {"id": "102", "email": "c@example.com", "user": {"id": "3"}},
+            {"id": "103", "name": "No user", "user": null},
+            {"id": "104", "name": "Bad user ID", "user": {"id": "a1"}},
+            {"id": "105", "user": {"id": "4"}}
+        ]);
+        let a = |name: &str, value: &str| SentryAssignee {
+            name: name.into(),
+            value: value.into(),
+        };
+        assert_eq!(
+            assignees_of(&teams, &users),
+            SentryAssignees {
+                teams: vec![a("#backend", "team:7"), a("#web", "team:8")],
+                members: vec![
+                    a("Owner", "user:1"),
+                    a("Tanaka", "user:2"),
+                    a("c@example.com", "user:3")
+                ],
+            }
+        );
+        // An answer that is not a list gives no choice.
+        assert_eq!(
+            assignees_of(&json!({}), &json!(null)),
+            SentryAssignees {
+                teams: vec![],
+                members: vec![]
+            }
+        );
+    }
+
+    #[test]
+    fn a_status_of_a_read_is_a_verdict() {
+        assert_eq!(get_verdict(200), Ok(()));
+        assert_eq!(get_verdict(401), Err(BAD_TOKEN.into()));
+        assert_eq!(get_verdict(403), Err(NO_READ.into()));
+        assert_eq!(get_verdict(404), Err(NO_ISSUE.into()));
+        assert_eq!(
+            get_verdict(500),
+            Err("Sentry から読めませんでした（500）".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn the_choices_are_read_from_the_project_that_sentry_says_the_issue_has() {
+        let (base, seen) = serve_each(vec![
+            json_answer(&json!({"project": {"id": "22", "slug": "example_front"}})),
+            json_answer(&json!([{"id": "7", "slug": "backend"}])),
+            json_answer(&json!([{"id": "100", "name": "Owner", "user": {"id": "1"}}])),
+        ])
+        .await;
+        let http = client().unwrap();
+        let got = read_assignees(&http, &base, "sntryu_abc", "acme", "1234").await;
+        assert_eq!(
+            got,
+            Ok(SentryAssignees {
+                teams: vec![SentryAssignee {
+                    name: "#backend".into(),
+                    value: "team:7".into()
+                }],
+                members: vec![SentryAssignee {
+                    name: "Owner".into(),
+                    value: "user:1".into()
+                }],
+            })
+        );
+        let requests = seen.await.unwrap();
+        let heads: Vec<&str> = requests.iter().map(|r| r.lines().next().unwrap()).collect();
+        assert_eq!(
+            heads,
+            [
+                "GET /organizations/acme/issues/1234/ HTTP/1.1",
+                "GET /projects/acme/example_front/teams/ HTTP/1.1",
+                "GET /organizations/acme/users/?project=22 HTTP/1.1",
+            ]
+        );
+        for r in &requests {
+            assert!(
+                r.to_ascii_lowercase()
+                    .contains("authorization: bearer sntryu_abc"),
+                "{r}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_read_that_sentry_refuses_or_that_names_a_bad_project_gives_no_choice() {
+        let http = client().unwrap();
+        for (answer, want) in [
+            (UNAUTHORIZED.to_owned(), BAD_TOKEN),
+            (FORBIDDEN.to_owned(), NO_READ),
+            (
+                "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    .to_owned(),
+                NO_ISSUE,
+            ),
+            (
+                json_answer(&json!({"project": {"id": "22", "slug": "../x"}})),
+                BAD_ANSWER,
+            ),
+            (OK.to_owned(), BAD_ANSWER),
+        ] {
+            let (base, _seen) = serve_each(vec![answer]).await;
+            assert_eq!(
+                read_assignees(&http, &base, "sntryu_abc", "acme", "1").await,
+                Err(want.into())
+            );
+        }
+        // An answer that is not JSON.
+        let (base, _seen) = serve_each(vec![
+            "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc".to_owned(),
+        ])
+        .await;
+        assert_eq!(
+            read_assignees(&http, &base, "sntryu_abc", "acme", "1").await,
+            Err(BAD_ANSWER.into())
         );
     }
 }

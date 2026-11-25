@@ -3,7 +3,7 @@
 //! Pure functions from Slack's JSON: nothing here calls Slack. The text is plain text (`plain_text`), never markup; a mrkdwn text is a `Rich` (S-12).
 //! A button's address is http or https, an image's address is https, and anything else is left out here, so the screen does not decide.
 //! A part that works only in Slack (a button with no address, a menu) is not drawn; `needs_slack` says whether a message has one.
-//! The buttons of a Sentry notification are the exception for a workspace with a Sentry token: `sentry_issue` reads the issue and the buttons the screen presses (S-30).
+//! The buttons and the menu to assign of a Sentry notification are the exception for a workspace with a Sentry token: `sentry_issue` reads the issue, the buttons and the menu the screen presses (S-30).
 
 use std::collections::HashSet;
 
@@ -232,12 +232,15 @@ fn button(b: &Value, name_of: NameOf) -> Option<ThreadButton> {
 
 /// Whether the message has a part that can be used only in Slack, which the screen does not draw (S-11): a button with no address, a select menu, an overflow menu, a date picker or any other part that is not a button with an address or an image,
 /// as the accessory of a section or among the actions of the message's blocks, of the blocks of an attachment, or of an attachment's own actions. The screen then offers a link to the message in Slack.
-/// `sentry` is true when the screen presses the buttons of a Sentry notification (`sentry_issue` found them): those buttons are not such a part, and the menu to assign is.
+/// `sentry` is true when the screen presses the buttons of a Sentry notification (`sentry_issue` found them): those buttons and the menu to assign are not such a part.
 pub(crate) fn needs_slack(message: &Value, name_of: NameOf, sentry: bool) -> bool {
     let in_blocks = |blocks: &Value| {
         items(blocks).iter().any(|b| match b["type"].as_str() {
             Some("actions") => items(&b["elements"]).iter().any(|e| {
-                button(e, name_of).is_none() && !(sentry && sentry_button(e, name_of).is_some())
+                button(e, name_of).is_none()
+                    && !(sentry
+                        && (sentry_button(e, name_of).is_some()
+                            || sentry_menu(e, name_of).is_some()))
             }),
             Some("section") => {
                 let a = &b["accessory"];
@@ -265,7 +268,8 @@ pub struct SentryButton {
     value: String,
 }
 
-/// The Sentry issue that a notification is about (S-30): `org` is the organization's name in the address of the title (`https://{org}.sentry.io/issues/{issue_id}/`), `project_id` the project's ID from the `action_id` of the buttons, and `buttons` the buttons the screen presses.
+/// The Sentry issue that a notification is about (S-30): `org` is the organization's name in the address of the title (`https://{org}.sentry.io/issues/{issue_id}/`), `project_id` the project's ID from the `action_id` of the buttons, `buttons` the buttons the screen presses,
+/// and `assign` the text of the menu to assign when the notification has one (its chosen option, else its placeholder).
 #[derive(Serialize, Debug, PartialEq, Clone)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -275,6 +279,7 @@ pub struct SentryIssue {
     issue_id: String,
     project_id: String,
     buttons: Vec<SentryButton>,
+    assign: Option<String>,
 }
 
 /// An ID or a name of Sentry (an organization, an issue, a project): letters, digits and hyphens only, so that it goes into an address as it is.
@@ -340,6 +345,14 @@ fn sentry_button(e: &Value, name_of: NameOf) -> Option<SentryButton> {
     })
 }
 
+/// The menu to assign of a Sentry notification (`external_select`, `action_id` `assign::…`) and the text it shows: its chosen option, else its placeholder. One with no text is not pressed.
+fn sentry_menu(e: &Value, name_of: NameOf) -> Option<String> {
+    (e["type"] == "external_select").then_some(())?;
+    let (action, _, _) = sentry_action(e)?;
+    (action == "assign").then_some(())?;
+    text_of(&e["initial_option"]["text"], name_of).or_else(|| text_of(&e["placeholder"], name_of))
+}
+
 /// The issue of a Sentry notification and the buttons that the screen can press, or `None` when the message is not one (S-30): its blocks have a title that links to an issue, and an `actions` block of Sentry's `action_id`s
 /// (the buttons only count when there is one; the menu to assign is read for its IDs, which every element of the block must share with the first). Sentry's blocks are the message's own: nothing in an attachment is read.
 pub(crate) fn sentry_issue(message: &Value, name_of: NameOf) -> Option<SentryIssue> {
@@ -347,6 +360,7 @@ pub(crate) fn sentry_issue(message: &Value, name_of: NameOf) -> Option<SentryIss
     let (org, issue_id) = sentry_title(blocks)?;
     let mut ids: Option<(&str, &str)> = None;
     let mut buttons = Vec::new();
+    let mut assign = None;
     for e in items(blocks)
         .iter()
         .filter(|b| b["type"] == "actions")
@@ -359,6 +373,7 @@ pub(crate) fn sentry_issue(message: &Value, name_of: NameOf) -> Option<SentryIss
             continue;
         }
         buttons.extend(sentry_button(e, name_of));
+        assign = assign.or_else(|| sentry_menu(e, name_of));
     }
     let (_, project_id) = ids?;
     (!buttons.is_empty()).then(|| SentryIssue {
@@ -366,6 +381,7 @@ pub(crate) fn sentry_issue(message: &Value, name_of: NameOf) -> Option<SentryIss
         issue_id,
         project_id: project_id.to_owned(),
         buttons,
+        assign,
     })
 }
 
@@ -1635,6 +1651,7 @@ mod tests {
                     button("Resolve", "resolve_dialog"),
                     button("Archive", "archive_dialog")
                 ],
+                assign: Some("Select Assignee...".into()),
             }
         );
         // The pairs Sentry sends for a resolve with no release, and for an issue that is resolved or archived; a tracking part after the routing is read past.
@@ -1650,6 +1667,42 @@ mod tests {
         let values: Vec<&str> = issue.buttons.iter().map(|b| b.value.as_str()).collect();
         assert_eq!(values, ["resolved", "unresolved:ongoing"]);
         assert_eq!(issue.issue_id, "9");
+    }
+
+    #[test]
+    fn the_menu_to_assign_shows_its_chosen_option_else_its_placeholder() {
+        let read = |menu: Value| {
+            sentry_issue(
+                &sentry_message(SENTRY_LINK, json!([sentry_buttons()[0], menu])),
+                &|_| None,
+            )
+            .unwrap()
+            .assign
+        };
+        let select = |extra: Value| {
+            let mut e = json!({"type": "external_select", "action_id": "assign::11::22|n=1"});
+            e.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            e
+        };
+        assert_eq!(read(select(json!({}))), None);
+        assert_eq!(
+            read(select(
+                json!({"placeholder": {"type": "plain_text", "text": "Select Assignee..."}})
+            )),
+            Some("Select Assignee...".into())
+        );
+        assert_eq!(
+            read(select(json!({
+                "placeholder": {"type": "plain_text", "text": "Select Assignee..."},
+                "initial_option": {"text": {"type": "plain_text", "text": "#backend"}, "value": "team:5"}
+            }))),
+            Some("#backend".into())
+        );
+        // A menu of another project is left out like a button of one.
+        let other = json!({"type": "external_select", "action_id": "assign::11::33", "placeholder": {"type": "plain_text", "text": "x"}});
+        assert_eq!(read(other), None);
     }
 
     #[test]
@@ -1742,10 +1795,19 @@ mod tests {
         );
         assert!(needs_slack(&buttons_only, &name, false));
         assert!(!needs_slack(&buttons_only, &name, true));
-        // The menu to assign is still a part of Slack.
+        // The menu to assign is pressed here too, and it needs Slack without the flag.
         let with_menu = sentry_message(SENTRY_LINK, sentry_buttons());
         assert!(needs_slack(&with_menu, &name, false));
-        assert!(needs_slack(&with_menu, &name, true));
+        assert!(!needs_slack(&with_menu, &name, true));
+        // A menu with no text to show, one that is not Sentry's and one of another type are not pressed.
+        for menu in [
+            json!({"type": "external_select", "action_id": "assign::11::22"}),
+            json!({"type": "external_select", "action_id": "other", "placeholder": {"type": "plain_text", "text": "x"}}),
+            json!({"type": "static_select", "action_id": "assign::11::22", "placeholder": {"type": "plain_text", "text": "x"}}),
+        ] {
+            let message = sentry_message(SENTRY_LINK, json!([sentry_buttons()[0], menu]));
+            assert!(needs_slack(&message, &name, true), "{menu}");
+        }
         // A button that is not Sentry's is not helped by the flag.
         let other = sentry_message(
             SENTRY_LINK,
