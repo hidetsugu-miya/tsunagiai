@@ -163,7 +163,7 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await expect($("#orca-jira-conn-status")).toHaveElementClass("ok");
     await expect($("#orca-jira-conn-user")).toHaveText("Example User ・ me@example.com");
     await expect($("#orca-jira-test")).toBeEnabled();
-    await expect(field("API トークン")).toHaveValue("");
+    await expect(field("API トークン")).toHaveValue("tok-3");
     expect(await callsOf("jira_save")).toEqual([]);
     expect(await callsOf("jira_boards")).toEqual([]);
   });
@@ -180,6 +180,7 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await waitForCount(CARDS, 1);
     expect(await textsOf(CARD)).toEqual([reason]);
     await expect($("#orca-jira-test")).toBeEnabled();
+    await expect(field("API トークン")).toHaveValue("tok-4");
   });
 
   it("opens the same form with the gear, with what is saved and no token, and closes it with 閉じる and no read (J-1, #1395)", async () => {

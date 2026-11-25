@@ -240,7 +240,6 @@ async function test() {
   if (here === null) return;
   const token = input("orca-jira-token");
   const values = { site: input("orca-jira-site").value, email: input("orca-jira-email").value, token: token.value };
-  token.value = "";
   formBusy(true);
   try {
     const user = await invoke("jira_test", { ...here, ...values });
