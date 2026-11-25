@@ -235,6 +235,15 @@ const actions: SideActions = {
     if (selected?.id === profile.id && selected.database === database) selected = { id: profile.id, database: null, table: null };
     draw();
   },
+  // The error under a row goes, and the row closes, so that the next press reads again; the connection is as it was.
+  clearError: (profile, database) => {
+    const c = connections.get(profile.id);
+    const d = database === null ? c : c?.byName.get(database);
+    if (!d) return;
+    d.error = null;
+    d.expanded = false;
+    draw();
+  },
   disconnect: async (profile) => {
     connections.delete(profile.id);
     hooks.gone(profile.id);

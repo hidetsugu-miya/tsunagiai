@@ -4273,6 +4273,35 @@ describe("orca: files and editor (A-18)", () => {
     expect(await count("#orca-database .database-note.danger")).toBe(0);
   });
 
+  it("clears the error of a connection and of a read of tables with the × at its right end, calls nothing, and reads again at the next press (A-43)", async () => {
+    await openDatabasePart({ database_connect: { __e2e_reject__: "接続できません" }, database_disconnect: null });
+    await dbRow("p1").click();
+    await waitForCount("#orca-database .database-note.danger", 1);
+    const clear = $("#orca-database .database-note.danger button.icon-btn");
+    await expect(clear).toHaveAttribute("aria-label", "エラーを消す");
+    expect(await clear.getText()).toBe("");
+    await clear.click();
+    await waitForCount("#orca-database .database-note.danger", 0);
+    await expect(dbDot("p1")).toHaveAttribute("data-state", "closed");
+    expect(await callsOf("database_connect")).toHaveLength(1);
+    await mock("database_connect", ["shop"]);
+    await mock("database_tables", { __e2e_reject__: "MySQL がエラーを返しました (1142): SELECT command denied" });
+    // Rust still holds the session, so the failed read is not a lost connection (D-3).
+    await mock("database_connections", ["p1"]);
+    await dbRow("p1").click();
+    await waitForCount("#orca-database .database-children .database-btn", 1);
+    await dbRow("p1/d/shop").click();
+    await waitForCount("#orca-database .database-note.danger", 1);
+    await $("#orca-database .database-note.danger button.icon-btn").click();
+    await waitForCount("#orca-database .database-note.danger", 0);
+    await expect(dbDot("p1")).toHaveAttribute("data-state", "connected");
+    expect(await callsOf("database_tables")).toHaveLength(1);
+    expect(await callsOf("database_disconnect")).toHaveLength(0);
+    await mock("database_tables", [databaseTable("orders")]);
+    await dbRow("p1/d/shop").click();
+    await waitForCount("#orca-database [data-key^='p1/d/shop/t/']", 1);
+  });
+
   it("draws the last line of the script while a connection opens, and drops the line of a connection that is not opening (A-43)", async () => {
     await openDatabasePart({ database_connect: holds });
     await dbRow("p1").click();
@@ -4341,6 +4370,41 @@ describe("orca: files and editor (A-18)", () => {
     await expect(dbDot("p1")).toHaveAttribute("data-state", "closed");
     expect(await count("#orca-database .database-children")).toBe(0);
     await expect(dbRow("p1")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("has the disconnect in the menu of a connection that is opening, and disconnects it, and draws nothing of the answer that comes after (A-43)", async () => {
+    await openDatabasePart({ database_connect: holds, database_disconnect: null });
+    await dbRow("p1").click();
+    await waitForCalls("database_connect");
+    await emitEvent("database-script-output", { id: "p1", line: "forwarding port 3307" });
+    await expect($("#orca-database .database-note")).toHaveText("forwarding port 3307");
+    await expect(dbDot("p1")).toHaveAttribute("data-state", "connecting");
+    await dbRightPress("p1");
+    expect(await textsOf('.menu button[role="menuitem"]')).toEqual(["切断"]);
+    await $('.menu button[role="menuitem"]').click();
+    expect(await waitForCalls("database_disconnect")).toEqual([{ id: "p1" }]);
+    await expect(dbDot("p1")).toHaveAttribute("data-state", "closed");
+    expect(await count("#orca-database .database-note")).toBe(0);
+    // The answer of an opening that was already done.
+    await release("database_connect", ["shop"]);
+    await browser.pause(300);
+    expect(await count("#orca-database .database-children")).toBe(0);
+    await expect(dbDot("p1")).toHaveAttribute("data-state", "closed");
+    // The answer of an opening that Rust stopped.
+    await dbRow("p1").click();
+    await waitForCalls("database_connect", 2);
+    await dbRightPress("p1");
+    await $('.menu button[role="menuitem"]').click();
+    await waitForCalls("database_disconnect", 2);
+    await release("database_connect", rejects("接続を切断しました"));
+    await browser.pause(300);
+    expect(await count("#orca-database .database-note")).toBe(0);
+    await expect(dbDot("p1")).toHaveAttribute("data-state", "closed");
+    // The next press opens it, and only its own answer is drawn.
+    await mock("database_connect", ["shop"]);
+    await dbRow("p1").click();
+    await waitForCount("#orca-database .database-children .database-btn", 1);
+    await expect(dbDot("p1")).toHaveAttribute("data-state", "connected");
   });
 
   // A-43: a table, and the SQL of a database, as tabs of the work pane. The tab draws the body of the database screen (D-4 to D-6) and calls its commands.

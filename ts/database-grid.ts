@@ -1,6 +1,6 @@
 // The grid of values of the database screen (D-4): a table of cells that Rust already turned into text (`DatabaseCell`).
 // The records tab draws a page with it, the structure tab (D-5) draws its columns with it, and the SQL tab draws its result with it (#635); nothing here turns a value into text.
-// A column is lined off from the next by a vertical line, and the grip at the right edge of its header changes its width (#669).
+// A grid has a border and a ruled line between every two cells, and the grip at the right edge of its header changes its width (#669).
 import type { DatabaseCell } from "./bindings/DatabaseCell";
 import { composing, tag } from "./dom.js";
 

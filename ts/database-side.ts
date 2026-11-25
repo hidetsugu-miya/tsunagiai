@@ -48,6 +48,8 @@ export interface SideActions {
   closeDatabase: (profile: DatabaseProfileView, database: string) => void;
   edit?: (profile: DatabaseProfileView) => void;
   disconnect: (profile: DatabaseProfileView) => void;
+  // Takes the error under the row away (the database's, or the connection's when `database` is null) and closes the row, so that the next press reads again. It calls nothing and leaves the connection as it is.
+  clearError: (profile: DatabaseProfileView, database: string | null) => void;
   // `anchor` is the name of the row, which the confirmation opens under.
   remove?: (profile: DatabaseProfileView, anchor: Element) => void;
 }
@@ -81,10 +83,19 @@ function dotNode(node: ConnectionNode) {
   return dot;
 }
 
-function note(text: string, depth: number, failed: boolean) {
-  const line = tag("p", `database-note${failed ? " danger" : ""}`, text);
+// A failure that gives `clear` has the button at its right end that takes the text away.
+function note(text: string, depth: number, failed: boolean, clear?: () => void) {
+  const line = tag("p", `database-note${failed ? " danger" : ""}${clear ? " clearable" : ""}`, clear ? "" : text);
   line.style.setProperty("--depth", String(depth));
   line.setAttribute("role", failed ? "alert" : "status");
+  if (clear) {
+    const button = tag("button", "icon-btn database-note-clear");
+    button.type = "button";
+    button.innerHTML = CLOSE_SVG;
+    button.setAttribute("aria-label", "エラーを消す");
+    button.onclick = clear;
+    line.append(tag("span", "database-note-text", text), button);
+  }
   return line;
 }
 
@@ -110,7 +121,7 @@ function databaseNodes(node: ConnectionNode, selected: Selected | null, actions:
     const out: Node[] = [button];
     if (db.expanded) {
       if (db.loading) out.push(note("読み込み中…", 2, false));
-      if (db.error !== null) out.push(note(db.error, 2, true));
+      if (db.error !== null) out.push(note(db.error, 2, true, () => actions.clearError(node.profile, db.name)));
       for (const table of db.tables) out.push(row(`${id}/d/${db.name}/t/${table}`, 2, here && selected?.table === table, null, null, table, () => actions.pressTable(node.profile, db.name, table)));
     }
     return out;
@@ -129,7 +140,7 @@ function itemNode(node: ConnectionNode, selected: Selected | null, actions: Side
     e.preventDefault();
     const items = [
       ...(edit ? [{ label: "編集", color: "", icon: EDIT_SVG, current: false, pick: () => edit(profile) }] : []),
-      ...(node.connected ? [{ label: "切断", color: "", icon: CLOSE_SVG, current: false, pick: () => actions.disconnect(profile) }] : []),
+      ...(node.connected || node.loading ? [{ label: "切断", color: "", icon: CLOSE_SVG, current: false, pick: () => actions.disconnect(profile) }] : []),
       ...(remove ? [{ label: "削除", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => remove(profile, name) }] : []),
     ];
     if (items.length > 0) openMenu(name, items, { at: { x: e.clientX, y: e.clientY } });
@@ -142,7 +153,7 @@ function itemNode(node: ConnectionNode, selected: Selected | null, actions: Side
       line.dataset.scriptNote = "";
       children.append(line);
     }
-    if (node.error !== null) children.append(note(node.error, 1, true));
+    if (node.error !== null) children.append(note(node.error, 1, true, () => actions.clearError(node.profile, null)));
     children.append(...databaseNodes(node, selected, actions));
     item.append(children);
   }
