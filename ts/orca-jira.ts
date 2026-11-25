@@ -220,7 +220,7 @@ async function read() {
   sections.clear();
   draw();
   try {
-    const settings = await invoke("jira_settings");
+    const settings = await invoke("jira_settings", { environment: null, project: "" }); // the project shown is passed by #1394
     if (run !== seq) return;
     if (settings.site === "" || !settings.hasToken) {
       stage = "none";

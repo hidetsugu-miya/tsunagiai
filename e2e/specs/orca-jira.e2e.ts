@@ -3,7 +3,7 @@ import { filesToggle, openOrca, orcaOverview, project, sample, selectedTab, tabO
 
 // J-2: the Jira part of the file pane (#870). Rust reads the boards, the sprints and the tickets (unit tests); here the screen is checked: what it asks of Rust, and how it draws the answers.
 describe("orca: the Jira part of the file pane (J-2)", () => {
-  const connected = { site: "https://example.atlassian.net", email: "me@example.com", hasToken: true };
+  const connected = { site: "https://example.atlassian.net", email: "me@example.com", hasToken: true, boardId: null };
   const board = jiraBoard(1, "Example board");
   const sprint12 = jiraSprint(12, "Sprint 12");
   const sprint13 = jiraSprint(13, "Sprint 13", "future");
@@ -68,7 +68,7 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await expect($("#orca-jira")).toBeDisplayed();
     await expect($("#orca-files-tree")).not.toBeDisplayed();
     await expect($("#orca-files-head")).not.toBeDisplayed();
-    expect(await waitForCalls("jira_settings")).toEqual([null]);
+    expect(await waitForCalls("jira_settings")).toEqual([{ environment: null, project: "" }]);
     await paneMode("ファイル").click();
     await expect($("#orca-jira")).not.toBeDisplayed();
     await expect($("#orca-files-head")).toBeDisplayed();

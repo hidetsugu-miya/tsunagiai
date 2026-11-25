@@ -253,12 +253,16 @@ export interface Commands {
   notion_connect: { args: undefined; result: NotionAccount };
   // Revokes the grant at Notion and drops its token and entry.
   notion_disconnect: { args: { workspaceId: string }; result: null };
-  // J-1: the saved site and email address of the Jira connection, and whether a token is kept; the token is never returned. Asks Jira nothing.
-  jira_settings: { args: undefined; result: JiraSettings };
-  // J-1: saves the connection (an empty token keeps the stored one); answers what is saved.
-  jira_save: { args: { site: string; email: string; token: string }; result: JiraSettings };
-  // J-1: asks the site who the credential of the form is (an empty token takes the stored one); saves nothing.
-  jira_test: { args: { site: string; email: string; token: string }; result: JiraUser };
+  // J-1 (#1393): the saved site, email address and board of the Jira connection of a project (`environment` is null for this machine, `project` its key in Orca's list, as `lsp_settings` takes them), and whether a token is kept; the token is never returned. Asks Jira nothing.
+  jira_settings: { args: { environment: string | null; project: string }; result: JiraSettings };
+  // J-1: saves the connection of the project (an empty token keeps the stored one; the board is kept while the site is the same); answers what is saved.
+  jira_save: { args: { environment: string | null; project: string; site: string; email: string; token: string }; result: JiraSettings };
+  // J-1: asks the site who the credential of the form is (an empty token takes the stored one of the project); saves nothing.
+  jira_test: { args: { environment: string | null; project: string; site: string; email: string; token: string }; result: JiraUser };
+  // J-1: deletes the connection of the project, its token included.
+  jira_delete: { args: { environment: string | null; project: string }; result: null };
+  // J-1: saves the board that the project shows (null: none); the project must have a saved connection. Answers what is saved.
+  jira_set_board: { args: { environment: string | null; project: string; boardId: number | null }; result: JiraSettings };
   // J-2: the boards that the saved connection can see, by name (at most 200). Fails with a message when no connection is saved.
   jira_boards: { args: undefined; result: JiraBoard[] };
   // J-2: the active and future sprints of a board (at most 100), the active one first. A board that has no sprints (a kanban one) is Jira's refusal.

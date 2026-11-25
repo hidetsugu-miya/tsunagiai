@@ -17,6 +17,9 @@ let readSeq = 0;
 
 const input = (id: string) => $<HTMLInputElement>(id);
 
+// The commands take the project that the connection belongs to; this card has none, and is replaced by the registration in the right pane (#1395).
+const NO_PROJECT = { environment: null, project: "" };
+
 // The values of the form; the token is taken out of its field.
 function form() {
   const token = input("jira-token");
@@ -39,7 +42,7 @@ function draw() {
 // Reads the saved connection into the form and draws the row: each time the 開発 tab is shown. Jira is asked nothing.
 export function showJiraCard() {
   const seq = ++readSeq;
-  invoke("jira_settings").then(
+  invoke("jira_settings", NO_PROJECT).then(
     (s) => {
       if (seq !== readSeq) return;
       saved = s;
@@ -57,7 +60,7 @@ async function save() {
   readSeq++;
   const { site, email, token } = form();
   try {
-    saved = await invoke("jira_save", { site, email, token });
+    saved = await invoke("jira_save", { ...NO_PROJECT, site, email, token });
   } catch (e) {
     return showFailure("jira-settings", e);
   }
@@ -71,7 +74,7 @@ async function test(button: HTMLButtonElement) {
   button.disabled = true;
   const { site, email, token } = form();
   try {
-    tested = await invoke("jira_test", { site, email, token });
+    tested = await invoke("jira_test", { ...NO_PROJECT, site, email, token });
   } catch (e) {
     tested = "failed";
     showFailure("jira-settings", e);

@@ -1387,7 +1387,9 @@ describe("settings: the 開発 tab (the tab `orca`) has no card of the target (A
 
 // J-1 (#868): the card of the Jira connection in the 開発 tab.
 describe("settings: Jira connection (the 開発 tab, J-1)", () => {
-  const saved = { site: "https://example.atlassian.net", email: "me@example.com", hasToken: true };
+  const saved = { site: "https://example.atlassian.net", email: "me@example.com", hasToken: true, boardId: null };
+  // The card has no project yet (#1395), so the commands get none.
+  const NO_PROJECT = { environment: null, project: "" };
   const user = { displayName: "Example User", emailAddress: "me@example.com" };
 
   async function openJira(fixtures: Record<string, unknown> = {}) {
@@ -1438,7 +1440,7 @@ describe("settings: Jira connection (the 開発 tab, J-1)", () => {
     const save = await mock("jira_save", saved);
     await fill("https://example.atlassian.net", "me@example.com", "tok-1");
     await $("#jira-form .text-btn.primary").click();
-    expect(await waitForCalls(save)).toEqual([{ site: "https://example.atlassian.net", email: "me@example.com", token: "tok-1" }]);
+    expect(await waitForCalls(save)).toEqual([{ ...NO_PROJECT, site: "https://example.atlassian.net", email: "me@example.com", token: "tok-1" }]);
     await expect($("#jira-items .status.ok")).toHaveText("保存済み");
     await expect($("#jira-token")).toHaveValue("");
     await expect($(CARDS)).not.toExist();
@@ -1449,7 +1451,7 @@ describe("settings: Jira connection (the 開発 tab, J-1)", () => {
     const save = await mock("jira_save", { ...saved, email: "" });
     await fill("https://example.atlassian.net", "", "tok-2");
     await $("#jira-form .text-btn.primary").click();
-    expect(await waitForCalls(save)).toEqual([{ site: "https://example.atlassian.net", email: "", token: "tok-2" }]);
+    expect(await waitForCalls(save)).toEqual([{ ...NO_PROJECT, site: "https://example.atlassian.net", email: "", token: "tok-2" }]);
   });
 
   it("shows the words of a refused save on a card, and keeps the form", async () => {
@@ -1468,7 +1470,7 @@ describe("settings: Jira connection (the 開発 tab, J-1)", () => {
     const test = await mock("jira_test", holds);
     await $("#jira-token").setValue("tok-4");
     await $("#jira-test").click();
-    expect(await waitForCalls(test)).toEqual([{ site: saved.site, email: saved.email, token: "tok-4" }]);
+    expect(await waitForCalls(test)).toEqual([{ ...NO_PROJECT, site: saved.site, email: saved.email, token: "tok-4" }]);
     await expect($("#jira-test")).toBeDisabled();
     await release(test, user);
     await expect($("#jira-items .status.ok")).toHaveText("接続できました");
@@ -1483,7 +1485,7 @@ describe("settings: Jira connection (the 開発 tab, J-1)", () => {
     await openJira({ jira_settings: saved });
     const test = await mock("jira_test", user);
     await $("#jira-test").click();
-    expect(await waitForCalls(test)).toEqual([{ site: saved.site, email: saved.email, token: "" }]);
+    expect(await waitForCalls(test)).toEqual([{ ...NO_PROJECT, site: saved.site, email: saved.email, token: "" }]);
   });
 
   it("shows the words of a failed test on a card and the state 接続できません", async () => {
