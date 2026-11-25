@@ -904,8 +904,6 @@ select[data-effort="max"] { --eff: var(--effort-max); --eff-bg: var(--effort-max
 .card-add { display: flex; gap: 8px; padding: 12px 12px 14px 20px; border-top: 1px solid var(--line); background: var(--bar); border-radius: 0 0 12px 12px; }
 .card-add input { flex: 1; min-width: 0; height: 32px; padding: 0 14px; border: 1px solid var(--chip-line); border-radius: 16px; font: inherit; background: var(--surface); }
 .card-add input:focus { outline: 2px solid var(--accent); border-color: transparent; }
-#jira-form { flex-wrap: wrap; }
-#jira-form input { flex: 1 1 180px; }
 .status { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 10px; border-radius: 11px; font-size: calc(12px * var(--fs)); white-space: nowrap; }
 .status::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .status.ok { background: var(--soft); color: var(--accent); }
@@ -1666,9 +1664,15 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 #orca-jira { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 #orca-jira-bar { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 8px 6px; border-bottom: 1px solid var(--line); }
 #orca-jira-bar select { flex: 1 1 0; min-width: 0; height: 26px; padding: 0 8px; border: 1px solid var(--chip-line); border-radius: 13px; background: var(--surface); font: inherit; font-size: calc(12px * var(--fs)); color: inherit; }
-#orca-jira-reload, #orca-jira-new { flex: none; width: 24px; height: 24px; color: var(--ink-soft); }
+#orca-jira-reload, #orca-jira-new, #orca-jira-config { flex: none; width: 24px; height: 24px; color: var(--ink-soft); }
 #orca-jira-reload { margin-left: auto; }
-#orca-jira-reload svg, #orca-jira-new svg { width: 14px; height: 14px; }
+#orca-jira-reload svg, #orca-jira-new svg, #orca-jira-config svg { width: 14px; height: 14px; }
+/* #1395: the form of the connection of the project, in the place of the bar and the list. */
+#orca-jira-conn { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 10px 8px; }
+#orca-jira-conn input { box-sizing: border-box; width: 100%; min-width: 0; height: 28px; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 14px; background: var(--surface); font: inherit; font-size: calc(12.5px * var(--fs)); color: inherit; }
+#orca-jira-conn input:focus { outline: 2px solid var(--accent); border-color: transparent; }
+#orca-jira-conn-buttons, #orca-jira-conn-state { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+#orca-jira-conn-state .orca-file-note { padding: 0; }
 #orca-jira-list { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 4px 8px; }
 #orca-jira-list .pending { margin: 4px; }
 .orca-jira-none { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 12px 8px; font-size: calc(12.5px * var(--fs)); color: var(--ink-soft); }
@@ -1740,6 +1744,7 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-jira-new-picks { display: flex; flex-wrap: wrap; gap: 12px; }
 .orca-jira-new-picks .orca-jira-new-field { flex: 1 1 180px; min-width: 0; }
 .orca-jira-new-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.orca-jira-new-field .orca-file-note { padding: 0; }
 .orca-jira-new-select, .orca-jira-new-summary { box-sizing: border-box; width: 100%; min-width: 0; height: 30px; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 15px; background: var(--surface); font: inherit; font-size: calc(13px * var(--fs)); color: inherit; }
 .orca-jira-new-select:disabled, .orca-jira-new-summary:disabled { opacity: 0.6; }
 .orca-jira-new .orca-jira-edit-bar { margin-top: 0; }

@@ -76,24 +76,242 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await expect($("#orca-files-head")).toBeDisplayed();
   });
 
-  it("says that Jira is not connected when no site or no token is saved, and leads to the Jira card of the settings (J-2)", async () => {
-    await openJira();
-    await waitForCount("#orca-jira-list .orca-jira-none", 1);
-    expect(await textsOf("#orca-jira-list .orca-jira-none")).toEqual(["Jira に接続されていません設定を開く"]);
+  // J-1 (#1395): the connection is registered, changed and deleted in the pane.
+  const empty = { site: "", email: "", hasToken: false, boardId: null };
+  const user = { displayName: "Example User", emailAddress: "me@example.com" };
+  const field = (name: string) => $(`#orca-jira-conn [aria-label="${name}"]`);
+  const gear = () => $("#orca-jira-config");
+  const formButtons = () => browser.execute(() => [...document.querySelectorAll<HTMLButtonElement>("#orca-jira-conn-buttons .text-btn")].filter((b) => !b.hidden).map((b) => b.textContent));
+  const fillForm = async (site: string, email: string, token: string) => {
+    await field("サイトの URL").setValue(site);
+    await field("メールアドレス").setValue(email);
+    await field("API トークン").setValue(token);
+  };
+
+  it("shows the form of the connection in place of the bar and the list while nothing is saved, and reads no board (J-1, #1395)", async () => {
+    await openJira(jiraFixtures({ jira_settings: empty }));
+    await expect($("#orca-jira-conn")).toBeDisplayed();
+    await expect($("#orca-jira-bar")).not.toBeDisplayed();
+    await expect($("#orca-jira-list")).not.toBeDisplayed();
+    await expect(gear()).not.toBeDisplayed();
+    await expect(field("サイトの URL")).toHaveValue("");
+    await expect(field("メールアドレス")).toHaveValue("");
+    await expect(field("API トークン")).toHaveAttribute("type", "password");
+    expect(await formButtons()).toEqual(["保存", "接続を試す"]);
+    expect(await count("#orca-jira-conn-state:not([hidden])")).toBe(0);
     expect(await callsOf("jira_boards")).toEqual([]);
-    await $("#orca-jira-list .orca-jira-none .text-btn").click();
-    await expect($("#settings")).toBeDisplayed();
-    await expect($("#settings-tab-orca")).toHaveAttribute("aria-selected", "true");
-    // The connection is saved there, and the screen reads it again when it is shown.
-    await mock("jira_settings", connected);
-    await mock("jira_boards", [board]);
-    await mock("jira_sprints", [sprint12]);
-    await mock("jira_backlog", jiraIssues([]));
+  });
+
+  it("saves the connection of the project with 保存, empties the token, and reads the boards with it (J-1, #1395)", async () => {
+    await openJira(jiraFixtures({ jira_settings: empty }));
+    const save = await mock("jira_save", connected);
+    await fillForm("https://example.atlassian.net", "me@example.com", "tok-1");
+    await $("#orca-jira-save").click();
+    expect(await waitForCalls(save)).toEqual([{ ...here, site: "https://example.atlassian.net", email: "me@example.com", token: "tok-1" }]);
+    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    await expect($("#orca-jira-conn")).not.toBeDisplayed();
+    await expect($("#orca-jira-bar")).toBeDisplayed();
+    await expect(gear()).toBeDisplayed();
+    await expect(field("API トークン")).toHaveValue("");
+    expect(await callsOf("jira_boards")).toEqual([here]);
+    expect(await callsOf("jira_settings")).toHaveLength(1);
+    expect(await count(CARDS)).toBe(0);
+  });
+
+  it("keeps the form as typed, with the reason in a card, when the save is refused (J-1, #1395)", async () => {
+    await openJira(jiraFixtures({ jira_settings: empty }));
+    const reason = "サイトの URL は Atlassian Cloud のものだけです";
+    const save = await mock("jira_save", rejects(reason));
+    await fillForm("https://example.com", "me@example.com", "tok-2");
+    await $("#orca-jira-save").click();
+    await waitForCalls(save);
+    await waitForCount(CARDS, 1);
+    expect(await textsOf(CARD)).toEqual([reason]);
+    await expect($("#orca-jira-conn")).toBeDisplayed();
+    await expect(field("サイトの URL")).toHaveValue("https://example.com");
+    await expect(field("API トークン")).toHaveValue("");
+    await expect($("#orca-jira-save")).toBeEnabled();
+    expect(await callsOf("jira_boards")).toEqual([]);
+  });
+
+  it("tries the form's values with 接続を試す, keeps the buttons off while it waits, and says who it found, and saves nothing (J-1, #1395)", async () => {
+    await openJira(jiraFixtures({ jira_settings: empty }));
+    const test = await mock("jira_test", holds);
+    await mock("jira_save", connected);
+    await fillForm("https://example.atlassian.net", "", "tok-3");
+    await $("#orca-jira-test").click();
+    expect(await waitForCalls(test)).toEqual([{ ...here, site: "https://example.atlassian.net", email: "", token: "tok-3" }]);
+    await expect($("#orca-jira-test")).toBeDisabled();
+    await expect($("#orca-jira-save")).toBeDisabled();
+    await release(test, user);
+    await expect($("#orca-jira-conn-status")).toHaveText("接続できました");
+    await expect($("#orca-jira-conn-status")).toHaveElementClass("ok");
+    await expect($("#orca-jira-conn-user")).toHaveText("Example User ・ me@example.com");
+    await expect($("#orca-jira-test")).toBeEnabled();
+    await expect(field("API トークン")).toHaveValue("");
+    expect(await callsOf("jira_save")).toEqual([]);
+    expect(await callsOf("jira_boards")).toEqual([]);
+  });
+
+  it("says 接続できません with the reason in a card when the test fails (J-1, #1395)", async () => {
+    await openJira(jiraFixtures({ jira_settings: empty }));
+    const reason = "Jira が認証を拒否しました（401）";
+    const test = await mock("jira_test", rejects(reason));
+    await fillForm("https://example.atlassian.net", "me@example.com", "tok-4");
+    await $("#orca-jira-test").click();
+    await waitForCalls(test);
+    await expect($("#orca-jira-conn-status")).toHaveText("接続できません");
+    await expect($("#orca-jira-conn-status")).toHaveElementClass("warn");
+    await waitForCount(CARDS, 1);
+    expect(await textsOf(CARD)).toEqual([reason]);
+    await expect($("#orca-jira-test")).toBeEnabled();
+  });
+
+  it("opens the same form with the gear, with what is saved and no token, and closes it with 閉じる and no read (J-1, #1395)", async () => {
+    await openJira(jiraFixtures());
+    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    await expect($("#orca-jira-conn")).not.toBeDisplayed();
+    await expect(gear()).toHaveAttribute("aria-label", "接続の設定");
+    await expect(gear().$("svg")).toExist();
+    await gear().click();
+    await expect($("#orca-jira-conn")).toBeDisplayed();
+    await expect($("#orca-jira-bar")).not.toBeDisplayed();
+    await expect($("#orca-jira-list")).not.toBeDisplayed();
+    await expect(field("サイトの URL")).toHaveValue(connected.site);
+    await expect(field("メールアドレス")).toHaveValue(connected.email);
+    await expect(field("API トークン")).toHaveValue("");
+    await expect($("#orca-jira-conn-status")).toHaveText("保存済み");
+    await expect($("#orca-jira-conn-status")).toHaveElementClass("ok");
+    expect(await formButtons()).toEqual(["保存", "接続を試す", "削除", "閉じる"]);
+    await field("メールアドレス").setValue("typed@example.com");
+    await $("#orca-jira-close").click();
+    await expect($("#orca-jira-conn")).not.toBeDisplayed();
+    await expect($("#orca-jira-list")).toBeDisplayed();
+    expect(await count("#orca-jira-list .orca-jira-issue")).toBe(5);
+    expect(await callsOf("jira_settings")).toHaveLength(1);
+    expect(await callsOf("jira_boards")).toHaveLength(1);
+    // What was typed is not kept: the gear shows what is saved.
+    await gear().click();
+    await expect(field("メールアドレス")).toHaveValue(connected.email);
+  });
+
+  it("changes the connection with 保存 from the gear (an empty token keeps the stored one) and reads everything with it (J-1, #1395)", async () => {
+    await openJira(jiraFixtures());
+    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    const save = await mock("jira_save", { ...connected, email: "other@example.com" });
+    await gear().click();
+    await field("メールアドレス").setValue("other@example.com");
+    await $("#orca-jira-save").click();
+    expect(await waitForCalls(save)).toEqual([{ ...here, site: connected.site, email: "other@example.com", token: "" }]);
+    await waitForCalls("jira_boards", 2);
+    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    await expect($("#orca-jira-conn")).not.toBeDisplayed();
+    await expect($("#orca-jira-bar")).toBeDisplayed();
+  });
+
+  it("deletes the connection of the project with 削除 and shows the empty form (J-1, #1395)", async () => {
+    await openJira(jiraFixtures());
+    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    const del = await mock("jira_delete", null);
+    await gear().click();
+    await $("#orca-jira-delete").click();
+    expect(await waitForCalls(del)).toEqual([here]);
+    await expect($("#orca-jira-conn")).toBeDisplayed();
+    await expect(field("サイトの URL")).toHaveValue("");
+    await expect(field("メールアドレス")).toHaveValue("");
+    expect(await formButtons()).toEqual(["保存", "接続を試す"]);
+    await expect(gear()).not.toBeDisplayed();
+    await expect($("#orca-jira-list")).not.toBeDisplayed();
+    expect(await count("#orca-jira-list .orca-jira-issue")).toBe(0);
+    expect(await callsOf("jira_boards")).toEqual([here]);
+  });
+
+  it("keeps the connection and the form with the reason in a card when the delete is refused (J-1, #1395)", async () => {
+    await openJira(jiraFixtures());
+    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    const reason = "キーチェーンを読めません";
+    await mock("jira_delete", rejects(reason));
+    await gear().click();
+    await $("#orca-jira-delete").click();
+    await waitForCalls("jira_delete");
+    await waitForCount(CARDS, 1);
+    expect(await textsOf(CARD)).toEqual([reason]);
+    await expect($("#orca-jira-conn")).toBeDisplayed();
+    expect(await formButtons()).toEqual(["保存", "接続を試す", "削除", "閉じる"]);
+    await expect($("#orca-jira-delete")).toBeEnabled();
+  });
+
+  it("keeps a connection to each project: another project has its own empty form (J-1, #1395)", async () => {
+    await openJira(jiraFixtures({ jira_settings: empty }));
+    await field("サイトの URL").setValue("https://typed.atlassian.net");
+    await project("example-api").click();
+    await waitForCalls("jira_settings", 2);
+    expect(await callsOf("jira_settings")).toEqual([here, api]);
+    await expect($("#orca-jira-conn")).toBeDisplayed();
+    await expect(field("サイトの URL")).toHaveValue("");
+  });
+
+  it("saves the board that is chosen for the project, and shows the saved board the next time (J-1, J-2, #1395)", async () => {
+    const two = { jira_boards: [board, jiraBoard(2, "Second board")], jira_sprints: [sprint12] };
+    await openJira(jiraFixtures(two));
+    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    const set = await mock("jira_set_board", { ...connected, boardId: 2 });
+    await mock("jira_sprints", [sprint13]);
+    await pick("orca-jira-board", "2");
+    expect(await waitForCalls(set)).toEqual([{ ...here, boardId: 2 }]);
+    await expect(gear()).toBeDisplayed();
+    // The next time, with the board that Rust holds.
+    await mock("jira_settings", { ...connected, boardId: 2 });
+    await mock("jira_sprints", [sprint13]);
+    await $("#orca-jira-reload").click();
+    expect(await waitForCalls("jira_sprints")).toEqual([{ ...here, boardId: 2 }]);
+    await expect(select("orca-jira-board")).toHaveValue("2");
+  });
+
+  it("starts with the board that the project saved, and with the first one when the saved one is gone (J-1, J-2, #1395)", async () => {
+    const two = { jira_boards: [board, jiraBoard(2, "Second board")], jira_sprints: [sprint12] };
+    await openJira(jiraFixtures({ ...two, jira_settings: { ...connected, boardId: 2 } }));
+    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    expect(await callsOf("jira_sprints")).toEqual([{ ...here, boardId: 2 }]);
+    await expect(select("orca-jira-board")).toHaveValue("2");
+    expect(await callsOf("jira_set_board")).toEqual([]);
+    await mock("jira_settings", { ...connected, boardId: 99 });
+    await project("example-api").click();
+    await waitForCalls("jira_sprints", 2);
+    expect(await callsOf("jira_sprints")).toEqual([{ ...here, boardId: 2 }, { ...api, boardId: 1 }]);
+  });
+
+  it("shows the scrum boards and the team-managed boards, and no kanban board (J-2, #1395)", async () => {
+    await openJira(jiraFixtures({ jira_boards: [board, jiraBoard(3, "Team board", "simple"), jiraBoard(2, "Example kanban", "kanban")] }));
+    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    expect(await optionsOf("orca-jira-board")).toEqual([["1", "Example board"], ["3", "Team board"]]);
+  });
+
+  it("draws Jira's refusal in the place of the sprints of a team-managed board that has none, and still reads its backlog (J-2, #1395)", async () => {
+    await openJira(jiraFixtures({ jira_boards: [jiraBoard(3, "Team board", "simple")] }));
+    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    const refusal = "Jira が 400 を返しました: The board does not support sprints";
+    await mock("jira_sprints", rejects(refusal));
+    await mock("jira_backlog", backlog);
     await mock("jira_sprint_issues", issuesOf[12]);
-    await $("#nav-orca").click();
-    await waitForCalls("jira_boards");
-    await waitForCount("#orca-jira-list .orca-jira-section", 2);
-    expect(await count(".orca-jira-none")).toBe(0);
+    await mock("jira_settings", { ...connected, boardId: 3 });
+    await $("#orca-jira-reload").click();
+    await waitForCount("#orca-jira-list .orca-jira-sprint-note", 1);
+    expect(await textsOf("#orca-jira-list .orca-jira-sprint-note")).toEqual([refusal]);
+    expect(await callsOf("jira_sprints")).toEqual([{ ...here, boardId: 3 }]);
+    await waitForCount("#orca-jira-list .orca-jira-issue", 2);
+    expect(await sectionsOf()).toEqual([["backlog", "EX-5", "EX-6"]]);
+    expect(await callsOf("jira_backlog")).toEqual([{ ...here, boardId: 3 }]);
+    expect(await callsOf("jira_sprint_issues")).toEqual([]);
+    await expect(select("orca-jira-sprint")).not.toBeDisplayed();
+    await expect(plus()).toBeDisplayed();
+    expect(await count(CARDS)).toBe(0);
+    // A failed read of the sprints of a scrum board is still the failure of the board, with the button that reads again.
+    await mock("jira_boards", [board]);
+    await mock("jira_settings", { ...connected, boardId: 1 });
+    await $("#orca-jira-reload").click();
+    await waitForCount("#orca-jira-list .pending.fail", 1);
+    expect(await count(".orca-jira-sprint-note")).toBe(0);
   });
 
   it("reads the scrum boards, the sprints, the tickets of the first sprint and the backlog, and draws a row for each ticket (J-2)", async () => {
@@ -782,7 +1000,7 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
 
   it("shows the plus only while a board is shown, and opens the tab of a new ticket that asks for the projects, the sprints of the board and the types of the first project (J-2, #874)", async () => {
     await openJira();
-    await waitForCount("#orca-jira-list .orca-jira-none", 1);
+    await expect($("#orca-jira-conn")).toBeDisplayed();
     await expect(plus()).not.toBeDisplayed();
     await openNew();
     await expect(plus()).toBeDisplayed();
@@ -854,6 +1072,34 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await browser.keys("Enter");
     expect(await waitForCalls("jira_create_issue")).toEqual([{ ...here, projectId: "10000", issueTypeId: "10001", summary: "Brand new", markdown: expect.any(String), sprintId: null }]);
     await expect(tabOf("jira:1").$(".orca-tab-title")).toHaveText("EX-9");
+  });
+
+  it("shows Jira's refusal of the sprints under the select of the sprints, keeps the form, makes the ticket with no sprint, and draws the sprints again when they can be read (J-2, #874, #1395)", async () => {
+    await openJira(withNew());
+    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    const refusal = "Jira が 400 を返しました: The board does not support sprints";
+    await mock("jira_sprints", rejects(refusal));
+    await plus().click();
+    await expect($(".orca-jira-new")).toBeDisplayed();
+    await waitForCalls("jira_issue_types");
+    expect(await textsOf(".orca-jira-new-sprint-note")).toEqual([refusal]);
+    expect(await newOptions("スプリント")).toEqual([["", "バックログ"]]);
+    await expect(newField("スプリント")).toBeDisabled();
+    expect(await newOptions("プロジェクト")).toEqual([["10000", "Example (EX)"], ["10001", "Alpha (AB)"]]);
+    expect(await newOptions("種類")).toEqual([["10001", "Task"], ["10002", "Bug"]]);
+    expect(await count(CARDS)).toBe(0);
+    await newField("件名").setValue("Brand new");
+    await expect(submitNew()).toBeEnabled();
+    await submitNew().click();
+    expect(await waitForCalls("jira_create_issue")).toEqual([{ ...here, projectId: "10000", issueTypeId: "10001", summary: "Brand new", markdown: expect.any(String), sprintId: null }]);
+    // A tab that is still a new one reads the sprints again with 「読み直す」, and the note goes.
+    await plus().click();
+    await mock("jira_sprints", [sprint12, sprint13]);
+    await $('.orca-jira-tab-head .icon-btn[aria-label="読み直す"]').click();
+    await waitForCalls("jira_sprints");
+    await waitForCount(".orca-jira-new-sprint-note:not([hidden])", 0);
+    expect(await newOptions("スプリント")).toEqual([["", "バックログ"], ["12", "Sprint 12"], ["13", "Sprint 13"]]);
+    await expect(newField("スプリント")).toBeEnabled();
   });
 
   it("keeps the fields off while Jira answers, and keeps the typing with the reason in a card when Jira refuses (J-2, #874)", async () => {

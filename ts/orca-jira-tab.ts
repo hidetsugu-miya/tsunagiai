@@ -22,6 +22,9 @@ interface NewTicket {
   projects: JiraProject[];
   types: JiraIssueType[];
   sprints: JiraSprint[];
+  // Jira's refusal of the sprints of the board (a team-managed board with its sprints off), drawn under the select of the sprints; null when they were read.
+  sprintNote: string | null;
+  note: HTMLElement;
   typing: boolean;
   projectId: string;
   typeId: string;
@@ -497,6 +500,8 @@ function newTicket(t: JiraTab): NewTicket {
     projects: [],
     types: [],
     sprints: [],
+    sprintNote: null,
+    note: tag("p", "orca-file-note fail orca-jira-new-sprint-note"),
     typing: false,
     projectId: "",
     typeId: "",
@@ -520,7 +525,9 @@ function newTicket(t: JiraTab): NewTicket {
   const bar = tag("div", "orca-jira-edit-bar");
   bar.append(submit);
   const picks = tag("div", "orca-jira-new-picks");
-  picks.append(field("プロジェクト", f.project), field("種類", f.kind), field("スプリント", f.sprint));
+  const sprintField = field("スプリント", f.sprint);
+  sprintField.append(f.note);
+  picks.append(field("プロジェクト", f.project), field("種類", f.kind), sprintField);
   form.append(picks, field("件名", summary), field("説明", describe.el), bar);
   // Milkdown is read the first time an editor is made; the button waits for it.
   describe
@@ -548,7 +555,9 @@ function drawNew(t: JiraTab, f: NewTicket) {
   fillSelect(f.sprint, [["", "バックログ"], ...f.sprints.map((s): [string, string] => [String(s.id), s.name])], f.sprintId === null ? "" : String(f.sprintId));
   f.project.disabled = t.writing || t.phase === "loading";
   f.kind.disabled = t.writing || f.typing;
-  f.sprint.disabled = t.writing;
+  f.sprint.disabled = t.writing || f.sprintNote !== null;
+  f.note.hidden = f.sprintNote === null;
+  f.note.textContent = f.sprintNote ?? "";
   f.summary.disabled = t.writing;
   syncNew(t);
   t.body.replaceChildren(f.form);
@@ -578,19 +587,21 @@ async function readTypes(t: JiraTab, f: NewTicket) {
   draw(t);
 }
 
-// Reads the projects, the sprints of the board and then the issue types of the project that is chosen. What the form holds is kept.
+// Reads the projects, the sprints of the board (Jira's refusal of them is kept as a note, and the form goes on) and then the issue types of the project that is chosen. What the form holds is kept.
 async function readOptions(t: JiraTab, f: NewTicket) {
   const seq = ++t.seq;
   t.phase = "loading";
   t.error = null;
   draw(t);
   try {
-    const [projects, sprints] = await Promise.all([invoke("jira_projects", at(t)), invoke("jira_sprints", { ...at(t), boardId: t.boardId })]);
+    // The refusal of the sprints is not the failure of the form: a team-managed board with its sprints off has none, and a ticket is made with no sprint.
+    const [projects, read] = await Promise.all([invoke("jira_projects", at(t)), invoke("jira_sprints", { ...at(t), boardId: t.boardId }).then((sprints) => ({ sprints, note: null }), (e) => ({ sprints: [] as JiraSprint[], note: String(e) }))]);
     if (seq !== t.seq) return;
     f.projects = projects;
-    f.sprints = sprints;
+    f.sprints = read.sprints;
+    f.sprintNote = read.note;
     if (!projects.some((p) => p.id === f.projectId)) f.projectId = projects[0]?.id ?? "";
-    if (f.sprintId !== null && !sprints.some((s) => s.id === f.sprintId)) f.sprintId = null;
+    if (f.sprintId !== null && !f.sprints.some((s) => s.id === f.sprintId)) f.sprintId = null;
     t.phase = "ready";
   } catch (e) {
     if (seq !== t.seq) return;

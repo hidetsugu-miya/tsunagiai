@@ -326,6 +326,8 @@ const computed = {
     if (held === undefined) throw `Jira が 404 を返しました: no sprint ${sprintId}`;
     return held;
   },
+  // J-1 (#1395): the save of the board of a project answers the connection the spec gave (`jira_settings`) with that board; a spec that checks a refusal mocks `jira_set_board`.
+  jira_set_board: ({ boardId }) => ({ ...fixtures.jira_settings, boardId }),
   // J-2 (#871): a ticket for its tab, from the fixture `jira_details` ({ "{key}": the answer of `jira_issue` }); a ticket it does not hold fails as Jira's refusal does. A spec that wants one answer for every ticket mocks `jira_issue`.
   jira_issue: ({ key }) => {
     const held = fixtures.jira_details?.[key];

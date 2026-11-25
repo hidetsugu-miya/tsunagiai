@@ -1,16 +1,16 @@
 // The Jira part of the file pane of the Orca screen (J-2, #870): the tickets of the Jira that J-1 connects, by sprint, with the backlog under them. Each ticket is a row of its key, its summary and its status; a ticket that is done (its status category) is struck through. The tickets belong to no worktree, so the part hides the heading of the pane, as the database part does (A-43).
 // The part follows the project of the worktree that the pane shows (`Place`: its target and its project key, #1394): every command takes them, so the connection that is read is the project's own, and another project reads everything again from the start.
-// `jira_settings` is read first (it asks Jira nothing): with no site or no token saved the part says so and leads to the card of the settings (J-1). Then the scrum boards (`jira_boards`: only a scrum board has sprints), the sprints of the board (`jira_sprints`) and, for the sprints that the choice names and for the backlog, the tickets, one section after another (`jira_sprint_issues`, `jira_backlog`). A section reads, fails and is read again on its own.
+// `jira_settings` is read first (it asks Jira nothing): with no site or no token saved the part shows the form of the connection in its place (J-1, #1395: the site's URL, the email address, the API token, 「保存」 and 「接続を試す」), and a saved connection is changed or deleted with the gear of the bar, which opens the same form. Then the boards (`jira_boards`: the scrum ones and the team-managed ones, `simple`; a kanban board is left out), the sprints of the board (`jira_sprints`; a team-managed board whose sprints are off is Jira's refusal, drawn in the place of the sprints) and, for the sprints that the choice names and for the backlog, the tickets, one section after another (`jira_sprint_issues`, `jira_backlog`). The board that is chosen is saved for the project (`jira_set_board`) and shown the next time. A section reads, fails and is read again on its own.
 // A double press on a row opens the ticket as a tab of the work pane (orca-jira-tab.ts), and 「＋」 opens the tab of a new ticket (#874).
-// Everything is read when the part comes to be shown, when 「再読み込み」 is pressed, and, while the connection is missing or the first read failed, when the window gets the focus back and when the screen is shown again after 「設定を開く」; nothing is read at an interval.
+// Everything is read when the part comes to be shown, when 「再読み込み」 is pressed, after a save of the connection, and, while the first read failed, when the window gets the focus back; nothing is read at an interval.
 import type { JiraBoard } from "./bindings/JiraBoard";
 import type { JiraIssue } from "./bindings/JiraIssue";
+import type { JiraSettings } from "./bindings/JiraSettings";
 import type { JiraSprint } from "./bindings/JiraSprint";
 import { $, span, tag } from "./dom.js";
-import { logError } from "./error-card.js";
-import { PLUS_SVG, RELOAD_SVG } from "./icons.js";
+import { logError, showFailure } from "./error-card.js";
+import { PLUS_SVG, RELOAD_SVG, SETTINGS_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
-import { setScreen } from "./nav.js";
 
 // What the part shows: nothing yet, the first read, no connection, a read of the connection or of the boards that failed, or the board with its sections.
 type Stage = "idle" | "loading" | "none" | "failed" | "ready";
@@ -41,10 +41,17 @@ let stage: Stage = "idle";
 let failure = "";
 // The project shown (null: the pane has no worktree, so none).
 let place: JiraPlace | null = null;
-// The scrum boards, the one shown, its sprints (the active one first, as Jira gives them) and the sections read so far.
+// The connection of the project as last read (never the token), null until the first read.
+let conn: JiraSettings | null = null;
+// The form of the connection: opened by the gear (it is shown whatever this is while no connection is saved), the key of the project whose values it holds, and what the last test or read of it says.
+let formOpen = false;
+let filledFor: string | null = null;
+let connState: { kind: "ok" | "warn"; text: string; user: string } | null = null;
+// The boards that are shown (the scrum ones and the team-managed ones), the one shown, its sprints (the active one first, as Jira gives them), Jira's refusal of the sprints of a board that has none, and the sections read so far.
 let boards: JiraBoard[] = [];
 let boardId: number | null = null;
 let sprints: JiraSprint[] = [];
+let sprintNote: string | null = null;
 const sections = new Map<string, Section>();
 // The choice of the sprint (the id as text, or `all`) and of the status ("" is every status). They are kept while the part is read again.
 let sprintPick = "";
@@ -53,10 +60,15 @@ let statusPick = "";
 let seq = 0;
 // Whether the part is shown (the pane shown with this part chosen).
 let on = false;
-// 「設定を開く」 was pressed: the screen reads the connection again when it is shown next.
-let toSettings = false;
 
 const sectionKey = (sprint: JiraSprint) => `s${sprint.id}`;
+
+// A connection is saved when it has a site and a token.
+const registered = (s: JiraSettings | null) => s !== null && s.site !== "" && s.hasToken;
+// The form of the connection takes the place of the bar and the list while no connection is saved, and when the gear opened it.
+const formShown = () => stage === "none" || formOpen;
+const keyOf = (p: JiraPlace) => JSON.stringify([p.environment, p.project]);
+const input = (id: string) => $<HTMLInputElement>(id);
 
 // The sections that are drawn, in order: the sprints that the choice names, then the backlog.
 function wantedKeys(): string[] {
@@ -89,6 +101,8 @@ function fill(select: HTMLSelectElement, options: [string, string][], value: str
 }
 
 function drawBar() {
+  $("orca-jira-bar").hidden = formShown();
+  $("orca-jira-config").hidden = !registered(conn);
   const ready = stage === "ready";
   const withBoards = boards.length > 1 && (ready || stage === "loading");
   $("orca-jira-board").hidden = !withBoards;
@@ -151,25 +165,119 @@ function drawList() {
   if (stage === "idle") return list.replaceChildren();
   if (stage === "loading") return list.replaceChildren(pending("読み込んでいます…"));
   if (stage === "failed") return list.replaceChildren(pending(failure, () => void read()));
-  if (stage === "none") {
-    const box = tag("div", "orca-jira-none", "Jira に接続されていません");
-    const open = tag("button", "text-btn", "設定を開く");
-    open.type = "button";
-    open.onclick = () => {
-      toSettings = true;
-      setScreen("settings", "orca");
-    };
-    box.append(open);
-    return list.replaceChildren(box);
-  }
+  if (stage === "none") return list.replaceChildren();
   if (boardId === null) return list.replaceChildren(tag("div", "orca-jira-none", "スクラムボードがありません"));
-  list.replaceChildren(...wantedKeys().map(sectionNode));
+  list.replaceChildren(...(sprintNote === null ? [] : [tag("p", "orca-file-note fail orca-jira-sprint-note", sprintNote)]), ...wantedKeys().map(sectionNode));
+}
+
+// The form of the connection: shown or not, the buttons that only a saved connection has, and the state that the last read or test left.
+function drawForm() {
+  const open = formShown();
+  const saved = registered(conn);
+  $("orca-jira-conn").hidden = !open;
+  $("orca-jira-list").hidden = open;
+  $("orca-jira-delete").hidden = !saved;
+  $("orca-jira-close").hidden = !saved;
+  $("orca-jira-conn-state").hidden = connState === null;
+  if (connState === null) return;
+  $("orca-jira-conn-status").className = `status ${connState.kind}`;
+  $("orca-jira-conn-status").textContent = connState.text;
+  $("orca-jira-conn-user").textContent = connState.user;
+  $("orca-jira-conn-user").hidden = connState.user === "";
 }
 
 const draw = () => {
   drawBar();
+  drawForm();
   drawList();
 };
+
+// Puts what is saved into the form (the token is never given, so its field is empty) and the state that goes with it.
+function fillForm(here: JiraPlace, saved: JiraSettings | null) {
+  filledFor = keyOf(here);
+  input("orca-jira-site").value = saved?.site ?? "";
+  input("orca-jira-email").value = saved?.email ?? "";
+  input("orca-jira-token").value = "";
+  connState = registered(saved) ? { kind: "ok", text: "保存済み", user: "" } : null;
+}
+
+// Keeps the buttons of the form off while a call of it is on its way.
+function formBusy(busy: boolean) {
+  for (const id of ["orca-jira-save", "orca-jira-test", "orca-jira-delete", "orca-jira-close"]) $<HTMLButtonElement>(id).disabled = busy;
+}
+
+// 「保存」: saves the connection of the project (an empty token keeps the stored one) and reads the boards with it.
+async function save() {
+  const here = place;
+  if (here === null) return;
+  const token = input("orca-jira-token");
+  const values = { site: input("orca-jira-site").value, email: input("orca-jira-email").value, token: token.value };
+  token.value = "";
+  formBusy(true);
+  let saved: JiraSettings;
+  try {
+    saved = await invoke("jira_save", { ...here, ...values });
+  } catch (e) {
+    showFailure("orca-jira", e);
+    return formBusy(false);
+  }
+  formBusy(false);
+  if (place !== here) return;
+  conn = saved;
+  formOpen = false;
+  boardId = null;
+  filledFor = null;
+  connState = null;
+  void load(++seq, here, saved);
+}
+
+// 「接続を試す」: asks Jira who the credential of the form is, and saves nothing.
+async function test() {
+  const here = place;
+  if (here === null) return;
+  const token = input("orca-jira-token");
+  const values = { site: input("orca-jira-site").value, email: input("orca-jira-email").value, token: token.value };
+  token.value = "";
+  formBusy(true);
+  try {
+    const user = await invoke("jira_test", { ...here, ...values });
+    if (place !== here) return;
+    connState = { kind: "ok", text: "接続できました", user: [user.displayName, user.emailAddress].filter((s) => s).join(" ・ ") };
+  } catch (e) {
+    if (place !== here) return;
+    showFailure("orca-jira", e);
+    connState = { kind: "warn", text: "接続できません", user: "" };
+  } finally {
+    formBusy(false);
+  }
+  drawForm();
+}
+
+// 「削除」: deletes the connection of the project with its token, and shows the empty form.
+async function remove() {
+  const here = place;
+  if (here === null) return;
+  formBusy(true);
+  try {
+    await invoke("jira_delete", here);
+    if (place !== here) return;
+    seq++;
+    conn = null;
+    formOpen = false;
+    boardId = null;
+    boards = [];
+    sprints = [];
+    sprintNote = null;
+    sections.clear();
+    fillForm(here, null);
+    stage = "none";
+    draw();
+  } catch (e) {
+    showFailure("orca-jira", e);
+  } finally {
+    formBusy(false);
+  }
+}
 
 // Reads the tickets of the section `key`, which the run `run` asked for; an answer of another run is dropped.
 async function readSection(run: number, key: string) {
@@ -204,6 +312,7 @@ async function readBoard(run: number) {
     return draw();
   }
   stage = "loading";
+  sprintNote = null;
   draw();
   try {
     const read = await invoke("jira_sprints", { ...place, boardId });
@@ -211,10 +320,14 @@ async function readBoard(run: number) {
     sprints = read;
   } catch (e) {
     if (run !== seq) return;
-    logError("orca-jira", e);
-    failure = String(e);
-    stage = "failed";
-    return draw();
+    // A team-managed board with its sprints off is Jira's refusal: its words stand in the place of the sprints, and the backlog is still read.
+    if (boards.find((b) => b.id === boardId)?.type === "simple") sprintNote = String(e);
+    else {
+      logError("orca-jira", e);
+      failure = String(e);
+      stage = "failed";
+      return draw();
+    }
   }
   if (sprintPick !== ALL && !sprints.some((s) => String(s.id) === sprintPick)) sprintPick = sprints.length > 0 ? String(sprints[0].id) : ALL;
   stage = "ready";
@@ -222,29 +335,19 @@ async function readBoard(run: number) {
   await readSections(run);
 }
 
-// Reads the connection, the boards and the board that is shown, from the start.
-async function read() {
-  const run = ++seq;
-  toSettings = false;
-  sections.clear();
-  const here = place;
-  if (here === null) {
-    stage = "idle";
+// Reads the boards of a saved connection and the board that is shown (the one saved for the project, else the first), and then its sprints and sections; with no connection saved, shows the form of it.
+async function load(run: number, here: JiraPlace, settings: JiraSettings) {
+  conn = settings;
+  if (!registered(settings)) {
+    stage = "none";
+    if (filledFor !== keyOf(here)) fillForm(here, settings);
     return draw();
   }
-  stage = "loading";
-  draw();
   try {
-    const settings = await invoke("jira_settings", here);
-    if (run !== seq) return;
-    if (settings.site === "" || !settings.hasToken) {
-      stage = "none";
-      return draw();
-    }
     const all = await invoke("jira_boards", here);
     if (run !== seq) return;
-    boards = all.filter((b) => b.type === "scrum");
-    if (!boards.some((b) => b.id === boardId)) boardId = boards[0]?.id ?? null;
+    boards = all.filter((b) => b.type === "scrum" || b.type === "simple");
+    if (!boards.some((b) => b.id === boardId)) boardId = boards.find((b) => b.id === settings.boardId)?.id ?? boards[0]?.id ?? null;
   } catch (e) {
     if (run !== seq) return;
     logError("orca-jira", e);
@@ -255,13 +358,43 @@ async function read() {
   await readBoard(run);
 }
 
-// Told whether the part is shown and which project it is for (null: no worktree): it reads when it comes to be shown, when the project changes, and when the screen is shown again after the press on 「設定を開く」. Another project forgets the board and the choices of the one before.
+// Reads the connection, the boards and the board that is shown, from the start.
+async function read() {
+  const run = ++seq;
+  sections.clear();
+  const here = place;
+  if (here === null) {
+    stage = "idle";
+    return draw();
+  }
+  stage = "loading";
+  draw();
+  let settings: JiraSettings;
+  try {
+    settings = await invoke("jira_settings", here);
+  } catch (e) {
+    if (run !== seq) return;
+    logError("orca-jira", e);
+    failure = String(e);
+    stage = "failed";
+    return draw();
+  }
+  if (run !== seq) return;
+  await load(run, here, settings);
+}
+
+// Told whether the part is shown and which project it is for (null: no worktree): it reads when it comes to be shown and when the project changes. Another project forgets the connection, the form, the board and the choices of the one before.
 export function syncOrcaJira(shown: boolean, next: JiraPlace | null) {
   const moved = next?.environment !== place?.environment || next?.project !== place?.project;
-  const back = shown && toSettings && !$("orca").hidden;
   if (moved) {
     place = next;
+    conn = null;
+    formOpen = false;
+    filledFor = null;
+    connState = null;
+    for (const id of ["orca-jira-site", "orca-jira-email", "orca-jira-token"]) input(id).value = "";
     boardId = null;
+    sprintNote = null;
     sprintPick = "";
     statusPick = "";
     boards = [];
@@ -271,7 +404,7 @@ export function syncOrcaJira(shown: boolean, next: JiraPlace | null) {
     stage = "idle";
     draw();
   }
-  if (shown && (!on || back || moved)) void read();
+  if (shown && (!on || moved)) void read();
   on = shown;
 }
 
@@ -288,9 +421,9 @@ export async function reloadJiraSections() {
   for (const key of [...sections.keys()]) if (run === seq) await readSection(run, key);
 }
 
-// The window got the focus back: a connection that was missing, or a first read that failed, is tried again.
+// The window got the focus back: a first read that failed is tried again.
 export function refreshOrcaJira() {
-  if (stage === "none" || stage === "failed") void read();
+  if (stage === "failed") void read();
 }
 
 export function initOrcaJira(on: { open: (key: string, boardId: number) => void; create: (boardId: number, sprintId: number | null) => void }) {
@@ -304,7 +437,32 @@ export function initOrcaJira(on: { open: (key: string, boardId: number) => void;
     boardId = Number((e.target as HTMLSelectElement).value);
     sprintPick = "";
     void readBoard(++seq);
+    // The board is kept for the project, and the next read shows it again.
+    const here = place;
+    if (here === null) return;
+    invoke("jira_set_board", { ...here, boardId }).then(
+      (s) => {
+        if (place === here) conn = s;
+      },
+      (err) => showFailure("orca-jira", err),
+    );
   };
+  $("orca-jira-config").innerHTML = SETTINGS_SVG;
+  $("orca-jira-config").onclick = () => {
+    if (place !== null) fillForm(place, conn);
+    formOpen = true;
+    draw();
+  };
+  $("orca-jira-close").onclick = () => {
+    formOpen = false;
+    draw();
+  };
+  $("orca-jira-conn").onsubmit = (e) => {
+    e.preventDefault();
+    void save();
+  };
+  $("orca-jira-test").onclick = () => void test();
+  $("orca-jira-delete").onclick = () => void remove();
   $<HTMLSelectElement>("orca-jira-sprint").onchange = (e) => {
     sprintPick = (e.target as HTMLSelectElement).value;
     draw();
