@@ -121,8 +121,8 @@ struct Migration {
 pub struct SlackState {
     /// Whether v0.11.0's token has been dealt with in this run, and when it was last tried. The lock is held through the move.
     migrated: tokio::sync::Mutex<Migration>,
-    /// Held while the keychain and `slack-workspaces.json` are updated together.
-    files: tokio::sync::Mutex<()>,
+    /// Held while the keychain and `slack-workspaces.json` are updated together (and, for S-29, the Sentry tokens and `sentry-connections.json`).
+    pub(crate) files: tokio::sync::Mutex<()>,
     /// Each workspace's channel list, in memory only.
     channels: Arc<ChannelCache>,
     /// What the timeline and the thread keep between two reads, in memory only.
@@ -156,7 +156,7 @@ fn is_bot_token(token: &str) -> bool {
 
 /// The keychain user name of a workspace's token. `team_id` comes from outside, so it must look like one (`T0123ABC`);
 /// that also keeps it apart from `LEGACY_USER`, which has lower-case letters.
-fn token_key(team_id: &str) -> Result<String, String> {
+pub(crate) fn token_key(team_id: &str) -> Result<String, String> {
     if valid_channel(team_id) {
         Ok(team_id.to_owned())
     } else {
@@ -759,7 +759,7 @@ async fn call_scoped_at(
 }
 
 /// Runs file or keychain work off the async threads.
-async fn blocking<T: Send + 'static>(
+pub(crate) async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
     tokio::task::spawn_blocking(f)
@@ -824,6 +824,14 @@ fn save_list<T: Serialize>(dir: &Path, file: &str, key: &str, items: &[T]) -> Re
 async fn load_workspaces(dir: &Path) -> Result<Vec<Workspace>, String> {
     let dir = dir.to_owned();
     blocking(move || load_list(&dir, WORKSPACES_FILE, WORKSPACES_KEY)).await
+}
+
+/// Whether `team_id` is a connected workspace (S-29). The caller holds the lock of `SlackState::files`.
+pub(crate) async fn has_workspace(dir: &Path, team_id: &str) -> Result<bool, String> {
+    Ok(load_workspaces(dir)
+        .await?
+        .iter()
+        .any(|w| w.team_id == team_id))
 }
 
 /// Keeps the token in the keychain and the workspace in the list (replacing the one with the same `team_id`).
@@ -1037,8 +1045,9 @@ pub async fn slack_remove_workspace(
     state.channels.lock().unwrap().remove(&team_id);
     state.timeline.forget(&team_id);
     state.images.forget(&team_id);
-    // The Socket Mode connection and its App-Level Token go with the workspace (S-16).
+    // The Socket Mode connection and its App-Level Token go with the workspace (S-16), and so does its Sentry token (S-29).
     socket::forget_workspace(&app, &state.sockets, &team_id).await;
+    crate::sentry::forget_workspace(&app, &team_id).await;
     if let Some(token) = token {
         if let Err(e) = call(auth.http(), &token, "auth.revoke", Payload::Empty).await {
             log_failure("slack_revoke", &team_id, e);

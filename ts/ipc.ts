@@ -114,6 +114,7 @@ import type { HeldThread } from "./bindings/HeldThread";
 import type { HiddenChannel } from "./bindings/HiddenChannel";
 import type { SlackLoad } from "./bindings/SlackLoad";
 import type { SlackThread } from "./bindings/SlackThread";
+import type { SentryConnection } from "./bindings/SentryConnection";
 import type { SocketStatus } from "./bindings/SocketStatus";
 import type { Summary } from "./bindings/Summary";
 import type { TaskHit } from "./bindings/TaskHit";
@@ -249,6 +250,12 @@ export interface Commands {
   slack_app_token_remove: { args: { teamId: string }; result: SocketStatus[] };
   // S-16: the connections now. A change is sent to the screen as the event `slack-socket-status` (one `SocketStatus`).
   slack_socket_status: { args: undefined; result: SocketStatus[] };
+  // S-29: the workspaces that have a Sentry Personal Token, with the last four characters of each. Asks Sentry nothing.
+  sentry_connections: { args: undefined; result: SentryConnection[] };
+  // S-29: keeps the workspace's token once Sentry accepts it (it replaces one kept already); answers the connections.
+  sentry_save: { args: { teamId: string; token: string }; result: SentryConnection[] };
+  // S-29: deletes the workspace's token; answers the connections.
+  sentry_delete: { args: { teamId: string }; result: SentryConnection[] };
   // The connected Notion workspaces; `reconnect` is true when no token is kept. Asks Notion nothing.
   notion_accounts: { args: undefined; result: NotionAccount[] };
   // Opens the browser for Notion's consent and answers the connected workspace.

@@ -384,6 +384,22 @@
           <button class="text-btn">登録</button>
         </form>
       </section>
+      <section class="card">
+        <div class="card-head">
+          <h2>
+            <span class="logo sentry">S</span>Sentry
+          </h2>
+          <button id="sentry-help" class="icon-btn" data-hint aria-label="Sentry の設定方法" aria-expanded="false">
+            <svg data-svg="help"></svg>
+          </button>
+        </div>
+        <div id="sentry-items"></div>
+        <form id="sentry-form" class="card-add">
+          <select id="sentry-team" aria-label="ワークスペース"></select>
+          <input id="sentry-token" type="password" autocomplete="off" aria-label="Sentry の Personal Token" placeholder="Personal Token">
+          <button class="text-btn">追加</button>
+        </form>
+      </section>
       </div>
       <section id="settings-panel-notion" class="card" role="tabpanel" aria-labelledby="settings-tab-notion" hidden>
         <div class="card-head">
