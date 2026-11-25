@@ -3323,7 +3323,7 @@ describe("database: tree", () => {
     await row("p1").click();
     await waitForCalls(connect);
     await mock("database_profiles", [tunnel]);
-    await pickFromMenu("p1", 2);
+    await pickFromMenu("p1", 3);
     await $('.pop[role="alertdialog"] .text-btn.danger').click();
     await waitForCount("#database-side-feed .database-item", 1);
     const closed = await mock("database_disconnect", null);
