@@ -1,6 +1,6 @@
 // Startup: each module registers its own handlers, then the lists are drawn. The order is the order the handlers were registered in
 // when the app was one script, and the first Todo and inbox calls start before the Claude check.
-import { initAccounts } from "./accounts.js";
+import { initAccounts, popupOpen } from "./accounts.js";
 import { initCalendar } from "./calendar.js";
 import { initCalendarDetail } from "./calendar-detail.js";
 import { initClaude, refreshClaude } from "./claude.js";
@@ -41,7 +41,7 @@ import { initUpdate } from "./update.js";
 
 fillIcons();
 initAccounts();
-initTooltip();
+initTooltip((target) => popupOpen() && !!target.closest("#account-list, #slack-workspace-list, #claude-btn"));
 initInbox();
 initThread();
 initMailCompose();
