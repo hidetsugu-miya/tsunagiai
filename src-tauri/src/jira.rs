@@ -82,7 +82,7 @@ const MAX_ISSUE_TYPES: usize = 100;
 const SUMMARY_LIMIT: usize = 255;
 
 /// What `jira-connections.json` holds (version 1).
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 struct Store {
     version: u32,
     connections: Vec<Connection>,
@@ -1493,13 +1493,10 @@ pub async fn jira_save(
             let user = token_user(environment.as_deref(), &project);
             let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
             let mut store = load_store(&dir)?;
-            match token {
-                Some(token) => keychain::write(TOKEN_SERVICE, &user, &token)?,
-                None if keychain::read(TOKEN_SERVICE, &user)?.is_none() => {
-                    return Err(TOKEN_MISSING.into())
-                }
-                None => {}
+            if token.is_none() && keychain::read(TOKEN_SERVICE, &user)?.is_none() {
+                return Err(TOKEN_MISSING.into());
             }
+            let before = store.clone();
             let at = store
                 .connections
                 .iter()
@@ -1515,7 +1512,14 @@ pub async fn jira_save(
                 Some(i) => store.connections[i] = connection.clone(),
                 None => store.connections.push(connection.clone()),
             }
+            // The file first, then the token: a file that cannot be saved leaves the old site beside the old token. A token that cannot be written puts the old file back.
             save_store(&dir, &store)?;
+            if let Some(token) = token {
+                if let Err(e) = keychain::write(TOKEN_SERVICE, &user, &token) {
+                    let _ = save_store(&dir, &before);
+                    return Err(e);
+                }
+            }
             Ok(shown(connection, true))
         })
         .await

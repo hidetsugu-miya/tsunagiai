@@ -833,7 +833,7 @@ pub async fn database_structure(
     sessions.structure(&scripts, &id, &database, &table).await
 }
 
-/// The text `sql` run as one statement in `database` on the open connection `id` (D-6): at most 1,000 rows, each value already text, and the line with the rows and the time.
+/// The statements of the text `sql` run one after another in `database` on the open connection `id` (D-6): for each, at most 1,000 rows, each value already text, and the line with the rows and the time; the run stops at the first that fails, and its words are in the answer.
 #[tauri::command]
 pub async fn database_sql(
     sessions: tauri::State<'_, session::Sessions>,
@@ -841,7 +841,7 @@ pub async fn database_sql(
     id: String,
     database: String,
     sql: String,
-) -> Result<sql::DatabaseSqlResult, String> {
+) -> Result<sql::DatabaseSqlRun, String> {
     sessions.sql(&scripts, &id, &database, &sql).await
 }
 

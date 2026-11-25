@@ -1,5 +1,5 @@
 // The file pane of the Orca screen (A-18): the files of the worktree of the selected tab (with no tab, the main worktree of the selected project), as a tree on the right of the work pane. Rust reads a folder (`orca_files_list`: its entries sorted) and, after it, which of them git ignores (`orca_files_ignored`) and which differ from HEAD (`orca_files_changes`, A-39); this module draws the folder at once, marks the ignored and the changed entries when the answers come, and takes the presses.
-// A folder is read the first time it is opened and drawn from what was read after that, and the root and then the open folders are read again, side by side (at most `reads()` at a time), when the window gets the focus back and, while the pane is shown, by the clock of the Orca screen (`refreshFiles`, called by orca.ts), after the app's own create, delete and move, and after a switch of the branch, the app's own or one the list of Orca shows (`syncFiles`). A read by the clock or for a branch that changed outside the app says nothing when it fails (what is shown stays). Where the Orca screen streams (A-12), the disk is watched (`orca-watch.ts`, Orca's `files.watch`) and the folders that hold a path that changed or lie above it (read ones, not in an ignored folder) are read again at once (`rereadTree`), and the clock does not read the tree while its worktree is watched, unless a folder of `node_modules` or `.git` is open (Orca does not watch them); elsewhere nothing watches the disk. A press on a row selects it (with ⌘ it adds the row to the selection or takes it off, with Shift it selects the rows from the one pressed before), and the selected rows are drawn in the accent color. A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path (and, on a file, downloads it; on a folder, first makes a new file or folder in it, as the right button on the empty part of the tree does in the root; on a row that differs from HEAD, after a line, stages it, unstages it and puts it back, which asks first, A-44; last, after a line, 「移動・名前の変更」, which turns the row into a field with its path from the worktree, and the delete, which asks first and deletes for good, A-18; on several selected rows the menu is the delete alone, as the Delete key is, A-18). A row is also moved by dragging it onto a folder's row or onto the empty part of the tree (the root of the worktree). The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
+// A folder is read the first time it is opened and drawn from what was read after that, and the root and then the open folders are read again, side by side (at most `reads()` at a time), when the window gets the focus back and, while the pane is shown, by the clock of the Orca screen (`refreshFiles`, called by orca.ts), after the app's own create, delete and move, and after a switch of the branch, the app's own or one the list of Orca shows (`syncFiles`). A read by the clock or for a branch that changed outside the app says nothing when it fails (what is shown stays). Where the Orca screen streams (A-12), the disk is watched (`orca-watch.ts`, Orca's `files.watch`) and the folders that hold a path that changed or lie above it (read ones, not in an ignored folder) are read again at once (`rereadTree`), and the clock does not read the tree while its worktree is watched, unless a folder of `node_modules` or `.git` is open (Orca does not watch them), but it still asks the marks of the folders that were read (`rereadChanges`), because a commit is no change that Orca tells; elsewhere nothing watches the disk. A press on a row selects it (with ⌘ it adds the row to the selection or takes it off, with Shift it selects the rows from the one pressed before), and the selected rows are drawn in the accent color. A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path (and, on a file, downloads it; on a folder, first makes a new file or folder in it, as the right button on the empty part of the tree does in the root; on a row that differs from HEAD, after a line, stages it, unstages it and puts it back, which asks first, A-44; last, after a line, 「移動・名前の変更」, which turns the row into a field with its path from the worktree, and the delete, which asks first and deletes for good, A-18; on several selected rows the menu is the delete alone, as the Delete key is, A-18). A row is also moved by dragging it onto a folder's row or onto the empty part of the tree (the root of the worktree). The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
 // A file or folder dragged in from outside is put in the folder under the pointer (A-47, `putDropped`): the tree is a drop zone of `orca-attach.ts`, marks the folder with `data-drop` as a dragged row does, asks about each name that is taken, and shows the progress above the tree.
 // The tree belongs to one worktree of one target: another tab's worktree gives a new tree (nothing is kept of the old one, and an answer that comes late for the old one is dropped).
 // The top row also has the three buttons that choose what the pane shows under the heading, the files, the history of the worktree (A-27, orca-history.ts) or the language server of the worktree (A-34, orca-lsp.ts), a fourth for the connections of the database screen (A-43, orca-database.ts) and a fifth for the tickets of Jira (J-2, orca-jira.ts), which belong to no worktree and hide the heading; the choice is kept in memory only, and the heading serves the files, the history and the language server, and so do the reads at the return of the focus and by the clock (`refreshFiles`), which the language server and the connections have none of, and the tickets have none by the clock (the focus tries again a first read that failed).
@@ -283,6 +283,20 @@ async function readDir(dir: string, quiet = false, clock = false, pending?: List
   else void markChanges(here, mine, [listed]);
   // The clock does not ask git again for the ignore marks of a folder that holds what it held: they are asked for at the next read that is not the clock's.
   if (!(same && clock)) void markIgnored(here, mine, dir, next.dir);
+}
+
+// Asks again the marks (A-39) of the entries of every folder that was read, in one question and with no read of the folders: the clock does it while the watch of the worktree is ready, because a commit made outside the app changes no file that Orca tells and clears the marks. It leaves a folder that is being read (its read asks), one that the list marked as ignored, and a folder that holds nothing or failed; the answer is dropped by the guards of `markGroup`. It asks nothing while the pane does not show the tree.
+export function rereadChanges() {
+  const here = context;
+  if (treeWatch() === null || here === null) return;
+  const listed: Listed[] = [];
+  for (const [dir, { dir: read, error, busy }] of listings) {
+    if (busy || error !== null || read === null || read.entries.length === 0 || ignoredDir(dir)) continue;
+    const token = (asked.get(dir) ?? 0) + 1;
+    asked.set(dir, token);
+    listed.push({ dir, read, token });
+  }
+  if (listed.length > 0) void markChanges(here, generation, listed);
 }
 
 // How many folders a read of the open folders takes at once, as Orca's own window does: 16 on this machine, 8 on a saved environment (its connection is a paired server's).
@@ -684,15 +698,16 @@ function drawDrop() {
 // A-47: what the owner answered for a file whose name is taken in the folder: replace it, put it under another name, or leave it; `all` is that the rest of the drop that is taken is answered the same way.
 type Answer = "overwrite" | "copy" | "skip";
 
-// Asks about the file `name`, which the folder `dir` holds already, with `left` more such files after it (the checkbox for them is there when it is not 0). The question is a card over the tree; Escape leaves the file, and so does the end of the tree.
-function askTaken(dir: string, name: string, left: number): Promise<{ answer: Answer; all: boolean }> {
+// Asks about the file `name`, which the folder `dir` holds already, with `left` more such files after it (the checkbox for them is there when it is not 0). What is there is a folder when `folder` is true, and a folder is not replaced by a file, so the question has no 「上書き」. The question is a card over the tree; Escape leaves the file, and so does the end of the tree.
+function askTaken(dir: string, name: string, left: number, folder: boolean): Promise<{ answer: Answer; all: boolean }> {
   return new Promise((resolve) => {
     const where = folderName(dir);
+    const is = folder ? "フォルダーとして" : "";
     const pop = tag("div", "pop orca-drop-pop");
     pop.setAttribute("role", "alertdialog");
-    pop.setAttribute("aria-label", `${name} は ${where} にもうあります`);
+    pop.setAttribute("aria-label", `${name} は ${where} に${is}もうあります`);
     const text = tag("p");
-    text.append(tag("b", "", name), ` は ${where} にもうあります。`);
+    text.append(tag("b", "", name), ` は ${where} に${is}もうあります。`);
     pop.append(text);
     const check = tag("input");
     check.type = "checkbox";
@@ -714,7 +729,8 @@ function askTaken(dir: string, name: string, left: number): Promise<{ answer: An
       resolve({ answer, all: check.checked });
     };
     const actions = tag("div", "popup-actions");
-    const choices: [string, Answer, string][] = [["やめる", "skip", ""], ["別名で置く", "copy", ""], ["上書き", "overwrite", " danger"]];
+    const choices: [string, Answer, string][] = [["やめる", "skip", ""], ["別名で置く", "copy", ""]];
+    if (!folder) choices.push(["上書き", "overwrite", " danger"]);
     const buttons = choices.map(([label, answer, extra]) => {
       const button = tag("button", `text-btn${extra}`, label);
       button.type = "button";
@@ -777,21 +793,44 @@ async function putDropped(dir: string, read: Promise<Dropped>) {
     const files = dropped.files.filter((f) => f.file.size <= DROP_FILE).map((f) => ({ file: f.file, dir: joinDir(dir, f.dir), top: f.dir.split("/")[0] }));
     if (files.length === 0 && dropped.folders.length === 0) return;
     // Which names are taken: the names the drop puts in `dir` itself (a folder's name too, so that one that is there is known), then the files of each folder of the drop, only where the folder of the drop is there already (a folder that is new holds nothing).
-    const taken = new Set<string>();
+    // The taken names are keyed by folder and name, and hold whether what is there is a folder (read from the folder's listing; null when the listing does not show it, as when Orca's page was full). A folder's listing is read once, for all the questions of that folder.
+    const taken = new Map<string, boolean | null>();
+    const listed = new Map<string, Map<string, boolean>>();
     const ask = async (where: string, names: string[]) => {
       for (let at = 0; at < names.length; at += DROP_FILES) {
         const found = await invoke("orca_drop_taken", { path: here.path, dir: where, names: names.slice(at, at + DROP_FILES), environment: here.target });
-        for (const name of found) taken.add(`${where}\n${name}`);
+        if (found.length === 0) continue;
+        let kinds = listed.get(where);
+        if (kinds === undefined) {
+          kinds = new Map((await listDir(here, where, false)).entries.map((e) => [e.name, e.isDirectory]));
+          listed.set(where, kinds);
+        }
+        for (const name of found) taken.set(`${where}\n${name}`, kinds.get(name) ?? null);
       }
     };
     const own = [...files.filter((f) => f.dir === dir).map((f) => f.file.name), ...dropped.folders.filter((f) => !f.includes("/"))];
     if (own.length > 0) await ask(dir, own);
     if (mine !== generation) return;
-    const there = new Set(own.filter((name) => taken.has(`${dir}\n${name}`)));
-    for (const where of new Set(files.filter((f) => f.dir !== dir && there.has(f.top)).map((f) => f.dir))) {
-      await ask(where, files.filter((f) => f.dir === where).map((f) => f.file.name));
+    // A name that is a file there holds nothing, so nothing is asked under it (the questions would be answered by an error of Orca, not by a name).
+    const there = new Set(own.filter((name) => taken.has(`${dir}\n${name}`) && taken.get(`${dir}\n${name}`) !== false));
+    // In each folder of the drop under a folder that is there: its files, and the folders of the drop directly under it.
+    const inside = new Map<string, string[]>();
+    const put = (where: string, name: string) => inside.set(where, [...(inside.get(where) ?? []), name]);
+    for (const f of files) if (f.dir !== dir && there.has(f.top)) put(f.dir, f.file.name);
+    for (const f of dropped.folders) if (f.includes("/") && there.has(f.split("/")[0])) put(joinDir(dir, f.slice(0, f.lastIndexOf("/"))), f.slice(f.lastIndexOf("/") + 1));
+    // The folders nearer the folder under the pointer are asked first, so that a folder that is a file there is known before the folders under it are asked about.
+    const underFile = (where: string) => {
+      const parts = where.slice(dir === "" ? 0 : dir.length + 1).split("/");
+      return parts.some((name, i) => taken.get(`${joinDir(dir, parts.slice(0, i).join("/"))}\n${name}`) === false);
+    };
+    for (const [where, names] of [...inside].sort((a, b) => a[0].split("/").length - b[0].split("/").length)) {
+      if (underFile(where)) continue;
+      await ask(where, names);
       if (mine !== generation) return;
     }
+    // A folder of the drop whose name is a file there is not put, and nothing is, so the drop stops before a question is asked.
+    const clash = dropped.folders.filter((f) => taken.get(`${joinDir(dir, f.slice(0, Math.max(f.lastIndexOf("/"), 0)))}\n${f.slice(f.lastIndexOf("/") + 1)}`) === false);
+    if (clash.length > 0) return showFailure("orca-files", refused(clash, "と同じ名前のファイルが置き先にあるので、何も置きません"));
     const plan: { file: File; dir: string; onTaken: "overwrite" | "copy" }[] = [];
     let same: Answer | null = null;
     let left = files.filter((f) => taken.has(`${f.dir}\n${f.file.name}`)).length;
@@ -801,9 +840,11 @@ async function putDropped(dir: string, read: Promise<Dropped>) {
         continue;
       }
       left--;
-      let answer: Answer | null = same;
+      // A folder is never replaced by a file, so "replace" answered for the rest does not reach a file whose name is a folder there.
+      const folder = taken.get(`${where}\n${file.name}`) === true;
+      let answer: Answer | null = same === "overwrite" && folder ? null : same;
       if (answer === null) {
-        const reply = await askTaken(where, file.name, left);
+        const reply = await askTaken(where, file.name, left, folder);
         if (mine !== generation) return;
         answer = reply.answer;
         if (reply.all) same = answer;

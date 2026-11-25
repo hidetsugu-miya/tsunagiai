@@ -15,7 +15,7 @@ import type { DatabaseChange } from "./bindings/DatabaseChange";
 import type { DatabaseProfile } from "./bindings/DatabaseProfile";
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import type { DatabaseRecords } from "./bindings/DatabaseRecords";
-import type { DatabaseSqlResult } from "./bindings/DatabaseSqlResult";
+import type { DatabaseSqlRun } from "./bindings/DatabaseSqlRun";
 import type { DatabaseStructure } from "./bindings/DatabaseStructure";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
 import type { DecisionPage } from "./bindings/DecisionPage";
@@ -647,8 +647,8 @@ export interface Commands {
   database_records: { args: { id: string; database: string; table: string; page: number; estimate: number | null; typed?: string }; result: DatabaseRecords };
   // D-4: writes the `changes` (inserts, updates and deletes the records tab has gathered; an update and a delete name their row by the whole key of the `database_records` answer, and a value of null is NULL) to a table in one transaction. Any failure, and an update or a delete that does not match exactly one row, rolls all back. Answers the rows written of each kind.
   database_apply: { args: { id: string; database: string; table: string; changes: DatabaseChange[] }; result: DatabaseApplied };
-  // D-6: runs the text `sql` as one statement in `database` of the open connection `id`: at most 1,000 rows as cells, the columns, and the line with the rows and the time. A write is committed at once (D-2).
-  database_sql: { args: { id: string; database: string; sql: string }; result: DatabaseSqlResult };
+  // D-6: runs the statements of the text `sql` one after another in `database` of the open connection `id`: for each, at most 1,000 rows as cells, the columns, and the line with the rows and the time; it stops at the first that fails, and the words of that are in the answer. A write is committed at once (D-2).
+  database_sql: { args: { id: string; database: string; sql: string }; result: DatabaseSqlRun };
   // D-3: closes the connection `id` and ends its script.
   database_disconnect: { args: { id: string }; result: null };
   // D-3: the ids of the connections that are open now.

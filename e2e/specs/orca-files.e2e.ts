@@ -17,7 +17,7 @@ import type { OrcaRemoteBranch } from "../../ts/bindings/OrcaRemoteBranch";
 import type { OrcaSaved } from "../../ts/bindings/OrcaSaved";
 import type { PaneLayout } from "../../ts/bindings/PaneLayout";
 import type { PaneNode } from "../../ts/bindings/PaneNode";
-import { type GivenFile, callsOf, copiedTexts, count, huge, note, databaseCell, databaseColumn, databaseProfile, databaseRecords, databaseSqlResult, databaseStructure, databaseTable, emitEvent, fontSettings, holds, mock, onceId, orcaRow, orcaTerminal, orcaWorktree, popoutTab, rejects, release, sendFiles, sendPopout, sendStream, stubClipboard, textsOf, timers, waitForCalls, waitForCount, CARDS, CARD } from "../support";
+import { type GivenFile, callsOf, copiedTexts, count, huge, note, databaseCell, databaseColumn, databaseProfile, databaseRecords, databaseSqlResult, databaseSqlRun, databaseSqlStatement, databaseStructure, databaseTable, emitEvent, fontSettings, holds, mock, onceId, orcaRow, orcaTerminal, orcaWorktree, popoutTab, rejects, release, sendFiles, sendPopout, sendStream, stubClipboard, textsOf, timers, waitForCalls, waitForCount, CARDS, CARD } from "../support";
 import { blurEditor, caretOffset, charBoxes, claudeTab, CONTENT, editorText, filesToggle, onThisMachine, openOrca, orcaOverview, pickItem, pressEnter, pressFold, pressTab, pressUnfold, project, sample, selectedTab, setCaret, setText, showAgain, streamList, studio, tabOf, tabTitles, typeIn, waitForText, worktrees } from "../orca-support";
 
 // A-18: the file pane and the editor. Rust reads the folders, reads and saves the text, and decides whether a save went through (unit tests); here the screen is checked: what it asks of Rust, and how it draws the answers.
@@ -654,16 +654,31 @@ describe("orca: files and editor (A-18)", () => {
   };
   // Gives the editor the focus and puts the selection `start` to `end` in it: the caret is moved by the script (the window of the E2E build has no focus, so a click does not focus the editor).
   const caretAt = setCaret;
-  const bandOn = (line: string) => browser.waitUntil(async () => (await band()).line === line, { timeoutMsg: `the band never came to line ${line}` });
+  // The caret set in the page reaches the editor at the `selectionchange` that follows, and a draw of the lines in between (the editor measuring a file just opened, under load) puts the selection of the editor back: it is set again until the band is as wanted.
+  const bandOn = (line: string, start: number) =>
+    browser.waitUntil(
+      async () => {
+        await caretAt(start);
+        return (await band()).line === line;
+      },
+      { timeoutMsg: `the band never came to line ${line}` },
+    );
+  const bandHiddenOver = (start: number, end: number) =>
+    browser.waitUntil(
+      async () => {
+        await caretAt(start, end);
+        return !(await band()).shown;
+      },
+      { timeoutMsg: "the band never went over a selected range" },
+    );
+  // The blur is an event of the editor and is not put back by a draw: it is waited for as it is.
   const bandHidden = () => browser.waitUntil(async () => !(await band()).shown, { timeoutMsg: "the band never went" });
 
   it("lays a faint band under the line of the caret, across the box of the text and under the letters, and moves it with the caret (A-18)", async () => {
     await openFiles();
     await openA("alpha\nbeta\ngamma\n");
-    await caretAt(0);
-    await bandOn("0");
-    await caretAt(6);
-    await bandOn("1");
+    await bandOn("0", 0);
+    await bandOn("1", 6);
     const b = await band();
     const letter = await glyph(6);
     const next = await glyph(11);
@@ -673,23 +688,18 @@ describe("orca: files and editor (A-18)", () => {
     expect(b.bottom).toBeLessThanOrEqual(next.top);
     expect(b.width).toBeCloseTo(b.textWidth, 0);
     expect(b.background).toBe("rgba(90, 107, 98, 0.1)");
-    await caretAt(11);
-    await bandOn("2");
+    await bandOn("2", 11);
     expect((await band()).top).toBeGreaterThan(b.top);
-    await caretAt(6);
-    await bandOn("1");
+    await bandOn("1", 6);
     expect((await band()).top).toBe(b.top);
   });
 
   it("does not draw the band over a selected range, and takes it off when the editor loses the focus (A-18)", async () => {
     await openFiles();
     await openA("alpha\nbeta\ngamma\n");
-    await caretAt(6);
-    await bandOn("1");
-    await caretAt(6, 7);
-    await bandHidden();
-    await caretAt(6);
-    await bandOn("1");
+    await bandOn("1", 6);
+    await bandHiddenOver(6, 7);
+    await bandOn("1", 6);
     await blurEditor();
     await bandHidden();
   });
@@ -4487,6 +4497,22 @@ describe("orca: files and editor (A-18)", () => {
     expect(await callsOf("database_records")).toHaveLength(1);
   });
 
+  it("draws a tab for each statement of a run in the SQL tab, and the footer of the one that is pressed (A-43, D-6)", async () => {
+    await openShop({ database_sql: databaseSqlRun([databaseSqlStatement(["n"], [[databaseCell("1", "number")]], "1 行 / 2 ms"), databaseSqlStatement([], [], "3 行を変更 / 4 ms", "", "3 行を変更")]) });
+    await dbRow("p1/d/shop/t/orders").click();
+    await waitForCount(".orca-database-tab .database-grid", 1);
+    await $('.orca-database-tab [data-tab="sql"]').click();
+    await typeSql("select 1; update orders set a = 1");
+    await $('.orca-database-tab [data-key="run"]').click();
+    expect(await waitForCalls("database_sql")).toEqual([{ id: "p1", database: "shop", sql: "select 1; update orders set a = 1" }]);
+    await expect($(".orca-database-tab .database-range")).toHaveText("3 行を変更 / 4 ms");
+    expect(await textsOf(".orca-database-tab .database-result-tabs [role='tab']")).toEqual(["1: 1 行", "2: 3 行を変更"]);
+    await $('.orca-database-tab [data-key="result-0"]').click();
+    await expect($(".orca-database-tab .database-range")).toHaveText("1 行 / 2 ms");
+    expect(await count(".orca-database-tab .database-grid")).toBe(1);
+    expect(await callsOf("database_sql")).toHaveLength(1);
+  });
+
   it("closes the tab with its close button, calls nothing, and drops a read that ends after the tab was closed (A-43)", async () => {
     await openShop({ database_records: holds });
     await dbRow("p1/d/shop/t/orders").click();
@@ -5201,6 +5227,21 @@ describe("orca: files and editor (A-18)", () => {
       await expect($(CARDS)).not.toExist();
     });
 
+    it("asks the marks of the folders that were read by the clock while the watch is ready, with no read of the folders, so that a commit made outside the app clears them (A-39)", async () => {
+      await openStreamed({ ...timers({ orcaClock: 1000 }), orca_files_changes: [change("src", "changed")] });
+      await waitForCalls("orca_stream_files");
+      await sendFiles({ kind: "ready" });
+      const mark = () => browser.execute(() => document.querySelector<HTMLElement>('.orca-file[data-path="src"]')?.dataset.change ?? null);
+      await browser.waitUntil(async () => (await mark()) === "changed", { timeoutMsg: "the folder never got its mark" });
+      await browser.pause(500);
+      // A commit outside the app: Orca tells nothing, and the answer of git has no difference.
+      const list = await mock("orca_files_list", holds);
+      const asked = await mock("orca_files_changes", []);
+      await browser.waitUntil(async () => (await mark()) === null, { timeoutMsg: "the clock never cleared the mark" });
+      expect(((await callsOf(asked)) as { path: string; paths: string[]; environment: string }[])[0]).toEqual({ path: WORK, paths: ["src", "target", "a.rs", "b.log"], environment: "Studio" });
+      expect(await callsOf(list)).toEqual([]);
+    });
+
     it("reads of the tree only the folders that hold a path that changed or lie above it, not those in an ignored folder, and the changes of one second together (A-18)", async () => {
       await openStreamed();
       await waitForCalls("orca_stream_files");
@@ -5469,9 +5510,10 @@ describe("orca: drop on the file pane (A-47)", () => {
     await release(asked, ["a.rs"]);
     await waitForCalls(asked, 3);
     await release(asked, []);
+    // The names asked of 'src/lib' are its file and the folder of the drop directly under it.
     expect(await callsOf(asked)).toEqual([
       { path: HERE, dir: "src", names: ["lib"], environment: null },
-      { path: HERE, dir: "src/lib", names: ["a.rs"], environment: null },
+      { path: HERE, dir: "src/lib", names: ["a.rs", "inner"], environment: null },
       { path: HERE, dir: "src/lib/inner", names: ["b.rs"], environment: null },
     ]);
     await expect(question()).toHaveText(expect.stringContaining("a.rs は src/lib/ にもうあります。"));
@@ -5480,6 +5522,86 @@ describe("orca: drop on the file pane (A-47)", () => {
     const calls = (await waitForCalls("orca_drop_file", 2)) as { dir: string; name: string; onTaken: string }[];
     expect(calls.map((c) => [c.dir, c.name, c.onTaken])).toEqual([["src/lib", "a.rs", "overwrite"], ["src/lib/inner", "b.rs", "copy"]]);
     expect(await callsOf("orca_drop_dir")).toEqual([{ path: HERE, dir: "src/lib/inner", environment: null }]);
+  });
+
+  it("puts nothing and says so on a card when a dropped folder has the name of a file that is there, before any question", async () => {
+    await openTree();
+    await mock("orca_drop_taken", ["notes.txt", "main.rs"]);
+    await drop("src", [note], [folder("main.rs")]);
+    await expect($(CARD)).toHaveText("main.rs と同じ名前のファイルが置き先にあるので、何も置きません");
+    await browser.pause(300);
+    await expect(question()).not.toExist();
+    expect(await callsOf("orca_drop_dir")).toEqual([]);
+    expect(await callsOf("orca_drop_file")).toEqual([]);
+    await idle();
+  });
+
+  it("stops the same way when a folder inside a dropped folder has the name of a file in the folder that is there", async () => {
+    await openTree();
+    const asked = await mock("orca_drop_taken", holds);
+    await drop("src", [], [folder("lib", folder("deep"))]);
+    await waitForCalls(asked);
+    await release(asked, ["lib"]);
+    await waitForCalls(asked, 2);
+    expect(await callsOf(asked)).toEqual([
+      { path: HERE, dir: "src", names: ["lib"], environment: null },
+      { path: HERE, dir: "src/lib", names: ["deep"], environment: null },
+    ]);
+    await mock("orca_files_list", dirOf("src/lib", [["deep", false]]));
+    await release(asked, ["deep"]);
+    await expect($(CARD)).toHaveText("lib/deep と同じ名前のファイルが置き先にあるので、何も置きません");
+    await browser.pause(300);
+    expect(await callsOf("orca_drop_dir")).toEqual([]);
+    expect(await callsOf("orca_drop_file")).toEqual([]);
+  });
+
+  it("asks nothing under a dropped folder whose name is a file there, even with files inside it", async () => {
+    await openTree();
+    await mock("orca_files_list", dirOf("src", [["lib", false], ["main.rs", false]]));
+    const asked = await mock("orca_drop_taken", holds);
+    await drop("src", [], [folder("lib", named("a.rs"))]);
+    await waitForCalls(asked);
+    await release(asked, ["lib"]);
+    await expect($(CARD)).toHaveText("lib と同じ名前のファイルが置き先にあるので、何も置きません");
+    await browser.pause(300);
+    expect(await callsOf(asked)).toEqual([{ path: HERE, dir: "src", names: ["lib"], environment: null }]);
+    expect(await callsOf("orca_drop_dir")).toEqual([]);
+    expect(await callsOf("orca_drop_file")).toEqual([]);
+  });
+
+  it("asks nothing under a folder inside a dropped folder whose name is a file there, even with files inside it", async () => {
+    await openTree();
+    const asked = await mock("orca_drop_taken", holds);
+    await drop("src", [], [folder("lib", folder("deep", named("x.txt")))]);
+    await waitForCalls(asked);
+    await release(asked, ["lib"]);
+    await waitForCalls(asked, 2);
+    await mock("orca_files_list", dirOf("src/lib", [["deep", false]]));
+    await release(asked, ["deep"]);
+    await expect($(CARD)).toHaveText("lib/deep と同じ名前のファイルが置き先にあるので、何も置きません");
+    await browser.pause(300);
+    expect(await callsOf(asked)).toEqual([
+      { path: HERE, dir: "src", names: ["lib"], environment: null },
+      { path: HERE, dir: "src/lib", names: ["deep"], environment: null },
+    ]);
+    expect(await callsOf("orca_drop_dir")).toEqual([]);
+    expect(await callsOf("orca_drop_file")).toEqual([]);
+  });
+
+  it("offers no replace for a file whose name is a folder there, and still asks about it after 'replace' was answered for the rest", async () => {
+    await openTree();
+    await mock("orca_drop_taken", ["a.txt", "lib"]);
+    await drop("src", [named("a.txt"), named("lib")]);
+    await expect(question()).toHaveText(expect.stringContaining("a.txt は src/ にもうあります。"));
+    expect(await textsOf(".orca-drop-pop button")).toEqual(["やめる", "別名で置く", "上書き"]);
+    await question().$("input[type=checkbox]").click();
+    await answer("上書き");
+    await expect(question()).toHaveText(expect.stringContaining("lib は src/ にフォルダーとしてもうあります。"));
+    expect(await textsOf(".orca-drop-pop button")).toEqual(["やめる", "別名で置く"]);
+    await expect(question()).not.toHaveText(expect.stringContaining("残りの"));
+    await answer("別名で置く");
+    const calls = (await waitForCalls("orca_drop_file", 2)) as { name: string; onTaken: string }[];
+    expect(calls.map((c) => [c.name, c.onTaken])).toEqual([["a.txt", "overwrite"], ["lib", "copy"]]);
   });
 
   it("counts the files inside a dropped folder against the limit, and puts nothing when they are over it", async () => {

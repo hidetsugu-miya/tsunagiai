@@ -2,9 +2,13 @@
 import type { DatabaseCell } from "./DatabaseCell";
 
 /**
- * The result of a run: the columns and the rows as D-4's cells, and the line under the table. A statement that gives no row has no column.
+ * The result of one statement: the columns and the rows as D-4's cells, the line under the table and the text of its tab. A statement that gives no row has no column.
  */
-export type DatabaseSqlResult = { columns: Array<string>, rows: Array<Array<DatabaseCell>>, summary: string, 
+export type DatabaseSqlResult = { columns: Array<string>, rows: Array<Array<DatabaseCell>>, 
+/**
+ * What the tab of this result says after its number: the rows, or the rows the statement changed (`format_label`).
+ */
+label: string, summary: string, 
 /**
  * The result as the copy button copies it (`records::cells_tsv`, #668).
  */
