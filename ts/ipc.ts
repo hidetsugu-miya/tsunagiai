@@ -51,6 +51,8 @@ import type { LspOutsideFile } from "./bindings/LspOutsideFile";
 import type { LspPlace } from "./bindings/LspPlace";
 import type { LspRepoSettings } from "./bindings/LspRepoSettings";
 import type { LspStatus } from "./bindings/LspStatus";
+import type { MachineResources } from "./bindings/MachineResources";
+import type { MachineUsage } from "./bindings/MachineUsage";
 import type { MailSummary } from "./bindings/MailSummary";
 import type { OutgoingMail } from "./bindings/OutgoingMail";
 import type { PickedAttachment } from "./bindings/PickedAttachment";
@@ -412,6 +414,10 @@ export interface Commands {
   orca_project_add_here: { args: undefined; result: boolean };
   // A-38: the folders in `path` of the saved environment `environment` (an empty path is its home folder), for the dialog that picks the folder of a project to add. `resolvedPath` is the folder Orca opened, `folders` the names in it. A failure carries the message.
   orca_browse_dir: { args: { environment: string; path: string }; result: BrowsedDir };
+  // A-48: the CPU (the load of a minute per core, in percent) and the memory of this Mac (`environment` null) and of each saved environment, from Orca's `diagnostics.memory`. A machine that fails has its `error` and no figure; the others are still returned. Only reads.
+  machine_resources: { args: undefined; result: MachineResources[] };
+  // A-48: the rate limits of Claude and Antigravity (`session` 5 hours, `weekly`) of the same machines, from Orca's `accounts.list`. Orca takes them again after 5 minutes. A machine that does not answer has `unavailable` for both. Only reads.
+  machine_usage: { args: undefined; result: MachineUsage[] };
   // A-10: puts the file `data` (base64, any kind, up to 20 MiB) in `.orca/drops/` of the worktree at `path` of the target `environment`, under its own `name` (a taken name gets `copy`, `copy 2`, ...), and answers `AttachedFile { text, bracketed }`: the text to type for it (the absolute path, one blank after it) and whether the terminal gets it as a bracketed paste (an image) or as typed text. Not tried again: a failure carries its message.
   orca_attach_file: { args: { path: string; name: string; data: string; environment: string | null }; result: AttachedFile };
   orca_drop_taken: { args: { path: string; dir: string; names: string[]; environment: string | null }; result: string[] };
