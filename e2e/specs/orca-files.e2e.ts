@@ -4286,6 +4286,8 @@ describe("orca: files and editor (A-18)", () => {
     expect(await callsOf("database_connect")).toHaveLength(1);
     await mock("database_connect", ["shop"]);
     await mock("database_tables", { __e2e_reject__: "MySQL がエラーを返しました (1142): SELECT command denied" });
+    // Rust still holds the session, so the failed read is not a lost connection (D-3).
+    await mock("database_connections", ["p1"]);
     await dbRow("p1").click();
     await waitForCount("#orca-database .database-children .database-btn", 1);
     await dbRow("p1/d/shop").click();
