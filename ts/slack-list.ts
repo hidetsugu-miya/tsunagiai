@@ -21,7 +21,7 @@ import { invoke } from "./ipc.js";
 import { setScreen } from "./nav.js";
 import { closeSlackChannel, openSlackChannel, redrawSlackChannel, revealSlackChannel, selectedChannel } from "./slack-channel.js";
 import { drawSlackSide, type SlackSection } from "./slack-side.js";
-import { attachmentNode, blocksNode } from "./slack-blocks.js";
+import { attachmentNode, blocksNode, slackLinkNode } from "./slack-blocks.js";
 import { richNodes } from "./slack-rich.js";
 import { getSlackWorkspaces, setSlackWorkspaces, slackListVersion } from "./slack-workspaces.js";
 import { openSlackThread } from "./slack-thread.js";
@@ -258,7 +258,7 @@ async function unhideChannel(teamId: string, channel: string) {
 
 // What a row and a reply under it draw. The images of blocks and attachments are never fetched in the list, and a row has no thumbnail of a file.
 const NO_IMAGES = { shown: false, uris: new Map<string, string>() };
-type Drawn = Pick<TimelineMessage, "text" | "rich" | "blocks" | "showText" | "attachments" | "hasFiles">;
+type Drawn = Pick<TimelineMessage, "text" | "rich" | "blocks" | "showText" | "attachments" | "slackLink" | "hasFiles">;
 
 // The body of a message as the thread draws it, in full.
 function bodyOf(m: Drawn) {
@@ -271,6 +271,7 @@ function bodyOf(m: Drawn) {
   if (m.blocks.length) box.append(blocksNode(m.blocks, NO_IMAGES));
   if (m.showText) box.append(...richNodes(m.rich));
   box.append(...m.attachments.map((a) => attachmentNode(a, NO_IMAGES)));
+  if (m.slackLink) box.append(slackLinkNode(m.slackLink));
   // Blocks that are only images (never fetched here) draw nothing: the plain text stands for them, else the files do.
   if (!box.textContent?.trim()) box.replaceChildren(m.text.trim() || "（添付ファイル）");
   return box;

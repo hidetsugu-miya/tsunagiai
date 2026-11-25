@@ -2,6 +2,7 @@
 //!
 //! Pure functions from Slack's JSON: nothing here calls Slack. The text is plain text (`plain_text`), never markup; a mrkdwn text is a `Rich` (S-12).
 //! A button's address is http or https, an image's address is https, and anything else is left out here, so the screen does not decide.
+//! A part that works only in Slack (a button with no address, a menu) is not drawn; `needs_slack` says whether a message has one.
 
 use std::collections::HashSet;
 
@@ -17,14 +18,14 @@ use crate::slack_mrkdwn::{parse, plain, rich_plain, user_link, Rich, RichBlock, 
 /// Looks a user or a user group up by ID, as `plain_text` does for a mention.
 type NameOf<'a> = &'a dyn Fn(&str) -> Option<String>;
 
-/// A button. Without `url` it cannot be pressed and the screen shows its name only.
+/// A button with an address: a link. A button with none cannot be used here and is not drawn (`needs_slack`).
 #[derive(Serialize, Debug, PartialEq, Clone)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadButton {
     text: String,
-    url: Option<String>,
+    url: String,
 }
 
 /// An image. `url` is an https address that may be fetched when the user asks for the images; without it only `alt` is drawn.
@@ -219,12 +220,37 @@ fn image_url(url: Option<&str>) -> Option<String> {
     (parsed.scheme() == "https" && host != "files.slack.com").then(|| url.to_owned())
 }
 
+/// A button that can be drawn: one with a name and an http or https address.
 fn button(b: &Value, name_of: NameOf) -> Option<ThreadButton> {
     (b["type"] == "button").then_some(())?;
     Some(ThreadButton {
         text: text_of(&b["text"], name_of)?,
-        url: http_url(b["url"].as_str()),
+        url: http_url(b["url"].as_str())?,
     })
+}
+
+/// Whether the message has a part that can be used only in Slack, which the screen does not draw (S-11): a button with no address, a select menu, an overflow menu, a date picker or any other part that is not a button with an address or an image,
+/// as the accessory of a section or among the actions of the message's blocks, of the blocks of an attachment, or of an attachment's own actions. The screen then offers a link to the message in Slack.
+pub(crate) fn needs_slack(message: &Value, name_of: NameOf) -> bool {
+    let in_blocks = |blocks: &Value| {
+        items(blocks).iter().any(|b| match b["type"].as_str() {
+            Some("actions") => items(&b["elements"])
+                .iter()
+                .any(|e| button(e, name_of).is_none()),
+            Some("section") => {
+                let a = &b["accessory"];
+                a.is_object() && a["type"] != "image" && accessory(a, name_of).is_none()
+            }
+            _ => false,
+        })
+    };
+    in_blocks(&message["blocks"])
+        || items(&message["attachments"]).iter().any(|a| {
+            in_blocks(&a["blocks"])
+                || items(&a["actions"])
+                    .iter()
+                    .any(|e| button(e, name_of).is_none())
+        })
 }
 
 /// An image with an address it may be fetched from, a description, or both.
@@ -782,6 +808,7 @@ pub(crate) fn mentioned_users(message: &Value) -> Vec<String> {
     collect_mentions(&message["blocks"], &mut found);
     for a in items(&message["attachments"]) {
         collect_mentions(a, &mut found);
+        // The actions count only when one is drawn (a button with an address).
         let other = [
             "pretext",
             "author_name",
@@ -789,13 +816,15 @@ pub(crate) fn mentioned_users(message: &Value) -> Vec<String> {
             "text",
             "fields",
             "footer",
-            "actions",
             "blocks",
             "image_url",
             "thumb_url",
         ]
         .iter()
-        .any(|k| !a[*k].is_null());
+        .any(|k| !a[*k].is_null())
+            || items(&a["actions"])
+                .iter()
+                .any(|b| b["type"] == "button" && http_url(b["url"].as_str()).is_some());
         if !other {
             collect_mentions(&a["fallback"], &mut found);
         }
@@ -805,12 +834,9 @@ pub(crate) fn mentioned_users(message: &Value) -> Vec<String> {
     found
 }
 
-/// A button as text: its name, and its address when it has one.
+/// A button as text: its name and its address.
 fn button_line(b: &ThreadButton) -> String {
-    match &b.url {
-        Some(url) => format!("{} ({url})", b.text),
-        None => b.text.clone(),
-    }
+    format!("{} ({})", b.text, b.url)
 }
 
 /// The description of an image, when it has one.
@@ -1041,12 +1067,12 @@ mod tests {
         ] {
             let a = one(own);
             assert_eq!(a.title_link, None, "{own}");
-            assert_eq!(a.actions[0].url, None, "{own}");
+            assert_eq!(a.actions, vec![], "{own}");
         }
         // Another host that only looks like it is a link.
         let other = one("https://tauri.localhost.example.com/");
         assert!(other.title_link.is_some());
-        assert!(other.actions[0].url.is_some());
+        assert_eq!(other.actions[0].url, "https://tauri.localhost.example.com/");
     }
 
     #[test]
@@ -1118,7 +1144,7 @@ mod tests {
                 ],
                 accessory: Some(ThreadAccessory::Button(ThreadButton {
                     text: "View Job".into(),
-                    url: Some("https://a.example/job".into())
+                    url: "https://a.example/job".into()
                 })),
             }]
         );
@@ -1358,47 +1384,102 @@ mod tests {
     }
 
     #[test]
-    fn a_button_opens_only_an_http_or_https_address() {
-        let one = |url: Value| match &blocks(json!([
-            {"type": "actions", "elements": [{"type": "button", "text": {"type": "plain_text", "text": "Go"}, "url": url}]}
-        ]))[..]
-        {
-            [ThreadBlock::Actions { buttons }] => buttons.clone(),
-            other => panic!("{other:?}"),
+    fn a_button_is_drawn_only_with_a_name_and_an_http_or_https_address() {
+        let one = |url: Value| {
+            blocks(json!([
+                {"type": "actions", "elements": [{"type": "button", "text": {"type": "plain_text", "text": "Go"}, "url": url}]}
+            ]))
         };
-        let go = |url: Option<&str>| {
-            vec![ThreadButton {
-                text: "Go".into(),
-                url: url.map(str::to_owned),
+        let go = |url: &str| {
+            vec![ThreadBlock::Actions {
+                buttons: vec![ThreadButton {
+                    text: "Go".into(),
+                    url: url.into(),
+                }],
             }]
         };
         assert_eq!(
             one(json!("https://a.example/x?y=1")),
-            go(Some("https://a.example/x?y=1"))
+            go("https://a.example/x?y=1")
         );
-        assert_eq!(
-            one(json!("http://a.example/x")),
-            go(Some("http://a.example/x"))
-        );
+        assert_eq!(one(json!("http://a.example/x")), go("http://a.example/x"));
+        // A button that cannot be a link is not drawn, and the block with it.
         for bad in [
-            "javascript:alert(1)",
-            "slack://channel?id=C1",
-            "mailto:a@a.example",
-            "file:///etc/passwd",
-            "ftp://a.example",
-            "//a.example",
-            "not a url",
-            "",
+            json!("javascript:alert(1)"),
+            json!("slack://channel?id=C1"),
+            json!("mailto:a@a.example"),
+            json!("file:///etc/passwd"),
+            json!("ftp://a.example"),
+            json!("//a.example"),
+            json!("not a url"),
+            json!(""),
+            Value::Null,
         ] {
-            assert_eq!(one(json!(bad)), go(None), "{bad}");
+            assert_eq!(one(bad.clone()), vec![], "{bad}");
         }
-        assert_eq!(one(Value::Null), go(None));
-        // A button with no name is dropped.
-        let nameless = json!([{"type": "actions", "elements": [{"type": "button", "url": "https://a.example"}, {"type": "button", "text": {"type": "plain_text", "text": "Go"}}]}]);
-        assert_eq!(
-            blocks(nameless),
-            vec![ThreadBlock::Actions { buttons: go(None) }]
-        );
+        // A button with no name is dropped; the one beside it with an address stays.
+        let nameless = json!([{"type": "actions", "elements": [{"type": "button", "url": "https://a.example"}, {"type": "button", "text": {"type": "plain_text", "text": "Go"}, "url": "https://a.example/go"}]}]);
+        assert_eq!(blocks(nameless), go("https://a.example/go"));
+    }
+
+    #[test]
+    fn a_message_needs_slack_when_a_part_that_works_only_there_is_not_drawn() {
+        let needs = |m: Value| needs_slack(&m, &|_| None);
+        let go = json!({"type": "button", "text": {"type": "plain_text", "text": "Go"}, "url": "https://a.example/go"});
+        let rerun = json!({"type": "button", "text": {"type": "plain_text", "text": "Rerun"}});
+        // Buttons with an address and images are drawn: nothing to do in Slack.
+        assert!(!needs(
+            json!({"blocks": [{"type": "actions", "elements": [go]}]})
+        ));
+        assert!(!needs(json!({"blocks": [
+            {"type": "section", "text": {"type": "mrkdwn", "text": "x"}, "accessory": go},
+            {"type": "section", "text": {"type": "mrkdwn", "text": "x"}, "accessory": {"type": "image", "image_url": "https://a.example/t.png", "alt_text": "t"}},
+            {"type": "section", "text": {"type": "mrkdwn", "text": "x"}},
+            {"type": "divider"}
+        ]})));
+        assert!(!needs(
+            json!({"attachments": [{"text": "t", "actions": [go]}]})
+        ));
+        assert!(!needs(json!({})));
+        // A button with no address, a menu of any kind, in the actions or as the accessory.
+        assert!(needs(
+            json!({"blocks": [{"type": "actions", "elements": [go, rerun]}]})
+        ));
+        for menu in [
+            "static_select",
+            "external_select",
+            "users_select",
+            "conversations_select",
+            "channels_select",
+            "overflow",
+            "datepicker",
+            "checkboxes",
+        ] {
+            assert!(
+                needs(json!({"blocks": [{"type": "actions", "elements": [{"type": menu}]}]})),
+                "{menu}"
+            );
+            assert!(
+                needs(
+                    json!({"blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "x"}, "accessory": {"type": menu}}]})
+                ),
+                "{menu}"
+            );
+        }
+        assert!(needs(
+            json!({"blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "x"}, "accessory": rerun}]})
+        ));
+        // The same in an attachment: its own actions, and its blocks.
+        assert!(needs(
+            json!({"attachments": [{"text": "t", "actions": [rerun]}]})
+        ));
+        assert!(needs(
+            json!({"attachments": [{"blocks": [{"type": "actions", "elements": [{"type": "static_select"}]}]}]})
+        ));
+        // A button of the app's own origin is not drawn either.
+        assert!(needs(
+            json!({"blocks": [{"type": "actions", "elements": [{"type": "button", "text": {"type": "plain_text", "text": "Go"}, "url": "https://tauri.localhost/x"}]}]})
+        ));
     }
 
     #[test]
@@ -1608,16 +1689,11 @@ mod tests {
                     },
                 ],
                 footer: Some("via CI".into()),
-                actions: vec![
-                    ThreadButton {
-                        text: "Open".into(),
-                        url: Some("https://a.example/open".into())
-                    },
-                    ThreadButton {
-                        text: "Rerun".into(),
-                        url: None
-                    },
-                ],
+                // "Rerun" has no address and is not drawn.
+                actions: vec![ThreadButton {
+                    text: "Open".into(),
+                    url: "https://a.example/open".into()
+                }],
                 blocks: vec![],
                 image: None,
                 thumb: None,
@@ -1696,7 +1772,7 @@ mod tests {
             json!({"footer": "t"}),
             json!({"fields": [{"title": "a", "value": "b"}]}),
             json!({"blocks": [{"type": "divider"}]}),
-            json!({"actions": [{"type": "button", "text": "B"}]}),
+            json!({"actions": [{"type": "button", "text": "B", "url": "https://a.example/b"}]}),
             json!({"image_url": "https://a.example/i.png"}),
             json!({"thumb_url": "https://a.example/t.png"}),
         ] {
@@ -1921,12 +1997,15 @@ mod tests {
             "blocks": [{"type": "actions", "block_id": "<@U6>", "elements": [{"type": "button", "text": {"type": "plain_text", "text": "Go"}, "url": "https://a.example/<@U7>"}]}],
             "attachments": [
                 {"text": "x", "fallback": "<@U8>", "callback_id": "<@U9>"},
-                {"fallback": "<@U10>"}
+                {"fallback": "<@U10>"},
+                // Actions that are not drawn (no address) leave the fallback as what is drawn; a button with an address is drawn beside it.
+                {"fallback": "<@U11>", "actions": [{"type": "button", "text": "Rerun"}]},
+                {"fallback": "<@U12>", "actions": [{"type": "button", "text": "Go", "url": "https://a.example/go"}]}
             ]
         });
         let mut found = mentioned_users(&m);
         found.sort();
-        assert_eq!(found, vec!["U10"]);
+        assert_eq!(found, vec!["U10", "U11"]);
         assert_eq!(mentioned_users(&json!({"text": "x"})), Vec::<String>::new());
     }
 
@@ -2015,11 +2094,12 @@ mod tests {
             {"type": "divider"},
             {"type": "context", "elements": [{"type": "mrkdwn", "text": "ctx"}, {"type": "image", "image_url": "https://a.example/i.png", "alt_text": "icon"}]},
             {"type": "image", "image_url": "https://a.example/p.png", "alt_text": "chart", "title": {"type": "plain_text", "text": "Sales"}},
-            {"type": "actions", "elements": [{"type": "button", "text": {"type": "plain_text", "text": "Ok"}}]},
+            {"type": "actions", "elements": [{"type": "button", "text": {"type": "plain_text", "text": "Ok"}, "url": "https://a.example/ok"}, {"type": "button", "text": {"type": "plain_text", "text": "Rerun"}}]},
         ]});
+        // A button with no address is not drawn, so it is not here either.
         assert_eq!(
             plain_of(m, "alt"),
-            "H\nbold body\nf1\nf2\nOpen (https://a.example/x)\nctx\nicon\nchart\nSales\nOk"
+            "H\nbold body\nf1\nf2\nOpen (https://a.example/x)\nctx\nicon\nchart\nSales\nOk (https://a.example/ok)"
         );
     }
 

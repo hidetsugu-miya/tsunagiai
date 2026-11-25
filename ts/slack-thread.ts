@@ -13,7 +13,7 @@ import { formatDetailDate, hostOf } from "./format.js";
 import { FILE_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { closeMenu } from "./menu.js";
-import { attachmentNode, blocksNode } from "./slack-blocks.js";
+import { attachmentNode, blocksNode, slackLinkNode } from "./slack-blocks.js";
 import { createRichEditor } from "./rich-editor.js";
 import { richNodes } from "./slack-rich.js";
 import { revealSlackList, seeThread } from "./slack-list.js";
@@ -230,6 +230,7 @@ function messageNode(m: ThreadMessage) {
   // Rust says whether the text is drawn too: with no blocks, and beside a block that could not be drawn (the text is otherwise Slack's alternative text).
   if (m.showText) body.append(...richNodes(m.rich));
   body.append(...m.attachments.map((a) => attachmentNode(a, images)));
+  if (m.slackLink) body.append(slackLinkNode(m.slackLink));
   if (m.imageUrls.length && !images.shown) body.append(imagesBar(m));
   if (m.files.length) {
     const files = tag("div", "st-files");

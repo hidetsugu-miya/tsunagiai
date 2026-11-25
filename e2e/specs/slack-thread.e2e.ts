@@ -444,7 +444,7 @@ describe("slack thread: blocks and attachments", () => {
     { type: "section", text: plain("Project: api"), fields: [plain("When\nnow"), plain("Branch\nmain")], accessory: { type: "button", text: "View Job", url: "https://app.example.com/jobs/1" } },
     { type: "context", elements: [{ type: "text", text: plain("built by the bot") }] },
     { type: "divider" },
-    { type: "actions", buttons: [{ text: "Rerun", url: null }, { text: "Docs", url: "https://docs.example.com/" }] },
+    { type: "actions", buttons: [{ text: "Docs", url: "https://docs.example.com/" }] },
   ];
   // A thread of one message from a bot: `text` is only the alternative text.
   // (Rust sends showText false for a message whose blocks are drawn in place of the text.)
@@ -524,12 +524,27 @@ describe("slack thread: blocks and attachments", () => {
     expect(await textsOf("#st-msgs .st-att")).toEqual(["No link", "Only a fallback"]);
   });
 
-  it("gives a button with an address as a link, and one without as its name that cannot be pressed", async () => {
+  it("gives a button with an address as a link, and draws no button that cannot be pressed", async () => {
     await openDetail({}, bot({ blocks }));
     const links = await browser.execute(() => [...document.querySelectorAll<HTMLAnchorElement>("#st-msgs a.text-btn")].map((a) => [a.textContent, a.getAttribute("href")]));
     expect(links).toEqual([["View Job", "https://app.example.com/jobs/1"], ["Docs", "https://docs.example.com/"]]);
-    await expect($("#st-msgs button.text-btn")).toHaveText("Rerun");
-    await expect($("#st-msgs button.text-btn")).toBeDisabled();
+    expect(await count("#st-msgs button.text-btn")).toBe(0);
+  });
+
+  it("links a message with a part that works only in Slack to the message there, under its blocks and attachments (S-11)", async () => {
+    await openDetail({}, bot({ blocks, attachments: [attachment({ title: "Job", text: plain("done") })], slackLink: permalinkOf(root) }));
+    const link = await browser.execute(() => {
+      const a = [...document.querySelectorAll<HTMLAnchorElement>("#st-msgs .st-msg > div > .st-acts > a.text-btn")].find((x) => x.textContent === "Slack で操作する")!;
+      const att = document.querySelector("#st-msgs .st-att")!;
+      return { text: a.textContent, href: a.getAttribute("href"), title: a.title === a.href, icon: a.querySelectorAll("svg").length, below: !!(att.compareDocumentPosition(a) & Node.DOCUMENT_POSITION_FOLLOWING) };
+    });
+    expect(link).toEqual({ text: "Slack で操作する", href: permalinkOf(root), title: true, icon: 1, below: true });
+    expect(await count(`#st-msgs a.text-btn[href='${permalinkOf(root)}']`)).toBe(1);
+  });
+
+  it("draws no link to Slack for a message without such a part", async () => {
+    await openDetail({}, bot({ blocks }));
+    expect(await textsOf("#st-msgs a.text-btn")).toEqual(["View Job", "Docs"]);
   });
 
   it("draws every text as text: no markup, and only URLs are links", async () => {

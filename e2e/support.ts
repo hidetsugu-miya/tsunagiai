@@ -675,6 +675,7 @@ export const timelineMessage = (ts: string, name: string, channelName: string, t
   repliers: [],
   latestReply: null,
   permalink: permalinkOf(ts),
+  slackLink: null,
   hasFiles: false,
   unread: false,
   watch: null,
@@ -685,7 +686,7 @@ export const timelineMessage = (ts: string, name: string, channelName: string, t
 });
 
 // An unread reply under a row of the Slack list (S-14); its `rich` is its text with no style unless `extra` sets it.
-export const timelineReply = (ts: string, name: string, text: string, extra: Partial<TimelineReply> = {}): TimelineReply => ({ ts, name, iconUrl: null, text, rich: plain(text), blocks: [], showText: true, attachments: [], hasFiles: false, ...extra });
+export const timelineReply = (ts: string, name: string, text: string, extra: Partial<TimelineReply> = {}): TimelineReply => ({ ts, name, iconUrl: null, text, rich: plain(text), blocks: [], showText: true, attachments: [], slackLink: null, hasFiles: false, ...extra });
 
 // What a row's thread has unread (`TimelineMessage.unreadReplies`): the replies given, counted (`share` too, what Rust adds to the badge), the last one the newest, unless `extra` says another.
 export const unreadRepliesOf = (replies: TimelineReply[], extra: Partial<UnreadReplies> = {}): UnreadReplies => ({ count: replies.length, uncounted: false, share: replies.length, latestTs: replies[replies.length - 1]?.ts ?? "", replies, ...extra });
@@ -748,7 +749,7 @@ export const quote = (...spans: Span[]): RichBlock => ({ type: "quote", spans })
 export const plain = (text: string): RichBlock[] => [para(span(text))];
 
 // A message of a thread (`slack_thread`); its `rich` is its text with no style unless `extra` sets it.
-export const threadMessage = (ts: string, name: string, text: string, extra: Partial<ThreadMessage> = {}): ThreadMessage => ({ ts, user: "U1", name, iconUrl: null, text, rich: plain(text), files: [], blocks: [], showText: true, attachments: [], imageUrls: [], reactions: [], ...extra });
+export const threadMessage = (ts: string, name: string, text: string, extra: Partial<ThreadMessage> = {}): ThreadMessage => ({ ts, user: "U1", name, iconUrl: null, text, rich: plain(text), files: [], blocks: [], showText: true, attachments: [], slackLink: null, imageUrls: [], reactions: [], ...extra });
 
 // A reaction under a message (S-22): Slack's `name`, the `emoji` drawn for it, how many gave it, for a custom emoji the address of its `image` (S-26), and whether the user gave it themselves, `mine` (S-25).
 export const reaction = (name: string, emoji: string, count: number, image: string | null = null, mine = false): Reaction => ({ name, emoji, count, image, mine });

@@ -21,7 +21,11 @@ blocks: Array<ThreadBlock>,
 /**
  * Whether the text (`rich`) is drawn too: when there are no blocks to draw, and when a block of the message could not be drawn.
  */
-showText: boolean, attachments: Array<ThreadAttachment>, reactions: Array<Reaction>, 
+showText: boolean, attachments: Array<ThreadAttachment>, 
+/**
+ * The message's address in Slack, set only when the message has a part that works only in Slack and is not drawn (`needs_slack`, S-11).
+ */
+slackLink: string | null, reactions: Array<Reaction>, 
 /**
  * The https addresses of the images of `blocks` and `attachments`, once each; the screen asks for them only when the user presses "画像を表示".
  */

@@ -1,4 +1,4 @@
-import { attachment, boot, callsOf, claudeReady, count, emitEvent, emojiCatalog, holds, inbox, mock, onceId, ownIcon, para, plain, pngUri, quote, reaction, rejects, release, sideChannel, sideWorkspace, slackLoad, slackThread, slackTs, socketStatus, span, textsOf, threadMessage, timeline, timelineMessage, timelineReply, unreadChannelsOf, unreadRepliesOf, waitForCalls, waitForCount, waitForText, watchedMessage, workspace, TOOLS, CARD } from "../support";
+import { attachment, boot, callsOf, claudeReady, count, emitEvent, emojiCatalog, holds, inbox, mock, onceId, ownIcon, para, permalinkOf, plain, pngUri, quote, reaction, rejects, release, sideChannel, sideWorkspace, slackLoad, slackThread, slackTs, socketStatus, span, textsOf, threadMessage, timeline, timelineMessage, timelineReply, unreadChannelsOf, unreadRepliesOf, waitForCalls, waitForCount, waitForText, watchedMessage, workspace, TOOLS, CARD } from "../support";
 
 const iconUrl = "https://avatars.slack-edge.com/T1-U1/a_72.png";
 
@@ -123,9 +123,10 @@ const botPost = (extra: Parameters<typeof timelineMessage>[4] = {}) =>
     showText: false,
     blocks: [
       { type: "section", text: [para(span("Success!", "b"))], fields: [[para(span("Project:", "b"), span(" example/api"))], [para(span("Job:", "b"), span(" deploy"))]], accessory: null },
-      { type: "actions", buttons: [{ text: "View Job", url: "https://example.com/job" }, { text: "Rerun", url: null }] },
+      { type: "actions", buttons: [{ text: "View Job", url: "https://example.com/job" }] },
     ],
     attachments: [attachment({ color: "#2eb67d", text: plain("Deployed"), image: { url: "https://example.com/a.png", alt: "a chart" } })],
+    slackLink: permalinkOf(botTs),
     ...extra,
   });
 
@@ -1076,7 +1077,8 @@ describe("slack list", () => {
         columns: getComputedStyle(fields).gridTemplateColumns.split(" ").length,
         fields: r.querySelectorAll(".st-field").length,
         link: r.querySelector<HTMLAnchorElement>("a.text-btn")!.href,
-        off: r.querySelector<HTMLButtonElement>(".st-acts button")!.disabled,
+        buttons: r.querySelectorAll(".st-acts button").length,
+        slack: [...r.querySelectorAll<HTMLAnchorElement>(".st-acts a.text-btn")].map((a) => [a.textContent, a.href]),
         attachment: r.querySelector(".st-att")!.textContent,
         text: r.querySelector(".feed-text")!.textContent,
       };
@@ -1085,7 +1087,8 @@ describe("slack list", () => {
     expect(drawn.columns).toBe(2);
     expect(drawn.fields).toBe(2);
     expect(drawn.link).toBe("https://example.com/job");
-    expect(drawn.off).toBe(true);
+    expect(drawn.buttons).toBe(0);
+    expect(drawn.slack).toEqual([["View Job", "https://example.com/job"], ["Slack で操作する", permalinkOf(botTs)]]);
     expect(drawn.attachment).toContain("Deployed");
     expect(drawn.text).not.toContain("*");
   });
@@ -1159,9 +1162,9 @@ describe("slack list", () => {
     await expect($("#slack-thread")).not.toBeDisplayed();
     expect(await callsOf(mark)).toEqual([]);
     expect(await count("#slack-feed .feed-row")).toBe(1);
-    // A button with no address cannot be pressed: the press goes through to the row.
-    expect(await hitAt("#slack-feed .st-acts button")).toBe("BUTTON.feed-open");
-    await pressAt("#slack-feed .st-acts button");
+    // The press on what is drawn but no link goes through to the row.
+    expect(await hitAt("#slack-feed .st-sec-main")).toBe("BUTTON.feed-open");
+    await pressAt("#slack-feed .st-sec-main");
     await expect($("#slack-thread")).toBeDisplayed();
     expect(await waitForCalls(mark)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD", ts: botTs }]);
   });
