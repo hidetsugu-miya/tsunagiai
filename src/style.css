@@ -2510,6 +2510,10 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 .database-tabs { flex: none; display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid var(--line); }
 .database-tab { height: 32px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; font: inherit; color: var(--muted); cursor: pointer; }
 .database-tab[aria-selected="true"] { border-bottom-color: var(--accent); color: inherit; font-weight: 600; }
+/* D-6: the tabs of the results of a run with more than one statement; the tab of the statement that failed is in the danger color. */
+.database-result-tabs { overflow-x: auto; }
+.database-result-tabs .database-tab { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.database-result-tabs .database-tab[data-failed="true"] { color: var(--danger); }
 .database-records { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .database-records-scroll { flex: 1; min-height: 0; overflow: auto; }
 .database-pager { flex: none; display: flex; align-items: center; gap: 8px; padding-top: 12px; }
