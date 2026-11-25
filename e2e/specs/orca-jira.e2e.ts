@@ -1163,6 +1163,16 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
 
   // J-2, "Closing": a draft of the description or of a comment asks before the tab is closed.
   const closeButton = '.orca-tab[data-jira="true"] .orca-tab-close';
+  // The page's own press: the driver's click focuses the button after the handler, which would take the focus back from the popup.
+  const pressClose = () =>
+    browser.execute(
+      (selector, once) => {
+        if (!window.__e2e_once__(once)) return;
+        document.querySelector(selector)!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      },
+      closeButton,
+      onceId(),
+    );
   const dialog = '.pop[role="alertdialog"]';
 
   it("closes at once with no draft: an editor that was not opened, an empty comment field and a cancelled description (J-2, Closing)", async () => {
@@ -1186,7 +1196,7 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await openEditable();
     await $(".orca-jira-comment-add").click();
     await typeInto(commentField, "Half written");
-    await $(closeButton).click();
+    await pressClose();
     await expect($(dialog)).toBeDisplayed();
     expect(await textsOf(`${dialog} button`)).toEqual(["破棄して閉じる", "キャンセル"]);
     expect(await browser.execute(() => document.activeElement?.textContent)).toBe("キャンセル");
