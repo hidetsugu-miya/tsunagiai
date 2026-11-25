@@ -1010,8 +1010,10 @@ mod tests {
             let dir = folder("none");
             let error = call(&dir, &read("todo-draft"), SECOND).await.unwrap_err();
             assert_eq!(error, NOT_RUNNING);
-            // A socket file that nobody listens on (the app was killed) is the same.
-            drop(bind(&socket_path(&dir)).unwrap());
+            // A socket file that nobody listens on (the app was killed) is the same. It is bound and never put to listen: a listening socket made here could be inherited by a child that another test forks (macOS sets close-on-exec after `socket()`), and the child would accept the call.
+            let socket = tokio::net::UnixSocket::new_stream().unwrap();
+            socket.bind(socket_path(&dir)).unwrap();
+            drop(socket);
             let error = call(&dir, &read("todo-draft"), SECOND).await.unwrap_err();
             assert_eq!(error, NOT_RUNNING);
             // A request that the list refuses never reaches the socket.
