@@ -2,7 +2,7 @@
 // Drawing only. The tabs of a table are `TABS`: the records tab (D-4), the structure tab (D-5) and the SQL tab (D-6), which only the Orca screen's tabs have (the database screen's SQL is in the query tabs, `queryNode`).
 // The body of a table (its tabs) and the SQL of a database are drawn into any box, with no screen state behind them: the database screen draws them in `#database-work` (`drawDatabaseWork`), and the work pane of the Orca screen draws one tab each into its own box (`drawTableTab`, A-43).
 import type { DatabaseRecords } from "./bindings/DatabaseRecords";
-import type { DatabaseSqlResult } from "./bindings/DatabaseSqlResult";
+import type { DatabaseSqlRun } from "./bindings/DatabaseSqlRun";
 import type { DatabaseStructure } from "./bindings/DatabaseStructure";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
 import { canEditCell, cellKey, changesOf, type EditState, isAdded, markable, originalText } from "./database-edit.js";
@@ -26,12 +26,18 @@ export interface StructureState {
   data: DatabaseStructure | null;
 }
 
-// The text of a SQL field as typed, and the result of the run asked for last (a query tab of the database screen, D-9, or a tab of the Orca screen, A-43). `data` is none before a run and after an error.
+// The text of a SQL field as typed, and the result of the run asked for last (a query tab of the database screen, D-9, or a tab of the Orca screen, A-43). `data` is none before a run and after an error. `tab` is the selected tab of the results of the run (D-6): the index of a result, or one past the last for the statement that failed.
 export interface SqlState {
   text: string;
   loading: boolean;
   error: string | null;
-  data: DatabaseSqlResult | null;
+  data: DatabaseSqlRun | null;
+  tab: number;
+}
+
+// The tab that a run opens on: the last one, which is the statement that failed when one did.
+export function lastResultTab(run: DatabaseSqlRun): number {
+  return Math.max(0, run.results.length + (run.error === null ? 0 : 1) - 1);
 }
 
 // A tab of the strip that is a table or a query: `key` names it to the actions, `label` is its text and `title` says what it holds.
@@ -100,6 +106,8 @@ export interface WorkActions {
   sqlText: (text: string) => void;
   // Runs the text of the SQL field.
   runSql: () => void;
+  // Selects the result tab `index` of the last run.
+  sqlTab: (index: number) => void;
   // Opens the table of a row of the table list, as a press on its row in the tree does.
   openTable: (table: string) => void;
   edit: EditActions;
@@ -124,7 +132,7 @@ export interface EditActions {
 }
 
 // What the body of a table or of a SQL tab asks of its screen; `edit` is the screen's that can write.
-export type TabActions = Pick<WorkActions, "page" | "pageInput" | "tab" | "sqlText" | "runSql"> & { edit?: EditActions };
+export type TabActions = Pick<WorkActions, "page" | "pageInput" | "tab" | "sqlText" | "runSql" | "sqlTab"> & { edit?: EditActions };
 
 // The tabs of a table, in order. The body of the selected one is drawn in `drawDatabaseWork`, where the body of a tab that is added goes.
 const TABS = [
@@ -172,14 +180,14 @@ function note(text: string, failed: boolean) {
   return line;
 }
 
-function tabsNode(tabs: { id: string; label: string }[], active: string, pick: (id: string) => void) {
+function tabsNode(tabs: { id: string; label: string }[], active: string, pick: (id: string) => void, keyPrefix = "tab") {
   const bar = tag("div", "database-tabs");
   bar.setAttribute("role", "tablist");
   for (const t of tabs) {
     const button = tag("button", "database-tab", t.label);
     button.type = "button";
     button.dataset.tab = t.id;
-    button.dataset.key = `tab-${t.id}`;
+    button.dataset.key = `${keyPrefix}-${t.id}`;
     button.onclick = () => pick(t.id);
     button.setAttribute("role", "tab");
     button.setAttribute("aria-selected", String(t.id === active));
@@ -388,25 +396,40 @@ function runBar(sql: SqlState, actions: TabActions) {
   return bar;
 }
 
-// The result of a run as a grid, and under it the copy, and the rows and the time as Rust worded them.
-function sqlResultNodes(sql: SqlState, sizes: string) {
+// The tabs of the results of a run, one for each statement that was run and, after them, the one that failed (D-6): its number and what Rust said of it. There are none for a run of one statement.
+function resultTabsNode(run: DatabaseSqlRun, active: number, pick: (index: number) => void) {
+  const tabs = run.results.map((r, i) => ({ id: String(i), label: `${i + 1}: ${r.label}` }));
+  if (run.error !== null) tabs.push({ id: String(run.results.length), label: `${run.results.length + 1}: エラー` });
+  const bar = tabsNode(tabs, String(active), (id) => pick(Number(id)), "result");
+  bar.classList.add("database-result-tabs");
+  if (run.error !== null) bar.lastElementChild?.setAttribute("data-failed", "true");
+  return tabs.length > 1 ? bar : null;
+}
+
+// The result of a run as a grid, and under it the copy, and the rows and the time as Rust worded them: those of the selected tab when the run had more than one statement. A failed statement shows its words in place of the grid.
+function sqlResultNodes(sql: SqlState, sizes: string, actions: TabActions) {
+  const { data } = sql;
+  const shown = data !== null && sql.tab < data.results.length ? data.results[sql.tab] : null;
+  const failed = data !== null && shown === null ? data.error : null;
+  const nodes: Node[] = [];
+  const bar = data === null ? null : resultTabsNode(data, sql.tab, actions.sqlTab);
+  if (bar) nodes.push(bar);
   const scroll = tag("div", "database-records-scroll");
   if (sql.error !== null) scroll.append(note(sql.error, true));
-  else if (sql.data !== null && sql.data.columns.length > 0) {
-    const { data } = sql;
-    scroll.append(gridOf(data, () => gridNode(data.columns, data.rows, sizes)));
-  }
+  else if (failed !== null) scroll.append(note(failed, true));
+  else if (shown !== null && shown.columns.length > 0) scroll.append(gridOf(shown, () => gridNode(shown.columns, shown.rows, sizes)));
   const footer = tag("div", "database-pager");
-  const summary = tag("span", "database-range", sql.loading ? "実行中…" : (sql.data?.summary ?? ""));
+  const summary = tag("span", "database-range", sql.loading ? "実行中…" : (shown?.summary ?? ""));
   summary.setAttribute("role", "status");
-  footer.append(copyButton(sql.data, sql.loading), summary);
-  return [scroll, footer];
+  footer.append(copyButton(shown, sql.loading), summary);
+  nodes.push(scroll, footer);
+  return nodes;
 }
 
 // The SQL of a database on the Orca screen (A-43): the text field and the run button above, the result as a grid under them, and under the grid the copy, and the rows and the time as Rust worded them.
 function sqlNode(sql: SqlState, actions: TabActions, sizes: string) {
   const box = tag("div", "database-records database-sql");
-  box.append(sqlField(sql, actions), runBar(sql, actions), ...sqlResultNodes(sql, sizes));
+  box.append(sqlField(sql, actions), runBar(sql, actions), ...sqlResultNodes(sql, sizes, actions));
   return box;
 }
 
@@ -486,7 +509,7 @@ function queryNode(query: QueryState, actions: WorkActions) {
   );
   const input = sqlField(query.sql, actions);
   if (query.height !== null) input.style.height = `${query.height}px`;
-  box.append(bar, input, runBar(query.sql, actions), splitNode(input, actions.queryHeight), ...sqlResultNodes(query.sql, ["query", query.key, "sql"].join("\0")));
+  box.append(bar, input, runBar(query.sql, actions), splitNode(input, actions.queryHeight), ...sqlResultNodes(query.sql, ["query", query.key, "sql"].join("\0"), actions));
   return box;
 }
 
@@ -550,7 +573,7 @@ export function drawDatabaseWork(state: WorkState | null, actions: WorkActions) 
   // The text field is made again with the pane: the caret stays where it was.
   const caret = active instanceof HTMLTextAreaElement ? ([active.selectionStart, active.selectionEnd] as const) : null;
   const scroller = box.querySelector<HTMLElement>(".database-records-scroll");
-  const grid = body.kind === "table" ? [body.connection, body.database, body.table, body.tab, body.records.page].join("\0") : body.kind === "query" ? `query\0${body.query.key}` : "";
+  const grid = body.kind === "table" ? [body.connection, body.database, body.table, body.tab, body.records.page].join("\0") : body.kind === "query" ? `query\0${body.query.key}\0${body.query.sql.tab}` : "";
   const scrolled = scroller !== null && grid === drawnGrid ? ([scroller.scrollTop, scroller.scrollLeft] as const) : null;
   drawnGrid = grid;
   const nodes: Node[] = [];

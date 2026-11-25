@@ -15,6 +15,7 @@ import type { DatabaseCell } from "../ts/bindings/DatabaseCell";
 import type { DatabaseColumn } from "../ts/bindings/DatabaseColumn";
 import type { DatabaseRecords } from "../ts/bindings/DatabaseRecords";
 import type { DatabaseSqlResult } from "../ts/bindings/DatabaseSqlResult";
+import type { DatabaseSqlRun } from "../ts/bindings/DatabaseSqlRun";
 import type { DatabaseStructure } from "../ts/bindings/DatabaseStructure";
 import type { DatabaseTable } from "../ts/bindings/DatabaseTable";
 import type { DecisionPage } from "../ts/bindings/DecisionPage";
@@ -639,8 +640,14 @@ export const databaseColumn = (name: string, columnType: string, extra: Partial<
 // The structure of a table as `database_structure` answers it; `tsv` is the text Rust made for the copy button (#668), which a spec that copies gives.
 export const databaseStructure = (columns: DatabaseColumn[], summary = `${columns.length} 列 / InnoDB / utf8mb4`, tsv = ""): DatabaseStructure => ({ columns, summary, tsv });
 
-// The result of a statement as `database_sql` answers it (D-6): the cells as D-4's, and the line under the table.
-export const databaseSqlResult = (columns: string[], rows: DatabaseCell[][], summary = `${rows.length} 行 / 3 ms`, tsv = ""): DatabaseSqlResult => ({ columns, rows, summary, tsv });
+// The result of one statement of a run (D-6): the cells as D-4's, the line under the table and the text of its tab.
+export const databaseSqlStatement = (columns: string[], rows: DatabaseCell[][], summary = `${rows.length} 行 / 3 ms`, tsv = "", label = `${rows.length} 行`): DatabaseSqlResult => ({ columns, rows, label, summary, tsv });
+
+// The answer of `database_sql` (D-6): the results of the statements that were run, and the words of the one that failed after them.
+export const databaseSqlRun = (results: DatabaseSqlResult[], error: string | null = null): DatabaseSqlRun => ({ results, error });
+
+// The answer of a run of one statement.
+export const databaseSqlResult = (columns: string[], rows: DatabaseCell[][], summary = `${rows.length} 行 / 3 ms`, tsv = "", label = `${rows.length} 行`): DatabaseSqlRun => databaseSqlRun([databaseSqlStatement(columns, rows, summary, tsv, label)]);
 
 export const slackTs = (minutes: number, n = 0) => `${slackNow - minutes * 60}.${String(100 + n).padStart(6, "0")}`;
 

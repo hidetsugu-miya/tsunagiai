@@ -684,15 +684,16 @@ function drawDrop() {
 // A-47: what the owner answered for a file whose name is taken in the folder: replace it, put it under another name, or leave it; `all` is that the rest of the drop that is taken is answered the same way.
 type Answer = "overwrite" | "copy" | "skip";
 
-// Asks about the file `name`, which the folder `dir` holds already, with `left` more such files after it (the checkbox for them is there when it is not 0). The question is a card over the tree; Escape leaves the file, and so does the end of the tree.
-function askTaken(dir: string, name: string, left: number): Promise<{ answer: Answer; all: boolean }> {
+// Asks about the file `name`, which the folder `dir` holds already, with `left` more such files after it (the checkbox for them is there when it is not 0). What is there is a folder when `folder` is true, and a folder is not replaced by a file, so the question has no 「上書き」. The question is a card over the tree; Escape leaves the file, and so does the end of the tree.
+function askTaken(dir: string, name: string, left: number, folder: boolean): Promise<{ answer: Answer; all: boolean }> {
   return new Promise((resolve) => {
     const where = folderName(dir);
+    const is = folder ? "フォルダーとして" : "";
     const pop = tag("div", "pop orca-drop-pop");
     pop.setAttribute("role", "alertdialog");
-    pop.setAttribute("aria-label", `${name} は ${where} にもうあります`);
+    pop.setAttribute("aria-label", `${name} は ${where} に${is}もうあります`);
     const text = tag("p");
-    text.append(tag("b", "", name), ` は ${where} にもうあります。`);
+    text.append(tag("b", "", name), ` は ${where} に${is}もうあります。`);
     pop.append(text);
     const check = tag("input");
     check.type = "checkbox";
@@ -714,7 +715,8 @@ function askTaken(dir: string, name: string, left: number): Promise<{ answer: An
       resolve({ answer, all: check.checked });
     };
     const actions = tag("div", "popup-actions");
-    const choices: [string, Answer, string][] = [["やめる", "skip", ""], ["別名で置く", "copy", ""], ["上書き", "overwrite", " danger"]];
+    const choices: [string, Answer, string][] = [["やめる", "skip", ""], ["別名で置く", "copy", ""]];
+    if (!folder) choices.push(["上書き", "overwrite", " danger"]);
     const buttons = choices.map(([label, answer, extra]) => {
       const button = tag("button", `text-btn${extra}`, label);
       button.type = "button";
@@ -777,21 +779,44 @@ async function putDropped(dir: string, read: Promise<Dropped>) {
     const files = dropped.files.filter((f) => f.file.size <= DROP_FILE).map((f) => ({ file: f.file, dir: joinDir(dir, f.dir), top: f.dir.split("/")[0] }));
     if (files.length === 0 && dropped.folders.length === 0) return;
     // Which names are taken: the names the drop puts in `dir` itself (a folder's name too, so that one that is there is known), then the files of each folder of the drop, only where the folder of the drop is there already (a folder that is new holds nothing).
-    const taken = new Set<string>();
+    // The taken names are keyed by folder and name, and hold whether what is there is a folder (read from the folder's listing; null when the listing does not show it, as when Orca's page was full). A folder's listing is read once, for all the questions of that folder.
+    const taken = new Map<string, boolean | null>();
+    const listed = new Map<string, Map<string, boolean>>();
     const ask = async (where: string, names: string[]) => {
       for (let at = 0; at < names.length; at += DROP_FILES) {
         const found = await invoke("orca_drop_taken", { path: here.path, dir: where, names: names.slice(at, at + DROP_FILES), environment: here.target });
-        for (const name of found) taken.add(`${where}\n${name}`);
+        if (found.length === 0) continue;
+        let kinds = listed.get(where);
+        if (kinds === undefined) {
+          kinds = new Map((await listDir(here, where, false)).entries.map((e) => [e.name, e.isDirectory]));
+          listed.set(where, kinds);
+        }
+        for (const name of found) taken.set(`${where}\n${name}`, kinds.get(name) ?? null);
       }
     };
     const own = [...files.filter((f) => f.dir === dir).map((f) => f.file.name), ...dropped.folders.filter((f) => !f.includes("/"))];
     if (own.length > 0) await ask(dir, own);
     if (mine !== generation) return;
-    const there = new Set(own.filter((name) => taken.has(`${dir}\n${name}`)));
-    for (const where of new Set(files.filter((f) => f.dir !== dir && there.has(f.top)).map((f) => f.dir))) {
-      await ask(where, files.filter((f) => f.dir === where).map((f) => f.file.name));
+    // A name that is a file there holds nothing, so nothing is asked under it (the questions would be answered by an error of Orca, not by a name).
+    const there = new Set(own.filter((name) => taken.has(`${dir}\n${name}`) && taken.get(`${dir}\n${name}`) !== false));
+    // In each folder of the drop under a folder that is there: its files, and the folders of the drop directly under it.
+    const inside = new Map<string, string[]>();
+    const put = (where: string, name: string) => inside.set(where, [...(inside.get(where) ?? []), name]);
+    for (const f of files) if (f.dir !== dir && there.has(f.top)) put(f.dir, f.file.name);
+    for (const f of dropped.folders) if (f.includes("/") && there.has(f.split("/")[0])) put(joinDir(dir, f.slice(0, f.lastIndexOf("/"))), f.slice(f.lastIndexOf("/") + 1));
+    // The folders nearer the folder under the pointer are asked first, so that a folder that is a file there is known before the folders under it are asked about.
+    const underFile = (where: string) => {
+      const parts = where.slice(dir === "" ? 0 : dir.length + 1).split("/");
+      return parts.some((name, i) => taken.get(`${joinDir(dir, parts.slice(0, i).join("/"))}\n${name}`) === false);
+    };
+    for (const [where, names] of [...inside].sort((a, b) => a[0].split("/").length - b[0].split("/").length)) {
+      if (underFile(where)) continue;
+      await ask(where, names);
       if (mine !== generation) return;
     }
+    // A folder of the drop whose name is a file there is not put, and nothing is, so the drop stops before a question is asked.
+    const clash = dropped.folders.filter((f) => taken.get(`${joinDir(dir, f.slice(0, Math.max(f.lastIndexOf("/"), 0)))}\n${f.slice(f.lastIndexOf("/") + 1)}`) === false);
+    if (clash.length > 0) return showFailure("orca-files", refused(clash, "と同じ名前のファイルが置き先にあるので、何も置きません"));
     const plan: { file: File; dir: string; onTaken: "overwrite" | "copy" }[] = [];
     let same: Answer | null = null;
     let left = files.filter((f) => taken.has(`${f.dir}\n${f.file.name}`)).length;
@@ -801,9 +826,11 @@ async function putDropped(dir: string, read: Promise<Dropped>) {
         continue;
       }
       left--;
-      let answer: Answer | null = same;
+      // A folder is never replaced by a file, so "replace" answered for the rest does not reach a file whose name is a folder there.
+      const folder = taken.get(`${where}\n${file.name}`) === true;
+      let answer: Answer | null = same === "overwrite" && folder ? null : same;
       if (answer === null) {
-        const reply = await askTaken(where, file.name, left);
+        const reply = await askTaken(where, file.name, left, folder);
         if (mine !== generation) return;
         answer = reply.answer;
         if (reply.all) same = answer;

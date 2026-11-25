@@ -118,6 +118,8 @@ pub enum PaneOp {
         after: String,
         share: f64,
     },
+    /// The tab, which no pane has yet, is put in the pane at the right end (see `rightmost_pane`) with no change of the focus: a layout of one pane is split and the tab is the new pane on its right, and a layout of two or more has it at the end of the tabs of that pane, shown there. A tab that a pane has already changes nothing.
+    PlaceRight { tab: String },
 }
 
 // ---- the tree ----
@@ -179,6 +181,22 @@ fn pane_of(node: &PaneNode, tab: &str) -> Option<String> {
         .into_iter()
         .find(|(_, tabs)| tabs.iter().any(|t| t == tab))
         .map(|(id, _)| id.to_owned())
+}
+
+/// The pane at the right end: the last node of a row and the first (top) node of a column, down to a pane.
+fn rightmost_pane(node: &PaneNode) -> Option<String> {
+    match node {
+        PaneNode::Pane { id, .. } => Some(id.clone()),
+        PaneNode::Split {
+            direction,
+            children,
+            ..
+        } => match direction {
+            Direction::Row => children.last(),
+            Direction::Column => children.first(),
+        }
+        .and_then(rightmost_pane),
+    }
 }
 
 /// A pane id that no pane has.
@@ -556,6 +574,25 @@ pub fn apply(mut layout: PaneLayout, op: &PaneOp) -> PaneLayout {
             after,
             share,
         } => resize(root, before, after, *share),
+        PaneOp::PlaceRight { tab } => {
+            if let (None, Some(target)) = (pane_of(root, tab), rightmost_pane(root)) {
+                if panes(root).len() == 1 {
+                    let new = PaneNode::Pane {
+                        id: fresh_id(root),
+                        tabs: vec![tab.clone()],
+                        selected: tab.clone(),
+                    };
+                    insert_beside(root, &target, new, Direction::Row, true);
+                } else {
+                    each_pane_mut(root, &mut |id, tabs, selected| {
+                        if *id == target {
+                            tabs.push(tab.clone());
+                            *selected = tab.clone();
+                        }
+                    });
+                }
+            }
+        }
     }
     layout.root = layout.root.take().and_then(normalize);
     layout
@@ -697,7 +734,7 @@ fn check(
         })?;
     match op {
         Some(PaneOp::Focus { pane }) => check_text("ペイン", pane),
-        Some(PaneOp::Select { tab }) => check_text("タブ", tab),
+        Some(PaneOp::Select { tab } | PaneOp::PlaceRight { tab }) => check_text("タブ", tab),
         Some(PaneOp::Move { tab, pane, .. }) => {
             check_text("タブ", tab)?;
             check_text("ペイン", pane)
@@ -1490,6 +1527,8 @@ mod tests {
         )
         .is_err());
         assert!(check(None, "proj", &ok, &[], &no, Some(&mv("a", "", Edge::Left))).is_err());
+        assert!(check(None, "proj", &ok, &[], &no, Some(&place_right("a"))).is_ok());
+        assert!(check(None, "proj", &ok, &[], &no, Some(&place_right(""))).is_err());
         assert!(check(None, "proj", &ok, &[], &no, Some(&resize("p1", "p2", 0.0))).is_ok());
         assert!(check(None, "proj", &ok, &[], &no, Some(&resize("p1", "p2", 1.0))).is_ok());
         assert!(check(None, "proj", &ok, &[], &no, Some(&resize("", "p2", 0.5))).is_err());
@@ -1699,6 +1738,154 @@ mod tests {
             serde_json::from_str(r#"{"kind":"resize","before":"p1","after":"p2","share":0.25}"#)
                 .unwrap();
         assert_eq!(op, resize("p1", "p2", 0.25));
+        let op: PaneOp = serde_json::from_str(r#"{"kind":"placeRight","tab":"a"}"#).unwrap();
+        assert_eq!(op, place_right("a"));
+    }
+
+    fn place_right(tab: &str) -> PaneOp {
+        PaneOp::PlaceRight { tab: tab.into() }
+    }
+
+    #[test]
+    fn the_pane_at_the_right_end_is_the_last_of_a_row_and_the_top_of_a_column() {
+        assert_eq!(
+            rightmost_pane(&pane("p1", &["a"], "a")),
+            Some("p1".to_owned())
+        );
+        assert_eq!(
+            rightmost_pane(&three().root.unwrap()),
+            Some("p3".to_owned())
+        );
+        // The right end is split above and below: the top one.
+        let right_split = split(
+            Direction::Row,
+            vec![
+                pane("p1", &["a"], "a"),
+                split(
+                    Direction::Column,
+                    vec![pane("p2", &["b"], "b"), pane("p3", &["c"], "c")],
+                ),
+            ],
+        );
+        assert_eq!(rightmost_pane(&right_split), Some("p2".to_owned()));
+        // A column of a row and a pane: the top is the row, and its last pane.
+        let column = split(
+            Direction::Column,
+            vec![
+                split(
+                    Direction::Row,
+                    vec![pane("p1", &["a"], "a"), pane("p2", &["b"], "b")],
+                ),
+                pane("p3", &["c"], "c"),
+            ],
+        );
+        assert_eq!(rightmost_pane(&column), Some("p2".to_owned()));
+        // Splits in splits: a row, a column in it, and a row at the top of that.
+        let nested = split(
+            Direction::Row,
+            vec![
+                pane("p1", &["a"], "a"),
+                split(
+                    Direction::Column,
+                    vec![
+                        split(
+                            Direction::Row,
+                            vec![pane("p2", &["b"], "b"), pane("p3", &["c"], "c")],
+                        ),
+                        pane("p4", &["d"], "d"),
+                    ],
+                ),
+            ],
+        );
+        assert_eq!(rightmost_pane(&nested), Some("p3".to_owned()));
+    }
+
+    #[test]
+    fn placing_a_tab_right_in_one_pane_splits_it_and_keeps_the_focus() {
+        let saved = layout(pane("p1", &["a", "b"], "b"), "p1");
+        let got = apply(saved, &place_right("new"));
+        assert_eq!(
+            got,
+            layout(
+                split(
+                    Direction::Row,
+                    vec![pane("p1", &["a", "b"], "b"), pane("p2", &["new"], "new")]
+                ),
+                "p1"
+            )
+        );
+    }
+
+    #[test]
+    fn placing_a_tab_right_in_two_or_more_panes_piles_it_on_the_right_end_and_keeps_the_focus() {
+        let got = apply(three(), &place_right("new"));
+        let mut want = three();
+        want.root = Some(sized(
+            Direction::Row,
+            vec![
+                pane("p1", &["a"], "a"),
+                pane("p2", &["b"], "b"),
+                pane("p3", &["c", "new"], "new"),
+            ],
+            &[0.25, 0.25, 0.5],
+        ));
+        assert_eq!(got, want);
+        // The focus is on the pane that gets the tab, and stays there.
+        let mut saved = three();
+        saved.focus = Some("p3".into());
+        assert_eq!(
+            apply(saved, &place_right("new")).focus,
+            Some("p3".to_owned())
+        );
+    }
+
+    #[test]
+    fn placing_a_tab_right_with_the_right_end_split_puts_it_in_the_top_pane() {
+        let saved = layout(
+            split(
+                Direction::Row,
+                vec![
+                    pane("p1", &["a"], "a"),
+                    split(
+                        Direction::Column,
+                        vec![pane("p2", &["b"], "b"), pane("p3", &["c"], "c")],
+                    ),
+                ],
+            ),
+            "p1",
+        );
+        let got = apply(saved, &place_right("new"));
+        assert_eq!(
+            got,
+            layout(
+                split(
+                    Direction::Row,
+                    vec![
+                        pane("p1", &["a"], "a"),
+                        split(
+                            Direction::Column,
+                            vec![pane("p2", &["b", "new"], "new"), pane("p3", &["c"], "c")]
+                        ),
+                    ]
+                ),
+                "p1"
+            )
+        );
+    }
+
+    #[test]
+    fn placing_a_tab_right_that_a_pane_has_changes_nothing() {
+        let one = layout(pane("p1", &["a", "b"], "a"), "p1");
+        for tab in ["a", "b"] {
+            assert_eq!(apply(one.clone(), &place_right(tab)), one);
+        }
+        for tab in ["a", "b", "c"] {
+            assert_eq!(apply(three(), &place_right(tab)), three());
+        }
+        assert_eq!(
+            apply(PaneLayout::default(), &place_right("a")),
+            PaneLayout::default()
+        );
     }
 
     /// Three panes side by side, a quarter, a quarter and a half.

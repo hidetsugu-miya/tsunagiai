@@ -1,7 +1,7 @@
 //! The SQL tab (D-6, #635): the text the user typed, run as it is on the open session, and its rows turned into the cells of D-4.
 //!
 //! The session is not read only (D-2): a write (INSERT, UPDATE, DELETE and the like) is run as it is and is committed at once (autocommit, the server's own default). This module words the errors of the server (`server_message`) and keeps the run small.
-//! One statement is run at a time, as a prepared one, so its rows come in the binary protocol that `records::cells_of` reads. The text is not rewritten: only the whitespace and the semicolons at its end are cut (`statement`).
+//! The text is cut into its statements at the semicolons that are not in a quote or a comment (`statements`), and they are run one after another, each as a prepared one, so its rows come in the binary protocol that `records::cells_of` reads. A statement is not rewritten: only the whitespace around it is cut. The run stops at the first statement that fails.
 //! The database the tree has selected is chosen before the run by a `USE` of its own (the name quoted by `records::quote_identifier`), never put in the text of the user.
 //! Before the run, one round trip (`prepare_sql`) sets the limits (`max_execution_time` stops a SELECT at `SERVER_LIMIT` and `sql_select_limit` ends a SELECT with no LIMIT one row after the limit of the rows) and selects the database.
 //! After the run, whatever came of it (a failed `USE` too), `RESTORE` turns autocommit on again and puts the limits back,
@@ -19,6 +19,7 @@ use sqlx::{
     mysql::{MySqlConnection, MySqlDatabaseError, MySqlRow},
     AssertSqlSafe, Column, Either, Executor, Row,
 };
+use tokio::time::{error::Elapsed, timeout};
 #[cfg(test)]
 use ts_rs::TS;
 
@@ -32,37 +33,119 @@ use super::{
 pub const ROWS_MAX: usize = 1000;
 /// How long MySQL lets a SELECT run.
 pub const SERVER_LIMIT: Duration = Duration::from_secs(30);
-/// How long the app waits for the whole run (the preface, the statement, the restore) before it closes the connection: for what `SERVER_LIMIT` does not stop (a statement that is not a SELECT, a server that does not answer).
+/// How long the app waits for each step of the run (the preface, one statement, the restore) before it closes the connection: for what `SERVER_LIMIT` does not stop (a statement that is not a SELECT, a server that does not answer).
 pub const CLIENT_LIMIT: Duration = Duration::from_secs(35);
+/// The statements one run takes. A result keeps up to `ROWS_MAX` rows of cells, so this limits the memory of a run.
+pub const STATEMENTS_MAX: usize = 100;
 /// Turns autocommit on again and puts the limits back to the server's own, so that the reads of the tree and of the tabs after a run are as they were, and a `SET autocommit = 0` of the text of the user does not outlive its run (turning it on commits what the run left open).
 const RESTORE: &str =
     "SET SESSION autocommit = 1, max_execution_time = DEFAULT, sql_select_limit = DEFAULT";
 const EMPTY: &str = "SQL を入力してください";
+const TOO_MANY: &str = "文が多すぎます（100 文まで）";
 const TIMED_OUT: &str =
     "実行が時間内に終わらなかったため、MySQL との接続を閉じました。もう一度開いてください";
 const TIMED_OUT_WRITE: &str = "実行が時間内に終わらなかったため、MySQL との接続を閉じました。書き込みの文は、サーバーで確定している場合があります。もう一度開いてください";
 
-/// The result of a run: the columns and the rows as D-4's cells, and the line under the table. A statement that gives no row has no column.
+/// The result of one statement: the columns and the rows as D-4's cells, the line under the table and the text of its tab. A statement that gives no row has no column.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 pub struct DatabaseSqlResult {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<DatabaseCell>>,
+    /// What the tab of this result says after its number: the rows, or the rows the statement changed (`format_label`).
+    pub label: String,
     pub summary: String,
     /// The result as the copy button copies it (`records::cells_tsv`, #668).
     pub tsv: String,
 }
 
-/// The text to run: `sql` without the whitespace around it and the semicolons at its end (a prepared statement is one statement, and `;` is how one is ended by hand), or the reason there is nothing to run.
-pub fn statement(sql: &str) -> Result<&str, String> {
-    let text = sql
-        .trim_end_matches(|c: char| c == ';' || c.is_whitespace())
-        .trim_start();
-    if text.is_empty() {
+/// The answer of a run: the results of the statements that were run, in order, and, when the statement after them failed, what MySQL answered to it (the run stopped there, so the statements after it were not run). A statement that failed is not among the results, so the number of its tab is one past the last result.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct DatabaseSqlRun {
+    pub results: Vec<DatabaseSqlResult>,
+    pub error: Option<String>,
+}
+
+/// The statements of `sql`, in order, each without the whitespace around it: the text is cut at the semicolons that are not in a quote (`'`, `"` and the backtick, with a backslash and a doubled quote inside) or a comment (`-- `, `#` and `/* */`). A piece that holds nothing but whitespace and comments is no statement and is left out. `DELIMITER` is not known: a statement that has `;` inside (a stored program) is cut there, as MySQL cannot run it as a prepared one either (1295).
+/// The reason there is nothing to run, or too many statements.
+pub fn statements(sql: &str) -> Result<Vec<&str>, String> {
+    let bytes = sql.as_bytes();
+    let mut parts = Vec::new();
+    let (mut start, mut i, mut real) = (0, 0, false);
+    let mut cut = |from: usize, to: usize, real: bool| {
+        let part = sql[from..to].trim();
+        if real && !part.is_empty() {
+            parts.push(part);
+        }
+    };
+    while i < bytes.len() {
+        let b = bytes[i];
+        match b {
+            b';' => {
+                cut(start, i, real);
+                i += 1;
+                (start, real) = (i, false);
+            }
+            b'\'' | b'"' | b'`' => {
+                real = true;
+                i = skip_quoted(bytes, i);
+            }
+            b'#' => i = skip_line(bytes, i),
+            b'-' if bytes.get(i + 1) == Some(&b'-')
+                && bytes
+                    .get(i + 2)
+                    .is_none_or(|c| c.is_ascii_whitespace() || c.is_ascii_control()) =>
+            {
+                i = skip_line(bytes, i);
+            }
+            b'/' if bytes.get(i + 1) == Some(&b'*') => i = skip_block(bytes, i),
+            _ => {
+                real |= !b.is_ascii_whitespace();
+                i += 1;
+            }
+        }
+    }
+    cut(start, bytes.len(), real);
+    if parts.is_empty() {
         return Err(EMPTY.to_owned());
     }
-    Ok(text)
+    if parts.len() > STATEMENTS_MAX {
+        return Err(TOO_MANY.to_owned());
+    }
+    Ok(parts)
+}
+
+/// The index after the quote that closes the one at `open`, or the end of the text. A backslash escapes the next byte, except in a backtick name; a doubled quote is a closing and an opening one, and ends nothing.
+fn skip_quoted(bytes: &[u8], open: usize) -> usize {
+    let quote = bytes[open];
+    let mut i = open + 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' if quote != b'`' => i += 2,
+            b if b == quote => return i + 1,
+            _ => i += 1,
+        }
+    }
+    bytes.len()
+}
+
+/// The index of the end of the line that `from` is in, or of the text.
+fn skip_line(bytes: &[u8], from: usize) -> usize {
+    bytes[from..]
+        .iter()
+        .position(|&b| b == b'\n')
+        .map_or(bytes.len(), |n| from + n)
+}
+
+/// The index after the `*/` that closes the comment at `open`, or the end of the text.
+fn skip_block(bytes: &[u8], open: usize) -> usize {
+    bytes[open + 2..]
+        .windows(2)
+        .position(|w| w == b"*/")
+        .map_or(bytes.len(), |n| open + 2 + n + 2)
 }
 
 /// Selects the database of the tree. It is a statement of its own and never part of the text of the user.
@@ -105,6 +188,24 @@ pub fn format_summary(shown: usize, truncated: bool, changed: u64, elapsed: Dura
     }
 }
 
+/// What the tab of a result says after its number: the rows, or, for a statement that gave no row and changed some, the rows it changed (as `format_summary` tells them).
+pub fn format_label(shown: usize, changed: u64) -> String {
+    if shown == 0 && changed > 0 {
+        format!("{} 行を変更", format_rows(Some(changed)))
+    } else {
+        format!("{} 行", format_rows(Some(shown as u64)))
+    }
+}
+
+/// The words of a statement that failed, with its number in front when the text holds more than one statement (`2 文目: …`), so that the person knows which of them it was.
+pub fn numbered(number: usize, total: usize, message: &str) -> String {
+    if total > 1 {
+        format!("{number} 文目: {message}")
+    } else {
+        message.to_owned()
+    }
+}
+
 /// An error that MySQL answered to the text of the user, in words for the person who typed it: what it is, its number and the server's message.
 /// The refusal of a write (1792, in a transaction the text started READ ONLY, and 1290 of a server that is read only) is told with the same ending.
 pub fn server_message(number: u16, message: &str) -> String {
@@ -115,7 +216,7 @@ pub fn server_message(number: u16, message: &str) -> String {
             "MySQL サーバーが読み取り専用のため、データを書き換える文は実行できません".to_owned()
         }
         1044 | 1142 | 1143 | 1227 => "このユーザーには、この操作の権限がありません".to_owned(),
-        1064 => "SQL の文法が正しくありません。1 回に実行できる文は 1 つです".to_owned(),
+        1064 => "SQL の文法が正しくありません".to_owned(),
         1295 => "この種類の文は実行できません".to_owned(),
         1049 => "データベースが見つかりません".to_owned(),
         1146 => "テーブルが見つかりません".to_owned(),
@@ -199,36 +300,77 @@ async fn read(connection: &mut MySqlConnection, text: &str) -> Result<Read, sqlx
     Ok((columns.unwrap_or_default(), rows, truncated, changed))
 }
 
-/// Runs `text` (already checked by `statement`) in `database` on the session, under the limits of MySQL, and puts the limits back.
-/// `body_started` is set once the preface is over and the text is about to be sent, so that the caller that stops the run at `CLIENT_LIMIT` knows how to word it (`timed_out`).
+/// What one statement read, as the result that is shown: the line under the table and the tab are made from the rows and the time.
+fn result_of(read: Read, elapsed: Duration) -> DatabaseSqlResult {
+    let (columns, rows, truncated, changed) = read;
+    DatabaseSqlResult {
+        tsv: cells_tsv(&columns, &rows),
+        label: format_label(rows.len(), changed),
+        summary: format_summary(rows.len(), truncated, changed, elapsed),
+        columns,
+        rows,
+    }
+}
+
+/// Runs `statements` (already cut by `statements`) in `database` on the session, one after another, under the limits of MySQL, and puts the limits back.
+/// A statement that MySQL answers with an error ends the run: its words are in the answer, after the results of the statements before it. A failure of the session itself (or of the preface) is the `sqlx::Error` that the caller words.
+/// `body_started` is set once the preface is over and the text is about to be sent, so that the caller that stops the run (the `Elapsed` of a step that took `CLIENT_LIMIT`, for each step alone) knows how to word it (`timed_out`).
 pub async fn run(
     connection: &mut MySqlConnection,
     database: &str,
-    text: &str,
+    statements: &[&str],
     body_started: &AtomicBool,
-) -> Result<DatabaseSqlResult, sqlx::Error> {
+) -> Result<Result<DatabaseSqlRun, sqlx::Error>, Elapsed> {
     // The statements of the preface and of the restore are run as text, because the protocol of a prepared statement does not take `USE`.
-    let prepared = sqlx::raw_sql(AssertSqlSafe(prepare_sql(database)))
-        .execute(&mut *connection)
-        .await;
-    let started = Instant::now();
-    let read = match prepared {
+    let prepared = timeout(
+        CLIENT_LIMIT,
+        sqlx::raw_sql(AssertSqlSafe(prepare_sql(database))).execute(&mut *connection),
+    )
+    .await?;
+    let mut results = Vec::new();
+    let mut stopped: Option<(usize, sqlx::Error)> = None;
+    let mut preface = Ok(());
+    match prepared {
         Ok(_) => {
             body_started.store(true, Ordering::Relaxed);
-            read(connection, text).await
+            for (n, text) in statements.iter().enumerate() {
+                let started = Instant::now();
+                match timeout(CLIENT_LIMIT, read(connection, text)).await? {
+                    Ok(read) => results.push(result_of(read, started.elapsed())),
+                    Err(e) => {
+                        stopped = Some((n + 1, e));
+                        break;
+                    }
+                }
+            }
         }
-        Err(e) => Err(e),
-    };
-    let elapsed = started.elapsed();
+        Err(e) => preface = Err(e),
+    }
     // After a failure that MySQL answered (a `USE` that failed too) the session is still there and is put back; after a broken one this fails as well, and the failure of the run is the one told.
-    let restored = sqlx::raw_sql(RESTORE).execute(&mut *connection).await;
-    let (columns, rows, truncated, changed) = read?;
-    restored?;
-    Ok(DatabaseSqlResult {
-        tsv: cells_tsv(&columns, &rows),
-        columns,
-        summary: format_summary(rows.len(), truncated, changed, elapsed),
-        rows,
+    let restored = timeout(
+        CLIENT_LIMIT,
+        sqlx::raw_sql(RESTORE).execute(&mut *connection),
+    )
+    .await?;
+    if let Err(e) = preface {
+        return Ok(Err(e));
+    }
+    if let Some((number, e)) = stopped {
+        let failed = failure(&e);
+        if failed.lost {
+            return Ok(Err(e));
+        }
+        return Ok(Ok(DatabaseSqlRun {
+            results,
+            error: Some(numbered(number, statements.len(), &failed.message)),
+        }));
+    }
+    Ok(match restored {
+        Ok(_) => Ok(DatabaseSqlRun {
+            results,
+            error: None,
+        }),
+        Err(e) => Err(e),
     })
 }
 
@@ -241,34 +383,150 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_text_is_run_as_typed_but_for_the_whitespace_and_the_semicolons_at_its_ends() {
-        assert_eq!(statement("SELECT 1"), Ok("SELECT 1"));
-        assert_eq!(statement("  SELECT 1 ;\n"), Ok("SELECT 1"));
-        assert_eq!(statement("SELECT 1;;  ; \n;"), Ok("SELECT 1"));
-        // Inside the text nothing is touched, a second statement included (MySQL refuses it).
+    fn the_text_is_cut_at_its_semicolons_and_each_statement_is_run_as_typed_but_for_the_whitespace_around_it(
+    ) {
+        assert_eq!(statements("SELECT 1"), Ok(vec!["SELECT 1"]));
+        assert_eq!(statements("  SELECT 1 ;\n"), Ok(vec!["SELECT 1"]));
+        assert_eq!(statements("SELECT 1;;  ; \n;"), Ok(vec!["SELECT 1"]));
         assert_eq!(
-            statement("SELECT ';' ; SELECT 2;"),
-            Ok("SELECT ';' ; SELECT 2")
+            statements("UPDATE t SET a = 1;\nSELECT a FROM t;\n SELECT 3 "),
+            Ok(vec!["UPDATE t SET a = 1", "SELECT a FROM t", "SELECT 3"])
         );
         assert_eq!(
-            statement("SELECT\n  a,\n  b\nFROM t -- note"),
-            Ok("SELECT\n  a,\n  b\nFROM t -- note")
+            statements("SELECT\n  a,\n  b\nFROM t -- note"),
+            Ok(vec!["SELECT\n  a,\n  b\nFROM t -- note"])
         );
         assert_eq!(
-            statement("INSERT INTO t VALUES (1)"),
-            Ok("INSERT INTO t VALUES (1)")
+            statements("INSERT INTO t VALUES (1)"),
+            Ok(vec!["INSERT INTO t VALUES (1)"])
+        );
+    }
+
+    #[test]
+    fn a_semicolon_in_a_quote_or_a_comment_does_not_cut() {
+        for text in [
+            "SELECT ';'",
+            "SELECT \";\"",
+            "SELECT `a;b` FROM t",
+            "SELECT 'it''s; here'",
+            "SELECT 'a\\'; b'",
+            "SELECT 1 -- a; b",
+            "SELECT 1 # a; b",
+            "SELECT /* a; b */ 1",
+            "SELECT 1 /* a;\nb */",
+        ] {
+            assert_eq!(statements(text), Ok(vec![text]), "{text:?}");
+        }
+        assert_eq!(
+            statements("SELECT ';'; SELECT \"a;\"; SELECT 3 -- x; y\n; SELECT 4"),
+            Ok(vec![
+                "SELECT ';'",
+                "SELECT \"a;\"",
+                "SELECT 3 -- x; y",
+                "SELECT 4"
+            ])
+        );
+    }
+
+    #[test]
+    fn a_backtick_name_has_no_backslash_escape_and_two_dashes_need_a_space_to_be_a_comment() {
+        assert_eq!(
+            statements("SELECT `a\\`; SELECT 2"),
+            Ok(vec!["SELECT `a\\`", "SELECT 2"])
+        );
+        // `1--1` is arithmetic, so the semicolon after it cuts.
+        assert_eq!(
+            statements("SELECT 1--1; SELECT 2"),
+            Ok(vec!["SELECT 1--1", "SELECT 2"])
+        );
+        assert_eq!(
+            statements("SELECT 1 --; SELECT 2"),
+            Ok(vec!["SELECT 1 --", "SELECT 2"])
+        );
+        assert_eq!(
+            statements("SELECT 1 -- ; SELECT 2"),
+            Ok(vec!["SELECT 1 -- ; SELECT 2"])
+        );
+    }
+
+    #[test]
+    fn a_quote_or_a_comment_that_is_not_closed_runs_to_the_end_of_the_text() {
+        assert_eq!(
+            statements("SELECT 'a; SELECT 2"),
+            Ok(vec!["SELECT 'a; SELECT 2"])
+        );
+        assert_eq!(
+            statements("SELECT 1 /* a; SELECT 2"),
+            Ok(vec!["SELECT 1 /* a; SELECT 2"])
+        );
+    }
+
+    #[test]
+    fn a_piece_with_nothing_but_whitespace_and_comments_is_no_statement() {
+        assert_eq!(statements("SELECT 1; -- done"), Ok(vec!["SELECT 1"]));
+        assert_eq!(
+            statements("-- first\nSELECT 1; /* nothing */ ; # end"),
+            Ok(vec!["-- first\nSELECT 1"])
+        );
+        assert_eq!(statements("/* a */ SELECT 1"), Ok(vec!["/* a */ SELECT 1"]));
+    }
+
+    #[test]
+    fn non_ascii_text_is_cut_at_the_semicolons_only() {
+        assert_eq!(
+            statements("SELECT 'あ;い'; SELECT 'う' ;"),
+            Ok(vec!["SELECT 'あ;い'", "SELECT 'う'"])
         );
     }
 
     #[test]
     fn nothing_to_run_is_refused_in_japanese() {
-        for text in ["", "   ", "\n\t", ";", " ; ;\n"] {
+        for text in [
+            "",
+            "   ",
+            "\n\t",
+            ";",
+            " ; ;\n",
+            "-- only a note",
+            "/* a */;#b",
+        ] {
             assert_eq!(
-                statement(text),
+                statements(text),
                 Err("SQL を入力してください".to_owned()),
                 "{text:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_hundred_statements_are_run_and_one_more_is_refused_before_anything_is_run() {
+        let many = |n: usize| "SELECT 1;".repeat(n);
+        assert_eq!(statements(&many(STATEMENTS_MAX)).unwrap().len(), 100);
+        assert_eq!(
+            statements(&many(STATEMENTS_MAX + 1)),
+            Err("文が多すぎます（100 文まで）".to_owned())
+        );
+    }
+
+    #[test]
+    fn the_tab_of_a_result_says_its_rows_or_the_rows_it_changed() {
+        assert_eq!(format_label(2, 0), "2 行");
+        assert_eq!(format_label(1000, 0), "1,000 行");
+        assert_eq!(format_label(0, 0), "0 行");
+        assert_eq!(format_label(0, 1), "1 行を変更");
+        assert_eq!(format_label(0, 12_345), "12,345 行を変更");
+        // Rows that were read are told as rows, whatever the server says it affected.
+        assert_eq!(format_label(2, 5), "2 行");
+    }
+
+    #[test]
+    fn an_error_has_the_number_of_its_statement_only_when_the_text_has_more_than_one() {
+        assert_eq!(
+            numbered(2, 3, "列が見つかりません"),
+            "2 文目: 列が見つかりません"
+        );
+        assert_eq!(numbered(1, 2, "m"), "1 文目: m");
+        assert_eq!(numbered(1, 1, "列が見つかりません"), "列が見つかりません");
     }
 
     #[test]
@@ -377,10 +635,7 @@ mod tests {
             (1142, "このユーザーには、この操作の権限がありません"),
             (1143, "このユーザーには、この操作の権限がありません"),
             (1227, "このユーザーには、この操作の権限がありません"),
-            (
-                1064,
-                "SQL の文法が正しくありません。1 回に実行できる文は 1 つです",
-            ),
+            (1064, "SQL の文法が正しくありません"),
             (1295, "この種類の文は実行できません"),
             (1049, "データベースが見つかりません"),
             (1146, "テーブルが見つかりません"),

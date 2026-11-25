@@ -1152,19 +1152,46 @@ class Hook(unittest.TestCase):
         with open(stub, "w") as f:
             f.write("#!/bin/sh\necho STUB\n")
         os.chmod(stub, 0o755)
+        # A gh that answers from the environment: the issues a pull request closes (FAKE_GH_REFS), and how many polls of an issue find it still open (FAKE_GH_OPEN_POLLS).
+        bin_dir = os.path.join(root, "bin")
+        os.makedirs(bin_dir)
+        fake_gh = os.path.join(bin_dir, "gh")
+        with open(fake_gh, "w") as f:
+            f.write(
+                '#!/bin/sh\n'
+                'echo "gh $*" >> "$FAKE_GH_LOG"\n'
+                '[ -z "$FAKE_GH_PWD_LOG" ] || pwd -P >> "$FAKE_GH_PWD_LOG"\n'
+                '[ -z "$FAKE_GH_FAIL" ] || exit 1\n'
+                'case "$1 $2" in\n'
+                '  "pr view") for n in $FAKE_GH_REFS; do echo "$n"; done ;;\n'
+                '  "issue view")\n'
+                '    c=$(grep -c -x "gh issue view $3 --json state --jq .state" "$FAKE_GH_LOG")\n'
+                '    if [ "$c" -gt "${FAKE_GH_OPEN_POLLS:-0}" ]; then echo CLOSED; else echo OPEN; fi ;;\n'
+                'esac\n'
+            )
+        os.chmod(fake_gh, 0o755)
+        cls.bin_dir = bin_dir
         cls.root = root
 
     @classmethod
     def tearDownClass(cls):
         cls.tmp.cleanup()
 
-    def run_hook(self, command):
+    def setUp(self):
+        self.gh_log = os.path.join(self.root, "gh.log")
+        open(self.gh_log, "w").close()
+
+    def gh_lines(self):
+        with open(self.gh_log) as f:
+            return f.read().splitlines()
+
+    def run_hook(self, command, cwd=None, **env):
         r = subprocess.run(
             ["bash", HOOK],
-            input=json.dumps({"tool_input": {"command": command}}),
+            input=json.dumps({"tool_input": {"command": command}, **({"cwd": cwd} if cwd else {})}),
             capture_output=True,
             text=True,
-            env={**os.environ, "CLAUDE_PROJECT_DIR": self.root},
+            env={**os.environ, "CLAUDE_PROJECT_DIR": self.root, "PATH": self.bin_dir + os.pathsep + os.environ["PATH"], "FAKE_GH_LOG": self.gh_log, **env},
         )
         self.assertEqual(r.returncode, 0)
         return json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"] if r.stdout.strip() else ""
@@ -1186,6 +1213,69 @@ class Hook(unittest.TestCase):
         finally:
             with open(stub, "w") as f:
                 f.write("#!/bin/sh\necho STUB\n")
+
+    def with_stub_that_logs(self):
+        stub = os.path.join(self.root, ".claude", "tools", "plan-release.py")
+        with open(stub, "w") as f:
+            f.write('#!/bin/sh\necho release >> "$FAKE_GH_LOG"\necho STUB\n')
+
+    def restore_stub(self):
+        stub = os.path.join(self.root, ".claude", "tools", "plan-release.py")
+        with open(stub, "w") as f:
+            f.write("#!/bin/sh\necho STUB\n")
+
+    def test_merge_waits_for_the_issues_the_pull_request_closes(self):
+        self.with_stub_that_logs()
+        try:
+            out = self.run_hook("gh pr merge 5 --merge", FAKE_GH_REFS="7", FAKE_GH_OPEN_POLLS="2")
+        finally:
+            self.restore_stub()
+        self.assertIn("STUB", out)
+        poll = "gh issue view 7 --json state --jq .state"
+        self.assertEqual(self.gh_lines(), ["gh pr view 5 --json closingIssuesReferences --jq .closingIssuesReferences[].number", poll, poll, poll, "release"])
+
+    def test_merge_without_a_number_asks_for_the_pull_request_of_the_branch(self):
+        self.run_hook("gh pr merge --merge", FAKE_GH_REFS="7 8")
+        self.assertEqual(
+            self.gh_lines(),
+            [
+                "gh pr view --json closingIssuesReferences --jq .closingIssuesReferences[].number",
+                "gh issue view 7 --json state --jq .state",
+                "gh issue view 8 --json state --jq .state",
+            ],
+        )
+
+    def test_merge_looks_for_the_pull_request_where_a_leading_cd_moves_the_command(self):
+        target = os.path.realpath(tempfile.mkdtemp(dir=self.root))
+        other = os.path.realpath(tempfile.mkdtemp(dir=self.root))
+        pwd_log = os.path.join(self.root, "pwd.log")
+        for cmd in [f"cd {target} && gh pr merge --merge", f"cd '{target}'; gh pr merge --merge", f"cd {os.path.basename(target)} && gh pr merge --merge"]:
+            open(pwd_log, "w").close()
+            cwd = self.root if "/" not in cmd.split()[1] else other
+            self.run_hook(cmd, cwd=cwd, FAKE_GH_REFS="7", FAKE_GH_PWD_LOG=pwd_log)
+            with open(pwd_log) as f:
+                self.assertEqual(set(f.read().splitlines()), {target}, cmd)
+
+    def test_merge_stops_waiting_at_the_limit(self):
+        self.with_stub_that_logs()
+        try:
+            out = self.run_hook("gh pr merge", FAKE_GH_REFS="7", FAKE_GH_OPEN_POLLS="1000", TSUNAGIAI_CLOSE_WAIT="2")
+        finally:
+            self.restore_stub()
+        self.assertIn("STUB", out)
+        lines = self.gh_lines()
+        self.assertEqual(lines[-1], "release")
+        self.assertTrue(2 <= len(lines) - 2 <= 4, lines)
+
+    def test_merge_goes_on_when_the_pull_request_cannot_be_read(self):
+        out = self.run_hook("gh pr merge 5", FAKE_GH_FAIL="1", FAKE_GH_REFS="7")
+        self.assertIn("STUB", out)
+        self.assertEqual(self.gh_lines(), ["gh pr view 5 --json closingIssuesReferences --jq .closingIssuesReferences[].number"])
+
+    def test_merge_of_a_pull_request_that_closes_nothing_waits_for_nothing(self):
+        out = self.run_hook("gh pr merge 5")
+        self.assertIn("STUB", out)
+        self.assertEqual(len(self.gh_lines()), 1)
 
     def test_issue_create_points_to_issue_plan(self):
         for cmd in [
