@@ -129,7 +129,7 @@ function itemNode(node: ConnectionNode, selected: Selected | null, actions: Side
     e.preventDefault();
     const items = [
       ...(edit ? [{ label: "編集", color: "", icon: EDIT_SVG, current: false, pick: () => edit(profile) }] : []),
-      ...(node.connected ? [{ label: "切断", color: "", icon: CLOSE_SVG, current: false, pick: () => actions.disconnect(profile) }] : []),
+      ...(node.connected || node.loading ? [{ label: "切断", color: "", icon: CLOSE_SVG, current: false, pick: () => actions.disconnect(profile) }] : []),
       ...(remove ? [{ label: "削除", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => remove(profile, name) }] : []),
     ];
     if (items.length > 0) openMenu(name, items, { at: { x: e.clientX, y: e.clientY } });

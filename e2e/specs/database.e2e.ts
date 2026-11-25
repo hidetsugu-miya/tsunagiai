@@ -3227,6 +3227,61 @@ describe("database: tree", () => {
     await waitForCalls("database_connect", 2);
   });
 
+  it("has 切断 in the menu of a connection that is opening, and disconnects it: database_disconnect with the id, the dot goes gray and the output line goes", async () => {
+    await openDatabase();
+    const connect = await mock("database_connect", holds);
+    await row("p1").click();
+    await waitForCalls(connect);
+    await emitEvent("database-script-output", { id: "p1", line: "Starting session" });
+    await browser.waitUntil(async () => (await notes())[0] === "Starting session");
+    await expect(dot("p1")).toHaveAttribute("data-state", "connecting");
+    await rightPress("p1");
+    expect(await textsOf('.menu button[role="menuitem"]')).toEqual(["編集", "切断", "削除"]);
+    await browser.keys("Escape");
+    const closed = await mock("database_disconnect", null);
+    await pickFromMenu("p1", 2);
+    expect(await waitForCalls(closed)).toEqual([{ id: "p1" }]);
+    await expect(dot("p1")).toHaveAttribute("data-state", "closed");
+    await expect(row("p1")).toHaveAttribute("aria-expanded", "false");
+    expect(await notes()).toEqual([]);
+    expect(await keys()).toEqual(["p1", "p2"]);
+    // A line that comes after the disconnect is dropped.
+    await emitEvent("database-script-output", { id: "p1", line: "late" });
+    await browser.pause(200);
+    expect(await notes()).toEqual([]);
+  });
+
+  it("draws nothing of the database_connect that answers after the disconnect of a connection that was opening, and opens it again on the next press", async () => {
+    await openDatabase();
+    const connect = await mock("database_connect", holds);
+    await row("p1").click();
+    await waitForCalls(connect);
+    const closed = await mock("database_disconnect", null);
+    await pickFromMenu("p1", 2);
+    await waitForCalls(closed);
+    // The answer of an opening that was already done.
+    await release("database_connect", ["information_schema", "shop"]);
+    await browser.pause(300);
+    expect(await keys()).toEqual(["p1", "p2"]);
+    await expect(dot("p1")).toHaveAttribute("data-state", "closed");
+    expect(await notes()).toEqual([]);
+    // The answer of an opening that Rust stopped.
+    await row("p1").click();
+    await waitForCalls(connect, 2);
+    await pickFromMenu("p1", 2);
+    await waitForCalls(closed, 2);
+    await release("database_connect", rejects("接続を切断しました"));
+    await browser.pause(300);
+    expect(await notes()).toEqual([]);
+    expect(await count("#database-side-feed .database-note.danger")).toBe(0);
+    await expect(dot("p1")).toHaveAttribute("data-state", "closed");
+    // The next press opens it, and only its own answer is drawn.
+    await mock("database_connect", ["shop"]);
+    await row("p1").click();
+    await waitForCount('#database-side-feed [data-key^="p1/d/"]', 1);
+    await expect(dot("p1")).toHaveAttribute("data-state", "connected");
+  });
+
   it("closes the tree on a disconnect that fails and shows its error", async () => {
     await openTree();
     const closed = await mock("database_disconnect", rejects("接続を閉じられませんでした"));

@@ -4343,6 +4343,41 @@ describe("orca: files and editor (A-18)", () => {
     await expect(dbRow("p1")).toHaveAttribute("aria-pressed", "true");
   });
 
+  it("has the disconnect in the menu of a connection that is opening, and disconnects it, and draws nothing of the answer that comes after (A-43)", async () => {
+    await openDatabasePart({ database_connect: holds, database_disconnect: null });
+    await dbRow("p1").click();
+    await waitForCalls("database_connect");
+    await emitEvent("database-script-output", { id: "p1", line: "forwarding port 3307" });
+    await expect($("#orca-database .database-note")).toHaveText("forwarding port 3307");
+    await expect(dbDot("p1")).toHaveAttribute("data-state", "connecting");
+    await dbRightPress("p1");
+    expect(await textsOf('.menu button[role="menuitem"]')).toEqual(["切断"]);
+    await $('.menu button[role="menuitem"]').click();
+    expect(await waitForCalls("database_disconnect")).toEqual([{ id: "p1" }]);
+    await expect(dbDot("p1")).toHaveAttribute("data-state", "closed");
+    expect(await count("#orca-database .database-note")).toBe(0);
+    // The answer of an opening that was already done.
+    await release("database_connect", ["shop"]);
+    await browser.pause(300);
+    expect(await count("#orca-database .database-children")).toBe(0);
+    await expect(dbDot("p1")).toHaveAttribute("data-state", "closed");
+    // The answer of an opening that Rust stopped.
+    await dbRow("p1").click();
+    await waitForCalls("database_connect", 2);
+    await dbRightPress("p1");
+    await $('.menu button[role="menuitem"]').click();
+    await waitForCalls("database_disconnect", 2);
+    await release("database_connect", rejects("接続を切断しました"));
+    await browser.pause(300);
+    expect(await count("#orca-database .database-note")).toBe(0);
+    await expect(dbDot("p1")).toHaveAttribute("data-state", "closed");
+    // The next press opens it, and only its own answer is drawn.
+    await mock("database_connect", ["shop"]);
+    await dbRow("p1").click();
+    await waitForCount("#orca-database .database-children .database-btn", 1);
+    await expect(dbDot("p1")).toHaveAttribute("data-state", "connected");
+  });
+
   // A-43: a table, and the SQL of a database, as tabs of the work pane. The tab draws the body of the database screen (D-4 to D-6) and calls its commands.
   const shopRecords = databaseRecords(["id", "name"], [[databaseCell("1", "number"), databaseCell("Alice")]], { summary: "1–1 行目", tsv: "id\tname\n1\tAlice" });
   const dbTabs = () => textsOf('.orca-tab[data-database="true"] .orca-tab-title');
