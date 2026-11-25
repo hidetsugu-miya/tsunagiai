@@ -228,6 +228,9 @@ async function save() {
   boardId = null;
   filledFor = null;
   connState = null;
+  // The form closes at once, and the part waits for the boards.
+  stage = "loading";
+  draw();
   void load(++seq, here, saved);
 }
 
