@@ -1,13 +1,28 @@
 #!/usr/bin/env bash
-# PostToolUse(Bash): issue の作成のあとは issue-plan の手順 1〜4 の続行を、gh pr merge のあとは plan-release.py release の結果と Release PR の用意とマージ、リリースの見届けの続行を、セッションに伝える。常に exit 0。
+# PostToolUse(Bash): issue の作成のあとは issue-plan の手順 1〜4 の続行を、gh pr merge のあとは（その PR が閉じる issue が閉じるのを待って）plan-release.py release の結果と Release PR の用意とマージ、リリースの見届けの続行を、セッションに伝える。常に exit 0。
 set -uo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/hook-log.sh"
-cmd=$(jq -r '.tool_input.command // empty')
+input=$(cat)
+cmd=$(jq -r '.tool_input.command // empty' <<< "$input")
+cwd=$(jq -r '.cwd // empty' <<< "$input")
 [ -n "$cmd" ] || exit 0
 
 # 引用符の中身を除き、gh が行頭か ; & | ( の後に来るときだけ、実行したコマンドとみなす。
 bare=$(perl -0777 -pe 's/"(?:\\.|[^"\\])*"/""/gs; s/\x27[^\x27]*\x27/\x27\x27/gs' <<< "$cmd")
 ran() { grep -q -E "(^|[;&|(])[[:space:]]*gh[[:space:]]+$1([[:space:]]|\$)" <<< "$bare"; }
+
+# gh pr merge は Closes #n の issue が閉じる前に返る（数秒後に閉じる）ので、plan-release.py release の changes に入らない。マージした PR の closingIssuesReferences が閉じるまで待つ（上限 TSUNAGIAI_CLOSE_WAIT 秒、既定 30）。PR 番号がコマンドになければ、cwd のブランチの PR を見る。
+wait_closed() {
+  local arg refs n deadline
+  arg=$(sed -nE 's/.*gh[[:space:]]+pr[[:space:]]+merge([^;&|]*).*/\1/p' <<< "$bare" | head -n 1 | tr ' ' '\n' | grep -E -m1 '^([0-9]+|https?://[^[:space:]]+/pull/[0-9]+)$')
+  refs=$(cd "${cwd:-.}" 2>/dev/null && gh pr view ${arg:+"$arg"} --json closingIssuesReferences --jq '.closingIssuesReferences[].number' 2>/dev/null) || return 0
+  deadline=$((SECONDS + ${TSUNAGIAI_CLOSE_WAIT:-30}))
+  for n in $refs; do
+    until [ "$(cd "${cwd:-.}" 2>/dev/null && gh issue view "$n" --json state --jq .state 2>/dev/null)" = CLOSED ] || [ "$SECONDS" -ge "$deadline" ]; do
+      sleep 1
+    done
+  done
+}
 
 plan=0
 ran 'issue[[:space:]]+create' && plan=1
@@ -22,6 +37,7 @@ if [ "$plan" -eq 1 ]; then
 fi
 if [ "$merge" -eq 1 ]; then
   main="$(git -C "${CLAUDE_PROJECT_DIR:?}" rev-parse --path-format=absolute --git-common-dir)/.."
+  wait_closed
   out=$("$main/.claude/tools/plan-release.py" release 2>&1)
   rc=$?
   if [ "$rc" -eq 0 ]; then
