@@ -50,6 +50,7 @@ const TOKEN_MISSING: &str = "API トークンを入力してください";
 const NOT_SAVED: &str = "Jira の接続が保存されていません";
 const COPY_SAME_PLACE: &str = "コピー元とコピー先が同じです";
 const COPY_NO_TOKEN: &str = "コピー元の API トークンが保存されていません";
+const COPY_EXISTS: &str = "コピー先にはすでに Jira の接続があります";
 /// The Agile API, after `api_base`.
 const BOARD_PATH: &str = "/rest/agile/1.0/board";
 const SPRINT_PATH: &str = "/rest/agile/1.0/sprint";
@@ -1397,6 +1398,14 @@ fn check_copy(
     Ok(())
 }
 
+/// A copy goes to a project that has no connection: one with a site saved and a token kept is not overwritten (a site without a token, or a token without a site, is no connection, and the copy takes its place).
+fn check_copy_target(own: Option<&Connection>, has_token: bool) -> Result<(), String> {
+    if has_token && own.is_some_and(|c| !c.site.is_empty()) {
+        return Err(COPY_EXISTS.into());
+    }
+    Ok(())
+}
+
 /// The connection that a copy of `from` makes for the project `project` of `environment`, with the token to write for it: the site and the email address are checked again (`saved_connection`), and the board is not copied (a board is chosen for each project).
 fn copied(
     from: &Connection,
@@ -1601,7 +1610,7 @@ pub async fn jira_connections(app: AppHandle) -> Result<Vec<JiraConnection>, Str
     read.await.map_err(|e| log_failure(command, LOG_ACCOUNT, e))
 }
 
-/// Copies the connection of `from_project` of `from_environment` to the project: its site, its email address and its token, which goes from the keychain to the keychain here and is never returned. The board is left empty. Refused when the two keys are the same or the source has no token or a site that is not an Atlassian Cloud one.
+/// Copies the connection of `from_project` of `from_environment` to the project: its site, its email address and its token, which goes from the keychain to the keychain here and is never returned. The board is left empty. Refused when the two keys are the same, when the project already has a connection, or when the source has no token or a site that is not an Atlassian Cloud one.
 #[tauri::command]
 pub async fn jira_copy(
     app: AppHandle,
@@ -1622,6 +1631,14 @@ pub async fn jira_copy(
         blocking(move || {
             let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
             let mut store = load_store(&dir)?;
+            let user = token_user(environment.as_deref(), &project);
+            check_copy_target(
+                store
+                    .connections
+                    .iter()
+                    .find(|c| c.is_at(environment.as_deref(), &project)),
+                keychain::read(TOKEN_SERVICE, &user)?.is_some(),
+            )?;
             let from = store
                 .connections
                 .iter()
@@ -1633,13 +1650,14 @@ pub async fn jira_copy(
                 &token_user(from_environment.as_deref(), &from_project),
             )?;
             let (connection, token) = copied(&from, token, environment.as_deref(), &project)?;
-            keychain::write(
-                TOKEN_SERVICE,
-                &token_user(environment.as_deref(), &project),
-                &token,
-            )?;
+            // The file first, then the token, as `jira_save` does: a token that cannot be written puts the old file back.
+            let before = store.clone();
             upserted(&mut store, connection.clone());
             save_store(&dir, &store)?;
+            if let Err(e) = keychain::write(TOKEN_SERVICE, &user, &token) {
+                let _ = save_store(&dir, &before);
+                return Err(e);
+            }
             Ok(shown(connection, true))
         })
         .await
@@ -2310,6 +2328,16 @@ mod tests {
         assert!(check_copy(None, "", None, "q").is_err());
         assert!(check_copy(None, "p", Some(""), "q").is_err());
         assert!(check_copy(None, "p", None, "q\nr").is_err());
+    }
+
+    #[test]
+    fn a_copy_does_not_overwrite_a_project_that_has_a_connection() {
+        let own = connection(None, "b", "https://old.atlassian.net");
+        assert_eq!(check_copy_target(Some(&own), true), Err(COPY_EXISTS.into()));
+        assert!(check_copy_target(Some(&own), false).is_ok());
+        assert!(check_copy_target(Some(&Connection::unset(None, "b")), true).is_ok());
+        assert!(check_copy_target(None, true).is_ok());
+        assert!(check_copy_target(None, false).is_ok());
     }
 
     #[test]

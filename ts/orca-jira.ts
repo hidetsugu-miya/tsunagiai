@@ -51,9 +51,11 @@ let conn: JiraSettings | null = null;
 let formOpen = false;
 let filledFor: string | null = null;
 let connState: { kind: "ok" | "warn"; text: string; user: string } | null = null;
-// The connections of the other projects that the form offers to copy, and whether a copy is on its way.
+// The connections of the other projects that the form offers to copy, the list that the rows drawn were made from, and whether a call of the form or of a row is on its way.
 let copies: JiraConnection[] = [];
-let copying = false;
+let drawnCopies: JiraConnection[] = [];
+let busy = false;
+const NO_COPIES: JiraConnection[] = [];
 // The boards that are shown (the scrum ones and the team-managed ones), the one shown, its sprints (the active one first, as Jira gives them), Jira's refusal of the sprints of a board that has none, and the sections read so far.
 let boards: JiraBoard[] = [];
 let boardId: number | null = null;
@@ -197,12 +199,15 @@ function drawForm() {
   $("orca-jira-conn-user").hidden = connState.user === "";
 }
 
-// The rows of the connections to copy, above the form, while the project has no connection; with no row there is no separator either.
+// The rows of the connections to copy, above the form, while the project has no connection; with no row there is no separator either. The rows are made again only when the list to show changes.
 function drawCopies() {
+  const want = stage === "none" ? copies : NO_COPIES;
+  if (want === drawnCopies) return;
+  drawnCopies = want;
   const box = $("orca-jira-copy");
-  box.hidden = stage !== "none" || copies.length === 0;
+  box.hidden = want.length === 0;
   if (box.hidden) return box.replaceChildren();
-  box.replaceChildren(...copies.map(copyRow), tag("div", "orca-jira-copy-sep", "新しく入力"));
+  box.replaceChildren(...want.map(copyRow), tag("div", "orca-jira-copy-sep", "新しく入力"));
 }
 
 function copyRow(from: JiraConnection) {
@@ -213,7 +218,7 @@ function copyRow(from: JiraConnection) {
   text.append(name, tag("div", "orca-jira-copy-meta", [from.site.replace(/^https:\/\//, ""), from.email].filter((s) => s !== "").join(" ・ ")));
   const use = tag("button", "text-btn", "使う");
   use.type = "button";
-  use.disabled = copying;
+  use.disabled = busy;
   use.onclick = () => void copyFrom(from);
   row.append(text, use);
   return row;
@@ -235,9 +240,11 @@ function fillForm(here: JiraPlace, saved: JiraSettings | null) {
   connState = registered(saved) ? { kind: "ok", text: "保存済み", user: "" } : null;
 }
 
-// Keeps the buttons of the form off while a call of it is on its way.
-function formBusy(busy: boolean) {
-  for (const id of ["orca-jira-save", "orca-jira-test", "orca-jira-delete", "orca-jira-close"]) $<HTMLButtonElement>(id).disabled = busy;
+// Keeps the buttons of the form and of the rows of the connections to copy off while a call of the form or of a row is on its way.
+function formBusy(on: boolean) {
+  busy = on;
+  for (const id of ["orca-jira-save", "orca-jira-test", "orca-jira-delete", "orca-jira-close"]) $<HTMLButtonElement>(id).disabled = on;
+  for (const button of document.querySelectorAll<HTMLButtonElement>("#orca-jira-copy .text-btn")) button.disabled = on;
 }
 
 // 「保存」: saves the connection of the project (an empty token keeps the stored one) and reads the boards with it.
@@ -286,15 +293,15 @@ async function readCopies(run: number, here: JiraPlace) {
 async function copyFrom(from: JiraConnection) {
   const here = place;
   if (here === null) return;
-  setCopying(true);
+  formBusy(true);
   let saved: JiraSettings;
   try {
     saved = await invoke("jira_copy", { ...here, fromEnvironment: from.environment, fromProject: from.project });
   } catch (e) {
     showFailure("orca-jira", e);
-    return setCopying(false);
+    return formBusy(false);
   }
-  setCopying(false);
+  formBusy(false);
   if (place !== here) return;
   conn = saved;
   formOpen = false;
@@ -302,14 +309,10 @@ async function copyFrom(from: JiraConnection) {
   filledFor = null;
   connState = null;
   copies = [];
+  // The form closes at once, and the part waits for the boards.
+  stage = "loading";
+  draw();
   void load(++seq, here, saved);
-}
-
-// Keeps the buttons of the rows and of the form off while a copy is on its way.
-function setCopying(busy: boolean) {
-  copying = busy;
-  formBusy(busy);
-  for (const button of document.querySelectorAll<HTMLButtonElement>("#orca-jira-copy .text-btn")) button.disabled = busy;
 }
 
 // 「接続を試す」: asks Jira who the credential of the form is, and saves nothing.

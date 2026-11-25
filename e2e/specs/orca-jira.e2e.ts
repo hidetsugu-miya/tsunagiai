@@ -318,8 +318,16 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await expect(copyButtons()[1]).toBeDisabled();
     await expect($("#orca-jira-save")).toBeDisabled();
     expect(await callsOf("jira_boards")).toEqual([]);
+    const boards = await mock("jira_boards", holds);
     await release(copy, connected);
-    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    // The form and the rows are gone while the boards are on their way, and the part shows the reading.
+    expect(await waitForCalls(boards)).toEqual([here]);
+    await expect($("#orca-jira-conn")).not.toBeDisplayed();
+    await expect($("#orca-jira-copy")).not.toBeDisplayed();
+    await expect($("#orca-jira-list .pending")).toBeDisplayed();
+    expect(await count("#orca-jira-list .orca-jira-issue")).toBe(0);
+    await release(boards, [board]);
+    await waitForCount("#orca-jira-list .orca-jira-issue", 3);
     await expect($("#orca-jira-conn")).not.toBeDisplayed();
     await expect($("#orca-jira-copy")).not.toBeDisplayed();
     await expect($("#orca-jira-bar")).toBeDisplayed();
@@ -327,6 +335,27 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     expect(await callsOf("jira_boards")).toEqual([here]);
     expect(await callsOf("jira_settings")).toHaveLength(1);
     expect(await count(CARDS)).toBe(0);
+  });
+
+  it("keeps the 使う of the rows off while 保存 or 接続を試す waits (J-1, #1425)", async () => {
+    await openJira(jiraFixtures({ jira_settings: empty, jira_connections: others }));
+    await waitForCount("#orca-jira-copy .orca-jira-copy-row", 2);
+    const test = await mock("jira_test", holds);
+    await fillForm("https://example.atlassian.net", "me@example.com", "tok-5");
+    await $("#orca-jira-test").click();
+    await waitForCalls(test);
+    await expect(copyButtons()[0]).toBeDisabled();
+    await expect(copyButtons()[1]).toBeDisabled();
+    await release(test, user);
+    await expect(copyButtons()[0]).toBeEnabled();
+    await expect(copyButtons()[1]).toBeEnabled();
+    const save = await mock("jira_save", holds);
+    await $("#orca-jira-save").click();
+    await waitForCalls(save);
+    await expect(copyButtons()[0]).toBeDisabled();
+    await expect(copyButtons()[1]).toBeDisabled();
+    await release(save, connected);
+    await waitForCount("#orca-jira-list .orca-jira-issue", 3);
   });
 
   it("keeps the rows and the form, with the reason in a card, when the copy is refused (J-1, #1425)", async () => {
@@ -361,7 +390,7 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
 
   it("does not offer the connections in the form that the gear opens, and offers them again after 削除 (J-1, #1425)", async () => {
     await openJira(jiraFixtures({ jira_connections: others }));
-    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    await waitForCount("#orca-jira-list .orca-jira-issue", 3);
     await gear().click();
     await expect($("#orca-jira-conn")).toBeDisplayed();
     await expect($("#orca-jira-copy")).not.toBeDisplayed();
