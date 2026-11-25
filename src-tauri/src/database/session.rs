@@ -11,7 +11,7 @@
 use std::{
     collections::HashMap,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicU64, Ordering},
         Arc, Mutex as StdMutex,
     },
     time::Duration,
@@ -367,7 +367,7 @@ impl Sessions {
         id: &str,
         session: &Arc<Session>,
         read: Result<Result<T, sqlx::Error>, tokio::time::error::Elapsed>,
-        failed: fn(&sqlx::Error) -> QueryFailure,
+        failed: impl Fn(&sqlx::Error) -> QueryFailure,
         timed_out: &str,
     ) -> Result<T, String> {
         let failure = match read {
@@ -503,21 +503,21 @@ impl Sessions {
     ) -> Result<DatabaseSqlRun, String> {
         let statements = sql::statements(text)?;
         let session = self.session(scripts, id).await?;
-        let body_started = AtomicBool::new(false);
+        let progress = sql::Progress::default();
         let read = {
             let mut guard = session.connection.lock().await;
             let Some(connection) = guard.as_mut() else {
                 return Err(NOT_OPEN.to_owned());
             };
-            sql::run(connection, database, &statements, &body_started).await
+            sql::run(connection, database, &statements, &progress).await
         };
         self.settle_with(
             scripts,
             id,
             &session,
             read,
-            sql::failure,
-            sql::timed_out(body_started.load(Ordering::Relaxed)),
+            |e| sql::run_failure(e, &progress, statements.len()),
+            &sql::timed_out(&progress, statements.len()),
         )
         .await
     }

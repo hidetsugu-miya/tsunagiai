@@ -170,6 +170,9 @@ export const redrawOrca = () => draw();
 
 export const worktreeLabel = (w: { repo: string; branch: string }) => `${w.repo} ・ ${w.branch}`;
 
+// The name that the list shows for the project `key` of `environment` (null: this machine), or undefined when the list holds none (the Jira part of the file pane names the projects that hold a connection, J-1).
+export const listedProjectName = (environment: string | null, key: string) => mix.projects.find((p) => p.key === key && placeOf(p) === environment)?.name;
+
 // How long ago `ms` was: running and waiting agents show the time since their state began ("2 分"), a done one how long ago it ended ("18 分前").
 export function elapsed(ms: number, now: number, done: boolean) {
   if (!ms) return "";

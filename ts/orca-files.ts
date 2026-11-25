@@ -285,10 +285,13 @@ async function readDir(dir: string, quiet = false, clock = false, pending?: List
   if (!(same && clock)) void markIgnored(here, mine, dir, next.dir);
 }
 
+// Whether the question of the clock is still on its way: the clock asks nothing more until it is answered (A-18, "Nothing is read twice at once"), so that a slow `git.status` is answered and not asked over again.
+let changesBusy = false;
+
 // Asks again the marks (A-39) of the entries of every folder that was read, in one question and with no read of the folders: the clock does it while the watch of the worktree is ready, because a commit made outside the app changes no file that Orca tells and clears the marks. It leaves a folder that is being read (its read asks), one that the list marked as ignored, and a folder that holds nothing or failed; the answer is dropped by the guards of `markGroup`. It asks nothing while the pane does not show the tree.
 export function rereadChanges() {
   const here = context;
-  if (treeWatch() === null || here === null) return;
+  if (changesBusy || treeWatch() === null || here === null) return;
   const listed: Listed[] = [];
   for (const [dir, { dir: read, error, busy }] of listings) {
     if (busy || error !== null || read === null || read.entries.length === 0 || ignoredDir(dir)) continue;
@@ -296,7 +299,11 @@ export function rereadChanges() {
     asked.set(dir, token);
     listed.push({ dir, read, token });
   }
-  if (listed.length > 0) void markChanges(here, generation, listed);
+  if (listed.length === 0) return;
+  changesBusy = true;
+  void markChanges(here, generation, listed).finally(() => {
+    changesBusy = false;
+  });
 }
 
 // How many folders a read of the open folders takes at once, as Orca's own window does: 16 on this machine, 8 on a saved environment (its connection is a paired server's).

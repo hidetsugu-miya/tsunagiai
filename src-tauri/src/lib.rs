@@ -344,6 +344,8 @@ pub fn run() {
             jira::jira_save,
             jira::jira_test,
             jira::jira_delete,
+            jira::jira_connections,
+            jira::jira_copy,
             jira::jira_set_board,
             jira::jira_boards,
             jira::jira_sprints,
