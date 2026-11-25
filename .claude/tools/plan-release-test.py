@@ -1160,6 +1160,7 @@ class Hook(unittest.TestCase):
             f.write(
                 '#!/bin/sh\n'
                 'echo "gh $*" >> "$FAKE_GH_LOG"\n'
+                '[ -z "$FAKE_GH_PWD_LOG" ] || pwd -P >> "$FAKE_GH_PWD_LOG"\n'
                 '[ -z "$FAKE_GH_FAIL" ] || exit 1\n'
                 'case "$1 $2" in\n'
                 '  "pr view") for n in $FAKE_GH_REFS; do echo "$n"; done ;;\n'
@@ -1184,10 +1185,10 @@ class Hook(unittest.TestCase):
         with open(self.gh_log) as f:
             return f.read().splitlines()
 
-    def run_hook(self, command, **env):
+    def run_hook(self, command, cwd=None, **env):
         r = subprocess.run(
             ["bash", HOOK],
-            input=json.dumps({"tool_input": {"command": command}}),
+            input=json.dumps({"tool_input": {"command": command}, **({"cwd": cwd} if cwd else {})}),
             capture_output=True,
             text=True,
             env={**os.environ, "CLAUDE_PROJECT_DIR": self.root, "PATH": self.bin_dir + os.pathsep + os.environ["PATH"], "FAKE_GH_LOG": self.gh_log, **env},
@@ -1243,6 +1244,17 @@ class Hook(unittest.TestCase):
                 "gh issue view 8 --json state --jq .state",
             ],
         )
+
+    def test_merge_looks_for_the_pull_request_where_a_leading_cd_moves_the_command(self):
+        target = os.path.realpath(tempfile.mkdtemp(dir=self.root))
+        other = os.path.realpath(tempfile.mkdtemp(dir=self.root))
+        pwd_log = os.path.join(self.root, "pwd.log")
+        for cmd in [f"cd {target} && gh pr merge --merge", f"cd '{target}'; gh pr merge --merge", f"cd {os.path.basename(target)} && gh pr merge --merge"]:
+            open(pwd_log, "w").close()
+            cwd = self.root if "/" not in cmd.split()[1] else other
+            self.run_hook(cmd, cwd=cwd, FAKE_GH_REFS="7", FAKE_GH_PWD_LOG=pwd_log)
+            with open(pwd_log) as f:
+                self.assertEqual(set(f.read().splitlines()), {target}, cmd)
 
     def test_merge_stops_waiting_at_the_limit(self):
         self.with_stub_that_logs()

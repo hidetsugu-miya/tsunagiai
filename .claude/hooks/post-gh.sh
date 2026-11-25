@@ -11,14 +11,20 @@ cwd=$(jq -r '.cwd // empty' <<< "$input")
 bare=$(perl -0777 -pe 's/"(?:\\.|[^"\\])*"/""/gs; s/\x27[^\x27]*\x27/\x27\x27/gs' <<< "$cmd")
 ran() { grep -q -E "(^|[;&|(])[[:space:]]*gh[[:space:]]+$1([[:space:]]|\$)" <<< "$bare"; }
 
-# gh pr merge は Closes #n の issue が閉じる前に返る（数秒後に閉じる）ので、plan-release.py release の changes に入らない。マージした PR の closingIssuesReferences が閉じるまで待つ（上限 TSUNAGIAI_CLOSE_WAIT 秒、既定 30）。PR 番号がコマンドになければ、cwd のブランチの PR を見る。
+# gh pr merge は Closes #n の issue が閉じる前に返る（数秒後に閉じる）ので、plan-release.py release の changes に入らない。マージした PR の closingIssuesReferences が閉じるまで待つ（上限 TSUNAGIAI_CLOSE_WAIT 秒、既定 30）。PR 番号がコマンドになければ、コマンドを実行した場所（hook 入力の cwd を、先頭の cd DIR && か cd DIR; が動かした場所。pre-git.sh と同じ、#310）のブランチの PR を見る。
 wait_closed() {
-  local arg refs n deadline
+  local arg refs n deadline dir
+  dir=${cwd:-$PWD}
+  if [[ $cmd =~ ^[[:space:]]*cd[[:space:]]+([^[:space:];\&\|]+)[[:space:]]*(\&\&|;) ]]; then
+    dir=${BASH_REMATCH[1]//[\"\']/}
+    dir=${dir/#\~/$HOME}
+    case "$dir" in /*) ;; *) dir="${cwd:-$PWD}/$dir" ;; esac
+  fi
   arg=$(sed -nE 's/.*gh[[:space:]]+pr[[:space:]]+merge([^;&|]*).*/\1/p' <<< "$bare" | head -n 1 | tr ' ' '\n' | grep -E -m1 '^([0-9]+|https?://[^[:space:]]+/pull/[0-9]+)$')
-  refs=$(cd "${cwd:-.}" 2>/dev/null && gh pr view ${arg:+"$arg"} --json closingIssuesReferences --jq '.closingIssuesReferences[].number' 2>/dev/null) || return 0
+  refs=$(cd "$dir" 2>/dev/null && gh pr view ${arg:+"$arg"} --json closingIssuesReferences --jq '.closingIssuesReferences[].number' 2>/dev/null) || return 0
   deadline=$((SECONDS + ${TSUNAGIAI_CLOSE_WAIT:-30}))
   for n in $refs; do
-    until [ "$(cd "${cwd:-.}" 2>/dev/null && gh issue view "$n" --json state --jq .state 2>/dev/null)" = CLOSED ] || [ "$SECONDS" -ge "$deadline" ]; do
+    until [ "$(cd "$dir" 2>/dev/null && gh issue view "$n" --json state --jq .state 2>/dev/null)" = CLOSED ] || [ "$SECONDS" -ge "$deadline" ]; do
       sleep 1
     done
   done
