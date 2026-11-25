@@ -375,6 +375,13 @@ class LoadState(unittest.TestCase):
             if args[:2] == ("repo", "view"):
                 return json.dumps({"nameWithOwner": "o/r", "owner": {"login": "owner"}})
             if args[:2] == ("pr", "list"):
+                if "merged" in args:
+                    return json.dumps(
+                        [
+                            {"author": {"login": "owner"}, "mergeCommit": {"oid": "abc"}, "closingIssuesReferences": [{"number": 6}]},
+                            {"author": {"login": "owner"}, "mergeCommit": {"oid": "old"}, "closingIssuesReferences": [{"number": 11}]},
+                        ]
+                    )
                 return json.dumps([{"author": {"login": "owner"}, "closingIssuesReferences": [{"number": 3}]}, {"author": {"login": "bot"}, "closingIssuesReferences": [{"number": 4}]}])
             raise AssertionError(args)
 
@@ -395,6 +402,7 @@ class LoadState(unittest.TestCase):
                 return [
                     raw(6, "closed", closed_at="2026-11-06T00:00:00Z"),
                     raw(7, "closed", closed_at="2026-11-04T00:00:00Z"),
+                    raw(11, "closed", closed_at="2026-11-06T00:00:00Z"),
                     raw(10, "closed", login="other", closed_at="2026-11-06T00:00:00Z"),
                 ]
             if path.endswith("/issues/1/dependencies/blocked_by?per_page=100"):
@@ -417,7 +425,7 @@ class LoadState(unittest.TestCase):
     def test_the_state_is_the_same_as_when_asked_one_by_one(self):
         state, calls = self.run_load()
         self.assertEqual((state.repo, state.owner, state.last_tag), ("o/r", "owner", "v0.2.0"))
-        self.assertEqual(sorted(state.issues), [1, 2, 3, 6])  # 7 closed before the release, 5 is another author's
+        self.assertEqual(sorted(state.issues), [1, 2, 3, 11])  # 7 closed before the release, 5 is another author's, 6 was closed by the last Release PR
         self.assertEqual(state.strangers, [(5, "other")])  # only an open issue of another author, not 10, which is closed
         self.assertEqual(state.issues[1].blocked_by, [9])
         self.assertEqual(state.issues[3].blocked_by, [2])  # a closed blocker and one of another repository are not blockers
@@ -438,6 +446,27 @@ class LoadState(unittest.TestCase):
         state, calls = self.run_load(blockers=False)
         self.assertFalse(any("blocked_by" in c[-1] for c in calls if c[0] == "api"))
         self.assertEqual(state.issues[1].blocked_by, [])
+
+
+class ClosedByReleasePr(unittest.TestCase):
+    MERGED = [
+        {"author": {"login": "owner"}, "mergeCommit": {"oid": "abc"}, "closingIssuesReferences": [{"number": 6}, {"number": 8}]},
+        {"author": {"login": "owner"}, "mergeCommit": {"oid": "old"}, "closingIssuesReferences": [{"number": 11}]},
+        {"author": {"login": "other"}, "mergeCommit": {"oid": "abc"}, "closingIssuesReferences": [{"number": 12}]},
+        {"author": {"login": "owner"}, "mergeCommit": None, "closingIssuesReferences": [{"number": 13}]},
+    ]
+
+    def test_the_issues_the_release_pr_of_the_last_tag_closed_are_not_the_next_versions_changes(self):
+        self.assertEqual(pr.closed_by_release_pr(self.MERGED, "owner", "abc"), {6, 8})
+
+    def test_nothing_is_left_out_when_no_release_pr_has_the_commit_of_the_tag(self):
+        self.assertEqual(pr.closed_by_release_pr(self.MERGED, "owner", "zzz"), set())
+        self.assertEqual(pr.closed_by_release_pr(self.MERGED, "owner", None), set())
+
+    def test_an_issue_closed_after_the_last_release_by_another_pull_request_is_still_a_change(self):
+        state = LoadState().run_load()[0]
+        self.assertIn(11, state.issues)
+        self.assertNotIn(6, state.issues)
 
 
 class ReleaseFacts(unittest.TestCase):
