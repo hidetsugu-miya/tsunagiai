@@ -27,7 +27,7 @@ use super::{
     mysql::{self, QueryFailure},
     records::{self, DatabaseRecords},
     script::{Cancel, Scripts, STOPPED},
-    sql::{self, DatabaseSqlResult},
+    sql::{self, DatabaseSqlRun},
     structure::{self, DatabaseStructure},
     write::{self, DatabaseApplied, DatabaseChange},
     Login,
@@ -493,15 +493,15 @@ impl Sessions {
         .await?
     }
 
-    /// The text of the user run as one statement in `database` (D-6).
+    /// The statements of the text of the user run one after another in `database` (D-6), each under its own time limit, in one hold of the session.
     pub async fn sql(
         &self,
         scripts: &Scripts,
         id: &str,
         database: &str,
         text: &str,
-    ) -> Result<DatabaseSqlResult, String> {
-        let text = sql::statement(text)?;
+    ) -> Result<DatabaseSqlRun, String> {
+        let statements = sql::statements(text)?;
         let session = self.session(scripts, id).await?;
         let body_started = AtomicBool::new(false);
         let read = {
@@ -509,11 +509,7 @@ impl Sessions {
             let Some(connection) = guard.as_mut() else {
                 return Err(NOT_OPEN.to_owned());
             };
-            tokio::time::timeout(
-                sql::CLIENT_LIMIT,
-                sql::run(connection, database, text, &body_started),
-            )
-            .await
+            sql::run(connection, database, &statements, &body_started).await
         };
         self.settle_with(
             scripts,

@@ -1,6 +1,6 @@
 import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import { orcaOverview as placedOverview, streamList as placedStream, studio } from "../orca-support";
-import { boot, callsOf, copiedTexts, count, databaseCell, databaseColumn, databaseNull, databaseProfile, databaseRecords, databaseSqlResult, databaseStructure, databaseTable, emitEvent, holds, inbox, mock, onceId, orcaOverview, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, stubClipboard, textsOf, timers, waitForCalls, waitForCount, CARD, CARDS, waitForLog } from "../support";
+import { boot, callsOf, copiedTexts, count, databaseCell, databaseColumn, databaseNull, databaseProfile, databaseRecords, databaseSqlResult, databaseSqlRun, databaseSqlStatement, databaseStructure, databaseTable, emitEvent, holds, inbox, mock, onceId, orcaOverview, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, stubClipboard, textsOf, timers, waitForCalls, waitForCount, CARD, CARDS, waitForLog } from "../support";
 
 const direct = databaseProfile("p1", "Example direct");
 // The read of the list at an interval (#866) put so far off that a spec that counts the reads of the list meets none of it.
@@ -2880,7 +2880,7 @@ describe("database: tree", () => {
       const copy = $('#database-work [data-key="copy"]');
       await expect(copy).toBeDisabled();
       const copied = "id\tname\tdeleted_at\n1\tAlice\tNULL";
-      await mock("database_sql", { ...result, tsv: copied });
+      await mock("database_sql", databaseSqlResult(["id", "name", "deleted_at"], [[databaseCell("1", "number"), databaseCell("Alice"), databaseNull]], "2 行 / 12 ms", copied));
       await runText();
       await expect(range()).toHaveText("2 行 / 12 ms");
       const order = await browser.execute(() => [...document.querySelectorAll("#database-work .database-pager > *")].map((n) => (n as HTMLElement).dataset.key ?? n.className));
@@ -2929,6 +2929,101 @@ describe("database: tree", () => {
       expect(await count("#database-work .database-grid")).toBe(0);
       expect(await count("#database-work .database-note")).toBe(0);
       await expect($('#database-work [data-key="copy"]')).toBeDisabled();
+    });
+
+    describe("more than one statement (D-6)", () => {
+      const resultTabs = () => textsOf("#database-work .database-result-tabs [role='tab']");
+      const resultSelected = () => browser.execute(() => [...document.querySelectorAll("#database-work .database-result-tabs [aria-selected='true']")].map((e) => e.textContent));
+      const resultTab = (i: number) => $(`#database-work [data-key="result-${i}"]`);
+      const text3 = "UPDATE users SET name = 'x' WHERE id = 1; SELECT id, name FROM users; SELECT COUNT(*) AS n FROM users;";
+      const three = databaseSqlRun([
+        databaseSqlStatement([], [], "1 行を変更 / 3 ms", "", "1 行を変更"),
+        databaseSqlStatement(["id", "name"], [[databaseCell("1", "number"), databaseCell("x")], [databaseCell("2", "number"), databaseCell("Bob")]], "2 行 / 4 ms", "id\tname\n1\tx\n2\tBob"),
+        databaseSqlStatement(["n"], [[databaseCell("2", "number")]], "1 行 / 5 ms", "n\n2"),
+      ]);
+
+      it("sends the text as typed, opens on the last result, and draws a tab for each statement", async () => {
+        await openQuery();
+        const command = await mock("database_sql", three);
+        await runText(text3);
+        expect(await waitForCalls(command)).toEqual([ran(text3)]);
+        await expect(range()).toHaveText("1 行 / 5 ms");
+        expect(await resultTabs()).toEqual(["1: 1 行を変更", "2: 2 行", "3: 1 行"]);
+        expect(await resultSelected()).toEqual(["3: 1 行"]);
+        expect(await grid()).toEqual([["2"]]);
+        expect(await textsOf("#database-work .database-grid th")).toEqual(["n"]);
+        expect(await count("#database-work .database-note")).toBe(0);
+      });
+
+      it("draws the grid, the footer and the copy of the tab that is pressed, calling nothing", async () => {
+        await openQuery();
+        await stubClipboard();
+        await mock("database_sql", three);
+        await runText(text3);
+        await expect(range()).toHaveText("1 行 / 5 ms");
+        await resultTab(1).click();
+        await expect(range()).toHaveText("2 行 / 4 ms");
+        expect(await resultSelected()).toEqual(["2: 2 行"]);
+        expect(await grid()).toEqual([
+          ["1", "x"],
+          ["2", "Bob"],
+        ]);
+        await $('#database-work [data-key="copy"]').click();
+        await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "the clipboard was never written" });
+        expect(await copiedTexts()).toEqual(["id\tname\n1\tx\n2\tBob"]);
+        await resultTab(0).click();
+        await expect(range()).toHaveText("1 行を変更 / 3 ms");
+        expect(await count("#database-work .database-grid")).toBe(0);
+        await expect($('#database-work [data-key="copy"]')).toBeDisabled();
+        expect(await callsOf("database_sql")).toHaveLength(1);
+      });
+
+      it("has the tab of the statement that failed after the ones that ran, selected, with its words in the danger color", async () => {
+        await openQuery();
+        const message = "2 文目: 列が見つかりません (1054): Unknown column 'nam' in 'field list'";
+        await mock("database_sql", databaseSqlRun([databaseSqlStatement([], [], "1 行を変更 / 3 ms", "", "1 行を変更")], message));
+        await runText("UPDATE users SET plan = 'pro'; SELECT nam FROM users; SELECT 3");
+        await expect($("#database-work .database-note")).toHaveText(message);
+        await expect($("#database-work .database-note")).toHaveElementClass("danger");
+        expect(await resultTabs()).toEqual(["1: 1 行を変更", "2: エラー"]);
+        expect(await resultSelected()).toEqual(["2: エラー"]);
+        await expect(resultTab(1)).toHaveAttribute("data-failed", "true");
+        await expect(range()).toHaveText("");
+        await expect($('#database-work [data-key="copy"]')).toBeDisabled();
+        await resultTab(0).click();
+        await expect(range()).toHaveText("1 行を変更 / 3 ms");
+        expect(await count("#database-work .database-note")).toBe(0);
+        await resultTab(1).click();
+        await expect($("#database-work .database-note")).toHaveText(message);
+      });
+
+      it("draws no tabs for one statement, and a failure of the only statement as the error with no tab", async () => {
+        await openQuery();
+        await mock("database_sql", result);
+        await runText();
+        await expect(range()).toHaveText("2 行 / 12 ms");
+        expect(await count("#database-work .database-result-tabs")).toBe(0);
+        await mock("database_sql", databaseSqlRun([], "列が見つかりません (1054): Unknown column 'x' in 'field list'"));
+        await runText("SELECT x FROM users");
+        await expect($("#database-work .database-note")).toHaveText("列が見つかりません (1054): Unknown column 'x' in 'field list'");
+        expect(await count("#database-work .database-result-tabs")).toBe(0);
+        expect(await count("#database-work .database-grid")).toBe(0);
+        await expect(run()).toBeEnabled();
+      });
+
+      it("keeps the tabs of each query tab, and opens on the last result again after a run", async () => {
+        await openQuery();
+        await mock("database_sql", three);
+        await runText(text3);
+        await resultTab(0).click();
+        await add().click();
+        expect(await count("#database-work .database-result-tabs")).toBe(0);
+        await openTab("query-1").click();
+        expect(await resultSelected()).toEqual(["1: 1 行を変更"]);
+        await run().click();
+        await expect(range()).toHaveText("1 行 / 5 ms");
+        expect(await resultSelected()).toEqual(["3: 1 行"]);
+      });
     });
 
     it("shows the error of MySQL in the danger color, drops the old result, keeps the text and the connection, and runs again", async () => {

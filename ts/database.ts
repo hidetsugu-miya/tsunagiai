@@ -4,13 +4,13 @@
 import type { DatabaseProfile } from "./bindings/DatabaseProfile";
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import type { DatabaseScriptOutput } from "./bindings/DatabaseScriptOutput";
-import type { DatabaseSqlResult } from "./bindings/DatabaseSqlResult";
+import type { DatabaseSqlRun } from "./bindings/DatabaseSqlRun";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
 import { changesOf, cellKey, emptyEdit, type EditState, markable, originalText } from "./database-edit.js";
 import { drawDatabaseSide, showScriptOutput, type Selected, type SideActions, type SideState } from "./database-side.js";
 import { openDatabaseForm, syncDatabaseForm } from "./database-form.js";
 import { initDatabaseTerminal } from "./database-terminal.js";
-import { drawDatabaseWork, type EditActions, focusSqlField, setCopy, type RecordsState, type StructureState, type WorkActions, type WorkBody, type WorkState } from "./database-work.js";
+import { drawDatabaseWork, type EditActions, focusSqlField, lastResultTab, setCopy, type RecordsState, type StructureState, type WorkActions, type WorkBody, type WorkState } from "./database-work.js";
 import { $ } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
 import { confirmDelete, confirmDiscardChanges } from "./hint.js";
@@ -62,7 +62,9 @@ interface QueryTab {
   text: string;
   loading: boolean;
   error: string | null;
-  data: DatabaseSqlResult | null;
+  data: DatabaseSqlRun | null;
+  // The selected tab of the results of the run (D-6).
+  tab: number;
   height: number | null;
 }
 
@@ -158,7 +160,7 @@ function workBody(): WorkBody {
         databases: c?.databases ?? [active.database],
         database: active.database,
         height: active.height,
-        sql: { text: active.text, loading: active.loading, error: active.error, data: active.data },
+        sql: { text: active.text, loading: active.loading, error: active.error, data: active.data, tab: active.tab },
       },
     };
   }
@@ -410,8 +412,10 @@ async function runQuery(q: QueryTab) {
   draw();
   try {
     q.data = await invoke("database_sql", { id: q.id, database: q.database, sql: q.text });
+    q.tab = lastResultTab(q.data);
   } catch (e) {
     q.data = null;
+    q.tab = 0;
     q.error = String(e);
     // A stream that broke closes the connection: its tree closes and says why, and its tabs close.
     if (openTabs.includes(q) && (await dropClosed()).includes(q.id)) {
@@ -427,7 +431,7 @@ async function runQuery(q: QueryTab) {
 // Opens a query tab on the connection and database, selects it and puts the caret in its field.
 function openQuery(id: string, database: string) {
   queries += 1;
-  const q: QueryTab = { kind: "query", key: `query-${queries}`, id, database, text: "", loading: false, error: null, data: null, height: null };
+  const q: QueryTab = { kind: "query", key: `query-${queries}`, id, database, text: "", loading: false, error: null, data: null, tab: 0, height: null };
   openTabs.push(q);
   active = q;
   draw();
@@ -617,6 +621,12 @@ const workActions: WorkActions = {
   runSql: () => {
     const q = activeQuery();
     if (q) void runQuery(q);
+  },
+  sqlTab: (index) => {
+    const q = activeQuery();
+    if (!q || q.tab === index) return;
+    q.tab = index;
+    draw();
   },
   // The table list shows the tables of the selected database: a press on a row is the press on that table's row in the tree.
   openTable: (table) => {

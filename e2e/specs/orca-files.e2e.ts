@@ -17,7 +17,7 @@ import type { OrcaRemoteBranch } from "../../ts/bindings/OrcaRemoteBranch";
 import type { OrcaSaved } from "../../ts/bindings/OrcaSaved";
 import type { PaneLayout } from "../../ts/bindings/PaneLayout";
 import type { PaneNode } from "../../ts/bindings/PaneNode";
-import { type GivenFile, callsOf, copiedTexts, count, huge, note, databaseCell, databaseColumn, databaseProfile, databaseRecords, databaseSqlResult, databaseStructure, databaseTable, emitEvent, fontSettings, holds, mock, onceId, orcaRow, orcaTerminal, orcaWorktree, popoutTab, rejects, release, sendFiles, sendPopout, sendStream, stubClipboard, textsOf, timers, waitForCalls, waitForCount, CARDS, CARD } from "../support";
+import { type GivenFile, callsOf, copiedTexts, count, huge, note, databaseCell, databaseColumn, databaseProfile, databaseRecords, databaseSqlResult, databaseSqlRun, databaseSqlStatement, databaseStructure, databaseTable, emitEvent, fontSettings, holds, mock, onceId, orcaRow, orcaTerminal, orcaWorktree, popoutTab, rejects, release, sendFiles, sendPopout, sendStream, stubClipboard, textsOf, timers, waitForCalls, waitForCount, CARDS, CARD } from "../support";
 import { blurEditor, caretOffset, charBoxes, claudeTab, CONTENT, editorText, filesToggle, onThisMachine, openOrca, orcaOverview, pickItem, pressEnter, pressFold, pressTab, pressUnfold, project, sample, selectedTab, setCaret, setText, showAgain, streamList, studio, tabOf, tabTitles, typeIn, waitForText, worktrees } from "../orca-support";
 
 // A-18: the file pane and the editor. Rust reads the folders, reads and saves the text, and decides whether a save went through (unit tests); here the screen is checked: what it asks of Rust, and how it draws the answers.
@@ -4485,6 +4485,22 @@ describe("orca: files and editor (A-18)", () => {
     expect(await waitForCalls("database_sql")).toEqual([{ id: "p1", database: "shop", sql: "select 1" }]);
     await waitForCount(".orca-database-tab .database-grid", 1);
     expect(await callsOf("database_records")).toHaveLength(1);
+  });
+
+  it("draws a tab for each statement of a run in the SQL tab, and the footer of the one that is pressed (A-43, D-6)", async () => {
+    await openShop({ database_sql: databaseSqlRun([databaseSqlStatement(["n"], [[databaseCell("1", "number")]], "1 行 / 2 ms"), databaseSqlStatement([], [], "3 行を変更 / 4 ms", "", "3 行を変更")]) });
+    await dbRow("p1/d/shop/t/orders").click();
+    await waitForCount(".orca-database-tab .database-grid", 1);
+    await $('.orca-database-tab [data-tab="sql"]').click();
+    await typeSql("select 1; update orders set a = 1");
+    await $('.orca-database-tab [data-key="run"]').click();
+    expect(await waitForCalls("database_sql")).toEqual([{ id: "p1", database: "shop", sql: "select 1; update orders set a = 1" }]);
+    await expect($(".orca-database-tab .database-range")).toHaveText("3 行を変更 / 4 ms");
+    expect(await textsOf(".orca-database-tab .database-result-tabs [role='tab']")).toEqual(["1: 1 行", "2: 3 行を変更"]);
+    await $('.orca-database-tab [data-key="result-0"]').click();
+    await expect($(".orca-database-tab .database-range")).toHaveText("1 行 / 2 ms");
+    expect(await count(".orca-database-tab .database-grid")).toBe(1);
+    expect(await callsOf("database_sql")).toHaveLength(1);
   });
 
   it("closes the tab with its close button, calls nothing, and drops a read that ends after the tab was closed (A-43)", async () => {
