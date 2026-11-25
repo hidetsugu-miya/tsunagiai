@@ -3868,9 +3868,13 @@ fn children_read_args(agent: FormationAgent, environment: &str) -> Vec<String> {
 }
 
 /// The list of `formation_children`. Each environment that a launched child is in is asked once for what its children's states are read from (`children_read_args`: `orca worktree ps` when it has a Claude Code child, `orca terminal list` when it has a Codex child, side by side), and only its own children are joined to the answer; a record of planned children alone, or of none, needs no Orca, and a record of this Mac's children alone does not read `orca environment list`.
-/// The environment of a launched child is the record's value checked against `orca environment list` (`resolve_environment`), as a launch checks it: the record is a file the orchestrator can write, so a value that is not `local` and not exactly one saved environment never reaches the CLI. That list is read at the same time as this Mac's reads, and each saved environment's read waits `SAVED_PS_TIMEOUT` at most.
+/// The environment of a launched child is the record's value checked against `orca environment list` (`resolve_environment`), as a launch checks it: the record is a file the orchestrator can write, so a value that is not `local` and not exactly one saved environment never reaches the CLI. That list is read at the same time as this Mac's reads, and each saved environment's read waits `SAVED_PS_TIMEOUT` at most. A caller that has read it already passes it as `listed`, and it is not read again.
 /// An environment that cannot be read (also one whose value is refused) leaves its children working with their terminals, and the others are drawn from what was read. When no launched child could be read, the read fails with the first reason, so that the screen keeps its last list and says why.
-fn children_view_with(children: &[Child], read: &Read<'_>) -> Result<Vec<FormationChild>, String> {
+fn children_view_with(
+    children: &[Child],
+    read: &Read<'_>,
+    listed: Option<&[Environment]>,
+) -> Result<Vec<FormationChild>, String> {
     let launched_in = |local: bool| {
         children
             .iter()
@@ -3896,12 +3900,16 @@ fn children_view_with(children: &[Child], read: &Read<'_>) -> Result<Vec<Formati
                 )
             })
             .collect();
-        let list = launched_in(false).then(|| start(environment_list_args(), orca::READ_TIMEOUT));
-        let saved: Option<Result<Vec<Environment>, String>> = list.map(|run| {
-            joined(run)
-                .map(|result| environments_listed(&result))
-                .map_err(|e| format!("環境の一覧を読めません: {e}"))
-        });
+        let list = (listed.is_none() && launched_in(false))
+            .then(|| start(environment_list_args(), orca::READ_TIMEOUT));
+        let saved: Option<Result<Vec<Environment>, String>> = match listed {
+            Some(list) => Some(Ok(list.to_vec())),
+            None => list.map(|run| {
+                joined(run)
+                    .map(|result| environments_listed(&result))
+                    .map_err(|e| format!("環境の一覧を読めません: {e}"))
+            }),
+        };
         let named: Vec<Option<Result<String, String>>> = children
             .iter()
             .map(|child| {
@@ -4100,7 +4108,7 @@ fn children_view(
         &|args| screen_read(args, SAVED_PS_TIMEOUT),
         &pull,
     )?;
-    let mut rows = children_view_with(&children, &screen_read)?;
+    let mut rows = children_view_with(&children, &screen_read, None)?;
     // A formation of this Mac has its pages here, one of a saved environment on its PC (read above with its record), and one whose orchestrator never started there has none.
     let pages = match pc_pages.into_inner() {
         Some(pages) => pages,
@@ -4341,15 +4349,17 @@ fn list_core(
         })
         .collect();
     let all: Vec<Child> = records.iter().flatten().cloned().collect();
-    let (rows, read_error) = match children_view_with(&all, read) {
-        Ok(rows) => (rows, record_error),
-        Err(e) => (
-            all.iter()
-                .map(|child| child_row(child, &child.environment, None))
-                .collect(),
-            Some(e),
-        ),
-    };
+    // The list that a record read above took is used again; one that could not be read is read once more, as the screen's read does.
+    let (rows, read_error) =
+        match children_view_with(&all, read, listed.get().and_then(|l| l.as_deref())) {
+            Ok(rows) => (rows, record_error),
+            Err(e) => (
+                all.iter()
+                    .map(|child| child_row(child, &child.environment, None))
+                    .collect(),
+                Some(e),
+            ),
+        };
     let mut rows = rows.as_slice();
     let mut formations = Vec::new();
     for ((name, meta), children) in metas.into_iter().zip(&records) {
@@ -9224,7 +9234,7 @@ mod tests {
         }
 
         fn view(&self, children: &[Child]) -> Result<Vec<FormationChild>, String> {
-            children_view_with(children, &|args, limit| self.read(args, limit))
+            children_view_with(children, &|args, limit| self.read(args, limit), None)
         }
 
         fn reads_of_ps(&self) -> Vec<String> {
@@ -13247,14 +13257,18 @@ mod tests {
         .unwrap();
         // Orca of that environment lists its worktrees, and the agent of the child `a` is in one of them.
         let pc = Pc::with(Vec::new());
-        let rows = children_view_with(&children, &|args, _| {
-            if args[..2] == ["worktree", "ps"] {
-                assert_eq!(args.last().unwrap(), "--environment=mac-studio");
-                Ok(json!({"worktrees": [{"path": REMOTE_PATH, "agents": [{"paneKey": "tab-a:leaf", "parentPaneKey": null, "hasLivePty": true, "state": "working"}]}]}))
-            } else {
-                pc.read(args)
-            }
-        })
+        let rows = children_view_with(
+            &children,
+            &|args, _| {
+                if args[..2] == ["worktree", "ps"] {
+                    assert_eq!(args.last().unwrap(), "--environment=mac-studio");
+                    Ok(json!({"worktrees": [{"path": REMOTE_PATH, "agents": [{"paneKey": "tab-a:leaf", "parentPaneKey": null, "hasLivePty": true, "state": "working"}]}]}))
+                } else {
+                    pc.read(args)
+                }
+            },
+            None,
+        )
         .unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(
@@ -13628,6 +13642,72 @@ mod tests {
             .count();
         assert_eq!(asked, 1);
         std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_list_reads_orca_environment_list_once_when_a_record_names_an_environment_and_a_child_is_launched_in_it(
+    ) {
+        let config = temp_dir("list-once-named");
+        remote_formation(&config, "api-work");
+        // The record names a saved environment: the list resolves it, and the join of the children's states needs the same list.
+        let child = Child {
+            environment: "mac-studio".into(),
+            ..on_pc("a")
+        };
+        let pc = Pc::with(vec![child]);
+        let read = |args: &[String]| {
+            if args[..2] == ["worktree", "ps"] {
+                Ok(json!({"worktrees": []}))
+            } else {
+                pc.read(args)
+            }
+        };
+        let list = list_with(&config, &|args, _| read(args), &|e, i| pc.pull_env(e, i)).unwrap();
+        assert_eq!(list.formations.len(), 1);
+        let asked = pc
+            .cli
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|c| *c == "environment list")
+            .count();
+        assert_eq!(asked, 1);
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_join_of_the_children_uses_the_list_of_environments_it_is_given() {
+        let child = Child {
+            environment: "mac-studio".into(),
+            ..on_pc("a")
+        };
+        let pc = Pc::with(Vec::new());
+        let listed = environments_listed(&pc.environments);
+        let read = |args: &[String], _: Duration| {
+            if args[..2] == ["worktree", "ps"] {
+                Ok(json!({"worktrees": []}))
+            } else {
+                pc.read(args)
+            }
+        };
+        children_view_with(std::slice::from_ref(&child), &read, Some(&listed)).unwrap();
+        assert!(!pc
+            .cli
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|c| c == "environment list"));
+        // With none given it reads the list itself.
+        children_view_with(std::slice::from_ref(&child), &read, None).unwrap();
+        assert_eq!(
+            pc.cli
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|c| *c == "environment list")
+                .count(),
+            1
+        );
     }
 
     #[test]

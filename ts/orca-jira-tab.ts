@@ -241,6 +241,12 @@ async function startEdit(t: JiraTab) {
   editor.focus();
 }
 
+// A read that is on its way started before a change that Jira has taken, so its answer would put the old ticket back. Drop it, and let the tab stand on the ticket it has.
+function dropRead(t: JiraTab) {
+  t.seq++;
+  if (t.phase === "loading") t.phase = "ready";
+}
+
 // Sends the description of the editor. The ticket keeps the description it had until Jira has taken the new one; when Jira refuses, the typing stays in the editor.
 async function saveDescription(t: JiraTab) {
   const editor = t.describe;
@@ -253,6 +259,7 @@ async function saveDescription(t: JiraTab) {
     const description = await invoke("jira_set_description", { key: t.key, base: t.base, markdown: editor.markdown() });
     t.issue = { ...(t.issue ?? issue), description };
     t.editing = false;
+    dropRead(t);
   } catch (e) {
     showFailure("orca-jira", e);
   }
@@ -292,6 +299,7 @@ async function addComment(t: JiraTab) {
     t.issue = { ...now, comments: [...now.comments, added] };
     editor.set("");
     t.commenting = false;
+    dropRead(t);
   } catch (e) {
     showFailure("orca-jira", e);
   }
