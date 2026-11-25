@@ -979,6 +979,59 @@ describe("database: tree", () => {
     await expect(dot("p1")).toHaveAttribute("data-state", "connected");
   });
 
+  it("clears the error under a connection with the × at its right end, calls nothing, and reads again on the next press", async () => {
+    await openDatabase();
+    const message = "接続のスクリプトが、準備ができる前に終了しました（終了コード 1）。標準エラーの最後の行: aws login required";
+    const connect = await mock("database_connect", rejects(message));
+    const disconnect = await mock("database_disconnect", null);
+    await row("p1").click();
+    await waitForCalls(connect);
+    await browser.waitUntil(async () => (await notes()).length === 1);
+    const clear = $("#database-side-feed .database-note.danger button.icon-btn");
+    await expect(clear).toHaveAttribute("aria-label", "エラーを消す");
+    expect(await clear.getText()).toBe("");
+    expect(await count("#database-side-feed .database-note.danger button svg")).toBe(1);
+    await clear.click();
+    await browser.waitUntil(async () => (await notes()).length === 0);
+    expect(await count("#database-side-feed .database-note.danger")).toBe(0);
+    await expect(dot("p1")).toHaveAttribute("data-state", "closed");
+    expect(await keys()).toEqual(["p1", "p2"]);
+    expect(await callsOf(connect)).toHaveLength(1);
+    expect(await callsOf(disconnect)).toHaveLength(0);
+    const again = await mock("database_connect", ["shop"]);
+    await row("p1").click();
+    expect(await waitForCalls(again)).toEqual([{ id: "p1" }]);
+    await waitForCount('#database-side-feed [data-key^="p1/d/"]', 1);
+    await expect(dot("p1")).toHaveAttribute("data-state", "connected");
+  });
+
+  it("clears the error of a read of tables from the tree and from the work pane, keeps the connection open, and reads again on the next press", async () => {
+    await openTree();
+    const message = "MySQL がエラーを返しました (1142): SELECT command denied";
+    const read = await mock("database_tables", rejects(message));
+    const disconnect = await mock("database_disconnect", null);
+    await mock("database_connections", ["p1"]);
+    await row("p1/d/shop").click();
+    await waitForCalls(read);
+    await browser.waitUntil(async () => (await notes()).length === 1);
+    expect(await textsOf("#database-work .database-note")).toEqual([message]);
+    expect(await count("#database-work .database-note button")).toBe(0);
+    const clear = $("#database-side-feed .database-note.danger button.icon-btn");
+    await expect(clear).toHaveAttribute("aria-label", "エラーを消す");
+    await clear.click();
+    await browser.waitUntil(async () => (await notes()).length === 0);
+    expect(await count("#database-work .database-note")).toBe(0);
+    await expect($("#database-work h3")).toHaveText("shop");
+    await expect(dot("p1")).toHaveAttribute("data-state", "connected");
+    expect(await callsOf(read)).toHaveLength(1);
+    expect(await callsOf(disconnect)).toHaveLength(0);
+    const again = await mock("database_tables", tables);
+    await row("p1/d/shop").click();
+    await waitForCalls(again);
+    await waitForCount("#database-work tbody tr", 3);
+    expect(await notes()).toEqual([]);
+  });
+
   it("closes the tree on a second press and keeps the connection, and reads again when it is opened once more", async () => {
     await openTree();
     await row("p1").click();
