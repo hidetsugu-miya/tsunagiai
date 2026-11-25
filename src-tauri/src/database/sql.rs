@@ -46,8 +46,8 @@ const RESTORE: &str =
 const EMPTY: &str = "SQL を入力してください";
 const TOO_MANY: &str = "文が多すぎます（100 文まで）";
 const CSV_ONE_STATEMENT: &str = "CSV に書き出せるのは文が 1 つの SQL だけです";
-/// The words of a statement that gave no row, so that there was nothing to write.
-pub const CSV_NO_ROWS: &str = "行を返さない文のため、CSV に書き出せませんでした";
+/// The words of a statement that gave no row, so that there was nothing to write (a SELECT that found none too: no row, no column to name).
+pub const CSV_NO_ROWS: &str = "書き出す行がありませんでした";
 const TIMED_OUT_HEAD: &str = "実行が時間内に終わらなかったため、MySQL との接続を閉じました。";
 const TIMED_OUT_WRITE: &str = "書き込みの文は、サーバーで確定している場合があります。";
 const TIMED_OUT_TAIL: &str = "もう一度開いてください";
@@ -463,29 +463,43 @@ fn csv_fields(row: &MySqlRow) -> Vec<String> {
         .collect()
 }
 
-/// The rows of `text` (one statement), written to `out` as they come, with none held and no limit of rows or of characters (#1438).
-/// The first row writes the names of the columns, so a statement that gives no row is `Outcome::NoRows`. The wait for each row has `CLIENT_LIMIT`, which is the time of every step of `run`; MySQL's own limit of a SELECT is not set. A row that cannot be written ends the read with `WriteFailed`: the rest is left unread, as `collect_limited` leaves it.
-async fn stream_csv<W: Write>(
-    connection: &mut MySqlConnection,
-    text: &str,
+/// The rows of `rows` (the stream of one statement), written to `out` as they come, with none held and no limit of rows or of characters (#1438).
+/// The first row writes the names of the columns (`names`), so a statement that gives no row is `Outcome::NoRows`: sqlx gives the columns of a result only with its rows (`Either::Left`, the end of a result, holds none), so a statement that gave no row has no column to name. The wait for each row has `CLIENT_LIMIT`, which is the time of every step of `run`; MySQL's own limit of a SELECT is not set.
+/// A row after the end of a result (a second result of a `CALL`) ends the read with `MultipleResults` before it is written, and a row that cannot be written with `WriteFailed`: the rest is left unread, as `collect_limited` leaves it, so `stopped` is given the words of the end, for the caller to word the time out of the restore that has to read the rest (`run_csv`).
+async fn write_rows<S, L, R, W: Write>(
+    mut rows: S,
     out: &mut CsvWriter<W>,
-) -> Result<Result<Outcome, sqlx::Error>, Elapsed> {
-    let mut rows =
-        Box::pin(sqlx::raw_sql(AssertSqlSafe(text.to_owned())).fetch_many(&mut *connection));
+    stopped: &mut Option<String>,
+    names: impl Fn(&R) -> Vec<String>,
+    fields: impl Fn(&R) -> Vec<String>,
+) -> Result<Result<Outcome, sqlx::Error>, Elapsed>
+where
+    S: Stream<Item = Result<Either<L, R>, sqlx::Error>> + Unpin,
+{
+    let mut result_ended = false;
     while let Some(item) = timeout(CLIENT_LIMIT, rows.next()).await? {
         let row = match item {
             Ok(Either::Right(row)) => row,
-            Ok(Either::Left(_)) => continue,
+            Ok(Either::Left(_)) => {
+                result_ended = true;
+                continue;
+            }
             Err(e) => return Ok(Err(e)),
         };
+        if result_ended {
+            *stopped = Some(csv::MULTIPLE_RESULTS.to_owned());
+            return Ok(Ok(Outcome::MultipleResults));
+        }
         let written = if out.rows() == 0 {
-            out.header(&column_names(&row))
+            out.header(&names(&row))
         } else {
             Ok(())
         }
-        .and_then(|()| out.row(&csv_fields(&row)));
+        .and_then(|()| out.row(&fields(&row)));
         if let Err(e) = written {
-            return Ok(Ok(Outcome::WriteFailed(format!("保存先に書けません: {e}"))));
+            let message = format!("保存先に書けません: {e}");
+            *stopped = Some(message.clone());
+            return Ok(Ok(Outcome::WriteFailed(message)));
         }
     }
     Ok(Ok(if out.rows() == 0 {
@@ -496,12 +510,13 @@ async fn stream_csv<W: Write>(
 }
 
 /// Runs the statement `text` in `database` on the session and writes its rows to `out` (#1438). The database is selected by a `USE` of its own and `RESTORE` follows, as in `run`; no limit of MySQL is set.
-/// The caller words the `sqlx::Error` of a failed session and the `Elapsed` of a step that took `CLIENT_LIMIT` (the connection is then closed, as for `run`).
+/// The caller words the `sqlx::Error` of a failed session and the `Elapsed` of a step that took `CLIENT_LIMIT` (the connection is then closed, as for `run`). `stopped` is the words of a read that was ended early (`write_rows`): the restore reads what was left, which may take `CLIENT_LIMIT`, and the caller words that time out with them, since they are the cause.
 pub async fn run_csv<W: Write>(
     connection: &mut MySqlConnection,
     database: &str,
     text: &str,
     out: &mut CsvWriter<W>,
+    stopped: &mut Option<String>,
 ) -> Result<Result<Outcome, sqlx::Error>, Elapsed> {
     let prepared = timeout(
         CLIENT_LIMIT,
@@ -509,7 +524,12 @@ pub async fn run_csv<W: Write>(
     )
     .await?;
     let written = match prepared {
-        Ok(_) => stream_csv(connection, text, out).await?,
+        Ok(_) => {
+            let rows = Box::pin(
+                sqlx::raw_sql(AssertSqlSafe(text.to_owned())).fetch_many(&mut *connection),
+            );
+            write_rows(rows, out, stopped, column_names, csv_fields).await?
+        }
         Err(e) => Err(e),
     };
     let restored = timeout(
@@ -944,5 +964,126 @@ mod tests {
             collect_limited(Box::pin(source), 10).await,
             Err("broken".to_owned())
         );
+    }
+
+    type CsvItem = Result<Either<(), Vec<String>>, sqlx::Error>;
+
+    fn row(fields: &[&str]) -> CsvItem {
+        Ok(Either::Right(
+            fields.iter().map(|f| (*f).to_owned()).collect(),
+        ))
+    }
+
+    fn end_of_result() -> CsvItem {
+        Ok(Either::Left(()))
+    }
+
+    /// The rows of a stream as `write_rows` writes them: its answer, the words of an early end and the bytes written.
+    async fn written(
+        items: Vec<CsvItem>,
+    ) -> (Result<Outcome, sqlx::Error>, Option<String>, String) {
+        let mut buffer = Vec::new();
+        let mut out = CsvWriter::new(&mut buffer);
+        let mut stopped = None;
+        let outcome = write_rows(
+            stream::iter(items),
+            &mut out,
+            &mut stopped,
+            |_| vec!["n".to_owned()],
+            |r: &Vec<String>| r.clone(),
+        )
+        .await
+        .unwrap();
+        (outcome, stopped, String::from_utf8(buffer).unwrap())
+    }
+
+    #[tokio::test]
+    async fn the_names_of_the_columns_are_written_once_with_the_first_row_and_the_end_of_a_result_is_not_a_row(
+    ) {
+        let (outcome, stopped, bytes) = written(vec![
+            row(&["1"]),
+            row(&["2"]),
+            end_of_result(),
+            end_of_result(),
+        ])
+        .await;
+        assert_eq!(outcome.unwrap(), Outcome::Done);
+        assert_eq!(stopped, None);
+        assert_eq!(bytes, "n\r\n1\r\n2\r\n");
+    }
+
+    #[tokio::test]
+    async fn a_statement_that_gave_no_row_writes_nothing_and_is_no_rows() {
+        let (outcome, stopped, bytes) = written(vec![end_of_result()]).await;
+        assert_eq!(outcome.unwrap(), Outcome::NoRows);
+        assert_eq!(stopped, None);
+        assert_eq!(bytes, "");
+        assert_eq!(CSV_NO_ROWS, "書き出す行がありませんでした");
+    }
+
+    #[tokio::test]
+    async fn a_row_of_a_second_result_is_refused_before_it_is_written() {
+        let (outcome, stopped, bytes) = written(vec![
+            row(&["1"]),
+            end_of_result(),
+            row(&["x", "y"]),
+            row(&["z"]),
+        ])
+        .await;
+        assert_eq!(outcome.unwrap(), Outcome::MultipleResults);
+        assert_eq!(stopped.as_deref(), Some(csv::MULTIPLE_RESULTS));
+        assert_eq!(bytes, "n\r\n1\r\n");
+        // A first result with no row does not let the second one through either.
+        let (outcome, _, bytes) = written(vec![end_of_result(), row(&["x"])]).await;
+        assert_eq!(outcome.unwrap(), Outcome::MultipleResults);
+        assert_eq!(bytes, "");
+    }
+
+    struct Broken;
+
+    impl Write for Broken {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("disk full"))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_row_that_cannot_be_written_ends_the_read_and_its_words_are_kept_for_the_time_out_of_the_restore(
+    ) {
+        let mut out = CsvWriter::new(Broken);
+        let mut stopped = None;
+        let items: Vec<CsvItem> = vec![row(&["1"]), row(&["2"])];
+        let outcome = write_rows(
+            stream::iter(items),
+            &mut out,
+            &mut stopped,
+            |_| vec!["n".to_owned()],
+            |r: &Vec<String>| r.clone(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let Outcome::WriteFailed(message) = outcome else {
+            panic!("not a write failure");
+        };
+        assert_eq!(message, "保存先に書けません: disk full");
+        assert_eq!(stopped, Some(message));
+    }
+
+    #[tokio::test]
+    async fn an_error_of_the_stream_ends_the_csv_with_that_error_and_no_early_end() {
+        let (outcome, stopped, bytes) = written(vec![
+            row(&["1"]),
+            Err(sqlx::Error::RowNotFound),
+            row(&["2"]),
+        ])
+        .await;
+        assert!(matches!(outcome, Err(sqlx::Error::RowNotFound)));
+        assert_eq!(stopped, None);
+        assert_eq!(bytes, "n\r\n1\r\n");
     }
 }

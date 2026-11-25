@@ -533,22 +533,18 @@ impl Sessions {
         out: &mut CsvWriter<W>,
     ) -> Result<Outcome, String> {
         let session = self.session(scripts, id).await?;
+        let mut stopped = None;
         let read = {
             let mut guard = session.connection.lock().await;
             let Some(connection) = guard.as_mut() else {
                 return Err(NOT_OPEN.to_owned());
             };
-            sql::run_csv(connection, database, statement, out).await
+            sql::run_csv(connection, database, statement, out, &mut stopped).await
         };
-        self.settle_with(
-            scripts,
-            id,
-            &session,
-            read,
-            sql::failure,
-            &sql::csv_timed_out(),
-        )
-        .await
+        // A read that was ended early (a row that cannot be written, a second result) leaves the rest to the restore, whose time out is not the cause: its words are.
+        let timed_out = stopped.unwrap_or_else(sql::csv_timed_out);
+        self.settle_with(scripts, id, &session, read, sql::failure, &timed_out)
+            .await
     }
 
     /// The structure of `table` in `database` (D-5).
