@@ -1,9 +1,11 @@
 // The Jira part of the file pane of the Orca screen (J-2, #870): the tickets of the Jira that J-1 connects, by sprint, with the backlog under them. Each ticket is a row of its key, its summary and its status; a ticket that is done (its status category) is struck through. The tickets belong to no worktree, so the part hides the heading of the pane, as the database part does (A-43).
 // The part follows the project of the worktree that the pane shows (`Place`: its target and its project key, #1394): every command takes them, so the connection that is read is the project's own, and another project reads everything again from the start.
 // `jira_settings` is read first (it asks Jira nothing): with no site or no token saved the part shows the form of the connection in its place (J-1, #1395: the site's URL, the email address, the API token, 「保存」 and 「接続を試す」), and a saved connection is changed or deleted with the gear of the bar, which opens the same form. Then the boards (`jira_boards`: the scrum ones and the team-managed ones, `simple`; a kanban board is left out), the sprints of the board (`jira_sprints`; a team-managed board whose sprints are off is Jira's refusal, drawn in the place of the sprints) and, for the sprints that the choice names and for the backlog, the tickets, one section after another (`jira_sprint_issues`, `jira_backlog`). The board that is chosen is saved for the project (`jira_set_board`) and shown the next time. A section reads, fails and is read again on its own.
+// While the form is shown for a project with no connection (not from the gear), the connections of the other projects stand above it, one row each with 「使う」 (J-1, #1425): `jira_connections` is read when that form is shown, and `jira_copy` makes the project's connection of the row's. A failed read leaves no row and goes to the log only.
 // A double press on a row opens the ticket as a tab of the work pane (orca-jira-tab.ts), and 「＋」 opens the tab of a new ticket (#874).
 // Everything is read when the part comes to be shown, when 「再読み込み」 is pressed, after a save of the connection, and, while the first read failed, when the window gets the focus back; nothing is read at an interval.
 import type { JiraBoard } from "./bindings/JiraBoard";
+import type { JiraConnection } from "./bindings/JiraConnection";
 import type { JiraIssue } from "./bindings/JiraIssue";
 import type { JiraSettings } from "./bindings/JiraSettings";
 import type { JiraSprint } from "./bindings/JiraSprint";
@@ -11,6 +13,7 @@ import { $, span, tag } from "./dom.js";
 import { logError, showFailure } from "./error-card.js";
 import { PLUS_SVG, RELOAD_SVG, SETTINGS_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
+import { listedProjectName, THIS_MACHINE } from "./orca.js";
 
 // What the part shows: nothing yet, the first read, no connection, a read of the connection or of the boards that failed, or the board with its sections.
 type Stage = "idle" | "loading" | "none" | "failed" | "ready";
@@ -47,6 +50,9 @@ let conn: JiraSettings | null = null;
 let formOpen = false;
 let filledFor: string | null = null;
 let connState: { kind: "ok" | "warn"; text: string; user: string } | null = null;
+// The connections of the other projects that the form offers to copy, and whether a copy is on its way.
+let copies: JiraConnection[] = [];
+let copying = false;
 // The boards that are shown (the scrum ones and the team-managed ones), the one shown, its sprints (the active one first, as Jira gives them), Jira's refusal of the sprints of a board that has none, and the sections read so far.
 let boards: JiraBoard[] = [];
 let boardId: number | null = null;
@@ -186,10 +192,33 @@ function drawForm() {
   $("orca-jira-conn-user").hidden = connState.user === "";
 }
 
+// The rows of the connections to copy, above the form, while the project has no connection; with no row there is no separator either.
+function drawCopies() {
+  const box = $("orca-jira-copy");
+  box.hidden = stage !== "none" || copies.length === 0;
+  if (box.hidden) return box.replaceChildren();
+  box.replaceChildren(...copies.map(copyRow), tag("div", "orca-jira-copy-sep", "新しく入力"));
+}
+
+function copyRow(from: JiraConnection) {
+  const row = tag("div", "orca-jira-copy-row");
+  const name = tag("div", "orca-jira-copy-name", listedProjectName(from.environment, from.project) ?? from.project);
+  name.append(span("orca-jira-copy-chip", from.environment ?? THIS_MACHINE));
+  const text = tag("div", "orca-jira-copy-text");
+  text.append(name, tag("div", "orca-jira-copy-meta", [from.site.replace(/^https:\/\//, ""), from.email].filter((s) => s !== "").join(" ・ ")));
+  const use = tag("button", "text-btn", "使う");
+  use.type = "button";
+  use.disabled = copying;
+  use.onclick = () => void copyFrom(from);
+  row.append(text, use);
+  return row;
+}
+
 const draw = () => {
   drawBar();
   drawForm();
   drawList();
+  drawCopies();
 };
 
 // Puts what is saved into the form (the token is never given, so its field is empty) and the state that goes with it.
@@ -229,6 +258,50 @@ async function save() {
   filledFor = null;
   connState = null;
   void load(++seq, here, saved);
+}
+
+// Reads the connections that the project may copy (the project's own is left out). The run `run` asked for it; an answer of another run is dropped.
+async function readCopies(run: number, here: JiraPlace) {
+  copies = [];
+  try {
+    const all = await invoke("jira_connections");
+    if (run !== seq) return;
+    copies = all.filter((c) => c.environment !== here.environment || c.project !== here.project);
+  } catch (e) {
+    if (run !== seq) return;
+    logError("orca-jira", e);
+  }
+  drawCopies();
+}
+
+// 「使う」: Rust makes the connection of the project from the one of the row (the token stays in the keychain), and the part goes on as after 「保存」.
+async function copyFrom(from: JiraConnection) {
+  const here = place;
+  if (here === null) return;
+  setCopying(true);
+  let saved: JiraSettings;
+  try {
+    saved = await invoke("jira_copy", { ...here, fromEnvironment: from.environment, fromProject: from.project });
+  } catch (e) {
+    showFailure("orca-jira", e);
+    return setCopying(false);
+  }
+  setCopying(false);
+  if (place !== here) return;
+  conn = saved;
+  formOpen = false;
+  boardId = null;
+  filledFor = null;
+  connState = null;
+  copies = [];
+  void load(++seq, here, saved);
+}
+
+// Keeps the buttons of the rows and of the form off while a copy is on its way.
+function setCopying(busy: boolean) {
+  copying = busy;
+  formBusy(busy);
+  for (const button of document.querySelectorAll<HTMLButtonElement>("#orca-jira-copy .text-btn")) button.disabled = busy;
 }
 
 // 「接続を試す」: asks Jira who the credential of the form is, and saves nothing.
@@ -272,6 +345,7 @@ async function remove() {
     fillForm(here, null);
     stage = "none";
     draw();
+    void readCopies(seq, here);
   } catch (e) {
     showFailure("orca-jira", e);
   } finally {
@@ -341,7 +415,8 @@ async function load(run: number, here: JiraPlace, settings: JiraSettings) {
   if (!registered(settings)) {
     stage = "none";
     if (filledFor !== keyOf(here)) fillForm(here, settings);
-    return draw();
+    draw();
+    return void readCopies(run, here);
   }
   try {
     const all = await invoke("jira_boards", here);
@@ -392,6 +467,7 @@ export function syncOrcaJira(shown: boolean, next: JiraPlace | null) {
     formOpen = false;
     filledFor = null;
     connState = null;
+    copies = [];
     for (const id of ["orca-jira-site", "orca-jira-email", "orca-jira-token"]) input(id).value = "";
     boardId = null;
     sprintNote = null;

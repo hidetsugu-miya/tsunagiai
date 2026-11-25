@@ -231,6 +231,8 @@ const answers = {
   formation_consents: [],
   // J-1: no Jira connection saved yet; a spec that saves or tries one mocks `jira_save` or `jira_test`, and one that starts with a saved connection gives `jira_settings`.
   jira_settings: { site: "", email: "", hasToken: false, boardId: null },
+  // J-1 (#1425): no connection of another project to copy; a spec of the copy gives `jira_connections`, and presses 「使う」 with `jira_copy` mocked.
+  jira_connections: [],
   // A-13: no Ghostty settings imported yet; a spec that presses the import button mocks `ghostty_import`.
   ghostty_saved: null,
   // A-34: the language server of a worktree that was never started, with no way to start it (a spec that checks the pane or the start gives its own).

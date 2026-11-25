@@ -1668,6 +1668,17 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 #orca-jira-reload { margin-left: auto; }
 #orca-jira-reload svg, #orca-jira-new svg, #orca-jira-config svg { width: 14px; height: 14px; }
 /* #1395: the form of the connection of the project, in the place of the bar and the list. */
+#orca-jira-copy { flex: none; padding: 6px 0 0; }
+.orca-jira-copy-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; font-size: calc(12.5px * var(--fs)); }
+.orca-jira-copy-row:hover { background: var(--hover); }
+.orca-jira-copy-text { flex: 1; min-width: 0; }
+.orca-jira-copy-name, .orca-jira-copy-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.orca-jira-copy-name { font-weight: 600; }
+.orca-jira-copy-chip { margin-left: 4px; padding: 0 6px; border-radius: 9px; background: var(--soft); color: var(--accent-text); font-size: calc(10.5px * var(--fs)); font-weight: 400; line-height: 16px; }
+.orca-jira-copy-meta { color: var(--muted); font-size: calc(11.5px * var(--fs)); }
+.orca-jira-copy-row .text-btn { flex: none; }
+.orca-jira-copy-sep { display: flex; align-items: center; gap: 8px; padding: 6px 12px 0; color: var(--muted); font-size: calc(11.5px * var(--fs)); }
+.orca-jira-copy-sep::before, .orca-jira-copy-sep::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
 #orca-jira-conn { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 10px 8px; }
 #orca-jira-conn input { box-sizing: border-box; width: 100%; min-width: 0; height: 28px; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 14px; background: var(--surface); font: inherit; font-size: calc(12.5px * var(--fs)); color: inherit; }
 #orca-jira-conn input:focus { outline: 2px solid var(--accent); border-color: transparent; }
