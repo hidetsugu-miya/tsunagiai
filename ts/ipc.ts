@@ -69,7 +69,18 @@ import type { Skill } from "./bindings/Skill";
 import type { ClaudeCodePermissionMode } from "./bindings/ClaudeCodePermissionMode";
 import type { SkillScreen } from "./bindings/SkillScreen";
 import type { NewEvent } from "./bindings/NewEvent";
+import type { JiraBoard } from "./bindings/JiraBoard";
+import type { JiraComment } from "./bindings/JiraComment";
+import type { JiraCreated } from "./bindings/JiraCreated";
+import type { JiraIssueDetail } from "./bindings/JiraIssueDetail";
+import type { JiraIssues } from "./bindings/JiraIssues";
+import type { JiraIssueType } from "./bindings/JiraIssueType";
+import type { JiraPerson } from "./bindings/JiraPerson";
+import type { JiraPriority } from "./bindings/JiraPriority";
+import type { JiraProject } from "./bindings/JiraProject";
 import type { JiraSettings } from "./bindings/JiraSettings";
+import type { JiraSprint } from "./bindings/JiraSprint";
+import type { JiraTransition } from "./bindings/JiraTransition";
 import type { JiraUser } from "./bindings/JiraUser";
 import type { NotionAccount } from "./bindings/NotionAccount";
 import type { OrcaBranchSwitched } from "./bindings/OrcaBranchSwitched";
@@ -248,6 +259,39 @@ export interface Commands {
   jira_save: { args: { site: string; email: string; token: string }; result: JiraSettings };
   // J-1: asks the site who the credential of the form is (an empty token takes the stored one); saves nothing.
   jira_test: { args: { site: string; email: string; token: string }; result: JiraUser };
+  // J-2: the boards that the saved connection can see, by name (at most 200). Fails with a message when no connection is saved.
+  jira_boards: { args: undefined; result: JiraBoard[] };
+  // J-2: the active and future sprints of a board (at most 100), the active one first. A board that has no sprints (a kanban one) is Jira's refusal.
+  jira_sprints: { args: { boardId: number }; result: JiraSprint[] };
+  // J-2: the tickets of a sprint in the board's rank (at most 500; `truncated` says there were more).
+  jira_sprint_issues: { args: { sprintId: number }; result: JiraIssues };
+  // J-2: the backlog of a board in the board's rank (at most 500; `truncated` says there were more).
+  jira_backlog: { args: { boardId: number }; result: JiraIssues };
+  // J-2: one ticket for its tab: the fields of its right column, and its description and comments as Markdown (read from ADF; at most 200 comments, `commentsTruncated` says there were more). Fails with Jira's refusal for a key it does not know, and without asking when the key is not a ticket key.
+  jira_issue: { args: { key: string }; result: JiraIssueDetail };
+  // J-2 (#872): the status changes that the ticket can take now, each with the status it leads to.
+  jira_transitions: { args: { key: string }; result: JiraTransition[] };
+  // J-2 (#872): takes one of them (changes the status in Jira). Fails with Jira's reason, for a change that needs fields the app does not send.
+  jira_transition: { args: { key: string; transitionId: string }; result: null };
+  // J-2 (#872): the people the ticket can be assigned to (at most 100).
+  jira_assignable: { args: { key: string }; result: JiraPerson[] };
+  // J-2 (#872): assigns the ticket to the account, or to no one for `null` (changes the assignee in Jira).
+  jira_assign: { args: { key: string; accountId: string | null }; result: null };
+  // J-2 (#872): the priorities the ticket can be given; none when its priority cannot be edited.
+  jira_priorities: { args: { key: string }; result: JiraPriority[] };
+  // J-2 (#872): gives the ticket the priority (changes it in Jira).
+  jira_set_priority: { args: { key: string; priorityId: string }; result: null };
+  // J-2 (#872): puts the ticket in the sprint (an active or future one), or in the backlog for `null` (changes its sprint in Jira).
+  jira_set_sprint: { args: { key: string; sprintId: number | null }; result: null };
+  // J-2 (#873): saves the description of the ticket from the Markdown of the editor (`base` is the Markdown the editor started from: Rust refuses when Jira's description is no longer that), and gives the Markdown of what Jira now holds. Rust puts the Markdown into the ADF that Jira holds, so what Markdown cannot say stays in the blocks that were not changed.
+  jira_set_description: { args: { key: string; base: string; markdown: string }; result: string };
+  // J-2 (#873): adds a comment from Markdown and gives it as Jira answers it (the author, the time, the text as Markdown).
+  jira_add_comment: { args: { key: string; markdown: string }; result: JiraComment };
+  // J-2 (#874): the projects that a ticket can be created in (the credential has the permission to create there; at most 200, by name), and the issue types of one (no subtask). `projectId` is a number as text.
+  jira_projects: { args: undefined; result: JiraProject[] };
+  jira_issue_types: { args: { projectId: string }; result: JiraIssueType[] };
+  // J-2 (#874): creates a ticket (changes Jira) from the project, the issue type, the summary and the description as Markdown (empty for none), and puts it in the sprint when `sprintId` is given. The answer is its key, with `sprintError` when the ticket was made but could not go into the sprint.
+  jira_create_issue: { args: { projectId: string; issueTypeId: string; summary: string; markdown: string; sprintId: number | null }; result: JiraCreated };
   slack_channels: { args: { teamId: string; refresh: boolean }; result: Channel[] };
   // The newest 10 unread rows of each joined channel (no direct messages) of every workspace, newest first: the unread messages (S-8) and the threads with unread replies (S-14, each with `unreadReplies`), and `watched`, the watched threads (S-13, each with `watch`, the newest activity first); `failed` are workspaces whose read failed (the messages their earlier reads kept are still listed),
   // `missing` the scopes a token lacks (users:read, files:read, channels:write, groups:write among them), `refreshSecs` the wait until the next read, `pendingChannels` the channels no read has reached yet,

@@ -3,12 +3,21 @@
 //! Only Atlassian Cloud is spoken to: the site is `https://{name}.atlassian.net` and nothing else (`site_url`), and a token goes to that site or to `api.atlassian.com` only, never to another host.
 //! An email address makes the token a Basic credential (`email:token`, an API token of an account) sent to the site; with none it is a Bearer token (a scoped token) sent through the gateway `api.atlassian.com/ex/jira/{cloudId}`, which is the only place Atlassian takes it (`api_base` chooses).
 //! The token is never returned to the screen, logged or written to a file; a save with no token keeps the stored one.
+//!
+//! The boards, the sprints and their tickets are read through the Agile API (`/rest/agile/1.0`, J-2, #869): the commands `jira_boards`, `jira_sprints`, `jira_sprint_issues` and `jira_backlog` read the saved connection and call it where `api_base` says. They only read; the answers are turned into the types below by pure functions.
+//! A ticket is read for its tab (J-2, #871) by `jira_issue`: the ticket with its description (REST API v3, where the description is ADF, read as Markdown by `adf`), its sprint (the Agile API) and its comments.
+//! The tab changes four fields of a ticket (J-2, #872): the status (`jira_transitions` lists what the ticket can take now and `jira_transition` takes one), the assignee (`jira_assignable`, `jira_assign`), the priority (`jira_priorities`, `jira_set_priority`) and the sprint (`jira_set_sprint`). These are the calls that write to Jira, with the two of #873 below; every id that reaches a path or a body is checked first (`key_of`, `numeric_id_of`, `account_id_of`).
+//! The tab also saves the description (`jira_set_description`) and adds a comment (`jira_add_comment`, J-2, #873): the Markdown of the editor is turned back into ADF by `markdown` (a pure function), the description being put into the document that Jira holds now so that what Markdown cannot say stays.
+
+mod adf;
+mod markdown;
 
 use std::{path::Path, time::Duration};
 
 use base64::{engine::general_purpose::STANDARD, Engine};
-use reqwest::header::{HeaderValue, ACCEPT, AUTHORIZATION};
-use serde::{Deserialize, Serialize};
+use reqwest::header::{HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde_json::Value;
 use tauri::AppHandle;
 #[cfg(test)]
 use ts_rs::TS;
@@ -35,6 +44,37 @@ const TIMEOUT: Duration = Duration::from_secs(15);
 /// How much of an error body goes into the message.
 const BODY_LIMIT: usize = 200;
 const TOKEN_MISSING: &str = "API トークンを入力してください";
+const NOT_SAVED: &str = "Jira の接続が保存されていません";
+/// The Agile API, after `api_base`.
+const BOARD_PATH: &str = "/rest/agile/1.0/board";
+const SPRINT_PATH: &str = "/rest/agile/1.0/sprint";
+const PROJECT_SEARCH_PATH: &str = "/rest/api/3/project/search";
+/// What each call asks for a page, and how many items one command reads in all (a command stops at the page that reaches the limit).
+const PAGE_SIZE: usize = 50;
+const MAX_BOARDS: usize = 200;
+const MAX_SPRINTS: usize = 100;
+const MAX_ISSUES: usize = 500;
+/// The fields of a ticket that `JiraIssue` holds, and nothing else is asked for.
+const ISSUE_FIELDS: &str = "fields=summary,status,assignee,priority";
+/// One ticket (J-2, #871): its fields and its description in REST API v3 (ADF), its sprint in the Agile API, and its comments.
+const ISSUE_PATH: &str = "/rest/api/3/issue";
+const AGILE_ISSUE_PATH: &str = "/rest/agile/1.0/issue";
+const DETAIL_FIELDS: &str = "summary,description,status,assignee,priority,labels,parent";
+const MAX_COMMENTS: usize = 200;
+/// The longest ticket key taken (a project key of letters, digits and underscores, a hyphen and a number).
+const KEY_LIMIT: usize = 64;
+/// The most people that the list of assignable users holds.
+const MAX_ASSIGNABLE: usize = 100;
+/// The longest id of a transition or of a priority (Jira's are numbers) and of an account taken.
+const ID_LIMIT: usize = 18;
+const ACCOUNT_ID_LIMIT: usize = 128;
+/// The longest Markdown that is written back as ADF (J-2, #873), in bytes.
+const MARKDOWN_LIMIT: usize = 200_000;
+/// The projects and the issue types that the form of a new ticket offers, at most.
+const MAX_PROJECTS: usize = 200;
+const MAX_ISSUE_TYPES: usize = 100;
+/// Jira's own limit of a summary.
+const SUMMARY_LIMIT: usize = 255;
 
 /// What `jira-settings.json` holds.
 #[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
@@ -64,6 +104,158 @@ pub struct JiraUser {
     pub display_name: String,
     #[serde(default)]
     pub email_address: Option<String>,
+}
+
+/// A board of Jira Software. `type` is Jira's own word: `scrum`, `kanban` or `simple` (only a scrum board has sprints).
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct JiraBoard {
+    #[cfg_attr(test, ts(type = "number"))]
+    pub id: u64,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default, rename = "type")]
+    pub board_type: String,
+}
+
+/// A sprint of a board. `state` is Jira's own word: `active`, `future` or `closed`; the dates are Jira's ISO 8601 text, and a sprint that has not started has none.
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct JiraSprint {
+    #[cfg_attr(test, ts(type = "number"))]
+    pub id: u64,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub start_date: Option<String>,
+    #[serde(default)]
+    pub end_date: Option<String>,
+}
+
+/// A ticket as the list draws it. `statusCategory` is the key of the status's category: `new`, `indeterminate` or `done` (`undefined` when Jira gave none). `assignee` is the display name, `null` when unassigned, and `priority` is `null` when the project has none.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct JiraIssue {
+    pub key: String,
+    pub summary: String,
+    pub status: String,
+    pub status_category: String,
+    pub assignee: Option<String>,
+    pub priority: Option<String>,
+}
+
+/// The tickets of a sprint or of a backlog. `truncated` is true when there were more than the command reads (`MAX_ISSUES`).
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct JiraIssues {
+    pub issues: Vec<JiraIssue>,
+    pub truncated: bool,
+}
+
+/// A ticket as its tab draws it (J-2, #871). `description` and the `body` of a comment are Markdown (read from Jira's ADF), `sprint` is the name of the sprint the ticket is in now (`null` for none), `created` is Jira's time as `YYYY-MM-DD HH:MM` in the offset it gave, and `commentsTruncated` is true when there were more comments than the command reads (`MAX_COMMENTS`).
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct JiraIssueDetail {
+    pub key: String,
+    pub summary: String,
+    pub description: String,
+    pub status: String,
+    pub status_category: String,
+    pub assignee: Option<String>,
+    pub priority: Option<String>,
+    pub sprint: Option<String>,
+    pub labels: Vec<String>,
+    pub parent: Option<JiraParent>,
+    pub comments: Vec<JiraComment>,
+    pub comments_truncated: bool,
+}
+
+/// The parent of a ticket: its key and its summary.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct JiraParent {
+    pub key: String,
+    pub summary: String,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct JiraComment {
+    pub author: String,
+    pub created: String,
+    pub body: String,
+}
+
+/// A change of status that the ticket can take now (J-2, #872). `status` is the name of the status it leads to and `statusCategory` the key of that status's category, the same as the list has them.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct JiraTransition {
+    pub id: String,
+    pub status: String,
+    pub status_category: String,
+}
+
+/// A person that the ticket can be assigned to.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct JiraPerson {
+    pub account_id: String,
+    pub display_name: String,
+}
+
+/// A project that a ticket can be created in (J-2, #874): its id (a number, which is what Rust sends back), its key and its name.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct JiraProject {
+    pub id: String,
+    pub key: String,
+    pub name: String,
+}
+
+/// An issue type that a ticket of the project can be created with (a subtask is left out: it needs a parent).
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct JiraIssueType {
+    pub id: String,
+    pub name: String,
+}
+
+/// The ticket that was created (J-2, #874). `sprintError` is the reason when the ticket was made but could not be put in the sprint (the ticket exists all the same), and `null` otherwise.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct JiraCreated {
+    pub key: String,
+    pub sprint_error: Option<String>,
+}
+
+/// A priority that the ticket can be given.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct JiraPriority {
+    pub id: String,
+    pub name: String,
 }
 
 /// The origin of a site: `https://{name}.atlassian.net` only. Another scheme, host, port, user info or an empty or dotted name is refused, and a path is dropped.
@@ -123,17 +315,231 @@ fn authorization(email: &str, token: &str) -> String {
     }
 }
 
+/// The message for an answer that is not a success.
+fn failure_of(status: u16, body: &str) -> String {
+    match status {
+        401 | 403 => format!("Jira が認証を拒否しました（{status}）"),
+        _ => {
+            let shown: String = body.chars().take(BODY_LIMIT).collect();
+            format!("Jira が {status} を返しました: {shown}")
+        }
+    }
+}
+
 /// What Jira's answer to the call of `MYSELF_PATH` means.
 fn user_of(status: u16, body: &str) -> Result<JiraUser, String> {
     match status {
         200..=299 => {
             serde_json::from_str(body).map_err(|e| format!("Jira の応答を読めません: {e}"))
         }
-        401 | 403 => Err(format!("Jira が認証を拒否しました（{status}）")),
-        _ => {
-            let shown: String = body.chars().take(BODY_LIMIT).collect();
-            Err(format!("Jira が {status} を返しました: {shown}"))
+        _ => Err(failure_of(status, body)),
+    }
+}
+
+/// One page of the Agile API: the boards and the sprints are under `values`, the tickets under `issues` (and the comments of a ticket, of REST API v3, under `comments`, the issue types of the create metadata under `issueTypes`). Jira gives `isLast` for the first two and `total` for the last (and for some of the first).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Page<T> {
+    #[serde(
+        default = "Vec::new",
+        alias = "values",
+        alias = "issues",
+        alias = "comments",
+        alias = "issueTypes"
+    )]
+    items: Vec<T>,
+    total: Option<usize>,
+    is_last: Option<bool>,
+}
+
+fn page_of<T: DeserializeOwned>(status: u16, body: &str) -> Result<Page<T>, String> {
+    if !(200..=299).contains(&status) {
+        return Err(failure_of(status, body));
+    }
+    serde_json::from_str(body).map_err(|e| format!("Jira の応答を読めません: {e}"))
+}
+
+/// Where the next page starts, or `None` at the end: a page with nothing, `isLast`, or the count that `total` gives having been reached. It goes on by what was received, not by what was asked, because Jira may give fewer than `maxResults`.
+fn next_start(start: usize, page: &Page<impl Sized>) -> Option<usize> {
+    let next = start + page.items.len();
+    let done = page.items.is_empty()
+        || page.is_last == Some(true)
+        || page.total.is_some_and(|total| next >= total);
+    (!done).then_some(next)
+}
+
+#[derive(Deserialize)]
+struct RawIssue {
+    key: String,
+    fields: Option<RawFields>,
+}
+
+#[derive(Deserialize, Default)]
+struct RawFields {
+    summary: Option<String>,
+    status: Option<RawStatus>,
+    assignee: Option<RawUser>,
+    priority: Option<RawPriority>,
+    description: Option<Value>,
+    labels: Option<Vec<String>>,
+    parent: Option<RawParent>,
+}
+
+#[derive(Deserialize)]
+struct RawParent {
+    key: String,
+    fields: Option<RawParentFields>,
+}
+
+#[derive(Deserialize)]
+struct RawParentFields {
+    summary: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RawComment {
+    author: Option<RawUser>,
+    body: Option<Value>,
+    created: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawStatus {
+    name: Option<String>,
+    status_category: Option<RawCategory>,
+}
+
+#[derive(Deserialize)]
+struct RawCategory {
+    key: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawUser {
+    display_name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RawPriority {
+    name: Option<String>,
+}
+
+fn issue_of(raw: RawIssue) -> JiraIssue {
+    let fields = raw.fields.unwrap_or_default();
+    let status = fields.status;
+    JiraIssue {
+        key: raw.key,
+        summary: fields.summary.unwrap_or_default(),
+        status_category: status
+            .as_ref()
+            .and_then(|s| s.status_category.as_ref())
+            .and_then(|c| c.key.clone())
+            .unwrap_or_else(|| "undefined".to_owned()),
+        status: status.and_then(|s| s.name).unwrap_or_default(),
+        assignee: fields.assignee.and_then(|u| u.display_name),
+        priority: fields.priority.and_then(|p| p.name),
+    }
+}
+
+/// A ticket key as the tab asks for it: a project key (a capital letter, then capitals, digits and underscores), a hyphen and a number. It goes into a path, so nothing else is let through.
+fn key_of(input: &str) -> Result<&str, String> {
+    let bad = || "チケットのキーの形が正しくありません".to_owned();
+    let (project, number) = input.split_once('-').ok_or_else(bad)?;
+    let mut letters = project.chars();
+    let ok = input.len() <= KEY_LIMIT
+        && letters.next().is_some_and(|c| c.is_ascii_uppercase())
+        && letters.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+        && !number.is_empty()
+        && number.chars().all(|c| c.is_ascii_digit());
+    if ok {
+        Ok(input)
+    } else {
+        Err(bad())
+    }
+}
+
+/// Jira's time (`2026-11-20T09:30:12.345+0900`) as `2026-11-20 09:30`, in the offset Jira gave (the one of the credential's user); a text of another form is kept as it is.
+fn shown_time(time: &str) -> String {
+    match (time.as_bytes().get(10), time.get(..10), time.get(11..16)) {
+        (Some(b'T'), Some(date), Some(clock)) => format!("{date} {clock}"),
+        _ => time.to_owned(),
+    }
+}
+
+/// What Jira's answer to the read of a ticket (REST API v3) means.
+fn raw_issue_of(status: u16, body: &str) -> Result<RawIssue, String> {
+    match status {
+        200..=299 => {
+            serde_json::from_str(body).map_err(|e| format!("Jira の応答を読めません: {e}"))
         }
+        _ => Err(failure_of(status, body)),
+    }
+}
+
+/// The name of the sprint that the Agile API's answer for a ticket (`fields=sprint`) puts it in, `None` for a ticket in none.
+fn sprint_of(status: u16, body: &str) -> Result<Option<String>, String> {
+    #[derive(Deserialize)]
+    struct Sprint {
+        name: Option<String>,
+    }
+    #[derive(Deserialize)]
+    struct Fields {
+        sprint: Option<Sprint>,
+    }
+    #[derive(Deserialize)]
+    struct Answer {
+        fields: Option<Fields>,
+    }
+    if !(200..=299).contains(&status) {
+        return Err(failure_of(status, body));
+    }
+    let answer: Answer =
+        serde_json::from_str(body).map_err(|e| format!("Jira の応答を読めません: {e}"))?;
+    Ok(answer
+        .fields
+        .and_then(|f| f.sprint)
+        .and_then(|s| s.name)
+        .filter(|name| !name.is_empty()))
+}
+
+/// The ticket's tab from what the three reads gave: the description and the comments are read as Markdown.
+fn detail_of(
+    mut raw: RawIssue,
+    sprint: Option<String>,
+    comments: Vec<RawComment>,
+    comments_truncated: bool,
+) -> JiraIssueDetail {
+    let (description, labels, parent) = raw
+        .fields
+        .as_mut()
+        .map(|f| (f.description.take(), f.labels.take(), f.parent.take()))
+        .unwrap_or_default();
+    let issue = issue_of(raw);
+    JiraIssueDetail {
+        key: issue.key,
+        summary: issue.summary,
+        description: adf::adf_to_markdown(&description.unwrap_or(Value::Null)),
+        status: issue.status,
+        status_category: issue.status_category,
+        assignee: issue.assignee,
+        priority: issue.priority,
+        sprint,
+        labels: labels.unwrap_or_default(),
+        parent: parent.map(|p| JiraParent {
+            summary: p.fields.and_then(|f| f.summary).unwrap_or_default(),
+            key: p.key,
+        }),
+        comments: comments
+            .into_iter()
+            .map(|c| JiraComment {
+                author: c.author.and_then(|u| u.display_name).unwrap_or_default(),
+                created: shown_time(&c.created.unwrap_or_default()),
+                body: adf::adf_to_markdown(&c.body.unwrap_or(Value::Null)),
+            })
+            .collect(),
+        comments_truncated,
     }
 }
 
@@ -193,31 +599,585 @@ pub(crate) async fn api_base(
     Ok(format!("{gateway}/ex/jira/{}", cloud_id_of(status, &body)?))
 }
 
-/// Asks Jira who the credential belongs to. `base` is what `api_base` answered.
-async fn fetch_user(
-    http: &reqwest::Client,
-    base: &str,
-    authorization: &str,
-) -> Result<JiraUser, String> {
-    let mut header = HeaderValue::from_str(authorization).map_err(|e| e.to_string())?;
+/// What a call needs: the client, the base that `api_base` chose and the `Authorization` value.
+struct Conn {
+    http: reqwest::Client,
+    base: String,
+    authorization: String,
+}
+
+/// `api_base` for the credential, with the client and the header made once.
+async fn connect(site: &str, email: &str, token: &str, gateway: &str) -> Result<Conn, String> {
+    let http = client()?;
+    let base = api_base(&http, site, email, gateway).await?;
+    Ok(Conn {
+        http,
+        base,
+        authorization: authorization(email, token),
+    })
+}
+
+/// A call of `path` (with its query) after the base, with the credential: the status and the body. The one place that sends it. `body` is the JSON of a write (J-2, #872), none for a read.
+async fn send(
+    conn: &Conn,
+    method: reqwest::Method,
+    path: &str,
+    body: Option<&Value>,
+) -> Result<(u16, String), String> {
+    let mut header = HeaderValue::from_str(&conn.authorization).map_err(|e| e.to_string())?;
     header.set_sensitive(true);
-    let res = http
-        .get(format!("{base}{MYSELF_PATH}"))
+    let mut request = conn
+        .http
+        .request(method, format!("{}{path}", conn.base))
         .header(AUTHORIZATION, header)
-        .header(ACCEPT, "application/json")
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+        .header(ACCEPT, "application/json");
+    if let Some(body) = body {
+        request = request
+            .header(CONTENT_TYPE, "application/json")
+            .body(body.to_string());
+    }
+    let res = request.send().await.map_err(|e| e.to_string())?;
     let status = res.status().as_u16();
-    let body = res.text().await.map_err(|e| e.to_string())?;
+    let text = res.text().await.map_err(|e| e.to_string())?;
+    Ok((status, text))
+}
+
+/// A GET of `path`: the status and the body.
+async fn get(conn: &Conn, path: &str) -> Result<(u16, String), String> {
+    send(conn, reqwest::Method::GET, path, None).await
+}
+
+/// Asks Jira who the credential belongs to.
+async fn fetch_user(conn: &Conn) -> Result<JiraUser, String> {
+    let (status, body) = get(conn, MYSELF_PATH).await?;
     user_of(status, &body)
 }
 
-/// The test of a connection: `api_base`, then the call of `fetch_user` with the credential.
+/// The test of a connection: `connect`, then the call of `fetch_user`.
 async fn check(site: &str, email: &str, token: &str, gateway: &str) -> Result<JiraUser, String> {
-    let http = client()?;
-    let base = api_base(&http, site, email, gateway).await?;
-    fetch_user(&http, &base, &authorization(email, token)).await
+    fetch_user(&connect(site, email, token, gateway).await?).await
+}
+
+/// Reads the pages of a list one after another, until its end or until `limit` items are held; the items past `limit` are dropped and the second value says so. `query` has no `startAt` or `maxResults` (and may be empty).
+async fn fetch_all<T: DeserializeOwned>(
+    conn: &Conn,
+    path: &str,
+    query: &str,
+    limit: usize,
+) -> Result<(Vec<T>, bool), String> {
+    let mut items = Vec::new();
+    let mut start = 0;
+    let join = if query.is_empty() { "" } else { "&" };
+    loop {
+        let (status, body) = get(
+            conn,
+            &format!("{path}?{query}{join}startAt={start}&maxResults={PAGE_SIZE}"),
+        )
+        .await?;
+        let page = page_of::<T>(status, &body)?;
+        let next = next_start(start, &page);
+        items.extend(page.items);
+        let Some(next) = next else {
+            return Ok((items, false));
+        };
+        if items.len() >= limit {
+            items.truncate(limit);
+            return Ok((items, true));
+        }
+        start = next;
+    }
+}
+
+async fn boards(conn: &Conn) -> Result<Vec<JiraBoard>, String> {
+    Ok(fetch_all(conn, BOARD_PATH, "orderBy=name", MAX_BOARDS)
+        .await?
+        .0)
+}
+
+/// The sprints that are active or still to come, the active one first (Jira orders them by state, then by position).
+async fn sprints(conn: &Conn, board_id: u64) -> Result<Vec<JiraSprint>, String> {
+    let path = format!("{BOARD_PATH}/{board_id}/sprint");
+    Ok(fetch_all(conn, &path, "state=active,future", MAX_SPRINTS)
+        .await?
+        .0)
+}
+
+async fn issues(conn: &Conn, path: &str) -> Result<JiraIssues, String> {
+    let (raw, truncated) = fetch_all::<RawIssue>(conn, path, ISSUE_FIELDS, MAX_ISSUES).await?;
+    Ok(JiraIssues {
+        issues: raw.into_iter().map(issue_of).collect(),
+        truncated,
+    })
+}
+
+async fn sprint_issues(conn: &Conn, sprint_id: u64) -> Result<JiraIssues, String> {
+    issues(conn, &format!("{SPRINT_PATH}/{sprint_id}/issue")).await
+}
+
+/// The incomplete tickets of a board that no active or future sprint holds.
+async fn backlog(conn: &Conn, board_id: u64) -> Result<JiraIssues, String> {
+    issues(conn, &format!("{BOARD_PATH}/{board_id}/backlog")).await
+}
+
+/// A ticket for its tab: its fields and description (REST API v3), its sprint (the Agile API) and its comments, oldest first (at most `MAX_COMMENTS`).
+async fn issue_detail(conn: &Conn, key: &str) -> Result<JiraIssueDetail, String> {
+    let key = key_of(key)?;
+    let (status, body) = get(conn, &format!("{ISSUE_PATH}/{key}?fields={DETAIL_FIELDS}")).await?;
+    let raw = raw_issue_of(status, &body)?;
+    let (status, body) = get(conn, &format!("{AGILE_ISSUE_PATH}/{key}?fields=sprint")).await?;
+    let sprint = sprint_of(status, &body)?;
+    let (comments, truncated) = fetch_all::<RawComment>(
+        conn,
+        &format!("{ISSUE_PATH}/{key}/comment"),
+        "orderBy=created",
+        MAX_COMMENTS,
+    )
+    .await?;
+    Ok(detail_of(raw, sprint, comments, truncated))
+}
+
+/// A transition id or a priority id as the screen gives it back: Jira's are numbers, and one goes into a path or a body, so nothing else is let through.
+fn numeric_id_of(input: &str) -> Result<&str, String> {
+    if !input.is_empty() && input.len() <= ID_LIMIT && input.chars().all(|c| c.is_ascii_digit()) {
+        Ok(input)
+    } else {
+        Err("ID の形が正しくありません".into())
+    }
+}
+
+/// An account id as the screen gives it back: letters and digits, then also `:`, `-` and `_` (`5b10ac8d82e05b22cc7d4ef5`, `712020:{uuid}`). It starts with a letter or a digit, so that `-1` (Jira's "the default assignee") is never sent.
+fn account_id_of(input: &str) -> Result<&str, String> {
+    let mut chars = input.chars();
+    let ok = input.len() <= ACCOUNT_ID_LIMIT
+        && chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '-' | '_'));
+    if ok {
+        Ok(input)
+    } else {
+        Err("アカウント ID の形が正しくありません".into())
+    }
+}
+
+/// The status changes that Jira's answer to the read of the transitions of a ticket gives: those it can take now (`isAvailable` is not false) and whose id is a number, each with the status it leads to (the name of the transition when Jira names no status).
+fn transitions_of(status: u16, body: &str) -> Result<Vec<JiraTransition>, String> {
+    #[derive(Deserialize)]
+    struct Answer {
+        #[serde(default)]
+        transitions: Vec<Raw>,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Raw {
+        id: String,
+        name: Option<String>,
+        to: Option<RawStatus>,
+        is_available: Option<bool>,
+    }
+    if !(200..=299).contains(&status) {
+        return Err(failure_of(status, body));
+    }
+    let answer: Answer =
+        serde_json::from_str(body).map_err(|e| format!("Jira の応答を読めません: {e}"))?;
+    Ok(answer
+        .transitions
+        .into_iter()
+        .filter(|t| t.is_available != Some(false) && numeric_id_of(&t.id).is_ok())
+        .map(|t| {
+            let to = t.to;
+            let category = to
+                .as_ref()
+                .and_then(|s| s.status_category.as_ref())
+                .and_then(|c| c.key.clone())
+                .unwrap_or_else(|| "undefined".to_owned());
+            JiraTransition {
+                id: t.id,
+                status: to
+                    .and_then(|s| s.name)
+                    .filter(|n| !n.is_empty())
+                    .or(t.name)
+                    .unwrap_or_default(),
+                status_category: category,
+            }
+        })
+        .collect())
+}
+
+/// The people that Jira's answer to the search of assignable users gives: the active ones, with an account id of the form taken and a name.
+fn assignable_of(status: u16, body: &str) -> Result<Vec<JiraPerson>, String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Raw {
+        account_id: Option<String>,
+        display_name: Option<String>,
+        active: Option<bool>,
+    }
+    if !(200..=299).contains(&status) {
+        return Err(failure_of(status, body));
+    }
+    let people: Vec<Raw> =
+        serde_json::from_str(body).map_err(|e| format!("Jira の応答を読めません: {e}"))?;
+    Ok(people
+        .into_iter()
+        .filter(|p| p.active != Some(false))
+        .filter_map(|p| {
+            let account_id = p.account_id.filter(|id| account_id_of(id).is_ok())?;
+            let display_name = p.display_name.filter(|n| !n.is_empty())?;
+            Some(JiraPerson {
+                account_id,
+                display_name,
+            })
+        })
+        .collect())
+}
+
+/// The priorities that Jira's answer to the edit metadata of a ticket allows (`fields.priority.allowedValues`): none when the ticket's priority cannot be edited by this credential. Only those with a numeric id are kept.
+fn priorities_of(status: u16, body: &str) -> Result<Vec<JiraPriority>, String> {
+    #[derive(Deserialize)]
+    struct Allowed {
+        id: Option<String>,
+        name: Option<String>,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Field {
+        #[serde(default)]
+        allowed_values: Vec<Allowed>,
+    }
+    #[derive(Deserialize)]
+    struct Fields {
+        priority: Option<Field>,
+    }
+    #[derive(Deserialize)]
+    struct Answer {
+        fields: Option<Fields>,
+    }
+    if !(200..=299).contains(&status) {
+        return Err(failure_of(status, body));
+    }
+    let answer: Answer =
+        serde_json::from_str(body).map_err(|e| format!("Jira の応答を読めません: {e}"))?;
+    Ok(answer
+        .fields
+        .and_then(|f| f.priority)
+        .map(|p| p.allowed_values)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|v| {
+            let id = v.id.filter(|id| numeric_id_of(id).is_ok())?;
+            Some(JiraPriority {
+                id,
+                name: v.name.unwrap_or_default(),
+            })
+        })
+        .collect())
+}
+
+/// What Jira's answer to a write means: any 2xx is done (Jira answers 204 with no body), the rest is the failure with its reason.
+fn done_of(status: u16, body: &str) -> Result<(), String> {
+    if (200..=299).contains(&status) {
+        Ok(())
+    } else {
+        Err(failure_of(status, body))
+    }
+}
+
+async fn transitions(conn: &Conn, key: &str) -> Result<Vec<JiraTransition>, String> {
+    let key = key_of(key)?;
+    let (status, body) = get(conn, &format!("{ISSUE_PATH}/{key}/transitions")).await?;
+    transitions_of(status, &body)
+}
+
+async fn transition(conn: &Conn, key: &str, id: &str) -> Result<(), String> {
+    let (key, id) = (key_of(key)?, numeric_id_of(id)?);
+    let body = serde_json::json!({ "transition": { "id": id } });
+    let (status, text) = send(
+        conn,
+        reqwest::Method::POST,
+        &format!("{ISSUE_PATH}/{key}/transitions"),
+        Some(&body),
+    )
+    .await?;
+    done_of(status, &text)
+}
+
+async fn assignable(conn: &Conn, key: &str) -> Result<Vec<JiraPerson>, String> {
+    let key = key_of(key)?;
+    let path =
+        format!("/rest/api/3/user/assignable/search?issueKey={key}&maxResults={MAX_ASSIGNABLE}");
+    let (status, body) = get(conn, &path).await?;
+    assignable_of(status, &body)
+}
+
+/// Assigns the ticket to the account, or to no one (`None`).
+async fn assign(conn: &Conn, key: &str, account_id: Option<&str>) -> Result<(), String> {
+    let key = key_of(key)?;
+    let account_id = account_id.map(account_id_of).transpose()?;
+    let body = serde_json::json!({ "accountId": account_id });
+    let (status, text) = send(
+        conn,
+        reqwest::Method::PUT,
+        &format!("{ISSUE_PATH}/{key}/assignee"),
+        Some(&body),
+    )
+    .await?;
+    done_of(status, &text)
+}
+
+async fn priorities(conn: &Conn, key: &str) -> Result<Vec<JiraPriority>, String> {
+    let key = key_of(key)?;
+    let (status, body) = get(conn, &format!("{ISSUE_PATH}/{key}/editmeta")).await?;
+    priorities_of(status, &body)
+}
+
+async fn set_priority(conn: &Conn, key: &str, id: &str) -> Result<(), String> {
+    let (key, id) = (key_of(key)?, numeric_id_of(id)?);
+    let body = serde_json::json!({ "fields": { "priority": { "id": id } } });
+    let (status, text) = send(
+        conn,
+        reqwest::Method::PUT,
+        &format!("{ISSUE_PATH}/{key}"),
+        Some(&body),
+    )
+    .await?;
+    done_of(status, &text)
+}
+
+/// Puts the ticket in the sprint (an active or future one, which the Agile API takes), or back in the backlog (`None`), which takes it out of its sprints.
+async fn move_to_sprint(conn: &Conn, key: &str, sprint_id: Option<u64>) -> Result<(), String> {
+    let key = key_of(key)?;
+    let path = match sprint_id {
+        Some(id) => format!("{SPRINT_PATH}/{id}/issue"),
+        None => "/rest/agile/1.0/backlog/issue".to_owned(),
+    };
+    let body = serde_json::json!({ "issues": [key] });
+    let (status, text) = send(conn, reqwest::Method::POST, &path, Some(&body)).await?;
+    done_of(status, &text)
+}
+
+/// Markdown that is written back as ADF: at most `MARKDOWN_LIMIT` bytes.
+fn markdown_of(markdown: &str) -> Result<&str, String> {
+    if markdown.len() <= MARKDOWN_LIMIT {
+        Ok(markdown)
+    } else {
+        Err("文章が長すぎます".into())
+    }
+}
+
+/// The description saved from the editor (J-2, #873). The description that Jira holds now is read, and it must be the one that the editor started from (`base`, the Markdown the tab was given): another change in between is refused, so that it is never overwritten. `markdown` is then put into that document (`markdown::merged`), which keeps what Markdown cannot say of every block that was not changed, and the result is put as the description (null when it is empty). Nothing is sent when it changes nothing. Gives the Markdown of what was saved.
+async fn set_description(
+    conn: &Conn,
+    key: &str,
+    base: &str,
+    markdown: &str,
+) -> Result<String, String> {
+    let (key, markdown) = (key_of(key)?, markdown_of(markdown)?);
+    let (status, body) = get(conn, &format!("{ISSUE_PATH}/{key}?fields=description")).await?;
+    let current = raw_issue_of(status, &body)?
+        .fields
+        .and_then(|f| f.description)
+        .unwrap_or(Value::Null);
+    if adf::adf_to_markdown(&current) != base {
+        return Err("説明が Jira で変更されています。読み直してください".into());
+    }
+    let old: Vec<Value> = current
+        .get("content")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut blocks = markdown::merged(&old, markdown);
+    if blocks == old && current.is_object() {
+        return Ok(base.to_owned());
+    }
+    markdown::with_ids(&mut blocks);
+    let description = if blocks.is_empty() {
+        Value::Null
+    } else {
+        serde_json::json!({"version": 1, "type": "doc", "content": blocks})
+    };
+    let body = serde_json::json!({ "fields": { "description": description } });
+    let (status, text) = send(
+        conn,
+        reqwest::Method::PUT,
+        &format!("{ISSUE_PATH}/{key}"),
+        Some(&body),
+    )
+    .await?;
+    done_of(status, &text)?;
+    Ok(adf::adf_to_markdown(&description))
+}
+
+/// The comment that Jira answers a new one with: its author, its time and its text as Markdown.
+fn comment_of(status: u16, body: &str) -> Result<JiraComment, String> {
+    if !(200..=299).contains(&status) {
+        return Err(failure_of(status, body));
+    }
+    let raw: RawComment = serde_json::from_str(body).map_err(|_| {
+        "コメントは追加されましたが、応答を読めません。読み直してください".to_owned()
+    })?;
+    Ok(JiraComment {
+        author: raw.author.and_then(|u| u.display_name).unwrap_or_default(),
+        created: shown_time(&raw.created.unwrap_or_default()),
+        body: adf::adf_to_markdown(&raw.body.unwrap_or(Value::Null)),
+    })
+}
+
+/// Adds a comment to the ticket (J-2, #873): the Markdown as ADF, which `POST /rest/api/3/issue/{key}/comment` takes as `body`.
+async fn add_comment(conn: &Conn, key: &str, markdown: &str) -> Result<JiraComment, String> {
+    let (key, markdown) = (key_of(key)?, markdown_of(markdown)?);
+    let mut blocks = markdown::markdown_to_blocks(markdown);
+    if blocks.is_empty() {
+        return Err("コメントを入力してください".into());
+    }
+    markdown::with_ids(&mut blocks);
+    let body = serde_json::json!({ "body": {"version": 1, "type": "doc", "content": blocks} });
+    let (status, text) = send(
+        conn,
+        reqwest::Method::POST,
+        &format!("{ISSUE_PATH}/{key}/comment"),
+        Some(&body),
+    )
+    .await?;
+    comment_of(status, &text)
+}
+
+/// The projects that Jira's answer gives, as the form offers them: those with a numeric id (it goes into a path and a body), by name. Archived ones are left out.
+fn project_of(raw: RawProject) -> Option<JiraProject> {
+    if raw.archived == Some(true) {
+        return None;
+    }
+    let id = raw.id.filter(|id| numeric_id_of(id).is_ok())?;
+    let key = raw.key.unwrap_or_default();
+    Some(JiraProject {
+        name: raw
+            .name
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| key.clone()),
+        id,
+        key,
+    })
+}
+
+#[derive(Deserialize)]
+struct RawProject {
+    id: Option<String>,
+    key: Option<String>,
+    name: Option<String>,
+    archived: Option<bool>,
+}
+
+/// The issue types that Jira's answer to the create metadata gives, as the form offers them: those with a numeric id and a name, and not a subtask.
+fn issue_type_of(raw: RawIssueType) -> Option<JiraIssueType> {
+    if raw.subtask == Some(true) {
+        return None;
+    }
+    let id = raw.id.filter(|id| numeric_id_of(id).is_ok())?;
+    Some(JiraIssueType {
+        id,
+        name: raw.name.filter(|n| !n.is_empty())?,
+    })
+}
+
+#[derive(Deserialize)]
+struct RawIssueType {
+    id: Option<String>,
+    name: Option<String>,
+    subtask: Option<bool>,
+}
+
+/// The projects the credential can create a ticket in (`action=create`: the *Create issues* permission), by name (at most `MAX_PROJECTS`).
+async fn projects(conn: &Conn) -> Result<Vec<JiraProject>, String> {
+    let (raw, _) = fetch_all::<RawProject>(
+        conn,
+        PROJECT_SEARCH_PATH,
+        "action=create&orderBy=name",
+        MAX_PROJECTS,
+    )
+    .await?;
+    Ok(raw.into_iter().filter_map(project_of).collect())
+}
+
+/// The issue types of a project that a ticket can be created with (at most `MAX_ISSUE_TYPES`).
+async fn issue_types(conn: &Conn, project_id: &str) -> Result<Vec<JiraIssueType>, String> {
+    let project_id = numeric_id_of(project_id)?;
+    let path = format!("{ISSUE_PATH}/createmeta/{project_id}/issuetypes");
+    let (raw, _) = fetch_all::<RawIssueType>(conn, &path, "", MAX_ISSUE_TYPES).await?;
+    Ok(raw.into_iter().filter_map(issue_type_of).collect())
+}
+
+/// A summary as the form gives it: trimmed, not empty, at most `SUMMARY_LIMIT` characters and in one line (Jira refuses a line break in it).
+fn summary_of(input: &str) -> Result<&str, String> {
+    let summary = input.trim();
+    if summary.is_empty() {
+        Err("件名を入力してください".into())
+    } else if summary.chars().count() > SUMMARY_LIMIT {
+        Err(format!("件名は {SUMMARY_LIMIT} 文字までです"))
+    } else if summary.chars().any(char::is_control) {
+        Err("件名に改行や制御文字は入れられません".into())
+    } else {
+        Ok(summary)
+    }
+}
+
+/// The body of `POST /rest/api/3/issue`: the project and the issue type by id, the summary and, when there is one, the description as ADF.
+fn create_body(
+    project_id: &str,
+    issue_type_id: &str,
+    summary: &str,
+    description: Vec<Value>,
+) -> Value {
+    let mut fields = serde_json::json!({
+        "project": { "id": project_id },
+        "issuetype": { "id": issue_type_id },
+        "summary": summary,
+    });
+    if !description.is_empty() {
+        fields["description"] =
+            serde_json::json!({"version": 1, "type": "doc", "content": description});
+    }
+    serde_json::json!({ "fields": fields })
+}
+
+/// The key in Jira's answer to a create (`{id, key, self}`), checked as a ticket key because it goes on to a path.
+fn created_of(status: u16, body: &str) -> Result<String, String> {
+    #[derive(Deserialize)]
+    struct Created {
+        key: String,
+    }
+    if !(200..=299).contains(&status) {
+        return Err(failure_of(status, body));
+    }
+    serde_json::from_str::<Created>(body)
+        .ok()
+        .filter(|c| key_of(&c.key).is_ok())
+        .map(|c| c.key)
+        .ok_or_else(|| {
+            "チケットは作られましたが、応答を読めません。一覧を読み直してください".to_owned()
+        })
+}
+
+/// Creates a ticket (J-2, #874) from the form: the project and the issue type by id, the summary, the description from Markdown (left out when it is empty) and, when `sprint_id` is given, the sprint, which is put with the Agile API after the create (the sprint is a custom field in REST API v3, whose id differs by site). Everything is checked before anything is sent. A ticket that was made but could not be put in the sprint is still the answer, with the reason in `sprint_error`.
+async fn create_issue(
+    conn: &Conn,
+    project_id: &str,
+    issue_type_id: &str,
+    summary: &str,
+    markdown: &str,
+    sprint_id: Option<u64>,
+) -> Result<JiraCreated, String> {
+    let (project_id, issue_type_id) = (numeric_id_of(project_id)?, numeric_id_of(issue_type_id)?);
+    let (summary, markdown) = (summary_of(summary)?, markdown_of(markdown)?);
+    let mut blocks = markdown::markdown_to_blocks(markdown);
+    markdown::with_ids(&mut blocks);
+    let body = create_body(project_id, issue_type_id, summary, blocks);
+    let (status, text) = send(conn, reqwest::Method::POST, ISSUE_PATH, Some(&body)).await?;
+    let key = created_of(status, &text)?;
+    let sprint_error = match sprint_id {
+        Some(id) => move_to_sprint(conn, &key, Some(id)).await.err().map(|e| {
+            format!("チケット {key} は作りましたが、スプリントに入れられませんでした: {e}")
+        }),
+        None => None,
+    };
+    Ok(JiraCreated { key, sprint_error })
 }
 
 fn load_file(dir: &Path) -> Result<Saved, String> {
@@ -248,6 +1208,27 @@ async fn stored_token() -> Result<Option<String>, String> {
     tokio::task::spawn_blocking(|| keychain::read(TOKEN_SERVICE, TOKEN_USER))
         .await
         .map_err(|e| e.to_string())?
+}
+
+/// The saved site and email address with the stored token: an error when nothing is saved.
+fn saved_connection(
+    saved: Saved,
+    token: Option<String>,
+) -> Result<(String, String, String), String> {
+    if saved.site.is_empty() {
+        return Err(NOT_SAVED.into());
+    }
+    Ok((saved.site, saved.email, token.ok_or(TOKEN_MISSING)?))
+}
+
+/// The connection that the saved settings and the keychain give, for the commands that read.
+async fn saved_conn(app: &AppHandle) -> Result<Conn, String> {
+    let dir = config_dir(app)?;
+    let saved = tokio::task::spawn_blocking(move || load_file(&dir))
+        .await
+        .map_err(|e| e.to_string())??;
+    let (site, email, token) = saved_connection(saved, stored_token().await?)?;
+    connect(&site, &email, &token, GATEWAY).await
 }
 
 /// The saved site and email address, and whether a token is kept. Asks Jira nothing.
@@ -322,6 +1303,198 @@ pub async fn jira_test(site: String, email: String, token: String) -> Result<Jir
     check(&site, &email, &token, GATEWAY)
         .await
         .map_err(|e| log_failure(command, LOG_ACCOUNT, e))
+}
+
+/// The boards that the credential can see, by name (at most `MAX_BOARDS`).
+#[tauri::command]
+pub async fn jira_boards(app: AppHandle) -> Result<Vec<JiraBoard>, String> {
+    let read = async { boards(&saved_conn(&app).await?).await };
+    read.await
+        .map_err(|e| log_failure("jira_boards", LOG_ACCOUNT, e))
+}
+
+/// The active and future sprints of a board (at most `MAX_SPRINTS`). A board without sprints (a kanban one) is Jira's refusal, with its message.
+#[tauri::command]
+pub async fn jira_sprints(app: AppHandle, board_id: u64) -> Result<Vec<JiraSprint>, String> {
+    let read = async { sprints(&saved_conn(&app).await?, board_id).await };
+    read.await
+        .map_err(|e| log_failure("jira_sprints", LOG_ACCOUNT, e))
+}
+
+/// The tickets of a sprint, in the order of the board's rank (at most `MAX_ISSUES`).
+#[tauri::command]
+pub async fn jira_sprint_issues(app: AppHandle, sprint_id: u64) -> Result<JiraIssues, String> {
+    let read = async { sprint_issues(&saved_conn(&app).await?, sprint_id).await };
+    read.await
+        .map_err(|e| log_failure("jira_sprint_issues", LOG_ACCOUNT, e))
+}
+
+/// The backlog of a board, in the order of its rank (at most `MAX_ISSUES`).
+#[tauri::command]
+pub async fn jira_backlog(app: AppHandle, board_id: u64) -> Result<JiraIssues, String> {
+    let read = async { backlog(&saved_conn(&app).await?, board_id).await };
+    read.await
+        .map_err(|e| log_failure("jira_backlog", LOG_ACCOUNT, e))
+}
+
+/// A ticket for its tab (J-2, #871): its description and comments read as Markdown, and the fields of its right column. `key` is checked to be a ticket key before anything is asked.
+#[tauri::command]
+pub async fn jira_issue(app: AppHandle, key: String) -> Result<JiraIssueDetail, String> {
+    let read = async { issue_detail(&saved_conn(&app).await?, &key).await };
+    read.await
+        .map_err(|e| log_failure("jira_issue", LOG_ACCOUNT, e))
+}
+
+/// The status changes that the ticket can take now (J-2, #872), each with the status it leads to.
+#[tauri::command]
+pub async fn jira_transitions(app: AppHandle, key: String) -> Result<Vec<JiraTransition>, String> {
+    let read = async { transitions(&saved_conn(&app).await?, &key).await };
+    read.await
+        .map_err(|e| log_failure("jira_transitions", LOG_ACCOUNT, e))
+}
+
+/// Takes the transition `transition_id` of the ticket (J-2, #872). Changes the status in Jira.
+#[tauri::command]
+pub async fn jira_transition(
+    app: AppHandle,
+    key: String,
+    transition_id: String,
+) -> Result<(), String> {
+    let write = async { transition(&saved_conn(&app).await?, &key, &transition_id).await };
+    write
+        .await
+        .map_err(|e| log_failure("jira_transition", LOG_ACCOUNT, e))
+}
+
+/// The people the ticket can be assigned to (J-2, #872), at most `MAX_ASSIGNABLE`.
+#[tauri::command]
+pub async fn jira_assignable(app: AppHandle, key: String) -> Result<Vec<JiraPerson>, String> {
+    let read = async { assignable(&saved_conn(&app).await?, &key).await };
+    read.await
+        .map_err(|e| log_failure("jira_assignable", LOG_ACCOUNT, e))
+}
+
+/// Assigns the ticket to `account_id`, or to no one when it is none (J-2, #872). Changes the assignee in Jira.
+#[tauri::command]
+pub async fn jira_assign(
+    app: AppHandle,
+    key: String,
+    account_id: Option<String>,
+) -> Result<(), String> {
+    let write = async { assign(&saved_conn(&app).await?, &key, account_id.as_deref()).await };
+    write
+        .await
+        .map_err(|e| log_failure("jira_assign", LOG_ACCOUNT, e))
+}
+
+/// The priorities the ticket can be given (J-2, #872): none when its priority cannot be edited.
+#[tauri::command]
+pub async fn jira_priorities(app: AppHandle, key: String) -> Result<Vec<JiraPriority>, String> {
+    let read = async { priorities(&saved_conn(&app).await?, &key).await };
+    read.await
+        .map_err(|e| log_failure("jira_priorities", LOG_ACCOUNT, e))
+}
+
+/// Gives the ticket the priority `priority_id` (J-2, #872). Changes the priority in Jira.
+#[tauri::command]
+pub async fn jira_set_priority(
+    app: AppHandle,
+    key: String,
+    priority_id: String,
+) -> Result<(), String> {
+    let write = async { set_priority(&saved_conn(&app).await?, &key, &priority_id).await };
+    write
+        .await
+        .map_err(|e| log_failure("jira_set_priority", LOG_ACCOUNT, e))
+}
+
+/// Puts the ticket in the sprint `sprint_id`, or in the backlog when it is none (J-2, #872). Changes the sprint in Jira.
+#[tauri::command]
+pub async fn jira_set_sprint(
+    app: AppHandle,
+    key: String,
+    sprint_id: Option<u64>,
+) -> Result<(), String> {
+    let write = async { move_to_sprint(&saved_conn(&app).await?, &key, sprint_id).await };
+    write
+        .await
+        .map_err(|e| log_failure("jira_set_sprint", LOG_ACCOUNT, e))
+}
+
+/// Saves the description of the ticket (J-2, #873) from the Markdown of the editor; `base` is the description the tab was given (the editor's start). Changes the description in Jira, and gives the Markdown of what it now is.
+#[tauri::command]
+pub async fn jira_set_description(
+    app: AppHandle,
+    key: String,
+    base: String,
+    markdown: String,
+) -> Result<String, String> {
+    let write = async { set_description(&saved_conn(&app).await?, &key, &base, &markdown).await };
+    write
+        .await
+        .map_err(|e| log_failure("jira_set_description", LOG_ACCOUNT, e))
+}
+
+/// Adds a comment to the ticket (J-2, #873) from Markdown, and gives it as Jira answers it. Adds a comment in Jira.
+#[tauri::command]
+pub async fn jira_add_comment(
+    app: AppHandle,
+    key: String,
+    markdown: String,
+) -> Result<JiraComment, String> {
+    let write = async { add_comment(&saved_conn(&app).await?, &key, &markdown).await };
+    write
+        .await
+        .map_err(|e| log_failure("jira_add_comment", LOG_ACCOUNT, e))
+}
+
+/// The projects that the credential can create a ticket in (J-2, #874), by name (at most `MAX_PROJECTS`).
+#[tauri::command]
+pub async fn jira_projects(app: AppHandle) -> Result<Vec<JiraProject>, String> {
+    let read = async { projects(&saved_conn(&app).await?).await };
+    read.await
+        .map_err(|e| log_failure("jira_projects", LOG_ACCOUNT, e))
+}
+
+/// The issue types of a project that a ticket can be created with (J-2, #874). `project_id` is checked to be a number before anything is asked.
+#[tauri::command]
+pub async fn jira_issue_types(
+    app: AppHandle,
+    project_id: String,
+) -> Result<Vec<JiraIssueType>, String> {
+    let read = async { issue_types(&saved_conn(&app).await?, &project_id).await };
+    read.await
+        .map_err(|e| log_failure("jira_issue_types", LOG_ACCOUNT, e))
+}
+
+/// Creates a ticket in Jira (J-2, #874) and gives its key. `markdown` is the description (may be empty) and `sprint_id` the sprint to put it in (none leaves it where Jira puts a new ticket, the backlog).
+#[tauri::command]
+pub async fn jira_create_issue(
+    app: AppHandle,
+    project_id: String,
+    issue_type_id: String,
+    summary: String,
+    markdown: String,
+    sprint_id: Option<u64>,
+) -> Result<JiraCreated, String> {
+    let write = async {
+        create_issue(
+            &saved_conn(&app).await?,
+            &project_id,
+            &issue_type_id,
+            &summary,
+            &markdown,
+            sprint_id,
+        )
+        .await
+    };
+    let mut created = write
+        .await
+        .map_err(|e| log_failure("jira_create_issue", LOG_ACCOUNT, e))?;
+    created.sprint_error = created
+        .sprint_error
+        .map(|e| log_failure("jira_create_issue", LOG_ACCOUNT, e));
+    Ok(created)
 }
 
 #[cfg(test)]
@@ -711,5 +1884,1474 @@ mod tests {
             .await
             .unwrap_err()
             .is_empty());
+    }
+
+    /// Serves one answer for each connection, in order, and returns the base URL and the requests that came.
+    async fn serve_each(answers: Vec<String>) -> (String, tokio::task::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let seen = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for answer in answers {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut buf = [0u8; 1024];
+                // The headers, and then the body that `content-length` announces (a write has one).
+                let mut needed = None;
+                loop {
+                    if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let head = lower(&String::from_utf8_lossy(&request[..end]));
+                        let length = head
+                            .lines()
+                            .find_map(|l| l.strip_prefix("content-length: "))
+                            .and_then(|n| n.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        needed = Some(end + 4 + length);
+                    }
+                    if needed.is_some_and(|n| request.len() >= n) {
+                        break;
+                    }
+                    let n = socket.read(&mut buf).await.unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buf[..n]);
+                }
+                socket.write_all(answer.as_bytes()).await.unwrap();
+                socket.shutdown().await.unwrap();
+                requests.push(lower(&String::from_utf8_lossy(&request)));
+            }
+            requests
+        });
+        (base, seen)
+    }
+
+    const BASIC: &str = "authorization: basic bwvazxhhbxbszs5jb206dg9r";
+
+    async fn basic_conn(site: &str) -> Conn {
+        connect(site, "me@example.com", "tok", "http://gateway.invalid")
+            .await
+            .unwrap()
+    }
+
+    #[test]
+    fn next_start_goes_on_by_what_was_received_and_stops_at_the_end() {
+        let page = |len: usize, total, is_last| Page::<u8> {
+            items: vec![0; len],
+            total,
+            is_last,
+        };
+        assert_eq!(next_start(0, &page(2, None, Some(false))), Some(2));
+        assert_eq!(next_start(2, &page(2, None, None)), Some(4));
+        assert_eq!(next_start(0, &page(2, Some(5), None)), Some(2));
+        assert_eq!(next_start(4, &page(1, Some(5), None)), None);
+        assert_eq!(next_start(0, &page(2, Some(5), Some(true))), None);
+        assert_eq!(next_start(0, &page(0, Some(5), Some(false))), None);
+    }
+
+    #[test]
+    fn page_of_reads_values_or_issues_and_says_why_for_a_failure() {
+        let boards = page_of::<JiraBoard>(
+            200,
+            r#"{"isLast":true,"maxResults":50,"startAt":0,"total":2,"values":[{"id":84,"name":"scrum board","type":"scrum","self":"https://x"},{"id":92,"type":"kanban"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            boards.items,
+            vec![
+                JiraBoard {
+                    id: 84,
+                    name: "scrum board".into(),
+                    board_type: "scrum".into()
+                },
+                JiraBoard {
+                    id: 92,
+                    name: String::new(),
+                    board_type: "kanban".into()
+                }
+            ]
+        );
+        assert_eq!((boards.total, boards.is_last), (Some(2), Some(true)));
+        let issues = page_of::<RawIssue>(
+            200,
+            r#"{"startAt":0,"maxResults":50,"total":1,"issues":[{"key":"A-1"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(issues.items.len(), 1);
+        assert!(page_of::<JiraBoard>(200, "{}").unwrap().items.is_empty());
+        assert!(page_of::<JiraBoard>(200, "<html></html>")
+            .err()
+            .unwrap()
+            .starts_with("Jira の応答を読めません"));
+        assert_eq!(
+            page_of::<JiraBoard>(401, "{}").err(),
+            Some("Jira が認証を拒否しました（401）".into())
+        );
+        assert_eq!(
+            page_of::<JiraBoard>(404, "no board").err(),
+            Some("Jira が 404 を返しました: no board".into())
+        );
+    }
+
+    #[test]
+    fn sprints_are_read_with_or_without_dates() {
+        let page = page_of::<JiraSprint>(
+            200,
+            r#"{"isLast":true,"values":[{"id":37,"self":"https://x","state":"active","name":"sprint 1","startDate":"2015-04-11T15:22:00.000+10:00","endDate":"2015-04-20T01:22:00.000+10:00","originBoardId":5,"goal":"g"},{"id":72,"state":"future","name":"sprint 2"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            page.items,
+            vec![
+                JiraSprint {
+                    id: 37,
+                    name: "sprint 1".into(),
+                    state: "active".into(),
+                    start_date: Some("2015-04-11T15:22:00.000+10:00".into()),
+                    end_date: Some("2015-04-20T01:22:00.000+10:00".into()),
+                },
+                JiraSprint {
+                    id: 72,
+                    name: "sprint 2".into(),
+                    state: "future".into(),
+                    start_date: None,
+                    end_date: None,
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn issue_of_takes_the_five_fields_and_leaves_out_what_jira_did_not_give() {
+        let raw = |json: &str| serde_json::from_str::<RawIssue>(json).unwrap();
+        assert_eq!(
+            issue_of(raw(
+                r#"{"id":"10001","key":"HSP-1","self":"https://x","fields":{"summary":"Fix it","status":{"name":"In Progress","statusCategory":{"key":"indeterminate","name":"In Progress"}},"assignee":{"accountId":"1","displayName":"Mia Krystof"},"priority":{"name":"High","id":"2"},"flagged":true}}"#
+            )),
+            JiraIssue {
+                key: "HSP-1".into(),
+                summary: "Fix it".into(),
+                status: "In Progress".into(),
+                status_category: "indeterminate".into(),
+                assignee: Some("Mia Krystof".into()),
+                priority: Some("High".into()),
+            }
+        );
+        // An unassigned ticket has a null assignee, and a project may have no priority field.
+        assert_eq!(
+            issue_of(raw(
+                r#"{"key":"HSP-2","fields":{"summary":"s","status":{"name":"Done","statusCategory":{"key":"done"}},"assignee":null}}"#
+            )),
+            JiraIssue {
+                key: "HSP-2".into(),
+                summary: "s".into(),
+                status: "Done".into(),
+                status_category: "done".into(),
+                assignee: None,
+                priority: None,
+            }
+        );
+        assert_eq!(
+            issue_of(raw(r#"{"key":"HSP-3","fields":null}"#)),
+            JiraIssue {
+                key: "HSP-3".into(),
+                summary: String::new(),
+                status: String::new(),
+                status_category: "undefined".into(),
+                assignee: None,
+                priority: None,
+            }
+        );
+    }
+
+    #[test]
+    fn saved_connection_needs_a_site_and_a_token() {
+        let saved = |site: &str| Saved {
+            site: site.into(),
+            email: "me@example.com".into(),
+        };
+        assert_eq!(
+            saved_connection(saved("https://example.atlassian.net"), Some("tok".into())),
+            Ok((
+                "https://example.atlassian.net".into(),
+                "me@example.com".into(),
+                "tok".into()
+            ))
+        );
+        assert_eq!(
+            saved_connection(Saved::default(), Some("tok".into())),
+            Err(NOT_SAVED.into())
+        );
+        assert_eq!(
+            saved_connection(saved("https://example.atlassian.net"), None),
+            Err(TOKEN_MISSING.into())
+        );
+    }
+
+    #[tokio::test]
+    async fn boards_are_read_by_name_page_by_page_with_the_credential() {
+        let first = json_answer(
+            r#"{"isLast":false,"maxResults":2,"startAt":0,"total":3,"values":[{"id":1,"name":"A","type":"scrum"},{"id":2,"name":"B","type":"kanban"}]}"#,
+        );
+        let second = json_answer(
+            r#"{"isLast":true,"maxResults":2,"startAt":2,"total":3,"values":[{"id":3,"name":"C","type":"simple"}]}"#,
+        );
+        let (site, seen) = serve_each(vec![first, second]).await;
+        let list = boards(&basic_conn(&site).await).await.unwrap();
+        assert_eq!(list.iter().map(|b| b.id).collect::<Vec<_>>(), vec![1, 2, 3]);
+        assert_eq!(list[1].board_type, "kanban");
+        let requests = seen.await.unwrap();
+        assert!(
+            requests[0].starts_with(
+                "get /rest/agile/1.0/board?orderby=name&startat=0&maxresults=50 http/1.1"
+            ),
+            "{}",
+            requests[0]
+        );
+        assert!(
+            requests[1].starts_with(
+                "get /rest/agile/1.0/board?orderby=name&startat=2&maxresults=50 http/1.1"
+            ),
+            "{}",
+            requests[1]
+        );
+        assert!(requests.iter().all(|r| r.contains(BASIC)));
+    }
+
+    #[tokio::test]
+    async fn sprints_of_a_board_are_asked_through_the_gateway_for_a_bearer_credential() {
+        let (site, tenant_seen) = serve_once(tenant_answer()).await;
+        let (gateway, seen) = serve_each(vec![json_answer(
+            r#"{"isLast":true,"values":[{"id":37,"state":"active","name":"sprint 1"}]}"#,
+        )])
+        .await;
+        let conn = connect(&site, "", "tok", &gateway).await.unwrap();
+        let list = sprints(&conn, 7).await.unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].state, "active");
+        let requests = seen.await.unwrap();
+        assert!(
+            requests[0].starts_with(&format!(
+                "get /ex/jira/{TENANT_ANSWER_ID}/rest/agile/1.0/board/7/sprint?state=active,future&startat=0&maxresults=50 http/1.1"
+            )),
+            "{}",
+            requests[0]
+        );
+        assert!(requests[0].contains("authorization: bearer tok\r\n"));
+        assert!(!lower(&tenant_seen.await.unwrap()).contains("authorization"));
+    }
+
+    #[tokio::test]
+    async fn the_tickets_of_a_sprint_and_of_a_backlog_come_with_the_five_fields() {
+        let body = r#"{"expand":"schema,names","startAt":0,"maxResults":50,"total":2,"issues":[{"key":"HSP-1","fields":{"summary":"One","status":{"name":"To Do","statusCategory":{"key":"new"}},"assignee":{"displayName":"Mia"},"priority":{"name":"Low"}}},{"key":"HSP-2","fields":{"summary":"Two","status":{"name":"Done","statusCategory":{"key":"done"}},"assignee":null,"priority":null}}]}"#;
+        // One answer each: the total is reached on the first page, so no second page is asked.
+        let (site, seen) = serve_each(vec![json_answer(body), json_answer(body)]).await;
+        let conn = basic_conn(&site).await;
+        let sprint = sprint_issues(&conn, 12).await.unwrap();
+        let back = backlog(&conn, 7).await.unwrap();
+        assert_eq!(sprint, back);
+        assert!(!sprint.truncated);
+        assert_eq!(sprint.issues[0].key, "HSP-1");
+        assert_eq!(sprint.issues[0].assignee.as_deref(), Some("Mia"));
+        assert_eq!(sprint.issues[1].status_category, "done");
+        assert_eq!(sprint.issues[1].priority, None);
+        let requests = seen.await.unwrap();
+        assert!(
+            requests[0].starts_with("get /rest/agile/1.0/sprint/12/issue?fields=summary,status,assignee,priority&startat=0&maxresults=50 http/1.1"),
+            "{}",
+            requests[0]
+        );
+        assert!(
+            requests[1].starts_with("get /rest/agile/1.0/board/7/backlog?fields=summary,status,assignee,priority&startat=0&maxresults=50 http/1.1"),
+            "{}",
+            requests[1]
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_all_stops_at_the_limit_and_says_that_more_were_left() {
+        let page = |ids: [u32; 2], total: u32| {
+            json_answer(&format!(
+                r#"{{"isLast":false,"total":{total},"values":[{{"id":{},"name":"a"}},{{"id":{},"name":"b"}}]}}"#,
+                ids[0], ids[1]
+            ))
+        };
+        // The second page would not be asked for after the limit; it is not served.
+        let (site, seen) = serve_each(vec![page([1, 2], 9), page([3, 4], 9)]).await;
+        let conn = basic_conn(&site).await;
+        let (items, truncated) = fetch_all::<JiraBoard>(&conn, BOARD_PATH, "orderBy=name", 3)
+            .await
+            .unwrap();
+        assert_eq!(
+            items.iter().map(|b| b.id).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert!(truncated);
+        assert_eq!(seen.await.unwrap().len(), 2);
+        // A list that ends exactly at the limit is not truncated.
+        let (site, _seen) = serve_each(vec![json_answer(
+            r#"{"isLast":true,"values":[{"id":1},{"id":2}]}"#,
+        )])
+        .await;
+        let (items, truncated) =
+            fetch_all::<JiraBoard>(&basic_conn(&site).await, BOARD_PATH, "orderBy=name", 2)
+                .await
+                .unwrap();
+        assert_eq!(items.len(), 2);
+        assert!(!truncated);
+    }
+
+    #[tokio::test]
+    async fn a_refused_read_is_the_error_and_a_redirect_is_not_followed() {
+        let (site, _seen) = serve_each(vec![
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
+        ])
+        .await;
+        assert_eq!(
+            sprint_issues(&basic_conn(&site).await, 99).await,
+            Err("Jira が 404 を返しました: ".into())
+        );
+        let redirect = "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/elsewhere\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let (site, seen) = serve_each(vec![redirect.into()]).await;
+        assert_eq!(
+            backlog(&basic_conn(&site).await, 7).await,
+            Err("Jira が 302 を返しました: ".into())
+        );
+        assert_eq!(seen.await.unwrap().len(), 1);
+    }
+
+    const ISSUE_BODY: &str = r#"{"id":"10007","key":"EX-7","fields":{"summary":"Show the ticket","description":{"version":1,"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Body *x*"}]}]},"status":{"name":"In Progress","statusCategory":{"key":"indeterminate"}},"assignee":{"displayName":"Mia"},"priority":{"name":"High"},"labels":["ui","ready"],"parent":{"id":"10000","key":"EX-1","fields":{"summary":"The epic","status":{"name":"To Do"}}}}}"#;
+    const SPRINT_BODY: &str = r#"{"id":"10007","key":"EX-7","fields":{"sprint":{"id":12,"name":"Sprint 12","state":"active"},"closedSprints":[{"id":11,"name":"Sprint 11"}]}}"#;
+    const COMMENTS_BODY: &str = r#"{"startAt":0,"maxResults":50,"total":2,"comments":[{"id":"1","author":{"displayName":"Ann","accountId":"a"},"body":{"version":1,"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Looks good"}]}]},"created":"2026-11-20T09:30:12.345+0900","updated":"2026-11-20T09:30:12.345+0900"},{"id":"2","body":null,"created":"2026-11-21T18:05:00.000+0900"}]}"#;
+
+    #[test]
+    fn key_of_takes_a_ticket_key_and_refuses_what_must_not_reach_a_path() {
+        for key in ["EX-1", "ABC_D2-1234567", "A-0"] {
+            assert_eq!(key_of(key), Ok(key), "{key}");
+        }
+        for key in [
+            "",
+            "EX",
+            "EX-",
+            "-1",
+            "ex-1",
+            "1X-1",
+            "_X-1",
+            "EX-1a",
+            "EX--1",
+            "EX-1-2",
+            "E X-1",
+            "EX-1/comment",
+            "EX-1?x=1",
+            "EX-1#",
+            "../EX-1",
+            "EX-1%2F",
+            "Ｅ-1",
+            "EX-１",
+        ] {
+            assert!(key_of(key).is_err(), "{key:?}");
+        }
+        assert!(key_of(&format!("A-{}", "1".repeat(KEY_LIMIT))).is_err());
+        assert_eq!(
+            key_of("x"),
+            Err("チケットのキーの形が正しくありません".into())
+        );
+    }
+
+    #[test]
+    fn shown_time_keeps_the_date_and_the_minute_in_the_offset_jira_gave() {
+        assert_eq!(
+            shown_time("2026-11-20T09:30:12.345+0900"),
+            "2026-11-20 09:30"
+        );
+        assert_eq!(
+            shown_time("2026-11-20T23:59:59.000-0500"),
+            "2026-11-20 23:59"
+        );
+        assert_eq!(shown_time("2026-11-20T09:30"), "2026-11-20 09:30");
+        assert_eq!(shown_time(""), "");
+        assert_eq!(shown_time("yesterday"), "yesterday");
+        assert_eq!(shown_time("2026-11-20 09:30:12"), "2026-11-20 09:30:12");
+        assert_eq!(
+            shown_time("日本語のとても長い文字列です。"),
+            "日本語のとても長い文字列です。"
+        );
+    }
+
+    #[test]
+    fn sprint_of_reads_the_sprint_of_a_ticket_and_says_why_for_a_failure() {
+        assert_eq!(sprint_of(200, SPRINT_BODY), Ok(Some("Sprint 12".into())));
+        assert_eq!(sprint_of(200, r#"{"fields":{"sprint":null}}"#), Ok(None));
+        assert_eq!(sprint_of(200, r#"{"fields":{}}"#), Ok(None));
+        assert_eq!(
+            sprint_of(200, r#"{"fields":{"sprint":{"name":""}}}"#),
+            Ok(None)
+        );
+        assert_eq!(sprint_of(200, "{}"), Ok(None));
+        assert!(sprint_of(200, "<html>")
+            .unwrap_err()
+            .starts_with("Jira の応答を読めません"));
+        assert_eq!(
+            sprint_of(403, "no"),
+            Err("Jira が認証を拒否しました（403）".into())
+        );
+        assert_eq!(
+            sprint_of(404, r#"{"errorMessages":["Issue does not exist"]}"#),
+            Err(r#"Jira が 404 を返しました: {"errorMessages":["Issue does not exist"]}"#.into())
+        );
+    }
+
+    #[test]
+    fn raw_issue_of_reads_a_ticket_and_says_why_for_a_failure() {
+        assert_eq!(raw_issue_of(200, ISSUE_BODY).unwrap().key, "EX-7");
+        let fail = |status, body| raw_issue_of(status, body).err().unwrap_or_default();
+        assert!(fail(200, "[]").starts_with("Jira の応答を読めません"));
+        assert_eq!(fail(401, ""), "Jira が認証を拒否しました（401）");
+        assert_eq!(fail(500, "boom"), "Jira が 500 を返しました: boom");
+    }
+
+    #[test]
+    fn detail_of_gathers_the_fields_the_description_and_the_comments() {
+        let comments: Page<RawComment> = serde_json::from_str(COMMENTS_BODY).unwrap();
+        let detail = detail_of(
+            raw_issue_of(200, ISSUE_BODY).unwrap(),
+            Some("Sprint 12".into()),
+            comments.items,
+            true,
+        );
+        assert_eq!(
+            detail,
+            JiraIssueDetail {
+                key: "EX-7".into(),
+                summary: "Show the ticket".into(),
+                description: "Body \\*x\\*".into(),
+                status: "In Progress".into(),
+                status_category: "indeterminate".into(),
+                assignee: Some("Mia".into()),
+                priority: Some("High".into()),
+                sprint: Some("Sprint 12".into()),
+                labels: vec!["ui".into(), "ready".into()],
+                parent: Some(JiraParent {
+                    key: "EX-1".into(),
+                    summary: "The epic".into()
+                }),
+                comments: vec![
+                    JiraComment {
+                        author: "Ann".into(),
+                        created: "2026-11-20 09:30".into(),
+                        body: "Looks good".into()
+                    },
+                    JiraComment {
+                        author: String::new(),
+                        created: "2026-11-21 18:05".into(),
+                        body: String::new()
+                    },
+                ],
+                comments_truncated: true,
+            }
+        );
+    }
+
+    #[test]
+    fn detail_of_leaves_out_what_jira_did_not_give() {
+        let raw: RawIssue = serde_json::from_str(r#"{"key":"EX-8","fields":{"summary":"Bare","description":null,"labels":[],"parent":{"key":"EX-2"}}}"#).unwrap();
+        let detail = detail_of(raw, None, Vec::new(), false);
+        assert_eq!(detail.description, "");
+        assert_eq!(detail.status, "");
+        assert_eq!(detail.status_category, "undefined");
+        assert_eq!(
+            (detail.assignee, detail.priority, detail.sprint),
+            (None, None, None)
+        );
+        assert!(detail.labels.is_empty() && detail.comments.is_empty());
+        assert_eq!(
+            detail.parent,
+            Some(JiraParent {
+                key: "EX-2".into(),
+                summary: String::new()
+            })
+        );
+        let none: RawIssue = serde_json::from_str(r#"{"key":"EX-9"}"#).unwrap();
+        let detail = detail_of(none, None, Vec::new(), false);
+        assert_eq!(
+            (detail.key.as_str(), detail.parent, detail.labels),
+            ("EX-9", None, Vec::new())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_ticket_is_read_with_its_sprint_and_its_comments_through_the_three_paths() {
+        let (site, seen) = serve_each(vec![
+            json_answer(ISSUE_BODY),
+            json_answer(SPRINT_BODY),
+            json_answer(COMMENTS_BODY),
+        ])
+        .await;
+        let detail = issue_detail(&basic_conn(&site).await, "EX-7")
+            .await
+            .unwrap();
+        assert_eq!(detail.key, "EX-7");
+        assert_eq!(detail.sprint.as_deref(), Some("Sprint 12"));
+        assert_eq!(detail.comments.len(), 2);
+        assert!(!detail.comments_truncated);
+        let requests = seen.await.unwrap();
+        assert!(requests[0].starts_with("get /rest/api/3/issue/ex-7?fields=summary,description,status,assignee,priority,labels,parent http/1.1"), "{}", requests[0]);
+        assert!(
+            requests[1].starts_with("get /rest/agile/1.0/issue/ex-7?fields=sprint http/1.1"),
+            "{}",
+            requests[1]
+        );
+        assert!(requests[2].starts_with("get /rest/api/3/issue/ex-7/comment?orderby=created&startat=0&maxresults=50 http/1.1"), "{}", requests[2]);
+        for request in &requests {
+            assert!(request.contains(BASIC), "{request}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_ticket_with_a_bad_key_asks_nothing_and_a_refused_read_stops_the_rest() {
+        let conn = basic_conn("http://127.0.0.1:1").await;
+        assert_eq!(
+            issue_detail(&conn, "../x").await,
+            Err("チケットのキーの形が正しくありません".into())
+        );
+        let (site, seen) = serve_each(vec![
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
+        ])
+        .await;
+        assert_eq!(
+            issue_detail(&basic_conn(&site).await, "EX-404").await,
+            Err("Jira が 404 を返しました: ".into())
+        );
+        assert_eq!(seen.await.unwrap().len(), 1);
+        // A refusal of the sprint, or of the comments, is the failure of the whole read.
+        let (site, _seen) = serve_each(vec![
+            json_answer(ISSUE_BODY),
+            "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
+        ])
+        .await;
+        assert_eq!(
+            issue_detail(&basic_conn(&site).await, "EX-7").await,
+            Err("Jira が認証を拒否しました（403）".into())
+        );
+    }
+
+    const NO_CONTENT: &str = "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n";
+
+    #[test]
+    fn numeric_id_of_takes_numbers_only() {
+        for ok in ["1", "31", "10001", "123456789012345678"] {
+            assert_eq!(numeric_id_of(ok), Ok(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "-1",
+            "1a",
+            "../1",
+            "1/2",
+            "1?x=1",
+            " 1",
+            "１",
+            "1234567890123456789",
+        ] {
+            assert!(numeric_id_of(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn account_id_of_takes_an_account_id_and_never_the_default_assignee() {
+        for ok in [
+            "5b10ac8d82e05b22cc7d4ef5",
+            "712020:0aa1b2c3-d4e5-46f7-8899-aabbccddeeff",
+            "a_b-c",
+        ] {
+            assert_eq!(account_id_of(ok), Ok(ok), "{ok}");
+        }
+        for bad in ["", "-1", ":a", "a b", "a/b", "a\"b", "a?b", "é"] {
+            assert!(account_id_of(bad).is_err(), "{bad}");
+        }
+        assert!(account_id_of(&"a".repeat(ACCOUNT_ID_LIMIT + 1)).is_err());
+    }
+
+    #[test]
+    fn transitions_of_keeps_what_can_be_taken_with_the_status_it_leads_to() {
+        let body = r#"{"expand":"transitions","transitions":[
+            {"id":"11","name":"Start","to":{"name":"In Progress","statusCategory":{"key":"indeterminate"}}},
+            {"id":"21","name":"Finish","isAvailable":true,"to":{"name":"Done","statusCategory":{"key":"done"}}},
+            {"id":"31","name":"Blocked","isAvailable":false,"to":{"name":"Blocked","statusCategory":{"key":"new"}}},
+            {"id":"../41","name":"Bad","to":{"name":"Bad"}},
+            {"id":"51","name":"Reopen"}]}"#;
+        let list = transitions_of(200, body).unwrap();
+        assert_eq!(
+            list,
+            vec![
+                JiraTransition {
+                    id: "11".into(),
+                    status: "In Progress".into(),
+                    status_category: "indeterminate".into()
+                },
+                JiraTransition {
+                    id: "21".into(),
+                    status: "Done".into(),
+                    status_category: "done".into()
+                },
+                JiraTransition {
+                    id: "51".into(),
+                    status: "Reopen".into(),
+                    status_category: "undefined".into()
+                },
+            ]
+        );
+        assert_eq!(transitions_of(200, "{}"), Ok(vec![]));
+        assert!(transitions_of(200, "<html>").is_err());
+        assert_eq!(
+            transitions_of(403, ""),
+            Err("Jira が認証を拒否しました（403）".into())
+        );
+        assert_eq!(
+            transitions_of(404, "no"),
+            Err("Jira が 404 を返しました: no".into())
+        );
+    }
+
+    #[test]
+    fn assignable_of_keeps_the_active_people_with_a_usable_account_id() {
+        let body = r#"[
+            {"accountId":"5b10","displayName":"Mia","active":true},
+            {"accountId":"712020:abc","displayName":"Ann"},
+            {"accountId":"6c20","displayName":"Gone","active":false},
+            {"accountId":"-1","displayName":"Default"},
+            {"accountId":"7d30","displayName":""},
+            {"displayName":"No id"}]"#;
+        let list = assignable_of(200, body).unwrap();
+        assert_eq!(
+            list.iter()
+                .map(|p| (p.account_id.as_str(), p.display_name.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("5b10", "Mia"), ("712020:abc", "Ann")]
+        );
+        assert!(assignable_of(200, "{}").is_err());
+        assert_eq!(
+            assignable_of(401, ""),
+            Err("Jira が認証を拒否しました（401）".into())
+        );
+    }
+
+    #[test]
+    fn priorities_of_reads_the_allowed_values_of_the_edit_metadata() {
+        let body = r#"{"fields":{"summary":{"required":true},"priority":{"required":false,"allowedValues":[
+            {"id":"1","name":"Highest"},{"id":"3","name":"Medium"},{"id":"x","name":"Bad"},{"name":"No id"}]}}}"#;
+        let list = priorities_of(200, body).unwrap();
+        assert_eq!(
+            list,
+            vec![
+                JiraPriority {
+                    id: "1".into(),
+                    name: "Highest".into()
+                },
+                JiraPriority {
+                    id: "3".into(),
+                    name: "Medium".into()
+                },
+            ]
+        );
+        // A ticket whose priority is not editable has no such field.
+        assert_eq!(priorities_of(200, r#"{"fields":{}}"#), Ok(vec![]));
+        assert_eq!(priorities_of(200, "{}"), Ok(vec![]));
+        assert!(priorities_of(200, "<html>").is_err());
+        assert_eq!(
+            priorities_of(500, "boom"),
+            Err("Jira が 500 を返しました: boom".into())
+        );
+    }
+
+    #[test]
+    fn done_of_is_a_success_for_any_2xx_and_the_reason_otherwise() {
+        assert_eq!(done_of(204, ""), Ok(()));
+        assert_eq!(done_of(200, "{}"), Ok(()));
+        assert_eq!(
+            done_of(400, r#"{"errors":{"resolution":"Resolution is required"}}"#),
+            Err(
+                r#"Jira が 400 を返しました: {"errors":{"resolution":"Resolution is required"}}"#
+                    .into()
+            )
+        );
+        assert_eq!(
+            done_of(403, ""),
+            Err("Jira が認証を拒否しました（403）".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn the_transitions_of_a_ticket_are_read_with_the_credential() {
+        let (site, seen) = serve_each(vec![json_answer(
+            r#"{"transitions":[{"id":"11","name":"Start","to":{"name":"In Progress","statusCategory":{"key":"indeterminate"}}}]}"#,
+        )])
+        .await;
+        let list = transitions(&basic_conn(&site).await, "EX-7").await.unwrap();
+        assert_eq!(list[0].status, "In Progress");
+        let requests = seen.await.unwrap();
+        assert!(
+            requests[0].starts_with("get /rest/api/3/issue/ex-7/transitions http/1.1"),
+            "{}",
+            requests[0]
+        );
+        assert!(requests[0].contains(BASIC));
+    }
+
+    #[tokio::test]
+    async fn a_transition_is_posted_with_its_id_and_a_bad_one_asks_nothing() {
+        let (site, seen) = serve_each(vec![NO_CONTENT.into()]).await;
+        let conn = basic_conn(&site).await;
+        transition(&conn, "EX-7", "31").await.unwrap();
+        let requests = seen.await.unwrap();
+        assert!(
+            requests[0].starts_with("post /rest/api/3/issue/ex-7/transitions http/1.1"),
+            "{}",
+            requests[0]
+        );
+        assert!(requests[0].contains(BASIC));
+        assert!(requests[0].contains("content-type: application/json"));
+        assert!(
+            requests[0].ends_with(r#"{"transition":{"id":"31"}}"#),
+            "{}",
+            requests[0]
+        );
+        let dead = basic_conn("http://127.0.0.1:1").await;
+        assert_eq!(
+            transition(&dead, "EX-7", "../1").await,
+            Err("ID の形が正しくありません".into())
+        );
+        assert_eq!(
+            transition(&dead, "ex-7", "1").await,
+            Err("チケットのキーの形が正しくありません".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_transition_is_the_error_with_jiras_reason() {
+        let (site, _seen) = serve_each(vec![
+            "HTTP/1.1 400 Bad Request\r\nContent-Length: 29\r\nConnection: close\r\n\r\n{\"errors\":{\"resolution\":\"r\"}}".into(),
+        ])
+        .await;
+        assert_eq!(
+            transition(&basic_conn(&site).await, "EX-7", "31").await,
+            Err(r#"Jira が 400 を返しました: {"errors":{"resolution":"r"}}"#.into())
+        );
+    }
+
+    #[tokio::test]
+    async fn the_assignable_people_are_asked_for_the_ticket_and_an_assignment_puts_the_account_id_or_null(
+    ) {
+        let (site, seen) = serve_each(vec![
+            json_answer(r#"[{"accountId":"5b10","displayName":"Mia"}]"#),
+            NO_CONTENT.into(),
+            NO_CONTENT.into(),
+        ])
+        .await;
+        let conn = basic_conn(&site).await;
+        assert_eq!(assignable(&conn, "EX-7").await.unwrap().len(), 1);
+        assign(&conn, "EX-7", Some("5b10")).await.unwrap();
+        assign(&conn, "EX-7", None).await.unwrap();
+        let requests = seen.await.unwrap();
+        assert!(
+            requests[0].starts_with(
+                "get /rest/api/3/user/assignable/search?issuekey=ex-7&maxresults=100 http/1.1"
+            ),
+            "{}",
+            requests[0]
+        );
+        assert!(
+            requests[1].starts_with("put /rest/api/3/issue/ex-7/assignee http/1.1"),
+            "{}",
+            requests[1]
+        );
+        assert!(
+            requests[1].ends_with(r#"{"accountid":"5b10"}"#),
+            "{}",
+            requests[1]
+        );
+        assert!(
+            requests[2].ends_with(r#"{"accountid":null}"#),
+            "{}",
+            requests[2]
+        );
+        assert!(requests.iter().all(|r| r.contains(BASIC)));
+        let dead = basic_conn("http://127.0.0.1:1").await;
+        assert_eq!(
+            assign(&dead, "EX-7", Some("-1")).await,
+            Err("アカウント ID の形が正しくありません".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn the_priorities_come_from_the_edit_metadata_and_a_priority_is_put_by_its_id() {
+        let (site, seen) = serve_each(vec![
+            json_answer(r#"{"fields":{"priority":{"allowedValues":[{"id":"2","name":"High"}]}}}"#),
+            NO_CONTENT.into(),
+        ])
+        .await;
+        let conn = basic_conn(&site).await;
+        assert_eq!(priorities(&conn, "EX-7").await.unwrap()[0].name, "High");
+        set_priority(&conn, "EX-7", "2").await.unwrap();
+        let requests = seen.await.unwrap();
+        assert!(
+            requests[0].starts_with("get /rest/api/3/issue/ex-7/editmeta http/1.1"),
+            "{}",
+            requests[0]
+        );
+        assert!(
+            requests[1].starts_with("put /rest/api/3/issue/ex-7 http/1.1"),
+            "{}",
+            requests[1]
+        );
+        assert!(
+            requests[1].ends_with(r#"{"fields":{"priority":{"id":"2"}}}"#),
+            "{}",
+            requests[1]
+        );
+        let dead = basic_conn("http://127.0.0.1:1").await;
+        assert_eq!(
+            set_priority(&dead, "EX-7", "High").await,
+            Err("ID の形が正しくありません".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_ticket_goes_into_a_sprint_or_back_to_the_backlog() {
+        let (site, seen) = serve_each(vec![NO_CONTENT.into(), NO_CONTENT.into()]).await;
+        let conn = basic_conn(&site).await;
+        move_to_sprint(&conn, "EX-7", Some(37)).await.unwrap();
+        move_to_sprint(&conn, "EX-7", None).await.unwrap();
+        let requests = seen.await.unwrap();
+        assert!(
+            requests[0].starts_with("post /rest/agile/1.0/sprint/37/issue http/1.1"),
+            "{}",
+            requests[0]
+        );
+        assert!(
+            // The helper lowercases what it saw.
+            requests[0].ends_with(r#"{"issues":["ex-7"]}"#),
+            "{}",
+            requests[0]
+        );
+        assert!(
+            requests[1].starts_with("post /rest/agile/1.0/backlog/issue http/1.1"),
+            "{}",
+            requests[1]
+        );
+        assert!(requests.iter().all(|r| r.contains(BASIC)));
+        assert_eq!(
+            move_to_sprint(&basic_conn("http://127.0.0.1:1").await, "x", Some(1)).await,
+            Err("チケットのキーの形が正しくありません".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_write_through_the_gateway_sends_the_bearer_credential_and_a_redirect_is_not_followed(
+    ) {
+        let (site, tenant_seen) = serve_once(tenant_answer()).await;
+        let (gateway, seen) = serve_each(vec![NO_CONTENT.into()]).await;
+        let conn = connect(&site, "", "tok", &gateway).await.unwrap();
+        transition(&conn, "EX-7", "31").await.unwrap();
+        let requests = seen.await.unwrap();
+        assert!(
+            requests[0].starts_with(&format!(
+                "post /ex/jira/{TENANT_ANSWER_ID}/rest/api/3/issue/ex-7/transitions http/1.1"
+            )),
+            "{}",
+            requests[0]
+        );
+        assert!(requests[0].contains("authorization: bearer tok\r\n"));
+        assert!(!lower(&tenant_seen.await.unwrap()).contains("authorization"));
+        let (site, seen) = serve_each(vec![
+            "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
+        ])
+        .await;
+        assert_eq!(
+            transition(&basic_conn(&site).await, "EX-7", "31").await,
+            Err("Jira が 302 を返しました: ".into())
+        );
+        assert_eq!(seen.await.unwrap().len(), 1);
+    }
+
+    fn description_answer(description: &Value) -> String {
+        json_answer(
+            &serde_json::json!({"key": "EX-7", "fields": {"description": description}}).to_string(),
+        )
+    }
+
+    fn adf_doc(content: Value) -> Value {
+        serde_json::json!({"version": 1, "type": "doc", "content": content})
+    }
+
+    fn body_of(request: &str) -> Value {
+        serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap()
+    }
+
+    fn described() -> Value {
+        adf_doc(serde_json::json!([
+            {"type": "paragraph", "content": [
+                {"type": "text", "text": "Ask "},
+                {"type": "mention", "attrs": {"id": "u1", "text": "@Taro"}}
+            ]},
+            {"type": "paragraph", "content": [{"type": "text", "text": "second"}]}
+        ]))
+    }
+
+    #[tokio::test]
+    async fn the_description_is_read_merged_with_the_markdown_and_put_back() {
+        let current = described();
+        let base = adf::adf_to_markdown(&current);
+        assert_eq!(base, "Ask @Taro\n\nsecond");
+        let (site, seen) = serve_each(vec![description_answer(&current), NO_CONTENT.into()]).await;
+        let saved = set_description(
+            &basic_conn(&site).await,
+            "EX-7",
+            &base,
+            "Ask @Taro\n\nsecond, edited\n\n- [ ] new task",
+        )
+        .await
+        .unwrap();
+        assert_eq!(saved, "Ask @Taro\n\nsecond, edited\n\n- ☐ new task");
+        let requests = seen.await.unwrap();
+        assert!(
+            requests[0].starts_with("get /rest/api/3/issue/ex-7?fields=description http/1.1"),
+            "{}",
+            requests[0]
+        );
+        assert!(
+            requests[1].starts_with("put /rest/api/3/issue/ex-7 http/1.1"),
+            "{}",
+            requests[1]
+        );
+        assert!(requests[1].contains(BASIC));
+        assert!(requests[1].contains("content-type: application/json"));
+        let sent = body_of(&requests[1]);
+        let doc = &sent["fields"]["description"];
+        assert_eq!(doc["type"], "doc");
+        assert_eq!(doc["version"], 1);
+        // The paragraph that was not edited is the one Jira holds, with its mention.
+        assert_eq!(
+            doc["content"][0],
+            serde_json::from_str::<Value>(&current["content"][0].to_string().to_lowercase())
+                .unwrap()
+        );
+        assert_eq!(doc["content"][1]["content"][0]["text"], "second, edited");
+        let task = &doc["content"][2];
+        // The request is lowercased by `lower`.
+        assert_eq!(task["type"], "tasklist");
+        assert!(task["attrs"]["localid"].is_string());
+        assert!(task["content"][0]["attrs"]["localid"].is_string());
+        assert_eq!(task["content"][0]["attrs"]["state"], "todo");
+    }
+
+    #[tokio::test]
+    async fn a_description_that_changed_in_jira_meanwhile_is_not_overwritten() {
+        let (site, seen) = serve_each(vec![description_answer(&described())]).await;
+        let err = set_description(&basic_conn(&site).await, "EX-7", "Ask someone else", "new")
+            .await
+            .unwrap_err();
+        assert_eq!(err, "説明が Jira で変更されています。読み直してください");
+        assert_eq!(seen.await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_description_that_changes_nothing_sends_nothing_and_an_empty_one_is_null() {
+        let current = described();
+        let base = adf::adf_to_markdown(&current);
+        let (site, seen) = serve_each(vec![description_answer(&current)]).await;
+        assert_eq!(
+            set_description(
+                &basic_conn(&site).await,
+                "EX-7",
+                &base,
+                "Ask @Taro\n\nsecond"
+            )
+            .await
+            .unwrap(),
+            base
+        );
+        assert_eq!(seen.await.unwrap().len(), 1);
+        let plain = adf_doc(
+            serde_json::json!([{"type": "paragraph", "content": [{"type": "text", "text": "x"}]}]),
+        );
+        let (site, seen) = serve_each(vec![description_answer(&plain), NO_CONTENT.into()]).await;
+        assert_eq!(
+            set_description(&basic_conn(&site).await, "EX-7", "x", "  \n")
+                .await
+                .unwrap(),
+            ""
+        );
+        let requests = seen.await.unwrap();
+        assert_eq!(
+            body_of(&requests[1]),
+            serde_json::json!({"fields": {"description": null}})
+        );
+        // A ticket with no description takes the new one.
+        let (site, seen) =
+            serve_each(vec![description_answer(&Value::Null), NO_CONTENT.into()]).await;
+        set_description(&basic_conn(&site).await, "EX-7", "", "hello")
+            .await
+            .unwrap();
+        let requests = seen.await.unwrap();
+        assert_eq!(
+            body_of(&requests[1])["fields"]["description"]["content"][0]["content"][0]["text"],
+            "hello"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_bad_key_or_a_huge_text_asks_nothing_and_a_refusal_is_the_error() {
+        let dead = basic_conn("http://127.0.0.1:1").await;
+        assert_eq!(
+            set_description(&dead, "ex-7", "", "x").await,
+            Err("チケットのキーの形が正しくありません".into())
+        );
+        assert_eq!(
+            set_description(&dead, "EX-7", "", &"x".repeat(MARKDOWN_LIMIT + 1)).await,
+            Err("文章が長すぎます".into())
+        );
+        assert_eq!(
+            add_comment(&dead, "../x", "x").await,
+            Err("チケットのキーの形が正しくありません".into())
+        );
+        let current = described();
+        let base = adf::adf_to_markdown(&current);
+        let (site, _seen) = serve_each(vec![
+            description_answer(&current),
+            "HTTP/1.1 400 Bad Request\r\nContent-Length: 12\r\nConnection: close\r\n\r\n{\"errors\":1}".into(),
+        ])
+        .await;
+        assert_eq!(
+            set_description(&basic_conn(&site).await, "EX-7", &base, "changed").await,
+            Err(r#"Jira が 400 を返しました: {"errors":1}"#.into())
+        );
+    }
+
+    #[test]
+    fn comment_of_reads_the_comment_that_jira_answers_with() {
+        let body = serde_json::json!({
+            "author": {"displayName": "Taro"},
+            "created": "2026-11-25T09:30:12.345+0900",
+            "body": adf_doc(serde_json::json!([{"type": "paragraph", "content": [{"type": "text", "text": "hi"}]}]))
+        })
+        .to_string();
+        assert_eq!(
+            comment_of(201, &body),
+            Ok(JiraComment {
+                author: "Taro".into(),
+                created: "2026-11-25 09:30".into(),
+                body: "hi".into()
+            })
+        );
+        assert_eq!(
+            comment_of(403, ""),
+            Err("Jira が認証を拒否しました（401）".replace("401", "403"))
+        );
+        assert!(comment_of(201, "not json")
+            .unwrap_err()
+            .contains("追加されました"));
+    }
+
+    #[tokio::test]
+    async fn a_comment_is_posted_as_adf_and_a_blank_one_asks_nothing() {
+        let answer = serde_json::json!({
+            "author": {"displayName": "Me"},
+            "created": "2026-11-25T10:00:00.000+0900",
+            "body": adf_doc(serde_json::json!([{"type": "paragraph", "content": [{"type": "text", "text": "ok"}]}]))
+        })
+        .to_string();
+        let created = format!(
+            "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
+            answer.len()
+        );
+        let (site, seen) = serve_each(vec![created]).await;
+        let conn = basic_conn(&site).await;
+        let comment = add_comment(&conn, "EX-7", "**ok**\n\n- [x] done")
+            .await
+            .unwrap();
+        assert_eq!(comment.author, "Me");
+        assert_eq!(comment.body, "ok");
+        let requests = seen.await.unwrap();
+        assert!(
+            requests[0].starts_with("post /rest/api/3/issue/ex-7/comment http/1.1"),
+            "{}",
+            requests[0]
+        );
+        assert!(requests[0].contains(BASIC));
+        let sent = body_of(&requests[0]);
+        assert_eq!(sent["body"]["type"], "doc");
+        assert_eq!(
+            sent["body"]["content"][0]["content"][0]["marks"][0]["type"],
+            "strong"
+        );
+        assert_eq!(sent["body"]["content"][1]["type"], "tasklist");
+        assert!(sent["body"]["content"][1]["attrs"]["localid"].is_string());
+        let dead = basic_conn("http://127.0.0.1:1").await;
+        assert_eq!(
+            add_comment(&dead, "EX-7", " \n\n ").await,
+            Err("コメントを入力してください".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn the_two_writes_of_the_tab_go_through_the_gateway_with_the_bearer_credential() {
+        let (site, tenant_seen) = serve_once(tenant_answer()).await;
+        let (gateway, seen) =
+            serve_each(vec![description_answer(&Value::Null), NO_CONTENT.into()]).await;
+        let conn = connect(&site, "", "tok", &gateway).await.unwrap();
+        set_description(&conn, "EX-7", "", "hello").await.unwrap();
+        let requests = seen.await.unwrap();
+        assert!(requests[1].starts_with(&format!(
+            "put /ex/jira/{TENANT_ANSWER_ID}/rest/api/3/issue/ex-7 http/1.1"
+        )));
+        assert!(requests[1].contains("authorization: bearer tok\r\n"));
+        assert!(!lower(&tenant_seen.await.unwrap()).contains("authorization"));
+    }
+
+    #[test]
+    fn project_of_keeps_the_projects_that_can_go_into_a_body() {
+        let list: Vec<RawProject> = serde_json::from_str(
+            r#"[{"id":"10000","key":"EX","name":"Example"},
+                {"id":"10001","key":"NN"},
+                {"id":"10002","key":"OLD","name":"Old","archived":true},
+                {"id":"../3","key":"BAD","name":"Bad"},
+                {"key":"NOID","name":"No id"}]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            list.into_iter().filter_map(project_of).collect::<Vec<_>>(),
+            vec![
+                JiraProject {
+                    id: "10000".into(),
+                    key: "EX".into(),
+                    name: "Example".into()
+                },
+                JiraProject {
+                    id: "10001".into(),
+                    key: "NN".into(),
+                    name: "NN".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn issue_type_of_leaves_out_subtasks_and_what_has_no_usable_id_or_name() {
+        let list: Vec<RawIssueType> = serde_json::from_str(
+            r#"[{"id":"10001","name":"Task","subtask":false},
+                {"id":"10002","name":"Bug"},
+                {"id":"10003","name":"Sub-task","subtask":true},
+                {"id":"x","name":"Bad id"},
+                {"id":"10005","name":""},
+                {"id":"10006"}]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            list.into_iter()
+                .filter_map(issue_type_of)
+                .collect::<Vec<_>>(),
+            vec![
+                JiraIssueType {
+                    id: "10001".into(),
+                    name: "Task".into()
+                },
+                JiraIssueType {
+                    id: "10002".into(),
+                    name: "Bug".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn summary_of_trims_and_refuses_an_empty_long_or_multi_line_summary() {
+        assert_eq!(summary_of("  Fix it \n"), Ok("Fix it"));
+        assert_eq!(summary_of(" \n "), Err("件名を入力してください".into()));
+        assert_eq!(
+            summary_of("a\nb"),
+            Err("件名に改行や制御文字は入れられません".into())
+        );
+        assert_eq!(
+            summary_of("a\u{0}b"),
+            Err("件名に改行や制御文字は入れられません".into())
+        );
+        assert!(summary_of(&"あ".repeat(255)).is_ok());
+        assert_eq!(
+            summary_of(&"あ".repeat(256)),
+            Err("件名は 255 文字までです".into())
+        );
+    }
+
+    #[test]
+    fn create_body_has_the_ids_the_summary_and_a_description_only_when_there_is_one() {
+        let blocks = vec![serde_json::json!({"type": "paragraph", "content": []})];
+        assert_eq!(
+            create_body("10000", "10001", "Sum", blocks.clone()),
+            serde_json::json!({"fields": {
+                "project": {"id": "10000"},
+                "issuetype": {"id": "10001"},
+                "summary": "Sum",
+                "description": {"version": 1, "type": "doc", "content": blocks},
+            }})
+        );
+        assert_eq!(
+            create_body("10000", "10001", "Sum", vec![]),
+            serde_json::json!({"fields": {
+                "project": {"id": "10000"},
+                "issuetype": {"id": "10001"},
+                "summary": "Sum",
+            }})
+        );
+    }
+
+    #[test]
+    fn created_of_reads_the_key_and_says_why_for_a_failure() {
+        assert_eq!(
+            created_of(
+                201,
+                r#"{"id":"10042","key":"EX-42","self":"https://x/10042"}"#
+            ),
+            Ok("EX-42".into())
+        );
+        for body in ["not json", "{}", r#"{"key":"../x"}"#, r#"{"key":"ex-1"}"#] {
+            assert!(
+                created_of(201, body).unwrap_err().contains("作られました"),
+                "{body}"
+            );
+        }
+        assert_eq!(
+            created_of(400, r#"{"errors":{"summary":"required"}}"#),
+            Err(r#"Jira が 400 を返しました: {"errors":{"summary":"required"}}"#.into())
+        );
+        assert_eq!(
+            created_of(403, ""),
+            Err("Jira が認証を拒否しました（403）".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn the_projects_to_create_in_are_read_page_by_page_and_the_issue_types_by_project_id() {
+        let page = |values: &str, last: bool| {
+            json_answer(&format!(
+                r#"{{"values":{values},"isLast":{last},"startAt":0,"total":3}}"#
+            ))
+        };
+        let (site, seen) = serve_each(vec![
+            page(r#"[{"id":"10000","key":"EX","name":"Example"},{"id":"10001","key":"AB","name":"Alpha"}]"#, false),
+            page(r#"[{"id":"10002","key":"CD","name":"Beta","archived":true}]"#, true),
+            json_answer(
+                r#"{"startAt":0,"maxResults":50,"total":2,"issueTypes":[{"id":"10001","name":"Task","subtask":false},{"id":"10003","name":"Sub-task","subtask":true}]}"#,
+            ),
+        ])
+        .await;
+        let conn = basic_conn(&site).await;
+        let list = projects(&conn).await.unwrap();
+        assert_eq!(
+            list.iter().map(|p| p.key.as_str()).collect::<Vec<_>>(),
+            ["EX", "AB"]
+        );
+        let types = issue_types(&conn, "10000").await.unwrap();
+        assert_eq!(
+            types,
+            vec![JiraIssueType {
+                id: "10001".into(),
+                name: "Task".into()
+            }]
+        );
+        let requests = seen.await.unwrap();
+        assert!(
+            requests[0].starts_with(
+                "get /rest/api/3/project/search?action=create&orderby=name&startat=0&maxresults=50 http/1.1"
+            ),
+            "{}",
+            requests[0]
+        );
+        assert!(
+            requests[1].contains("startat=2&maxresults=50"),
+            "{}",
+            requests[1]
+        );
+        assert!(
+            requests[2].starts_with(
+                "get /rest/api/3/issue/createmeta/10000/issuetypes?startat=0&maxresults=50 http/1.1"
+            ),
+            "{}",
+            requests[2]
+        );
+        assert!(requests.iter().all(|r| r.contains(BASIC)));
+        for bad in ["", "EX", "../1", "1/2", "1?x=y"] {
+            assert_eq!(
+                issue_types(&basic_conn("http://127.0.0.1:1").await, bad).await,
+                Err("ID の形が正しくありません".into()),
+                "{bad}"
+            );
+        }
+    }
+
+    fn created_answer() -> String {
+        let body = r#"{"id":"10042","key":"EX-42","self":"https://x/rest/api/3/issue/10042"}"#;
+        format!(
+            "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    #[tokio::test]
+    async fn a_ticket_is_created_with_its_fields_and_then_put_in_the_sprint() {
+        let (site, seen) = serve_each(vec![created_answer(), NO_CONTENT.into()]).await;
+        let conn = basic_conn(&site).await;
+        let created = create_issue(
+            &conn,
+            "10000",
+            "10001",
+            " New one ",
+            "**why**\n\n- a",
+            Some(37),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            created,
+            JiraCreated {
+                key: "EX-42".into(),
+                sprint_error: None
+            }
+        );
+        let requests = seen.await.unwrap();
+        assert!(
+            requests[0].starts_with("post /rest/api/3/issue http/1.1"),
+            "{}",
+            requests[0]
+        );
+        assert!(requests[0].contains(BASIC));
+        let sent = body_of(&requests[0]);
+        assert_eq!(sent["fields"]["project"]["id"], "10000");
+        assert_eq!(sent["fields"]["issuetype"]["id"], "10001");
+        assert_eq!(sent["fields"]["summary"], "new one");
+        assert_eq!(sent["fields"]["description"]["type"], "doc");
+        assert_eq!(
+            sent["fields"]["description"]["content"][0]["content"][0]["marks"][0]["type"],
+            "strong"
+        );
+        assert!(
+            requests[1].starts_with("post /rest/agile/1.0/sprint/37/issue http/1.1"),
+            "{}",
+            requests[1]
+        );
+        assert!(
+            requests[1].ends_with(r#"{"issues":["ex-42"]}"#),
+            "{}",
+            requests[1]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_ticket_with_no_description_and_no_sprint_sends_neither() {
+        let (site, seen) = serve_each(vec![created_answer()]).await;
+        let created = create_issue(
+            &basic_conn(&site).await,
+            "10000",
+            "10001",
+            "Only",
+            " \n ",
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(created.key, "EX-42");
+        let requests = seen.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        let sent = body_of(&requests[0]);
+        assert!(sent["fields"].get("description").is_none());
+        assert!(sent["fields"].get("sprint").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_ticket_that_could_not_be_put_in_the_sprint_is_still_the_answer_with_the_reason() {
+        let (site, seen) = serve_each(vec![
+            created_answer(),
+            "HTTP/1.1 400 Bad Request\r\nContent-Length: 6\r\nConnection: close\r\n\r\nclosed"
+                .into(),
+        ])
+        .await;
+        let created = create_issue(&basic_conn(&site).await, "10000", "10001", "S", "", Some(5))
+            .await
+            .unwrap();
+        assert_eq!(created.key, "EX-42");
+        assert_eq!(
+            created.sprint_error,
+            Some("チケット EX-42 は作りましたが、スプリントに入れられませんでした: Jira が 400 を返しました: closed".into())
+        );
+        assert_eq!(seen.await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_refused_create_is_the_error_and_puts_nothing_in_a_sprint() {
+        let (site, seen) = serve_each(vec![
+            "HTTP/1.1 400 Bad Request\r\nContent-Length: 12\r\nConnection: close\r\n\r\nneed a field".into(),
+        ])
+        .await;
+        assert_eq!(
+            create_issue(&basic_conn(&site).await, "10000", "10001", "S", "", Some(5)).await,
+            Err("Jira が 400 を返しました: need a field".into())
+        );
+        assert_eq!(seen.await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_create_with_a_bad_value_asks_nothing() {
+        let dead = basic_conn("http://127.0.0.1:1").await;
+        for (project, kind, summary, markdown, error) in [
+            ("x", "10001", "S", "", "ID の形が正しくありません"),
+            ("10000", "1/2", "S", "", "ID の形が正しくありません"),
+            ("10000", "10001", " ", "", "件名を入力してください"),
+            (
+                "10000",
+                "10001",
+                "a\nb",
+                "",
+                "件名に改行や制御文字は入れられません",
+            ),
+        ] {
+            assert_eq!(
+                create_issue(&dead, project, kind, summary, markdown, None).await,
+                Err(error.into()),
+                "{project} {kind} {summary:?}"
+            );
+        }
+        assert_eq!(
+            create_issue(
+                &dead,
+                "10000",
+                "10001",
+                "S",
+                &"a".repeat(MARKDOWN_LIMIT + 1),
+                None
+            )
+            .await,
+            Err("文章が長すぎます".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn the_create_goes_through_the_gateway_with_the_bearer_credential() {
+        let (site, tenant_seen) = serve_once(tenant_answer()).await;
+        let (gateway, seen) = serve_each(vec![created_answer(), NO_CONTENT.into()]).await;
+        let conn = connect(&site, "", "tok", &gateway).await.unwrap();
+        create_issue(&conn, "10000", "10001", "S", "", Some(7))
+            .await
+            .unwrap();
+        let requests = seen.await.unwrap();
+        assert!(requests[0].starts_with(&format!(
+            "post /ex/jira/{TENANT_ANSWER_ID}/rest/api/3/issue http/1.1"
+        )));
+        assert!(requests[1].starts_with(&format!(
+            "post /ex/jira/{TENANT_ANSWER_ID}/rest/agile/1.0/sprint/7/issue http/1.1"
+        )));
+        assert!(requests
+            .iter()
+            .all(|r| r.contains("authorization: bearer tok\r\n")));
+        assert!(!lower(&tenant_seen.await.unwrap()).contains("authorization"));
     }
 }

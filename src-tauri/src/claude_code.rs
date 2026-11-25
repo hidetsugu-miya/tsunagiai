@@ -1917,10 +1917,10 @@ mod tests {
             "目的、ゴール",
             "`folder`",
             "取り消せない操作",
-            "あなたは、子と同じ PC で動いています",
-            "子を起動できるのは、その PC（環境 `local`）だけです",
-            "別の PC の子の起動には、まだ対応していません",
-            "ほかの環境のリポジトリは、読めます。子は置けません",
+            "あなたは、環境 `local` の PC で動いています",
+            "子は、`local` にも、保存した環境（別の PC）にも起動できます",
+            "orca orchestration send --run {runId} --on {環境} --to {handle}",
+            "`orca orchestration reply`",
         ] {
             assert!(FORMATION_CLAUDE_MD.contains(needle), "{needle}");
         }
@@ -1928,6 +1928,7 @@ mod tests {
         assert!(FORMATION_CLAUDE_MD.contains("明示して頼んだときだけ"));
         assert!(!FORMATION_CLAUDE_MD.contains("codex のレビューの子"));
         assert!(!FORMATION_CLAUDE_MD.contains("閉じてかまいません"));
+        assert!(!FORMATION_CLAUDE_MD.contains("まだ対応していません"));
     }
 
     #[test]
