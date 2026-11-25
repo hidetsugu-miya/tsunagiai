@@ -514,24 +514,6 @@
       <section class="card">
         <div class="card-head">
           <h2>
-            <span class="logo orca"><svg data-svg="chain"></svg></span>Jira 接続
-          </h2>
-          <button id="jira-help" class="icon-btn" data-hint aria-label="Jira 接続の説明" aria-expanded="false">
-            <svg data-svg="help"></svg>
-          </button>
-        </div>
-        <div id="jira-items"></div>
-        <form id="jira-form" class="card-add">
-          <input id="jira-site" aria-label="サイトの URL" placeholder="サイトの URL" autocomplete="off" spellcheck="false">
-          <input id="jira-email" aria-label="メールアドレス" placeholder="メールアドレス" autocomplete="off" spellcheck="false">
-          <input id="jira-token" type="password" aria-label="API トークン" placeholder="API トークン" autocomplete="off">
-          <button class="text-btn primary">保存</button>
-          <button id="jira-test" type="button" class="text-btn">接続を試す</button>
-        </form>
-      </section>
-      <section class="card">
-        <div class="card-head">
-          <h2>
             <span class="logo orca"><svg data-svg="monitor"></svg></span>このマシンの Orca
           </h2>
           <button id="orca-pairing-help" class="icon-btn" data-hint aria-label="このマシンの Orca の説明" aria-expanded="false">
@@ -799,7 +781,20 @@
             <select id="orca-jira-status" aria-label="ステータス" hidden></select>
             <button id="orca-jira-new" class="icon-btn" type="button" aria-label="チケットを作る" hidden></button>
             <button id="orca-jira-reload" class="icon-btn" type="button" aria-label="再読み込み" hidden></button>
+            <button id="orca-jira-config" class="icon-btn" type="button" aria-label="接続の設定" hidden></button>
           </div>
+          <form id="orca-jira-conn" hidden>
+            <input id="orca-jira-site" aria-label="サイトの URL" placeholder="サイトの URL" autocomplete="off" spellcheck="false">
+            <input id="orca-jira-email" aria-label="メールアドレス" placeholder="メールアドレス" autocomplete="off" spellcheck="false">
+            <input id="orca-jira-token" type="password" aria-label="API トークン" placeholder="API トークン" autocomplete="off">
+            <div id="orca-jira-conn-buttons">
+              <button id="orca-jira-save" class="text-btn primary">保存</button>
+              <button id="orca-jira-test" type="button" class="text-btn">接続を試す</button>
+              <button id="orca-jira-delete" type="button" class="text-btn" hidden>削除</button>
+              <button id="orca-jira-close" type="button" class="text-btn" hidden>閉じる</button>
+            </div>
+            <div id="orca-jira-conn-state" hidden><span id="orca-jira-conn-status" class="status"></span><span id="orca-jira-conn-user" class="orca-file-note"></span></div>
+          </form>
           <div id="orca-jira-list"></div>
         </div>
         <div id="orca-server" hidden>

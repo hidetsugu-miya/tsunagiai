@@ -230,7 +230,7 @@ const answers = {
   // A-37 (#893): no PC has the owner's consent yet; a spec that needs one gives `formationConsent` of e2e/support.ts, and one that presses 「同意する」 or 「取り消す」 mocks `formation_consent` or `formation_consent_revoke`.
   formation_consents: [],
   // J-1: no Jira connection saved yet; a spec that saves or tries one mocks `jira_save` or `jira_test`, and one that starts with a saved connection gives `jira_settings`.
-  jira_settings: { site: "", email: "", hasToken: false },
+  jira_settings: { site: "", email: "", hasToken: false, boardId: null },
   // A-13: no Ghostty settings imported yet; a spec that presses the import button mocks `ghostty_import`.
   ghostty_saved: null,
   // A-34: the language server of a worktree that was never started, with no way to start it (a spec that checks the pane or the start gives its own).
@@ -326,6 +326,8 @@ const computed = {
     if (held === undefined) throw `Jira が 404 を返しました: no sprint ${sprintId}`;
     return held;
   },
+  // J-1 (#1395): the save of the board of a project answers the connection the spec gave (`jira_settings`) with that board; a spec that checks a refusal mocks `jira_set_board`.
+  jira_set_board: ({ boardId }) => ({ ...fixtures.jira_settings, boardId }),
   // J-2 (#871): a ticket for its tab, from the fixture `jira_details` ({ "{key}": the answer of `jira_issue` }); a ticket it does not hold fails as Jira's refusal does. A spec that wants one answer for every ticket mocks `jira_issue`.
   jira_issue: ({ key }) => {
     const held = fixtures.jira_details?.[key];

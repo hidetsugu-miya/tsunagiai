@@ -1,8 +1,8 @@
-//! The connection to Jira Cloud (J-1, #868): the site's URL and the email address in `jira-settings.json` of the app config directory, the API token in the keychain, and a test of the connection.
+//! The connection to Jira Cloud (J-1, #868, #1393): for each project of each environment (the key of `lsp.rs`'s settings: where the project is, `None` for this machine, and its key in Orca's list), the site's URL, the email address and the board it shows in `jira-connections.json` of the app config directory, the API token in the keychain under the same key, and a test of the connection. The one connection that J-1 kept before the projects (`jira-settings.json` and the token under the user `api-token`) is removed at each start (`remove_legacy`).
 //!
 //! Only Atlassian Cloud is spoken to: the site is `https://{name}.atlassian.net` and nothing else (`site_url`), and a token goes to that site or to `api.atlassian.com` only, never to another host.
 //! An email address makes the token a Basic credential (`email:token`, an API token of an account) sent to the site; with none it is a Bearer token (a scoped token) sent through the gateway `api.atlassian.com/ex/jira/{cloudId}`, which is the only place Atlassian takes it (`api_base` chooses).
-//! The token is never returned to the screen, logged or written to a file; a save with no token keeps the stored one.
+//! The token is never returned to the screen, logged or written to a file; a save with no token keeps the stored one. The saved site and email address are checked again (`site_url`, `email_of`) before a token is sent with them (`saved_connection`).
 //!
 //! The boards, the sprints and their tickets are read through the Agile API (`/rest/agile/1.0`, J-2, #869): the commands `jira_boards`, `jira_sprints`, `jira_sprint_issues` and `jira_backlog` read the saved connection and call it where `api_base` says. They only read; the answers are turned into the types below by pure functions.
 //! A ticket is read for its tab (J-2, #871) by `jira_issue`: the ticket with its description (REST API v3, where the description is ADF, read as Markdown by `adf`), its sprint (the Agile API) and its comments.
@@ -12,7 +12,7 @@
 mod adf;
 mod markdown;
 
-use std::{path::Path, time::Duration};
+use std::{path::Path, sync::Mutex, time::Duration};
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use reqwest::header::{HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
@@ -25,10 +25,13 @@ use url::Url;
 
 use crate::{accounts::write_atomic, auth::config_dir, gmail::log_failure, keychain};
 
-const FILE: &str = "jira-settings.json";
-/// The keychain service and user name of the API token.
+const FILE: &str = "jira-connections.json";
+const VERSION: u32 = 1;
+/// The file and the token user of the one connection before the projects (J-1, #868), which are removed.
+const LEGACY_FILE: &str = "jira-settings.json";
+const LEGACY_TOKEN_USER: &str = "api-token";
+/// The keychain service of the API tokens; the user is the key of the project (`token_user`).
 const TOKEN_SERVICE: &str = "jp.mysis.tsunagiai.jira";
-const TOKEN_USER: &str = "api-token";
 /// The `account=` of the logs.
 const LOG_ACCOUNT: &str = "jira";
 const HOST_SUFFIX: &str = ".atlassian.net";
@@ -76,14 +79,25 @@ const MAX_ISSUE_TYPES: usize = 100;
 /// Jira's own limit of a summary.
 const SUMMARY_LIMIT: usize = 255;
 
-/// What `jira-settings.json` holds.
-#[derive(Serialize, Deserialize, Default, Debug, PartialEq)]
-struct Saved {
-    site: String,
-    email: String,
+/// What `jira-connections.json` holds (version 1).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+struct Store {
+    version: u32,
+    connections: Vec<Connection>,
 }
 
-/// The saved connection as the screen gets it: never the token, only whether one is kept.
+/// The connection of the project `project` of `environment` (`None` for this machine, else the name of the saved environment), and the board it shows (`None`: none chosen).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct Connection {
+    environment: Option<String>,
+    project: String,
+    site: String,
+    email: String,
+    board_id: Option<u64>,
+}
+
+/// The saved connection of a project as the screen gets it: never the token, only whether one is kept.
 #[derive(Serialize, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -92,6 +106,9 @@ pub struct JiraSettings {
     pub site: String,
     pub email: String,
     pub has_token: bool,
+    /// The board the project shows, none when none is chosen.
+    #[cfg_attr(test, ts(type = "number | null"))]
+    pub board_id: Option<u64>,
 }
 
 /// Who the credential belongs to, as Jira answered the test.
@@ -1180,19 +1197,109 @@ async fn create_issue(
     Ok(JiraCreated { key, sprint_error })
 }
 
-fn load_file(dir: &Path) -> Result<Saved, String> {
-    let path = dir.join(FILE);
-    match std::fs::read_to_string(&path) {
-        Ok(text) => serde_json::from_str(&text)
-            .map_err(|e| format!("{} の形式が不正です: {e}", path.display())),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Saved::default()),
-        Err(e) => Err(format!("{} を読めません: {e}", path.display())),
+/// The longest text of the key of a connection (the name of an environment, the key of a project), in characters, as `lsp.rs` takes it.
+const PLACE_LIMIT: usize = 4096;
+/// The connections are read and written in turn by the commands of the screen, which may overlap.
+static LOCK: Mutex<()> = Mutex::new(());
+
+fn empty_store() -> Store {
+    Store {
+        version: VERSION,
+        connections: Vec::new(),
     }
 }
 
-fn save_file(dir: &Path, saved: &Saved) -> Result<(), String> {
-    let text = serde_json::to_string_pretty(saved).map_err(|e| e.to_string())?;
+impl Connection {
+    /// What a project with nothing saved has.
+    fn unset(environment: Option<&str>, project: &str) -> Self {
+        Self {
+            environment: environment.map(str::to_owned),
+            project: project.to_owned(),
+            site: String::new(),
+            email: String::new(),
+            board_id: None,
+        }
+    }
+
+    fn is_at(&self, environment: Option<&str>, project: &str) -> bool {
+        self.environment.as_deref() == environment && self.project == project
+    }
+}
+
+fn load_store(dir: &Path) -> Result<Store, String> {
+    let path = dir.join(FILE);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(empty_store()),
+        Err(e) => return Err(format!("{} を読めません: {e}", path.display())),
+    };
+    let store: Store = serde_json::from_str(&text)
+        .map_err(|e| format!("{} の形式が不正です: {e}", path.display()))?;
+    if store.version != VERSION {
+        return Err(format!(
+            "{} の版 {} は読めません",
+            path.display(),
+            store.version
+        ));
+    }
+    Ok(store)
+}
+
+fn save_store(dir: &Path, store: &Store) -> Result<(), String> {
+    let text = serde_json::to_string_pretty(store).map_err(|e| e.to_string())?;
     write_atomic(dir, FILE, &text)
+}
+
+/// The connection of the project `project` of `environment` (`None`: this machine): the saved one, else the unset one.
+fn connection_at(
+    dir: &Path,
+    environment: Option<&str>,
+    project: &str,
+) -> Result<Connection, String> {
+    Ok(load_store(dir)?
+        .connections
+        .into_iter()
+        .find(|c| c.is_at(environment, project))
+        .unwrap_or_else(|| Connection::unset(environment, project)))
+}
+
+/// A text of the key: not empty, not longer than `PLACE_LIMIT`, with no control character.
+fn check_text(what: &str, text: &str) -> Result<(), String> {
+    if text.is_empty() || text.chars().count() > PLACE_LIMIT || text.chars().any(char::is_control) {
+        return Err(format!("{what}が正しくありません"));
+    }
+    Ok(())
+}
+
+/// The key of a connection as a command is given it: the environment (`None` for this machine) and the key of the project in Orca's list.
+fn check_place(environment: Option<&str>, project: &str) -> Result<(), String> {
+    if let Some(environment) = environment {
+        check_text("接続先", environment)?;
+    }
+    check_text("プロジェクト", project)
+}
+
+/// The user name of the token of a project in the keychain: the key as a JSON array, so that no two keys share one (`[null,"p"]` is this machine, `["name","p"]` an environment).
+fn token_user(environment: Option<&str>, project: &str) -> String {
+    serde_json::json!([environment, project]).to_string()
+}
+
+/// The connection to save: the form's site and email address, with the board kept only while the site is the same one (a board belongs to its site).
+fn merged(
+    old: Option<&Connection>,
+    environment: Option<&str>,
+    project: &str,
+    site: String,
+    email: String,
+) -> Connection {
+    let board_id = old.filter(|o| o.site == site).and_then(|o| o.board_id);
+    Connection {
+        environment: environment.map(str::to_owned),
+        project: project.to_owned(),
+        site,
+        email,
+        board_id,
+    }
 }
 
 /// What a form gives, checked: the site's origin, the email address, and the token typed (`None` when the field was empty).
@@ -1204,98 +1311,167 @@ fn checked_form(
     Ok((site_url(site)?, email_of(email)?, token_of(token)?))
 }
 
-async fn stored_token() -> Result<Option<String>, String> {
-    tokio::task::spawn_blocking(|| keychain::read(TOKEN_SERVICE, TOKEN_USER))
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(work)
         .await
         .map_err(|e| e.to_string())?
 }
 
-/// The saved site and email address with the stored token: an error when nothing is saved.
+async fn stored_token(environment: Option<&str>, project: &str) -> Result<Option<String>, String> {
+    let user = token_user(environment, project);
+    blocking(move || keychain::read(TOKEN_SERVICE, &user)).await
+}
+
+/// The screen's view of a connection: never the token, only whether one is kept.
+fn shown(connection: Connection, has_token: bool) -> JiraSettings {
+    JiraSettings {
+        site: connection.site,
+        email: connection.email,
+        has_token,
+        board_id: connection.board_id,
+    }
+}
+
+/// The saved site and email address with the stored token, checked again before they are used: the file can be written by hand, and the token must go to an Atlassian Cloud site only (`site_url`, `email_of`). An error when nothing is saved.
 fn saved_connection(
-    saved: Saved,
+    saved: &Connection,
     token: Option<String>,
 ) -> Result<(String, String, String), String> {
     if saved.site.is_empty() {
         return Err(NOT_SAVED.into());
     }
-    Ok((saved.site, saved.email, token.ok_or(TOKEN_MISSING)?))
+    Ok((
+        site_url(&saved.site)?,
+        email_of(&saved.email)?,
+        token.ok_or(TOKEN_MISSING)?,
+    ))
 }
 
-/// The connection that the saved settings and the keychain give, for the commands that read.
-async fn saved_conn(app: &AppHandle) -> Result<Conn, String> {
+/// The connection that the saved settings of a project and the keychain give, for the commands that read the project's Jira.
+async fn project_conn(
+    app: &AppHandle,
+    environment: Option<&str>,
+    project: &str,
+) -> Result<Conn, String> {
+    check_place(environment, project)?;
     let dir = config_dir(app)?;
-    let saved = tokio::task::spawn_blocking(move || load_file(&dir))
-        .await
-        .map_err(|e| e.to_string())??;
-    let (site, email, token) = saved_connection(saved, stored_token().await?)?;
+    let (env, proj) = (environment.map(str::to_owned), project.to_owned());
+    let saved = blocking(move || connection_at(&dir, env.as_deref(), &proj)).await?;
+    let (site, email, token) = saved_connection(&saved, stored_token(environment, project).await?)?;
     connect(&site, &email, &token, GATEWAY).await
 }
 
-/// The saved site and email address, and whether a token is kept. Asks Jira nothing.
-#[tauri::command]
-pub async fn jira_settings(app: AppHandle) -> Result<JiraSettings, String> {
-    let command = "jira_settings";
-    let dir = config_dir(&app).map_err(|e| log_failure(command, LOG_ACCOUNT, e))?;
-    let saved = tokio::task::spawn_blocking(move || load_file(&dir))
-        .await
-        .map_err(|e| e.to_string())
-        .and_then(|r| r)
-        .map_err(|e| log_failure(command, LOG_ACCOUNT, e))?;
-    let has_token = stored_token()
-        .await
-        .map_err(|e| log_failure(command, LOG_ACCOUNT, e))?
-        .is_some();
-    Ok(JiraSettings {
-        site: saved.site,
-        email: saved.email,
-        has_token,
-    })
+/// Removes the file of the legacy connection (the one before the projects); a file that is not there is fine.
+fn remove_legacy_file(dir: &Path) -> Result<(), String> {
+    match std::fs::remove_file(dir.join(LEGACY_FILE)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            Err(format!("{LEGACY_FILE} を消せません: {e}"))
+        }
+        _ => Ok(()),
+    }
 }
 
-/// Saves the site and the email address to the file and the token to the keychain. An empty `token` keeps the stored one, and is refused when none is stored.
+/// Removes the one connection that J-1 kept before the projects (#1393): `jira-settings.json` and the token under the user `api-token`. Called at each start; both run even when the first fails.
+pub fn remove_legacy(dir: &Path) -> Result<(), String> {
+    let file = remove_legacy_file(dir);
+    let token = keychain::delete(TOKEN_SERVICE, LEGACY_TOKEN_USER);
+    file.and(token)
+}
+
+/// The saved site, email address and board of the project `project` of `environment` (`None`: this machine), and whether a token is kept. Asks Jira nothing.
+#[tauri::command]
+pub async fn jira_settings(
+    app: AppHandle,
+    environment: Option<String>,
+    project: String,
+) -> Result<JiraSettings, String> {
+    let command = "jira_settings";
+    check_place(environment.as_deref(), &project)?;
+    let read = async {
+        let dir = config_dir(&app)?;
+        blocking(move || {
+            let connection = connection_at(&dir, environment.as_deref(), &project)?;
+            let user = token_user(environment.as_deref(), &project);
+            let has_token = keychain::read(TOKEN_SERVICE, &user)?.is_some();
+            Ok(shown(connection, has_token))
+        })
+        .await
+    };
+    read.await.map_err(|e| log_failure(command, LOG_ACCOUNT, e))
+}
+
+/// Saves the site and the email address of the project to the file and its token to the keychain. An empty `token` keeps the stored one, and is refused when none is stored. The board is kept while the site is the same.
 #[tauri::command]
 pub async fn jira_save(
     app: AppHandle,
+    environment: Option<String>,
+    project: String,
     site: String,
     email: String,
     token: String,
 ) -> Result<JiraSettings, String> {
     let command = "jira_save";
+    check_place(environment.as_deref(), &project)?;
     let (site, email, token) = checked_form(&site, &email, &token)?;
-    let dir = config_dir(&app).map_err(|e| log_failure(command, LOG_ACCOUNT, e))?;
-    let saved = Saved {
-        site: site.clone(),
-        email: email.clone(),
-    };
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
-        match token {
-            Some(token) => keychain::write(TOKEN_SERVICE, TOKEN_USER, &token)?,
-            None if keychain::read(TOKEN_SERVICE, TOKEN_USER)?.is_none() => {
-                return Err(TOKEN_MISSING.into())
+    let write = async {
+        let dir = config_dir(&app)?;
+        blocking(move || {
+            let user = token_user(environment.as_deref(), &project);
+            let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let mut store = load_store(&dir)?;
+            if token.is_none() && keychain::read(TOKEN_SERVICE, &user)?.is_none() {
+                return Err(TOKEN_MISSING.into());
             }
-            None => {}
-        }
-        save_file(&dir, &saved)
-    })
-    .await
-    .map_err(|e| e.to_string())
-    .and_then(|r| r)
-    .map_err(|e| log_failure(command, LOG_ACCOUNT, e))?;
-    Ok(JiraSettings {
-        site,
-        email,
-        has_token: true,
-    })
+            let before = store.clone();
+            let at = store
+                .connections
+                .iter()
+                .position(|c| c.is_at(environment.as_deref(), &project));
+            let connection = merged(
+                at.map(|i| &store.connections[i]),
+                environment.as_deref(),
+                &project,
+                site,
+                email,
+            );
+            match at {
+                Some(i) => store.connections[i] = connection.clone(),
+                None => store.connections.push(connection.clone()),
+            }
+            // The file first, then the token: a file that cannot be saved leaves the old site beside the old token. A token that cannot be written puts the old file back.
+            save_store(&dir, &store)?;
+            if let Some(token) = token {
+                if let Err(e) = keychain::write(TOKEN_SERVICE, &user, &token) {
+                    let _ = save_store(&dir, &before);
+                    return Err(e);
+                }
+            }
+            Ok(shown(connection, true))
+        })
+        .await
+    };
+    write
+        .await
+        .map_err(|e| log_failure(command, LOG_ACCOUNT, e))
 }
 
-/// Tries the credential of the form against the site: an empty `token` takes the stored one. Saves nothing.
+/// Tries the credential of the form against the site: an empty `token` takes the one stored for the project. Saves nothing.
 #[tauri::command]
-pub async fn jira_test(site: String, email: String, token: String) -> Result<JiraUser, String> {
+pub async fn jira_test(
+    environment: Option<String>,
+    project: String,
+    site: String,
+    email: String,
+    token: String,
+) -> Result<JiraUser, String> {
     let command = "jira_test";
+    check_place(environment.as_deref(), &project)?;
     let (site, email, token) = checked_form(&site, &email, &token)?;
     let token = match token {
         Some(token) => token,
-        None => stored_token()
+        None => stored_token(environment.as_deref(), &project)
             .await
             .map_err(|e| log_failure(command, LOG_ACCOUNT, e))?
             .ok_or(TOKEN_MISSING)?,
@@ -1305,50 +1481,174 @@ pub async fn jira_test(site: String, email: String, token: String) -> Result<Jir
         .map_err(|e| log_failure(command, LOG_ACCOUNT, e))
 }
 
+/// Deletes the connection of the project: its token from the keychain first (a failure leaves everything as it was), then its entry of the file. A project with nothing saved is fine.
+#[tauri::command]
+pub async fn jira_delete(
+    app: AppHandle,
+    environment: Option<String>,
+    project: String,
+) -> Result<(), String> {
+    let command = "jira_delete";
+    check_place(environment.as_deref(), &project)?;
+    let delete = async {
+        let dir = config_dir(&app)?;
+        blocking(move || {
+            let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let mut store = load_store(&dir)?;
+            keychain::delete(TOKEN_SERVICE, &token_user(environment.as_deref(), &project))?;
+            let before = store.connections.len();
+            store
+                .connections
+                .retain(|c| !c.is_at(environment.as_deref(), &project));
+            if store.connections.len() != before {
+                save_store(&dir, &store)?;
+            }
+            Ok(())
+        })
+        .await
+    };
+    delete
+        .await
+        .map_err(|e| log_failure(command, LOG_ACCOUNT, e))
+}
+
+/// Saves the board that the project shows (`None`: none chosen). The project must have a saved connection.
+#[tauri::command]
+pub async fn jira_set_board(
+    app: AppHandle,
+    environment: Option<String>,
+    project: String,
+    board_id: Option<u64>,
+) -> Result<JiraSettings, String> {
+    let command = "jira_set_board";
+    check_place(environment.as_deref(), &project)?;
+    let write = async {
+        let dir = config_dir(&app)?;
+        blocking(move || {
+            let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let mut store = load_store(&dir)?;
+            let connection = store
+                .connections
+                .iter_mut()
+                .find(|c| c.is_at(environment.as_deref(), &project))
+                .ok_or(NOT_SAVED)?;
+            connection.board_id = board_id;
+            let connection = connection.clone();
+            save_store(&dir, &store)?;
+            let user = token_user(environment.as_deref(), &project);
+            let has_token = keychain::read(TOKEN_SERVICE, &user)?.is_some();
+            Ok(shown(connection, has_token))
+        })
+        .await
+    };
+    write
+        .await
+        .map_err(|e| log_failure(command, LOG_ACCOUNT, e))
+}
+
 /// The boards that the credential can see, by name (at most `MAX_BOARDS`).
 #[tauri::command]
-pub async fn jira_boards(app: AppHandle) -> Result<Vec<JiraBoard>, String> {
-    let read = async { boards(&saved_conn(&app).await?).await };
+pub async fn jira_boards(
+    app: AppHandle,
+    environment: Option<String>,
+    project: String,
+) -> Result<Vec<JiraBoard>, String> {
+    let read = async { boards(&project_conn(&app, environment.as_deref(), &project).await?).await };
     read.await
         .map_err(|e| log_failure("jira_boards", LOG_ACCOUNT, e))
 }
 
 /// The active and future sprints of a board (at most `MAX_SPRINTS`). A board without sprints (a kanban one) is Jira's refusal, with its message.
 #[tauri::command]
-pub async fn jira_sprints(app: AppHandle, board_id: u64) -> Result<Vec<JiraSprint>, String> {
-    let read = async { sprints(&saved_conn(&app).await?, board_id).await };
+pub async fn jira_sprints(
+    app: AppHandle,
+    environment: Option<String>,
+    project: String,
+    board_id: u64,
+) -> Result<Vec<JiraSprint>, String> {
+    let read = async {
+        sprints(
+            &project_conn(&app, environment.as_deref(), &project).await?,
+            board_id,
+        )
+        .await
+    };
     read.await
         .map_err(|e| log_failure("jira_sprints", LOG_ACCOUNT, e))
 }
 
 /// The tickets of a sprint, in the order of the board's rank (at most `MAX_ISSUES`).
 #[tauri::command]
-pub async fn jira_sprint_issues(app: AppHandle, sprint_id: u64) -> Result<JiraIssues, String> {
-    let read = async { sprint_issues(&saved_conn(&app).await?, sprint_id).await };
+pub async fn jira_sprint_issues(
+    app: AppHandle,
+    environment: Option<String>,
+    project: String,
+    sprint_id: u64,
+) -> Result<JiraIssues, String> {
+    let read = async {
+        sprint_issues(
+            &project_conn(&app, environment.as_deref(), &project).await?,
+            sprint_id,
+        )
+        .await
+    };
     read.await
         .map_err(|e| log_failure("jira_sprint_issues", LOG_ACCOUNT, e))
 }
 
 /// The backlog of a board, in the order of its rank (at most `MAX_ISSUES`).
 #[tauri::command]
-pub async fn jira_backlog(app: AppHandle, board_id: u64) -> Result<JiraIssues, String> {
-    let read = async { backlog(&saved_conn(&app).await?, board_id).await };
+pub async fn jira_backlog(
+    app: AppHandle,
+    environment: Option<String>,
+    project: String,
+    board_id: u64,
+) -> Result<JiraIssues, String> {
+    let read = async {
+        backlog(
+            &project_conn(&app, environment.as_deref(), &project).await?,
+            board_id,
+        )
+        .await
+    };
     read.await
         .map_err(|e| log_failure("jira_backlog", LOG_ACCOUNT, e))
 }
 
 /// A ticket for its tab (J-2, #871): its description and comments read as Markdown, and the fields of its right column. `key` is checked to be a ticket key before anything is asked.
 #[tauri::command]
-pub async fn jira_issue(app: AppHandle, key: String) -> Result<JiraIssueDetail, String> {
-    let read = async { issue_detail(&saved_conn(&app).await?, &key).await };
+pub async fn jira_issue(
+    app: AppHandle,
+    environment: Option<String>,
+    project: String,
+    key: String,
+) -> Result<JiraIssueDetail, String> {
+    let read = async {
+        issue_detail(
+            &project_conn(&app, environment.as_deref(), &project).await?,
+            &key,
+        )
+        .await
+    };
     read.await
         .map_err(|e| log_failure("jira_issue", LOG_ACCOUNT, e))
 }
 
 /// The status changes that the ticket can take now (J-2, #872), each with the status it leads to.
 #[tauri::command]
-pub async fn jira_transitions(app: AppHandle, key: String) -> Result<Vec<JiraTransition>, String> {
-    let read = async { transitions(&saved_conn(&app).await?, &key).await };
+pub async fn jira_transitions(
+    app: AppHandle,
+    environment: Option<String>,
+    project: String,
+    key: String,
+) -> Result<Vec<JiraTransition>, String> {
+    let read = async {
+        transitions(
+            &project_conn(&app, environment.as_deref(), &project).await?,
+            &key,
+        )
+        .await
+    };
     read.await
         .map_err(|e| log_failure("jira_transitions", LOG_ACCOUNT, e))
 }
@@ -1357,10 +1657,19 @@ pub async fn jira_transitions(app: AppHandle, key: String) -> Result<Vec<JiraTra
 #[tauri::command]
 pub async fn jira_transition(
     app: AppHandle,
+    environment: Option<String>,
+    project: String,
     key: String,
     transition_id: String,
 ) -> Result<(), String> {
-    let write = async { transition(&saved_conn(&app).await?, &key, &transition_id).await };
+    let write = async {
+        transition(
+            &project_conn(&app, environment.as_deref(), &project).await?,
+            &key,
+            &transition_id,
+        )
+        .await
+    };
     write
         .await
         .map_err(|e| log_failure("jira_transition", LOG_ACCOUNT, e))
@@ -1368,8 +1677,19 @@ pub async fn jira_transition(
 
 /// The people the ticket can be assigned to (J-2, #872), at most `MAX_ASSIGNABLE`.
 #[tauri::command]
-pub async fn jira_assignable(app: AppHandle, key: String) -> Result<Vec<JiraPerson>, String> {
-    let read = async { assignable(&saved_conn(&app).await?, &key).await };
+pub async fn jira_assignable(
+    app: AppHandle,
+    environment: Option<String>,
+    project: String,
+    key: String,
+) -> Result<Vec<JiraPerson>, String> {
+    let read = async {
+        assignable(
+            &project_conn(&app, environment.as_deref(), &project).await?,
+            &key,
+        )
+        .await
+    };
     read.await
         .map_err(|e| log_failure("jira_assignable", LOG_ACCOUNT, e))
 }
@@ -1378,10 +1698,19 @@ pub async fn jira_assignable(app: AppHandle, key: String) -> Result<Vec<JiraPers
 #[tauri::command]
 pub async fn jira_assign(
     app: AppHandle,
+    environment: Option<String>,
+    project: String,
     key: String,
     account_id: Option<String>,
 ) -> Result<(), String> {
-    let write = async { assign(&saved_conn(&app).await?, &key, account_id.as_deref()).await };
+    let write = async {
+        assign(
+            &project_conn(&app, environment.as_deref(), &project).await?,
+            &key,
+            account_id.as_deref(),
+        )
+        .await
+    };
     write
         .await
         .map_err(|e| log_failure("jira_assign", LOG_ACCOUNT, e))
@@ -1389,8 +1718,19 @@ pub async fn jira_assign(
 
 /// The priorities the ticket can be given (J-2, #872): none when its priority cannot be edited.
 #[tauri::command]
-pub async fn jira_priorities(app: AppHandle, key: String) -> Result<Vec<JiraPriority>, String> {
-    let read = async { priorities(&saved_conn(&app).await?, &key).await };
+pub async fn jira_priorities(
+    app: AppHandle,
+    environment: Option<String>,
+    project: String,
+    key: String,
+) -> Result<Vec<JiraPriority>, String> {
+    let read = async {
+        priorities(
+            &project_conn(&app, environment.as_deref(), &project).await?,
+            &key,
+        )
+        .await
+    };
     read.await
         .map_err(|e| log_failure("jira_priorities", LOG_ACCOUNT, e))
 }
@@ -1399,10 +1739,19 @@ pub async fn jira_priorities(app: AppHandle, key: String) -> Result<Vec<JiraPrio
 #[tauri::command]
 pub async fn jira_set_priority(
     app: AppHandle,
+    environment: Option<String>,
+    project: String,
     key: String,
     priority_id: String,
 ) -> Result<(), String> {
-    let write = async { set_priority(&saved_conn(&app).await?, &key, &priority_id).await };
+    let write = async {
+        set_priority(
+            &project_conn(&app, environment.as_deref(), &project).await?,
+            &key,
+            &priority_id,
+        )
+        .await
+    };
     write
         .await
         .map_err(|e| log_failure("jira_set_priority", LOG_ACCOUNT, e))
@@ -1412,10 +1761,19 @@ pub async fn jira_set_priority(
 #[tauri::command]
 pub async fn jira_set_sprint(
     app: AppHandle,
+    environment: Option<String>,
+    project: String,
     key: String,
     sprint_id: Option<u64>,
 ) -> Result<(), String> {
-    let write = async { move_to_sprint(&saved_conn(&app).await?, &key, sprint_id).await };
+    let write = async {
+        move_to_sprint(
+            &project_conn(&app, environment.as_deref(), &project).await?,
+            &key,
+            sprint_id,
+        )
+        .await
+    };
     write
         .await
         .map_err(|e| log_failure("jira_set_sprint", LOG_ACCOUNT, e))
@@ -1425,11 +1783,21 @@ pub async fn jira_set_sprint(
 #[tauri::command]
 pub async fn jira_set_description(
     app: AppHandle,
+    environment: Option<String>,
+    project: String,
     key: String,
     base: String,
     markdown: String,
 ) -> Result<String, String> {
-    let write = async { set_description(&saved_conn(&app).await?, &key, &base, &markdown).await };
+    let write = async {
+        set_description(
+            &project_conn(&app, environment.as_deref(), &project).await?,
+            &key,
+            &base,
+            &markdown,
+        )
+        .await
+    };
     write
         .await
         .map_err(|e| log_failure("jira_set_description", LOG_ACCOUNT, e))
@@ -1439,10 +1807,19 @@ pub async fn jira_set_description(
 #[tauri::command]
 pub async fn jira_add_comment(
     app: AppHandle,
+    environment: Option<String>,
+    project: String,
     key: String,
     markdown: String,
 ) -> Result<JiraComment, String> {
-    let write = async { add_comment(&saved_conn(&app).await?, &key, &markdown).await };
+    let write = async {
+        add_comment(
+            &project_conn(&app, environment.as_deref(), &project).await?,
+            &key,
+            &markdown,
+        )
+        .await
+    };
     write
         .await
         .map_err(|e| log_failure("jira_add_comment", LOG_ACCOUNT, e))
@@ -1450,8 +1827,13 @@ pub async fn jira_add_comment(
 
 /// The projects that the credential can create a ticket in (J-2, #874), by name (at most `MAX_PROJECTS`).
 #[tauri::command]
-pub async fn jira_projects(app: AppHandle) -> Result<Vec<JiraProject>, String> {
-    let read = async { projects(&saved_conn(&app).await?).await };
+pub async fn jira_projects(
+    app: AppHandle,
+    environment: Option<String>,
+    project: String,
+) -> Result<Vec<JiraProject>, String> {
+    let read =
+        async { projects(&project_conn(&app, environment.as_deref(), &project).await?).await };
     read.await
         .map_err(|e| log_failure("jira_projects", LOG_ACCOUNT, e))
 }
@@ -1460,17 +1842,28 @@ pub async fn jira_projects(app: AppHandle) -> Result<Vec<JiraProject>, String> {
 #[tauri::command]
 pub async fn jira_issue_types(
     app: AppHandle,
+    environment: Option<String>,
+    project: String,
     project_id: String,
 ) -> Result<Vec<JiraIssueType>, String> {
-    let read = async { issue_types(&saved_conn(&app).await?, &project_id).await };
+    let read = async {
+        issue_types(
+            &project_conn(&app, environment.as_deref(), &project).await?,
+            &project_id,
+        )
+        .await
+    };
     read.await
         .map_err(|e| log_failure("jira_issue_types", LOG_ACCOUNT, e))
 }
 
 /// Creates a ticket in Jira (J-2, #874) and gives its key. `markdown` is the description (may be empty) and `sprint_id` the sprint to put it in (none leaves it where Jira puts a new ticket, the backlog).
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn jira_create_issue(
     app: AppHandle,
+    environment: Option<String>,
+    project: String,
     project_id: String,
     issue_type_id: String,
     summary: String,
@@ -1479,7 +1872,7 @@ pub async fn jira_create_issue(
 ) -> Result<JiraCreated, String> {
     let write = async {
         create_issue(
-            &saved_conn(&app).await?,
+            &project_conn(&app, environment.as_deref(), &project).await?,
             &project_id,
             &issue_type_id,
             &summary,
@@ -1653,20 +2046,103 @@ mod tests {
         dir
     }
 
-    #[test]
-    fn the_file_round_trips_holds_no_token_and_is_empty_before_the_first_save() {
-        let dir = temp_dir("file");
-        assert_eq!(load_file(&dir), Ok(Saved::default()));
-        let saved = Saved {
-            site: "https://example.atlassian.net".into(),
+    fn connection(environment: Option<&str>, project: &str, site: &str) -> Connection {
+        Connection {
+            site: site.into(),
             email: "me@example.com".into(),
+            board_id: Some(7),
+            ..Connection::unset(environment, project)
+        }
+    }
+
+    #[test]
+    fn the_file_holds_a_connection_for_each_place_and_no_token_and_is_empty_before_the_first_save()
+    {
+        let dir = temp_dir("file");
+        assert_eq!(load_store(&dir), Ok(empty_store()));
+        let store = Store {
+            version: VERSION,
+            connections: vec![
+                connection(None, "p1", "https://example.atlassian.net"),
+                connection(Some("pc"), "p1", "https://other.atlassian.net"),
+            ],
         };
-        save_file(&dir, &saved).unwrap();
-        assert_eq!(load_file(&dir), Ok(saved));
+        save_store(&dir, &store).unwrap();
+        assert_eq!(load_store(&dir), Ok(store));
         let text = std::fs::read_to_string(dir.join(FILE)).unwrap();
         assert!(!text.to_lowercase().contains("token"));
+        assert_eq!(
+            connection_at(&dir, Some("pc"), "p1").unwrap().site,
+            "https://other.atlassian.net"
+        );
+        assert_eq!(
+            connection_at(&dir, None, "p2"),
+            Ok(Connection::unset(None, "p2"))
+        );
+        std::fs::write(dir.join(FILE), r#"{"version":2,"connections":[]}"#).unwrap();
+        assert!(load_store(&dir).unwrap_err().contains("版 2"));
         std::fs::write(dir.join(FILE), "not json").unwrap();
-        assert!(load_file(&dir).unwrap_err().contains("形式が不正"));
+        assert!(load_store(&dir).unwrap_err().contains("形式が不正"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_key_is_an_environment_or_this_machine_and_a_project_and_each_key_has_its_own_token() {
+        assert!(check_place(None, "p").is_ok());
+        assert!(check_place(Some("pc"), "p").is_ok());
+        assert!(check_place(Some(""), "p").is_err());
+        assert!(check_place(None, "").is_err());
+        assert!(check_place(None, "a\nb").is_err());
+        assert!(check_place(Some("pc\u{7}"), "p").is_err());
+        assert!(check_place(None, &"x".repeat(PLACE_LIMIT + 1)).is_err());
+        assert_eq!(token_user(None, "p"), r#"[null,"p"]"#);
+        assert_eq!(token_user(Some("pc"), "p"), r#"["pc","p"]"#);
+        assert_ne!(token_user(None, "p"), token_user(Some("p"), "p"));
+        assert_ne!(token_user(Some("a"), "b"), token_user(Some("a\",\"b"), ""));
+        assert_ne!(token_user(None, "p"), LEGACY_TOKEN_USER);
+    }
+
+    #[test]
+    fn a_save_keeps_the_board_while_the_site_is_the_same_and_drops_it_for_another_site() {
+        let old = connection(None, "p", "https://example.atlassian.net");
+        let same = merged(
+            Some(&old),
+            None,
+            "p",
+            "https://example.atlassian.net".into(),
+            "new@example.com".into(),
+        );
+        assert_eq!(same.board_id, Some(7));
+        assert_eq!(same.email, "new@example.com");
+        let other = merged(
+            Some(&old),
+            None,
+            "p",
+            "https://other.atlassian.net".into(),
+            String::new(),
+        );
+        assert_eq!(other.board_id, None);
+        let first = merged(
+            None,
+            Some("pc"),
+            "p",
+            "https://example.atlassian.net".into(),
+            String::new(),
+        );
+        assert_eq!(first.board_id, None);
+        assert_eq!(first.environment.as_deref(), Some("pc"));
+    }
+
+    #[test]
+    fn the_legacy_file_is_removed_and_a_missing_one_is_fine() {
+        let dir = temp_dir("legacy");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(remove_legacy_file(&dir), Ok(()));
+        std::fs::write(dir.join(LEGACY_FILE), r#"{"site":"","email":""}"#).unwrap();
+        std::fs::write(dir.join(FILE), r#"{"version":1,"connections":[]}"#).unwrap();
+        assert_eq!(remove_legacy_file(&dir), Ok(()));
+        assert!(!dir.join(LEGACY_FILE).exists());
+        assert!(dir.join(FILE).exists());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -2065,13 +2541,10 @@ mod tests {
     }
 
     #[test]
-    fn saved_connection_needs_a_site_and_a_token() {
-        let saved = |site: &str| Saved {
-            site: site.into(),
-            email: "me@example.com".into(),
-        };
+    fn saved_connection_needs_a_site_and_a_token_and_checks_the_site_again() {
+        let saved = |site: &str| connection(None, "p", site);
         assert_eq!(
-            saved_connection(saved("https://example.atlassian.net"), Some("tok".into())),
+            saved_connection(&saved("https://example.atlassian.net"), Some("tok".into())),
             Ok((
                 "https://example.atlassian.net".into(),
                 "me@example.com".into(),
@@ -2079,12 +2552,37 @@ mod tests {
             ))
         );
         assert_eq!(
-            saved_connection(Saved::default(), Some("tok".into())),
+            saved_connection(&Connection::unset(None, "p"), Some("tok".into())),
             Err(NOT_SAVED.into())
         );
         assert_eq!(
-            saved_connection(saved("https://example.atlassian.net"), None),
+            saved_connection(&saved("https://example.atlassian.net"), None),
             Err(TOKEN_MISSING.into())
+        );
+        // A file written by hand must not send the token to another host, or in another shape.
+        for site in [
+            "https://example.com",
+            "https://evil.example/.atlassian.net",
+            "http://example.atlassian.net",
+            "https://user@example.atlassian.net",
+        ] {
+            assert!(
+                saved_connection(&saved(site), Some("tok".into())).is_err(),
+                "{site}"
+            );
+        }
+        let mut bad_email = saved("https://example.atlassian.net");
+        bad_email.email = "a:b@example.com".into();
+        assert!(saved_connection(&bad_email, Some("tok".into())).is_err());
+        // The origin is what is used, with a path dropped.
+        assert_eq!(
+            saved_connection(
+                &saved("https://example.atlassian.net/x"),
+                Some("tok".into())
+            )
+            .unwrap()
+            .0,
+            "https://example.atlassian.net"
         );
     }
 
