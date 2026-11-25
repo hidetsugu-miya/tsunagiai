@@ -279,6 +279,13 @@ pub fn run() {
                     if let Err(e) = slack::remove_recent_file(&dir) {
                         gmail::log_failure("slack_recent_remove", "-", e);
                     }
+                    // The one Jira connection of before the projects, and its token (J-1, #1393); the keychain is asked off the main thread.
+                    let legacy = dir.clone();
+                    tauri::async_runtime::spawn_blocking(move || {
+                        if let Err(e) = jira::remove_legacy(&legacy) {
+                            gmail::log_failure("jira_legacy_remove", "-", e);
+                        }
+                    });
                     // The socket through which `tsunagiai-mcp` reads and writes the fields of the screens (A-36, #731).
                     screen_bridge::start(app.handle().clone(), dir);
                 }
@@ -336,6 +343,8 @@ pub fn run() {
             jira::jira_settings,
             jira::jira_save,
             jira::jira_test,
+            jira::jira_delete,
+            jira::jira_set_board,
             jira::jira_boards,
             jira::jira_sprints,
             jira::jira_sprint_issues,

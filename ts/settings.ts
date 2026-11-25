@@ -1,4 +1,4 @@
-// The settings screen: a tab each for Google, the calendar (the day the week starts on), Todoist (whether it is connected), Slack, Notion (`ts/notion-settings.ts`), Claude, the skills (`ts/skill-settings.ts`), 開発 (the tab `orca`: the card of the terminal colors `ts/orca-theme.ts`, that of Ghostty's settings `ts/ghostty.ts`, that of the PCs with the server of A-37 `ts/formation-consent-settings.ts`, that of the Jira connection `ts/jira-settings.ts`, that of the pairing of this machine's Orca `ts/orca-pairing-settings.ts`), the fonts (`ts/font-settings.ts`), the updater and the log (`ts/log-settings.ts`), each with its card.
+// The settings screen: a tab each for Google, the calendar (the day the week starts on), Todoist (whether it is connected), Slack, Notion (`ts/notion-settings.ts`), Claude, the skills (`ts/skill-settings.ts`), 開発 (the tab `orca`: the card of the terminal colors `ts/orca-theme.ts`, that of Ghostty's settings `ts/ghostty.ts`, that of the PCs with the server of A-37 `ts/formation-consent-settings.ts`, that of the pairing of this machine's Orca `ts/orca-pairing-settings.ts`), the fonts (`ts/font-settings.ts`), the updater and the log (`ts/log-settings.ts`), each with its card.
 // The heading and the tabs stay at the top while a card scrolls. A token is never shown; Rust keeps it in the keychain.
 import type { HiddenChannel } from "./bindings/HiddenChannel";
 import type { SlackLoad } from "./bindings/SlackLoad";
@@ -18,7 +18,6 @@ import { updateAddMode } from "./todo-add.js";
 import { showTokenForm } from "./todo.js";
 import { loadPromptState } from "./todo-prompt.js";
 import { showConsentCard } from "./formation-consent-settings.js";
-import { showJiraCard } from "./jira-settings.js";
 import { showOrcaPairingCard } from "./orca-pairing-settings.js";
 import { showLogTab } from "./log-settings.js";
 import { initNotionTab, showNotionTab } from "./notion-settings.js";
@@ -52,8 +51,6 @@ export function selectSettingsTab(name: SettingsTab) {
   else hideSkillClaude();
   // The PCs that the owner agreed to put tsunagiai-mcp on are read each time the Orca tab is shown (A-37).
   if (name === "orca") showConsentCard();
-  // The saved Jira connection is read each time the tab is shown (J-1).
-  if (name === "orca") showJiraCard();
   // Whether this machine's Orca is paired is read each time the tab is shown (A-12).
   if (name === "orca") showOrcaPairingCard();
   // The workspaces are read each time the Notion tab is shown (N-1).
