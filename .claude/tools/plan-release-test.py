@@ -1661,6 +1661,19 @@ class UseWorktree(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertTrue(os.path.exists(os.path.join(path, "c.txt")))
 
+    def test_a_branch_only_on_origin_and_merged_is_moved_up_to_origin_main(self):
+        self.git(self.main, "switch", "-q", "-c", "feat/reused")
+        self.commit(self.main, "r.txt", "r\n", "remote work")
+        self.git(self.main, "push", "-q", "origin", "feat/reused")
+        self.git(self.main, "switch", "-q", "main")
+        self.git(self.main, "branch", "-D", "feat/reused")
+        self.git(self.main, "merge", "-q", "--no-ff", "-m", "merge", "origin/feat/reused")
+        self.commit(self.main, "later.txt", "l\n", "later")
+        self.git(self.main, "push", "-q", "origin", "main")
+        path = self.use_ok("feat/reused")
+        self.assertEqual(self.git(path, "rev-parse", "HEAD"), self.git(self.main, "rev-parse", "origin/main"))
+        self.assertTrue(os.path.exists(os.path.join(path, "later.txt")))
+
     def test_a_branch_only_on_origin_is_tracked(self):
         self.git(self.main, "switch", "-q", "-c", "feat/remote")
         self.commit(self.main, "r.txt", "r\n", "remote work")

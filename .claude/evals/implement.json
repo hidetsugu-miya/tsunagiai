@@ -182,6 +182,21 @@
         "起動の prompt が、担当に `run-ci.sh` を回させていない",
         "起動の prompt が、ほかの担当が同じ木で別のファイルを触っているので、ほかのファイルを触らず、git add、git commit、git stash、git checkout、git reset を打たないと書いている"
       ]
+    },
+    {
+      "id": 14,
+      "name": "pre-release-branch-is-new-per-run",
+      "prompt": "あなたは implement の実行の手順 6 にいるリードです。`.claude/skills/implement/SKILL.md` の手順 6.2 を読み、`.claude/evals/files/implement/pre-release-branch.md` の記録について、直す項目のために `use-worktree.sh` に渡すブランチ名と、その名前にする理由を決めてください。この記録が、あなたの持つ実行の文脈です。コマンドは実行せず、打つはずのコマンドを書き出してください。",
+      "expected_output": "ブランチ名は実行の日時で作る `fix/pre-release-20261125-2017` で、issue の番号にはしない。理由は、一部を直した issue は一番古いままで、番号の名前がまた出てくるから。",
+      "files": [
+        ".claude/evals/files/implement/pre-release-branch.md"
+      ],
+      "assertions": [
+        "`use-worktree.sh` に渡すブランチ名が `fix/pre-release-20261125-2017`（日付と時刻の形 YYYYMMDD-HHMM）である",
+        "ブランチ名に issue の番号（#1455 など）を使っていない",
+        "番号の名前にしない理由を、一部を直した issue は一番古いままで、その名前がまた出てくるからと書いている",
+        "前の実行のブランチ `fix/pre-release-20261124-1030` を使い回していない"
+      ]
     }
   ]
 }
