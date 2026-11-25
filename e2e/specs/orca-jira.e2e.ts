@@ -267,6 +267,142 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await expect(field("サイトの URL")).toHaveValue("");
   });
 
+  // J-1 (#1425): the connections of the other projects above the form of a project with none, and 「使う」 that copies one.
+  const copyRows = () =>
+    browser.execute(() =>
+      [...document.querySelectorAll<HTMLElement>("#orca-jira-copy .orca-jira-copy-row")].map((r) => [".orca-jira-copy-name", ".orca-jira-copy-chip", ".orca-jira-copy-meta", ".text-btn"].map((s) => r.querySelector(s)!.textContent)),
+    );
+  const copyButtons = () => $$("#orca-jira-copy .text-btn");
+  const own = { environment: null, project: "proj_example-app", site: "https://example.atlassian.net", email: "me@example.com" };
+  const web = { environment: null, project: "proj_example-web", site: "https://example.atlassian.net", email: "me@example.com" };
+  const studio = { environment: "Studio", project: "proj_example-api", site: "https://client.atlassian.net", email: "" };
+  const others = [own, web, studio];
+
+  it("lists the connections of the other projects above the form, one row each with the name, the place, the site and the email address, and 使う (J-1, #1425)", async () => {
+    await openJira(jiraFixtures({ jira_settings: empty, jira_connections: others }));
+    await waitForCount("#orca-jira-copy .orca-jira-copy-row", 2);
+    expect(await callsOf("jira_connections")).toEqual([null]);
+    // The name is the list's (the project of this machine), else the key (the project of the saved environment, which this list does not hold).
+    expect(await copyRows()).toEqual([
+      ["example-webこのマシン", "このマシン", "example.atlassian.net ・ me@example.com", "使う"],
+      ["proj_example-apiStudio", "Studio", "client.atlassian.net", "使う"],
+    ]);
+    expect(await textsOf("#orca-jira-copy .orca-jira-copy-sep")).toEqual(["新しく入力"]);
+    await expect($("#orca-jira-conn")).toBeDisplayed();
+    expect(await browser.execute(() => !!(document.getElementById("orca-jira-copy")!.compareDocumentPosition(document.getElementById("orca-jira-conn")!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+    expect(await count("#orca-jira-copy [placeholder]")).toBe(0);
+    expect(await callsOf("jira_boards")).toEqual([]);
+  });
+
+  it("draws no row and no separator when no other project has a connection, and never the project's own (J-1, #1425)", async () => {
+    await openJira(jiraFixtures({ jira_settings: empty, jira_connections: [own] }));
+    await waitForCalls("jira_connections");
+    await expect($("#orca-jira-conn")).toBeDisplayed();
+    await expect($("#orca-jira-copy")).not.toBeDisplayed();
+    expect(await count(".orca-jira-copy-row, .orca-jira-copy-sep")).toBe(0);
+    await mock("jira_connections", []);
+    await project("example-api").click();
+    await waitForCalls("jira_connections");
+    expect(await callsOf("jira_settings")).toEqual([here, api]);
+    await expect($("#orca-jira-copy")).not.toBeDisplayed();
+    expect(await count(".orca-jira-copy-row, .orca-jira-copy-sep")).toBe(0);
+  });
+
+  it("copies the connection of a row with 使う: the keys of both, the buttons off while it waits, then the form closes and the boards are read with no new read of the settings (J-1, #1425)", async () => {
+    await openJira(jiraFixtures({ jira_settings: empty, jira_connections: others }));
+    await waitForCount("#orca-jira-copy .orca-jira-copy-row", 2);
+    const copy = await mock("jira_copy", holds);
+    await copyButtons()[1].click();
+    expect(await waitForCalls(copy)).toEqual([{ ...here, fromEnvironment: "Studio", fromProject: "proj_example-api" }]);
+    await expect(copyButtons()[0]).toBeDisabled();
+    await expect(copyButtons()[1]).toBeDisabled();
+    await expect($("#orca-jira-save")).toBeDisabled();
+    expect(await callsOf("jira_boards")).toEqual([]);
+    const boards = await mock("jira_boards", holds);
+    await release(copy, connected);
+    // The form and the rows are gone while the boards are on their way, and the part shows the reading.
+    expect(await waitForCalls(boards)).toEqual([here]);
+    await expect($("#orca-jira-conn")).not.toBeDisplayed();
+    await expect($("#orca-jira-copy")).not.toBeDisplayed();
+    await expect($("#orca-jira-list .pending")).toBeDisplayed();
+    expect(await count("#orca-jira-list .orca-jira-issue")).toBe(0);
+    await release(boards, [board]);
+    await waitForCount("#orca-jira-list .orca-jira-issue", 3);
+    await expect($("#orca-jira-conn")).not.toBeDisplayed();
+    await expect($("#orca-jira-copy")).not.toBeDisplayed();
+    await expect($("#orca-jira-bar")).toBeDisplayed();
+    await expect(gear()).toBeDisplayed();
+    expect(await callsOf("jira_boards")).toEqual([here]);
+    expect(await callsOf("jira_settings")).toHaveLength(1);
+    expect(await count(CARDS)).toBe(0);
+  });
+
+  it("keeps the 使う of the rows off while 保存 or 接続を試す waits (J-1, #1425)", async () => {
+    await openJira(jiraFixtures({ jira_settings: empty, jira_connections: others }));
+    await waitForCount("#orca-jira-copy .orca-jira-copy-row", 2);
+    const test = await mock("jira_test", holds);
+    await fillForm("https://example.atlassian.net", "me@example.com", "tok-5");
+    await $("#orca-jira-test").click();
+    await waitForCalls(test);
+    await expect(copyButtons()[0]).toBeDisabled();
+    await expect(copyButtons()[1]).toBeDisabled();
+    await release(test, user);
+    await expect(copyButtons()[0]).toBeEnabled();
+    await expect(copyButtons()[1]).toBeEnabled();
+    const save = await mock("jira_save", holds);
+    await $("#orca-jira-save").click();
+    await waitForCalls(save);
+    await expect(copyButtons()[0]).toBeDisabled();
+    await expect(copyButtons()[1]).toBeDisabled();
+    await release(save, connected);
+    await waitForCount("#orca-jira-list .orca-jira-issue", 3);
+  });
+
+  it("keeps the rows and the form, with the reason in a card, when the copy is refused (J-1, #1425)", async () => {
+    await openJira(jiraFixtures({ jira_settings: empty, jira_connections: others }));
+    await waitForCount("#orca-jira-copy .orca-jira-copy-row", 2);
+    const reason = "コピー元の API トークンが保存されていません";
+    const copy = await mock("jira_copy", rejects(reason));
+    await copyButtons()[0].click();
+    expect(await waitForCalls(copy)).toEqual([{ ...here, fromEnvironment: null, fromProject: "proj_example-web" }]);
+    await waitForCount(CARDS, 1);
+    expect(await textsOf(CARD)).toEqual([reason]);
+    expect(await count("#orca-jira-copy .orca-jira-copy-row")).toBe(2);
+    await expect(copyButtons()[0]).toBeEnabled();
+    await expect(copyButtons()[1]).toBeEnabled();
+    await expect($("#orca-jira-save")).toBeEnabled();
+    await expect($("#orca-jira-conn")).toBeDisplayed();
+    expect(await callsOf("jira_boards")).toEqual([]);
+    expect(await callsOf("jira_settings")).toHaveLength(1);
+  });
+
+  it("leaves no row when the connections cannot be read, with the failure in the log and no card (J-1, #1425)", async () => {
+    const reason = "キーチェーンを読めません";
+    await openJira(jiraFixtures({ jira_settings: empty, jira_connections: rejects(reason) }));
+    await waitForCalls("jira_connections");
+    await waitForLog(reason);
+    expect((await logged()).some((l) => l.level === "error" && l.source === "orca-jira" && l.message.includes(reason))).toBe(true);
+    await expect($("#orca-jira-conn")).toBeDisplayed();
+    await expect($("#orca-jira-copy")).not.toBeDisplayed();
+    expect(await count(".orca-jira-copy-row, .orca-jira-copy-sep")).toBe(0);
+    expect(await count(CARDS)).toBe(0);
+  });
+
+  it("does not offer the connections in the form that the gear opens, and offers them again after 削除 (J-1, #1425)", async () => {
+    await openJira(jiraFixtures({ jira_connections: others }));
+    await waitForCount("#orca-jira-list .orca-jira-issue", 3);
+    await gear().click();
+    await expect($("#orca-jira-conn")).toBeDisplayed();
+    await expect($("#orca-jira-copy")).not.toBeDisplayed();
+    expect(await count(".orca-jira-copy-row")).toBe(0);
+    expect(await callsOf("jira_connections")).toEqual([]);
+    await mock("jira_delete", null);
+    await $("#orca-jira-delete").click();
+    await waitForCount("#orca-jira-copy .orca-jira-copy-row", 2);
+    expect(await callsOf("jira_connections")).toEqual([null]);
+    await expect($("#orca-jira-conn")).toBeDisplayed();
+  });
+
   it("saves the board that is chosen for the project, and shows the saved board the next time (J-1, J-2, #1395)", async () => {
     const two = { jira_boards: [board, jiraBoard(2, "Second board")], jira_sprints: [sprint12] };
     await openJira(jiraFixtures(two));
