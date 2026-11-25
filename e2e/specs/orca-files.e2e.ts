@@ -5217,6 +5217,21 @@ describe("orca: files and editor (A-18)", () => {
       await expect($(CARDS)).not.toExist();
     });
 
+    it("asks the marks of the folders that were read by the clock while the watch is ready, with no read of the folders, so that a commit made outside the app clears them (A-39)", async () => {
+      await openStreamed({ ...timers({ orcaClock: 1000 }), orca_files_changes: [change("src", "changed")] });
+      await waitForCalls("orca_stream_files");
+      await sendFiles({ kind: "ready" });
+      const mark = () => browser.execute(() => document.querySelector<HTMLElement>('.orca-file[data-path="src"]')?.dataset.change ?? null);
+      await browser.waitUntil(async () => (await mark()) === "changed", { timeoutMsg: "the folder never got its mark" });
+      await browser.pause(500);
+      // A commit outside the app: Orca tells nothing, and the answer of git has no difference.
+      const list = await mock("orca_files_list", holds);
+      const asked = await mock("orca_files_changes", []);
+      await browser.waitUntil(async () => (await mark()) === null, { timeoutMsg: "the clock never cleared the mark" });
+      expect(((await callsOf(asked)) as { path: string; paths: string[]; environment: string }[])[0]).toEqual({ path: WORK, paths: ["src", "target", "a.rs", "b.log"], environment: "Studio" });
+      expect(await callsOf(list)).toEqual([]);
+    });
+
     it("reads of the tree only the folders that hold a path that changed or lie above it, not those in an ignored folder, and the changes of one second together (A-18)", async () => {
       await openStreamed();
       await waitForCalls("orca_stream_files");
