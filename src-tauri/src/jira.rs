@@ -48,6 +48,8 @@ const TIMEOUT: Duration = Duration::from_secs(15);
 const BODY_LIMIT: usize = 200;
 const TOKEN_MISSING: &str = "API トークンを入力してください";
 const NOT_SAVED: &str = "Jira の接続が保存されていません";
+const COPY_SAME_PLACE: &str = "コピー元とコピー先が同じです";
+const COPY_NO_TOKEN: &str = "コピー元の API トークンが保存されていません";
 /// The Agile API, after `api_base`.
 const BOARD_PATH: &str = "/rest/agile/1.0/board";
 const SPRINT_PATH: &str = "/rest/agile/1.0/sprint";
@@ -109,6 +111,18 @@ pub struct JiraSettings {
     /// The board the project shows, none when none is chosen.
     #[cfg_attr(test, ts(type = "number | null"))]
     pub board_id: Option<u64>,
+}
+
+/// A connection that has a token, as the list of connections to copy from gets it: where it is and which site and email address it uses, never the token.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct JiraConnection {
+    pub environment: Option<String>,
+    pub project: String,
+    pub site: String,
+    pub email: String,
 }
 
 /// Who the credential belongs to, as Jira answered the test.
@@ -1349,6 +1363,64 @@ fn saved_connection(
     ))
 }
 
+/// The connections that keep a token (`has_token` asks the keychain for one connection), as the list to copy from shows them.
+fn with_token(
+    connections: Vec<Connection>,
+    mut has_token: impl FnMut(&Connection) -> Result<bool, String>,
+) -> Result<Vec<JiraConnection>, String> {
+    let mut kept = Vec::new();
+    for c in connections {
+        if has_token(&c)? {
+            kept.push(JiraConnection {
+                environment: c.environment,
+                project: c.project,
+                site: c.site,
+                email: c.email,
+            });
+        }
+    }
+    Ok(kept)
+}
+
+/// The two keys of a copy, checked: both are keys of a connection, and they are not the same one.
+fn check_copy(
+    environment: Option<&str>,
+    project: &str,
+    from_environment: Option<&str>,
+    from_project: &str,
+) -> Result<(), String> {
+    check_place(environment, project)?;
+    check_place(from_environment, from_project)?;
+    if environment == from_environment && project == from_project {
+        return Err(COPY_SAME_PLACE.into());
+    }
+    Ok(())
+}
+
+/// The connection that a copy of `from` makes for the project `project` of `environment`, with the token to write for it: the site and the email address are checked again (`saved_connection`), and the board is not copied (a board is chosen for each project).
+fn copied(
+    from: &Connection,
+    token: Option<String>,
+    environment: Option<&str>,
+    project: &str,
+) -> Result<(Connection, String), String> {
+    let token = token.ok_or(COPY_NO_TOKEN)?;
+    let (site, email, token) = saved_connection(from, Some(token))?;
+    Ok((merged(None, environment, project, site, email), token))
+}
+
+/// Puts `connection` in the store in the place of the one with the same key, or after the others.
+fn upserted(store: &mut Store, connection: Connection) {
+    let at = store
+        .connections
+        .iter()
+        .position(|c| c.is_at(connection.environment.as_deref(), &connection.project));
+    match at {
+        Some(i) => store.connections[i] = connection,
+        None => store.connections.push(connection),
+    }
+}
+
 /// The connection that the saved settings of a project and the keychain give, for the commands that read the project's Jira.
 async fn project_conn(
     app: &AppHandle,
@@ -1504,6 +1576,71 @@ pub async fn jira_delete(
         .await
     };
     delete
+        .await
+        .map_err(|e| log_failure(command, LOG_ACCOUNT, e))
+}
+
+/// The connections that keep a token, for the user to copy one to another project: where each is, its site and its email address. The token is not returned, and Jira is asked nothing.
+#[tauri::command]
+pub async fn jira_connections(app: AppHandle) -> Result<Vec<JiraConnection>, String> {
+    let command = "jira_connections";
+    let read = async {
+        let dir = config_dir(&app)?;
+        blocking(move || {
+            with_token(load_store(&dir)?.connections, |c| {
+                let user = token_user(c.environment.as_deref(), &c.project);
+                Ok(keychain::read(TOKEN_SERVICE, &user)?.is_some())
+            })
+        })
+        .await
+    };
+    read.await.map_err(|e| log_failure(command, LOG_ACCOUNT, e))
+}
+
+/// Copies the connection of `from_project` of `from_environment` to the project: its site, its email address and its token, which goes from the keychain to the keychain here and is never returned. The board is left empty. Refused when the two keys are the same or the source has no token or a site that is not an Atlassian Cloud one.
+#[tauri::command]
+pub async fn jira_copy(
+    app: AppHandle,
+    environment: Option<String>,
+    project: String,
+    from_environment: Option<String>,
+    from_project: String,
+) -> Result<JiraSettings, String> {
+    let command = "jira_copy";
+    check_copy(
+        environment.as_deref(),
+        &project,
+        from_environment.as_deref(),
+        &from_project,
+    )?;
+    let write = async {
+        let dir = config_dir(&app)?;
+        blocking(move || {
+            let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let mut store = load_store(&dir)?;
+            let from = store
+                .connections
+                .iter()
+                .find(|c| c.is_at(from_environment.as_deref(), &from_project))
+                .cloned()
+                .unwrap_or_else(|| Connection::unset(from_environment.as_deref(), &from_project));
+            let token = keychain::read(
+                TOKEN_SERVICE,
+                &token_user(from_environment.as_deref(), &from_project),
+            )?;
+            let (connection, token) = copied(&from, token, environment.as_deref(), &project)?;
+            keychain::write(
+                TOKEN_SERVICE,
+                &token_user(environment.as_deref(), &project),
+                &token,
+            )?;
+            upserted(&mut store, connection.clone());
+            save_store(&dir, &store)?;
+            Ok(shown(connection, true))
+        })
+        .await
+    };
+    write
         .await
         .map_err(|e| log_failure(command, LOG_ACCOUNT, e))
 }
@@ -2127,6 +2264,117 @@ mod tests {
         );
         assert_eq!(first.board_id, None);
         assert_eq!(first.environment.as_deref(), Some("pc"));
+    }
+
+    #[test]
+    fn the_list_to_copy_from_keeps_the_connections_with_a_token_and_never_the_token() {
+        let all = vec![
+            connection(None, "a", "https://a.atlassian.net"),
+            connection(Some("pc"), "b", "https://b.atlassian.net"),
+            connection(None, "c", "https://c.atlassian.net"),
+        ];
+        let listed = with_token(all.clone(), |c| Ok(c.project != "c")).unwrap();
+        assert_eq!(
+            serde_json::to_value(&listed).unwrap(),
+            serde_json::json!([
+                {"environment": null, "project": "a", "site": "https://a.atlassian.net", "email": "me@example.com"},
+                {"environment": "pc", "project": "b", "site": "https://b.atlassian.net", "email": "me@example.com"},
+            ])
+        );
+        assert_eq!(with_token(all.clone(), |_| Ok(false)), Ok(Vec::new()));
+        assert_eq!(with_token(Vec::new(), |_| Ok(true)), Ok(Vec::new()));
+        // A keychain that cannot be read is an error, not an empty list.
+        assert_eq!(
+            with_token(all, |_| Err("キーチェーンを読めません".into())),
+            Err("キーチェーンを読めません".into())
+        );
+    }
+
+    #[test]
+    fn a_copy_needs_two_different_keys() {
+        assert!(check_copy(None, "p", Some("pc"), "q").is_ok());
+        assert!(check_copy(None, "p", None, "q").is_ok());
+        assert!(check_copy(Some("pc"), "p", None, "p").is_ok());
+        assert_eq!(
+            check_copy(None, "p", None, "p"),
+            Err(COPY_SAME_PLACE.into())
+        );
+        assert_eq!(
+            check_copy(Some("pc"), "p", Some("pc"), "p"),
+            Err(COPY_SAME_PLACE.into())
+        );
+        assert!(check_copy(None, "", None, "q").is_err());
+        assert!(check_copy(None, "p", Some(""), "q").is_err());
+        assert!(check_copy(None, "p", None, "q\nr").is_err());
+    }
+
+    #[test]
+    fn a_copy_takes_the_site_the_email_address_and_the_token_and_leaves_the_board_empty() {
+        let from = connection(None, "a", "https://example.atlassian.net/jira?x=1");
+        assert_eq!(from.board_id, Some(7));
+        let (copy, token) = copied(&from, Some("tok".into()), Some("pc"), "b").unwrap();
+        assert_eq!(
+            copy,
+            Connection {
+                environment: Some("pc".into()),
+                project: "b".into(),
+                site: "https://example.atlassian.net".into(),
+                email: "me@example.com".into(),
+                board_id: None,
+            }
+        );
+        assert_eq!(token, "tok");
+    }
+
+    #[test]
+    fn a_copy_is_refused_for_a_source_with_no_token_nothing_saved_or_a_site_that_is_not_atlassian_cloud(
+    ) {
+        let from = connection(None, "a", "https://example.atlassian.net");
+        assert_eq!(copied(&from, None, None, "b"), Err(COPY_NO_TOKEN.into()));
+        assert_eq!(
+            copied(&Connection::unset(None, "a"), Some("tok".into()), None, "b"),
+            Err(NOT_SAVED.into())
+        );
+        for site in [
+            "https://example.com",
+            "http://example.atlassian.net",
+            "https://user@example.atlassian.net",
+        ] {
+            let broken = connection(None, "a", site);
+            assert!(
+                copied(&broken, Some("tok".into()), None, "b").is_err(),
+                "{site}"
+            );
+        }
+        let mut bad_email = from;
+        bad_email.email = "a:b@example.com".into();
+        assert!(copied(&bad_email, Some("tok".into()), None, "b").is_err());
+    }
+
+    #[test]
+    fn a_copy_replaces_the_entry_of_its_key_or_is_added_after_the_others() {
+        let mut store = Store {
+            version: VERSION,
+            connections: vec![
+                connection(None, "a", "https://a.atlassian.net"),
+                connection(None, "b", "https://old.atlassian.net"),
+            ],
+        };
+        let (copy, _) = copied(&store.connections[0].clone(), Some("t".into()), None, "b").unwrap();
+        upserted(&mut store, copy);
+        assert_eq!(store.connections.len(), 2);
+        assert_eq!(store.connections[1].site, "https://a.atlassian.net");
+        assert_eq!(store.connections[1].board_id, None);
+        let (copy, _) = copied(
+            &store.connections[0].clone(),
+            Some("t".into()),
+            Some("pc"),
+            "b",
+        )
+        .unwrap();
+        upserted(&mut store, copy);
+        assert_eq!(store.connections.len(), 3);
+        assert_eq!(store.connections[2].environment.as_deref(), Some("pc"));
     }
 
     #[test]

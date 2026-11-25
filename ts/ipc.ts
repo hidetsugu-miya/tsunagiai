@@ -71,6 +71,7 @@ import type { SkillScreen } from "./bindings/SkillScreen";
 import type { NewEvent } from "./bindings/NewEvent";
 import type { JiraBoard } from "./bindings/JiraBoard";
 import type { JiraComment } from "./bindings/JiraComment";
+import type { JiraConnection } from "./bindings/JiraConnection";
 import type { JiraCreated } from "./bindings/JiraCreated";
 import type { JiraIssueDetail } from "./bindings/JiraIssueDetail";
 import type { JiraIssues } from "./bindings/JiraIssues";
@@ -261,6 +262,10 @@ export interface Commands {
   jira_test: { args: { environment: string | null; project: string; site: string; email: string; token: string }; result: JiraUser };
   // J-1: deletes the connection of the project, its token included.
   jira_delete: { args: { environment: string | null; project: string }; result: null };
+  // J-1 (#1424): the connections that keep a token, for copying one to another project: where each is (`environment` null for this machine), its site and its email address. The token is never returned. Asks Jira nothing.
+  jira_connections: { args: undefined; result: JiraConnection[] };
+  // J-1 (#1424): copies the connection of `fromProject` of `fromEnvironment` (site, email address and token, the token from keychain to keychain in Rust) to the project, with no board; refused for the same key or a source with no token. Answers what is saved, as jira_save does.
+  jira_copy: { args: { environment: string | null; project: string; fromEnvironment: string | null; fromProject: string }; result: JiraSettings };
   // J-1: saves the board that the project shows (null: none); the project must have a saved connection. Answers what is saved.
   jira_set_board: { args: { environment: string | null; project: string; boardId: number | null }; result: JiraSettings };
   // J-2: the boards that the saved connection can see, by name (at most 200). Fails with a message when no connection is saved.
