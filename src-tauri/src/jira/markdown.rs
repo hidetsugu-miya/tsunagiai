@@ -769,10 +769,12 @@ fn replace_run(old: &[Value], new: Value, depth: usize) -> Vec<Value> {
             from += part.len();
             let mut list = new.clone();
             if i > 0 {
-                // The start of a later ordered list is its own.
+                // The start of a later ordered list is its own; the attrs of any other kind of old list (a `localId`) are not the new list's.
                 match node.get("attrs") {
-                    Some(attrs) => list["attrs"] = attrs.clone(),
-                    None => {
+                    Some(attrs) if kind(node) == "orderedList" && kind(&new) == "orderedList" => {
+                        list["attrs"] = attrs.clone();
+                    }
+                    _ => {
                         list.as_object_mut().map(|o| o.remove("attrs"));
                     }
                 }
@@ -1333,6 +1335,7 @@ mod tests {
         let plain = merged(&old, &text.replace("☐ a", "a"));
         assert_eq!(plain[0], old[0]);
         assert_eq!(kind(&plain[1]), "bulletList");
+        assert!(plain[1].get("attrs").is_none());
         assert_eq!(content(&content(&plain[1])[0])[0], para(json!([txt("a")])));
     }
 
