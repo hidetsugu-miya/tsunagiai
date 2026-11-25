@@ -197,6 +197,20 @@
         "番号の名前にしない理由を、一部を直した issue は一番古いままで、その名前がまた出てくるからと書いている",
         "前の実行のブランチ `fix/pre-release-20261124-1030` を使い回していない"
       ]
+    },
+    {
+      "id": 15,
+      "name": "low-needing-real-machine-goes-to-owner-question",
+      "prompt": "あなたは implement の実行の手順 5 にいるリードです。`.claude/skills/implement/SKILL.md` の手順 5 と手順 9 を読み、`.claude/evals/files/implement/run-real-machine-low.md` の記録について、マージのあとに作る issue と、手順 9 の報告のオーナーへの質問を書き出してください。この記録が、あなたの持つ実行の文脈です。GitHub には読み書きともに触れないでください。`gh issue create` は実行せずに、打つはずのコマンド、題、ラベル、本文をそのまま書き出してください。`guard-public.sh text` はそのまま実行して構いません。",
+      "expected_output": "「PR #1402 のレビューで残った Low」の issue には、直し方が決まっている R-1 だけを入れる。R-2 は実機の IME の確認が要り AI は回せないので issue に入れず、手順 9 の報告に、オーナーへの質問として `ts/orca-terminal.ts:88` と確かめてほしいことを載せる。",
+      "files": [
+        ".claude/evals/files/implement/run-real-machine-low.md"
+      ],
+      "assertions": [
+        "`gh issue create` が 1 件で、本文に R-1（`ts/orca-files.ts:210`）を含み、R-2（`ts/orca-terminal.ts:88`）を含まない",
+        "R-2 を、手順 9 の報告の、オーナーへの質問として、`ts/orca-terminal.ts:88` と実機の IME で確かめてほしいことを添えて書いている",
+        "R-1 の本文に、直し方（`drop` の受け口の先頭で強調のクラスを外す）を書いている"
+      ]
     }
   ]
 }

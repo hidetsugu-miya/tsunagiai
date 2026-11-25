@@ -36,7 +36,7 @@ Reading the code gives a cause, not a bug: run the failing behavior first, and w
 Reproduce a screen's behavior with a temporary spec in `e2e/specs/`, which runs in the real WKWebView with no window and touches no real service. It is the one exception to one spec per screen (`e2e.md`). Do not commit it: `run-ci.sh` and `run-e2e.sh` refuse a dirty tree, so run `npm run e2e:build` and then `npm run e2e`, which writes no record, and delete the spec afterwards.
 For the inside of a mail body's iframe, use the means in `frontend.md`.
 Reproduce Rust logic with a temporary `cargo test`, with a local `TcpListener` for an HTTP branch (`rust.md`), and delete the test afterwards.
-Do not start the real app for this. When the fault depends on a real service's answer, ask the owner for the check instead of writing to their account, and write in the issue what stayed unchecked.
+Do not start the real app for this. When the fault depends on a real service's answer, ask the owner for the check instead of writing to their account, and file the issue after the answer, with the result in its body ("Make an issue only once…" below).
 When a behavior does not reproduce, file nothing and tell the owner what was run.
 
 ```text
@@ -111,18 +111,21 @@ Bad:  a bug of 1 point with no label goes ahead of an issue with `importance:hig
 
 ### Make an issue only once its spec is decided, verified, planned and shown
 
-An issue that carries a decision of the owner (a new feature, a change of spec or of a screen) is made only after all of these (at the owner's instruction, 2026-11-21; #1207. It replaces the rule of 2026-11-19, #1035, which made the issue as soon as the owner had decided):
-- The owner has decided the spec, in the session. While a decision is open, there is no issue.
-- The AI has verified the spec against the code: it can be built as decided, and what it touches.
-- The plan of the implementation is set: the files to touch, and the order.
-- The owner has accepted a prototype, shown as an HTML page in the preview of the development tab (`preview_open` of `tsunagiai-mcp`): a mock of the screen for UI work, the result of the verification for work without a screen (decided by the agent, 2026-11-21, at the owner's leave; #1207).
+An issue of every scope is made only once its verification and its design are done, and its check on a real machine too where the matter depends on one, and its body carries all three (at the owner's instruction, 2026-11-25. It extends the rule of 2026-11-21, #1207, which asked this of the owner's decisions only):
+- Verification: what was run or read that shows the fact and, for a bug, its cause.
+- Design: the fix is settled, with the files to touch, the way and the order (for a flaky test, the fix to try and its grounds).
+- Check on a real machine, when the matter depends on the real WKWebView or app, a real outside service or the OS: done, with what it showed. A check that the AI cannot run itself is asked of the owner.
 
-The gate has three scopes (decided by the agent, 2026-11-21, at the owner's leave; #1207):
-- An issue that carries a decision of the owner: the whole gate above.
-- An issue that the AI decides at the owner's leave (`improvement-proposal`, "Issue decided by the AI"): the verification, the plan and a prototype HTML all the same, but the AI accepts the prototype in the owner's place and the section `AI が決めたこと` says why.
-- No gate and no prototype: an issue for a Dependabot pull request (`dependabot-issues.sh`), a bug whose correct behavior a requirement already states, an issue that changes only `.claude/` or the tools (the harness), an issue of the Lows that a merged pull request's review left (`review.md`; at the owner's instruction, 2026-11-21; #1211), an issue of a flaky test (`review.md`; at the owner's instruction, 2026-11-21; #1212), and an issue of a retrospective (`.claude/skills/retrospective/SKILL.md`; at the owner's instruction, 2026-11-21; #1213). Its body records what was found and the plan only.
+When a design decision of the owner, or a real-machine check that the AI cannot run, is still open, no issue is made: put the matter to the owner in the session (the titles first, then one per reply), and make the issue only after the answer, with the answer in the body (at the owner's instruction, 2026-11-25).
+A matter of the Lows that a merged pull request's review left, of a flaky test or of a retrospective follows the same rule: if its fix needs such a decision or check, it is put to the owner in the report of `implement` (step 9) instead of into the issue, and it is fixed after the answer.
+An issue for a Dependabot pull request is made by `dependabot-issues.sh`, and the rule does not apply to it.
 
-Write in the body of the issue the background, what was investigated, the decision (with the options put to the owner), the plan and the prototype, as far as its scope asks, so that the reason for the choice can be found on GitHub later (`issue-plan`, step 2).
+What else an issue needs depends on its scope (decided by the agent, 2026-11-21, at the owner's leave; #1207):
+- An issue that carries a decision of the owner (a new feature, a change of spec or of a screen): the owner has also decided the spec in the session (while a decision is open, there is no issue), and has accepted a prototype, shown as an HTML page in the preview of the development tab (`preview_open` of `tsunagiai-mcp`): a mock of the screen for UI work, the result of the verification for work without a screen.
+- An issue that the AI decides at the owner's leave (`improvement-proposal`, "Issue decided by the AI"): the same prototype HTML, but the AI accepts it in the owner's place and the section `AI が決めたこと` says why.
+- Any other issue (a bug whose correct behavior a requirement already states, a change of `.claude/` or the tools only, the Lows that a merged pull request's review left (`review.md`; #1211), a flaky test (`review.md`; #1212), a retrospective (`.claude/skills/retrospective/SKILL.md`; #1213)): no prototype.
+
+Write in the body of the issue the background, what was investigated, the decision (with the options put to the owner), the plan, the result of the real-machine check and the prototype, as far as its scope asks, so that the reason for the choice can be found on GitHub later (`issue-plan`, step 2).
 The prototype goes in as the HTML that the owner was shown, unchanged, at the end of the body, inside a `<details>` and a code block of `html`; the body holds no URL of it (at the owner's instruction, 2026-11-22; #1235. It replaces the Artifact and its URL). The file is kept in `tmp/` of the main checkout until the issue is made, because a worktree may be parked before the owner decides, and is deleted then.
 The repository is public, so keep personal information out (`publishing.md`).
 
@@ -130,16 +133,19 @@ The repository is public, so keep personal information out (`publishing.md`).
 Good: two layouts are put to the owner in the session -> the owner picks A -> the code is checked and the files are listed -> a mock of A as HTML, opened in the preview -> the owner accepts it -> the issue is made with the decision, the plan and the HTML of the mock in a `<details>`
 Good: improvement-proposal finds a hook message that names a removed command -> the AI checks it, lists the files, writes the verification as an HTML page, accepts it, and files the issue with "AI が決めたこと" and the HTML in a `<details>`
 Good: a spec of the README photos no longer fits the screen -> the issue records what was found and the plan, with no prototype, because it changes only `.claude/`
-Good: a list stops scrolling, which its requirement says it must do -> the bug issue records the reproduction and the plan, with no prototype
+Good: a list stops scrolling, which its requirement says it must do -> the bug issue records the reproduction, the cause and the plan, with no prototype
+Good: a drag stops working only in the real WKWebView and the AI cannot run it -> the owner is asked to check it in the session -> the issue is made with the result in the body
 Bad:  two layouts are put to the owner, and the issue is made before the owner has picked one
 Bad:  the owner has decided, and the issue is made before the plan is set or a prototype is shown
+Bad:  a bug is filed from reading the code alone, with no run and no cause in the body, when a real-machine check was needed
+Bad:  a Low whose fix needs a design choice of the owner goes into the issue of Lows, and every run skips it
 Bad:  a bug fix that changes what the screen shows beyond its requirement is filed with no decision of the owner and no prototype
 Bad:  the issue does not record the options, the plan or the prototype that its scope asks for
 ```
 
 ### Stop an issue whose decision is missing, and ask the owner
 
-A product decision that an issue does not settle, found while it is implemented, is a defect of the issue, because an issue is made only once its spec is settled: stop that issue and ask the owner (at the owner's instruction, 2026-11-21; #1207. It replaces the route of 2026-11-19, #1035, which dropped the issue from the run).
+A product decision that an issue does not settle, or a design decision or a real-machine check that its body does not carry, found while it is implemented, is a defect of the issue, because an issue is made only once these are settled: stop that issue and ask the owner (at the owner's instruction, 2026-11-21; #1207. It replaces the route of 2026-11-19, #1035, which dropped the issue from the run).
 Keep state out of labels: an open pull request and the Release PR already show it.
 
 ```text

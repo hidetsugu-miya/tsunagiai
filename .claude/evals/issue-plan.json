@@ -12,7 +12,7 @@
       "assertions": [
         "`gh issue create` が 1 件で、ラベルに `point:1`、`point:2`、`point:3` のどれか 1 つと `documentation` がある（直す場所が `.claude/skills/` と `.claude/evals/` だけなので `documentation` を付ける）",
         "`adds:requirement`、`urgency:high`、`priority:*` のラベルは無い",
-        "本文に prototype の URL を求めず、ゲートが要らない種類（`.claude/` のみの変更）だと扱っている",
+        "本文に prototype の URL を求めず、prototype が要らない種類（`.claude/` のみの変更）だと扱っている",
         "ポイントの理由を 1 行のコメントで書いている"
       ]
     },
@@ -54,6 +54,20 @@
       "assertions": [
         "ラベルに `priority:1`、`priority:2`、`priority:3` のどれも無い",
         "ラベルに `urgency:high` が無く、`point:1`、`point:2`、`point:3` のどれか 1 つがある"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "open-real-machine-check-goes-to-owner-not-issue",
+      "prompt": "あなたは issue を作るよう頼まれたリードです。`.claude/skills/issue-plan/SKILL.md` を読み、`.claude/evals/files/issue-plan/request-real-machine-open.md` の依頼について、手順 2 のとおりに進めてください。この記録が、あなたの持つ文脈です。GitHub には読み書きともに触れないでください。`gh issue create` や `gh issue comment` を打つなら、実行せずに、打つはずのコマンド、題、ラベル、本文をそのまま書き出してください。打たないなら、代わりにオーナーへ何を伝えるかを書いてください。",
+      "expected_output": "原因が実機の WKWebView の確認に依存し、AI はそれを回せないので、issue は作らない。オーナーにセッションで実機の確認（Finder からファイルを落とす操作と、そのとき `dataTransfer.files` がどうなるか）を頼み、答えが出てから、結果を本文に載せて issue を作ると伝える。",
+      "files": [
+        ".claude/evals/files/issue-plan/request-real-machine-open.md"
+      ],
+      "assertions": [
+        "`gh issue create` を打っていない（実機の確認が済んでいないので、issue を作らない）",
+        "オーナーに、実機で何を確かめてほしいか（Finder からファイルを落とす操作と、`dataTransfer.files` が空になる条件）を具体的に頼んでいる",
+        "答えが出てから、確かめた結果を本文に入れて issue を作る、と言っている"
       ]
     }
   ]
