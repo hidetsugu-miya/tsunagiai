@@ -2,9 +2,9 @@
 # HEAD の e2e と review の合格を、GitHub の commit status で送る（.claude/rules/issues.md）。main の ruleset がこの 2 つを必須にしている。
 # 手元の CI と E2E の記録があるときだけ送るので、合格記録を書けるのは release-verifier と range-check.sh だけで、この役割は変わらない。指摘の中身は送らない。
 # CI・E2E・review は、HEAD の記録か、origin/main から HEAD までがリリース作業だけ（Release PR）であることで満たす（#931）。
-# 送ったあと、HEAD のブランチの PR の mergeStateStatus が BLOCKED でなくなるまで待つ（2 秒おき、上限 30 秒）。GitHub が statuses を ruleset に反映する前に、続く gh pr merge が拒まれないようにする（#1416）。
-# PR がなければ待たず、上限を過ぎても今と同じく終わる。
-# HEAD を push してから呼ぶ。どのチェックアウトからでもよく、呼んだ場所の HEAD を見る。
+# 送ったあと、HEAD のブランチの開いた PR の mergeStateStatus が BLOCKED でなくなるまで待つ（2 秒おき、上限 30 秒）。GitHub が statuses を ruleset に反映する前に、続く gh pr merge が拒まれないようにする（#1416）。
+# 開いた PR がなければ待たず、上限を過ぎても今と同じく終わる。
+# HEAD を push し、PR を作ってから呼ぶ。どのチェックアウトからでもよく、呼んだ場所の HEAD を見る。
 set -uo pipefail
 main="$(git rev-parse --path-format=absolute --git-common-dir)/.." || exit 2
 git diff --quiet HEAD || { echo "コミットしていない変更があります" >&2; exit 1; }
@@ -47,10 +47,12 @@ for context in e2e review; do
 done
 echo "送信しました: ${sha:0:7} e2e review"
 
-# ruleset が statuses を取り込むまで待つ。PR がない（gh pr view が失敗する）ときは待たない。
+# ruleset が statuses を取り込むまで待つ。開いた PR がない（マージ済みや閉じた PR は読まない）ときは待たない。
 # 反映前の UNKNOWN（まだ計算中）も BLOCKED と同じく待つ。
+branch=$(git branch --show-current)
+[ -n "$branch" ] || exit 0
 for _ in $(seq 15); do
-  state=$(gh pr view --json mergeStateStatus --jq .mergeStateStatus 2>/dev/null) || exit 0
+  state=$(gh pr list --head "$branch" --state open --json mergeStateStatus --jq '.[0].mergeStateStatus // empty' 2>/dev/null) || exit 0
   case "$state" in
     BLOCKED|UNKNOWN) sleep 2 ;;
     *) exit 0 ;;

@@ -29,6 +29,20 @@
         "Release PR #1510 を閉じたり作り直したりしない（開いたままにする）",
         "手順 B（リリースの見届け）や `gh run` の呼び出しをしない"
       ]
+    },
+    {
+      "id": 3,
+      "name": "pull-request-is-created-before-post-checks",
+      "prompt": "あなたは release-preparer です。`.claude/agents/release-preparer.md` と、それが指す `.claude/skills/release/SKILL.md` の手順 A を読み、`.claude/evals/files/release-preparer/fresh-release.md` の状況から、マージまでに打つコマンドを順に書き出してください。コマンドは実行せず、GitHub には読み書きともに触れないでください。",
+      "expected_output": "push、`gh pr create`、`post-checks.sh`、`gh pr merge` の順にコマンドを並べる。",
+      "files": [
+        ".claude/evals/files/release-preparer/fresh-release.md"
+      ],
+      "assertions": [
+        "`gh pr create` を `post-checks.sh` より前に打つ",
+        "`post-checks.sh` を push のあと、`gh pr merge` の前に打つ",
+        "`--admin` やルールセットを避ける手段を使わない"
+      ]
     }
   ]
 }

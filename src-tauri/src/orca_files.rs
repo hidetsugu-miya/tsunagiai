@@ -570,12 +570,19 @@ fn mark_of_status(status: &str) -> OrcaGitMark {
     }
 }
 
-/// The marks of `paths` (entries of one list, relative to the worktree) from the answer of `git.status` (its `entries`, each with a `status` and a `path`). A path is marked by the entries at it and under it, except an entry that is `deleted`, which marks nothing (the file has no row, so a folder's mark would point at nothing; a path that has an untracked or added entry too is `New` by that entry): a file by its own entries (`New` as soon as one of them is untracked or added, so a file that was added and edited again, git's `AM`, is `New`), a folder by the files below it, and `Changed` wins when both kinds are there. An untracked folder that git does not list file by file (its entry ends in `/`) marks everything under it `New`. A path with no difference is not in the answer, and the answer is in the order of `paths`. An answer with no `entries` marks nothing.
+/// The marks of `paths` (entries of one list, relative to the worktree) from the answer of `git.status` (its `entries`, each with a `status` and a `path`). A path is marked by the entries at it and under it, except an entry that is `deleted`, which marks nothing (the file has no row, so a folder's mark would point at nothing), and a modified, added, renamed or copied entry of a path that has a `deleted` entry too (git's `MD` and `AD`: staged and then deleted from the working tree), which marks nothing either; a path that has an untracked entry too is `New` by that entry: a file by its own entries (`New` as soon as one of them is untracked or added, so a file that was added and edited again, git's `AM`, is `New`), a folder by the files below it, and `Changed` wins when both kinds are there. An untracked folder that git does not list file by file (its entry ends in `/`) marks everything under it `New`. A path with no difference is not in the answer, and the answer is in the order of `paths`. An answer with no `entries` marks nothing.
 fn changes_in(status: &Value, paths: &[String]) -> Vec<OrcaGitChange> {
     let mut marks: HashMap<&str, OrcaGitMark> = HashMap::new();
     let mut new_folders: HashSet<&str> = HashSet::new();
     let mut new_own: HashSet<&str> = HashSet::new();
-    for entry in status["entries"].as_array().into_iter().flatten() {
+    let entries = status["entries"].as_array().map_or(&[][..], Vec::as_slice);
+    let deleted_paths: HashSet<&str> = entries
+        .iter()
+        .filter(|entry| entry["status"] == "deleted")
+        .filter_map(|entry| entry["path"].as_str())
+        .map(|path| path.trim_end_matches('/'))
+        .collect();
+    for entry in entries {
         let Some(path) = entry["path"].as_str() else {
             continue;
         };
@@ -583,8 +590,14 @@ fn changes_in(status: &Value, paths: &[String]) -> Vec<OrcaGitChange> {
         if status == "deleted" {
             continue;
         }
-        let mark = mark_of_status(status);
         let path = path.trim_end_matches('/');
+        // A file that is staged (modified, added, renamed or copied) and then deleted from the working tree (git's `MD` and `AD`) has no row, so its staged entry marks nothing either.
+        if deleted_paths.contains(path)
+            && matches!(status, "modified" | "added" | "renamed" | "copied")
+        {
+            continue;
+        }
+        let mark = mark_of_status(status);
         if path.is_empty() {
             continue;
         }
@@ -3581,6 +3594,44 @@ mod tests {
             [
                 change("n", OrcaGitMark::New),
                 change("m", OrcaGitMark::Changed)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_staged_file_deleted_from_the_working_tree_marks_nothing() {
+        // git's `MD` (modified, then deleted), `AD` (added, then deleted) and a rename whose new path was then deleted, in either order.
+        for kind in ["modified", "added", "renamed", "copied"] {
+            for entries in [
+                json!([{"status": kind, "path": "a/f.rs", "area": "staged"}, {"status": "deleted", "path": "a/f.rs", "area": "unstaged"}]),
+                json!([{"status": "deleted", "path": "a/f.rs", "area": "unstaged"}, {"status": kind, "path": "a/f.rs", "area": "staged"}]),
+            ] {
+                let asked: Vec<String> = ["a", "a/f.rs"].map(String::from).into();
+                assert_eq!(changes_in(&status_of(entries), &asked), [], "{kind}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_staged_file_deleted_beside_another_file_leaves_the_mark_of_the_other() {
+        let status = status_of(json!([
+            {"status": "added", "path": "d/gone.rs", "area": "staged"},
+            {"status": "deleted", "path": "d/gone.rs", "area": "unstaged"},
+            {"status": "modified", "path": "d/edit.rs", "area": "unstaged"},
+            {"status": "modified", "path": "e/gone.rs", "area": "staged"},
+            {"status": "deleted", "path": "e/gone.rs", "area": "unstaged"},
+            {"status": "untracked", "path": "e/new.rs", "area": "untracked"},
+        ]));
+        let asked: Vec<String> = ["d", "d/gone.rs", "d/edit.rs", "e", "e/gone.rs", "e/new.rs"]
+            .map(String::from)
+            .into();
+        assert_eq!(
+            changes_in(&status, &asked),
+            [
+                change("d", OrcaGitMark::Changed),
+                change("d/edit.rs", OrcaGitMark::Changed),
+                change("e", OrcaGitMark::New),
+                change("e/new.rs", OrcaGitMark::New),
             ]
         );
     }

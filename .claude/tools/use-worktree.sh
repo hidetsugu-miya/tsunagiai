@@ -5,7 +5,7 @@
 #   そのパスがあって、そのブランチにいるなら、private files をコピーし直してパスを出す（続きの作業）。
 #   そのパスがあって別のブランチか detached なら、使用中として理由を stderr に出して exit 3。
 #   そのブランチが別の worktree（main の checkout を含む）で checkout 済みなら、使用中として exit 3（release/next も同じ。後から来た側は手を出さない）。
-#   それ以外は worktree を作る。ブランチがローカルにあればそれを（origin/main にマージ済みなら origin/main まで進める）、origin/{ブランチ} があればそれを追跡して、どちらもなければ origin/main から新しく切る。
+#   それ以外は worktree を作る。ブランチがローカルにあればそれを、origin/{ブランチ} があればそれを追跡して（どちらも origin/main にマージ済みなら origin/main まで進める）、どちらもなければ origin/main から新しく切る。
 #   作ったあとに、.worktreeinclude のコピー（main の checkout のものが正）、main の checkout の src-tauri/target の APFS の clone（差分ビルド用の incremental/ は消す。失敗したら警告を出して空から始める）、ensure-deps.sh（npm ci）をする。
 # --park: 今いるディレクトリの worktree（.claude/worktrees/ の下のリンクされた worktree）を消す。空いているときだけ消し、そうでなければ exit 3。
 #   空いている = 作業ツリーがきれいで、HEAD がどれかのリモートブランチに含まれる（origin/main か、push 済みのブランチ。失う変更もコミットもない）。
@@ -78,14 +78,14 @@ holder=$(git -C "$main" worktree list --porcelain | awk -v ref="refs/heads/$bran
 
 if git -C "$main" show-ref --verify --quiet "refs/heads/$branch"; then
   git -C "$main" worktree add --quiet "$dest" "$branch"
-  # すでにあるブランチがマージ済みなら origin/main まで進める。
-  if git -C "$dest" merge-base --is-ancestor HEAD origin/main; then
-    git -C "$dest" merge --ff-only --quiet origin/main
-  fi
 elif git -C "$main" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
   git -C "$main" worktree add --quiet -b "$branch" --track "$dest" "origin/$branch"
 else
   git -C "$main" worktree add --quiet -b "$branch" --no-track "$dest" origin/main
+fi
+# すでにあるブランチ（ローカルでも origin/{ブランチ} の追跡でも）がマージ済みなら origin/main まで進める。
+if git -C "$dest" merge-base --is-ancestor HEAD origin/main; then
+  git -C "$dest" merge --ff-only --quiet origin/main
 fi
 copy_private
 # 依存クレートのビルド結果は場所によらず使えるので、main の checkout の target を clone で写して最初のビルドを速くする。
