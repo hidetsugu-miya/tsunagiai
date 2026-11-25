@@ -654,16 +654,31 @@ describe("orca: files and editor (A-18)", () => {
   };
   // Gives the editor the focus and puts the selection `start` to `end` in it: the caret is moved by the script (the window of the E2E build has no focus, so a click does not focus the editor).
   const caretAt = setCaret;
-  const bandOn = (line: string) => browser.waitUntil(async () => (await band()).line === line, { timeoutMsg: `the band never came to line ${line}` });
+  // The caret set in the page reaches the editor at the `selectionchange` that follows, and a draw of the lines in between (the editor measuring a file just opened, under load) puts the selection of the editor back: it is set again until the band is as wanted.
+  const bandOn = (line: string, start: number) =>
+    browser.waitUntil(
+      async () => {
+        await caretAt(start);
+        return (await band()).line === line;
+      },
+      { timeoutMsg: `the band never came to line ${line}` },
+    );
+  const bandHiddenOver = (start: number, end: number) =>
+    browser.waitUntil(
+      async () => {
+        await caretAt(start, end);
+        return !(await band()).shown;
+      },
+      { timeoutMsg: "the band never went over a selected range" },
+    );
+  // The blur is an event of the editor and is not put back by a draw: it is waited for as it is.
   const bandHidden = () => browser.waitUntil(async () => !(await band()).shown, { timeoutMsg: "the band never went" });
 
   it("lays a faint band under the line of the caret, across the box of the text and under the letters, and moves it with the caret (A-18)", async () => {
     await openFiles();
     await openA("alpha\nbeta\ngamma\n");
-    await caretAt(0);
-    await bandOn("0");
-    await caretAt(6);
-    await bandOn("1");
+    await bandOn("0", 0);
+    await bandOn("1", 6);
     const b = await band();
     const letter = await glyph(6);
     const next = await glyph(11);
@@ -673,23 +688,18 @@ describe("orca: files and editor (A-18)", () => {
     expect(b.bottom).toBeLessThanOrEqual(next.top);
     expect(b.width).toBeCloseTo(b.textWidth, 0);
     expect(b.background).toBe("rgba(90, 107, 98, 0.1)");
-    await caretAt(11);
-    await bandOn("2");
+    await bandOn("2", 11);
     expect((await band()).top).toBeGreaterThan(b.top);
-    await caretAt(6);
-    await bandOn("1");
+    await bandOn("1", 6);
     expect((await band()).top).toBe(b.top);
   });
 
   it("does not draw the band over a selected range, and takes it off when the editor loses the focus (A-18)", async () => {
     await openFiles();
     await openA("alpha\nbeta\ngamma\n");
-    await caretAt(6);
-    await bandOn("1");
-    await caretAt(6, 7);
-    await bandHidden();
-    await caretAt(6);
-    await bandOn("1");
+    await bandOn("1", 6);
+    await bandHiddenOver(6, 7);
+    await bandOn("1", 6);
     await blurEditor();
     await bandHidden();
   });
@@ -5215,6 +5225,21 @@ describe("orca: files and editor (A-18)", () => {
       await browser.waitUntil(async () => (await names()).join() === "by-watch.rs", { timeoutMsg: "the change never read the tree" });
       expect((await callsOf(tree))[0]).toEqual({ path: WORK, dir: "", ignored: false, environment: "Studio" });
       await expect($(CARDS)).not.toExist();
+    });
+
+    it("asks the marks of the folders that were read by the clock while the watch is ready, with no read of the folders, so that a commit made outside the app clears them (A-39)", async () => {
+      await openStreamed({ ...timers({ orcaClock: 1000 }), orca_files_changes: [change("src", "changed")] });
+      await waitForCalls("orca_stream_files");
+      await sendFiles({ kind: "ready" });
+      const mark = () => browser.execute(() => document.querySelector<HTMLElement>('.orca-file[data-path="src"]')?.dataset.change ?? null);
+      await browser.waitUntil(async () => (await mark()) === "changed", { timeoutMsg: "the folder never got its mark" });
+      await browser.pause(500);
+      // A commit outside the app: Orca tells nothing, and the answer of git has no difference.
+      const list = await mock("orca_files_list", holds);
+      const asked = await mock("orca_files_changes", []);
+      await browser.waitUntil(async () => (await mark()) === null, { timeoutMsg: "the clock never cleared the mark" });
+      expect(((await callsOf(asked)) as { path: string; paths: string[]; environment: string }[])[0]).toEqual({ path: WORK, paths: ["src", "target", "a.rs", "b.log"], environment: "Studio" });
+      expect(await callsOf(list)).toEqual([]);
     });
 
     it("reads of the tree only the folders that hold a path that changed or lie above it, not those in an ignored folder, and the changes of one second together (A-18)", async () => {
