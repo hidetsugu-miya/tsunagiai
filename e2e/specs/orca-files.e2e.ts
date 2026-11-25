@@ -5480,6 +5480,31 @@ describe("orca: drop on the file pane (A-47)", () => {
     await expect($(CARD)).not.toExist();
   });
 
+  it("leaves out a .DS_Store inside a dropped folder, at any depth, and one dropped by itself with other files", async () => {
+    await openTree();
+    const tree = folder("photos", named(".DS_Store"), named("a.jpg"), folder("2026", named(".DS_Store"), named("b.jpg")));
+    await drop("src", [named(".DS_Store"), note], [tree]);
+    expect(await waitForCalls("orca_drop_taken")).toEqual([{ path: HERE, dir: "src", names: ["notes.txt", "photos"], environment: null }]);
+    expect((await waitForCalls("orca_drop_file", 3)).map((c) => [(c as { dir: string }).dir, (c as { name: string }).name])).toEqual([
+      ["src/photos", "a.jpg"],
+      ["src/photos/2026", "b.jpg"],
+      ["src", "notes.txt"],
+    ]);
+    await idle();
+    expect(await callsOf("orca_drop_file")).toHaveLength(3);
+    await expect($(CARD)).not.toExist();
+  });
+
+  it("puts nothing and asks nothing for a .DS_Store dropped by itself", async () => {
+    await openTree();
+    await drop("src", [named(".DS_Store")]);
+    await browser.pause(300);
+    expect(await callsOf("orca_drop_taken")).toEqual([]);
+    expect(await callsOf("orca_drop_dir")).toEqual([]);
+    expect(await callsOf("orca_drop_file")).toEqual([]);
+    await expect($(CARD)).not.toExist();
+  });
+
   it("makes the folders of a dropped folder before its files go, and puts the files in the same layout (the batches of the reader, and an empty folder, are read through)", async () => {
     await openTree();
     const made = await mock("orca_drop_dir", holds);

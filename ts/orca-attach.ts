@@ -132,10 +132,14 @@ export interface Dropped {
 
 const fileOf = (entry: FileSystemFileEntry) => new Promise<File>((resolve, reject) => entry.file(resolve, reject));
 
+// A-47: the file that Finder writes in a folder, which a drop never puts, whether it is in a dropped folder or dropped by itself.
+const DS_STORE = ".DS_Store";
+
 // Walks the folder `entry` (which is in the folder `parent` of the drop): the folder is noted, and what it holds is read in the batches that `readEntries` gives until it gives an empty one. The walk ends once there are more than `max` files.
 async function walk(entry: FileSystemEntry, parent: string, found: Dropped, max: number) {
   if (found.over) return;
   if (!entry.isDirectory) {
+    if (entry.name === DS_STORE) return;
     if (found.files.length >= max) found.over = true;
     else found.files.push({ file: await fileOf(entry as FileSystemFileEntry), dir: parent });
     return;
@@ -150,10 +154,10 @@ async function walk(entry: FileSystemEntry, parent: string, found: Dropped, max:
   }
 }
 
-// Reads what a drop carried, at most `max` files. The entries of a drop are valid only while its event runs, so they are taken before the first wait; a transfer that has no entries (one that cannot name a folder) gives its plain files. Whether the entries of a drop from Finder work in the WKWebView is not checked (A-47).
+// Reads what a drop carried, at most `max` files. The entries of a drop are valid only while its event runs, so they are taken before the first wait; a transfer that has no entries (one that cannot name a folder) gives its plain files. A file named `.DS_Store` is left out (A-47).
 export async function readDropped(transfer: DataTransfer, max: number): Promise<Dropped> {
   const entries = [...(transfer.items ?? [])].map((item) => (item.kind === "file" ? item.webkitGetAsEntry() : null));
-  const plain = [...transfer.files];
+  const plain = [...transfer.files].filter((file) => file.name !== DS_STORE);
   if (entries.length === 0 || entries.some((entry) => entry === null)) return { files: plain.slice(0, max).map((file) => ({ file, dir: "" })), folders: [], over: plain.length > max };
   const found: Dropped = { files: [], folders: [], over: false };
   for (const entry of entries as FileSystemEntry[]) await walk(entry, "", found, max);
