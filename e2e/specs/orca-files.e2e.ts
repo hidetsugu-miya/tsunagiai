@@ -5242,6 +5242,23 @@ describe("orca: files and editor (A-18)", () => {
       expect(await callsOf(list)).toEqual([]);
     });
 
+    it("asks the marks by the clock again only after the question before it was answered, so that a slow git is not asked over again (A-18, A-39)", async () => {
+      await openStreamed({ ...timers({ orcaClock: 1000 }), orca_files_changes: [change("src", "changed")] });
+      await waitForCalls("orca_stream_files");
+      await sendFiles({ kind: "ready" });
+      const mark = () => browser.execute(() => document.querySelector<HTMLElement>('.orca-file[data-path="src"]')?.dataset.change ?? null);
+      await browser.waitUntil(async () => (await mark()) === "changed", { timeoutMsg: "the folder never got its mark" });
+      const asked = await mock("orca_files_changes", holds);
+      await waitForCalls(asked);
+      // Several periods pass with the first question unanswered: no second one is asked.
+      await browser.pause(3000);
+      expect((await callsOf(asked)).length).toBe(1);
+      await release(asked, []);
+      await browser.waitUntil(async () => (await mark()) === null, { timeoutMsg: "the answer never cleared the mark" });
+      // Answered: the next period asks again.
+      await waitForCalls(asked, 2);
+    });
+
     it("reads of the tree only the folders that hold a path that changed or lie above it, not those in an ignored folder, and the changes of one second together (A-18)", async () => {
       await openStreamed();
       await waitForCalls("orca_stream_files");

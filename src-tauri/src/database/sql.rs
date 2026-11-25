@@ -2,6 +2,7 @@
 //!
 //! The session is not read only (D-2): a write (INSERT, UPDATE, DELETE and the like) is run as it is and is committed at once (autocommit, the server's own default). This module words the errors of the server (`server_message`) and keeps the run small.
 //! The text is cut into its statements at the semicolons that are not in a quote or a comment (`statements`), and they are run one after another, each as a prepared one, so its rows come in the binary protocol that `records::cells_of` reads. A statement is not rewritten: only the whitespace around it is cut. The run stops at the first statement that fails.
+//! A run that the app stops at `CLIENT_LIMIT`, or that loses the session, returns no result, so its words say which statement it stopped at and how many were done (`Progress`).
 //! The database the tree has selected is chosen before the run by a `USE` of its own (the name quoted by `records::quote_identifier`), never put in the text of the user.
 //! Before the run, one round trip (`prepare_sql`) sets the limits (`max_execution_time` stops a SELECT at `SERVER_LIMIT` and `sql_select_limit` ends a SELECT with no LIMIT one row after the limit of the rows) and selects the database.
 //! After the run, whatever came of it (a failed `USE` too), `RESTORE` turns autocommit on again and puts the limits back,
@@ -9,7 +10,7 @@
 //! and the rows are read as a stream that stops after `ROWS_MAX` of them (`collect_limited`), so the rows past the limit are never held.
 
 use std::{
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     time::{Duration, Instant},
 };
 
@@ -42,9 +43,9 @@ const RESTORE: &str =
     "SET SESSION autocommit = 1, max_execution_time = DEFAULT, sql_select_limit = DEFAULT";
 const EMPTY: &str = "SQL を入力してください";
 const TOO_MANY: &str = "文が多すぎます（100 文まで）";
-const TIMED_OUT: &str =
-    "実行が時間内に終わらなかったため、MySQL との接続を閉じました。もう一度開いてください";
-const TIMED_OUT_WRITE: &str = "実行が時間内に終わらなかったため、MySQL との接続を閉じました。書き込みの文は、サーバーで確定している場合があります。もう一度開いてください";
+const TIMED_OUT_HEAD: &str = "実行が時間内に終わらなかったため、MySQL との接続を閉じました。";
+const TIMED_OUT_WRITE: &str = "書き込みの文は、サーバーで確定している場合があります。";
+const TIMED_OUT_TAIL: &str = "もう一度開いてください";
 
 /// The result of one statement: the columns and the rows as D-4's cells, the line under the table and the text of its tab. A statement that gives no row has no column.
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -69,7 +70,7 @@ pub struct DatabaseSqlRun {
     pub error: Option<String>,
 }
 
-/// The statements of `sql`, in order, each without the whitespace around it: the text is cut at the semicolons that are not in a quote (`'`, `"` and the backtick, with a backslash and a doubled quote inside) or a comment (`-- `, `#` and `/* */`). A piece that holds nothing but whitespace and comments is no statement and is left out. `DELIMITER` is not known: a statement that has `;` inside (a stored program) is cut there, as MySQL cannot run it as a prepared one either (1295).
+/// The statements of `sql`, in order, each without the whitespace around it: the text is cut at the semicolons that are not in a quote (`'`, `"` and the backtick, with a backslash and a doubled quote inside) or a comment (`-- `, `#` and `/* */`). A piece that holds nothing but whitespace and comments is no statement and is left out; a `/*!` comment is not one of them, because MySQL runs what is inside it (`/*!40101 SET NAMES utf8 */`). `DELIMITER` is not known: a statement that has `;` inside (a stored program) is cut there, as MySQL cannot run it as a prepared one either (1295).
 /// The reason there is nothing to run, or too many statements.
 pub fn statements(sql: &str) -> Result<Vec<&str>, String> {
     let bytes = sql.as_bytes();
@@ -101,7 +102,10 @@ pub fn statements(sql: &str) -> Result<Vec<&str>, String> {
             {
                 i = skip_line(bytes, i);
             }
-            b'/' if bytes.get(i + 1) == Some(&b'*') => i = skip_block(bytes, i),
+            b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                real |= bytes.get(i + 2) == Some(&b'!');
+                i = skip_block(bytes, i);
+            }
             _ => {
                 real |= !b.is_ascii_whitespace();
                 i += 1;
@@ -231,13 +235,50 @@ pub fn server_message(number: u16, message: &str) -> String {
     format!("{words} ({number}): {}", shorten(message))
 }
 
-/// The words of a run that the app stopped at `CLIENT_LIMIT`. `body_started` is that the text of the user had been sent (the preface was over): a write may then have been committed on the server (autocommit), so the words say so.
-pub fn timed_out(body_started: bool) -> &'static str {
-    if body_started {
+/// How far a run got, written by `run` and read by the caller that words a run which returned no result (the app stopped it, or the session was lost).
+#[derive(Default)]
+pub struct Progress {
+    /// The text of the user had been sent (the preface was over): a write may then have been committed on the server (autocommit).
+    body_started: AtomicBool,
+    /// The number (from 1) of the statement that is running or that the run stopped at; 0 before the text is sent and once every statement has been run.
+    at: AtomicUsize,
+}
+
+impl Progress {
+    /// Where the run stopped, as the words that go in front of the reason: `2 文目で止まりました（それまでの 1 文は済んでいます）。`. Nothing when the text has one statement, as `numbered` does, and when no statement was running.
+    fn stopped_at(&self, total: usize) -> String {
+        let at = self.at.load(Ordering::Relaxed);
+        if total > 1 && at > 0 {
+            format!(
+                "{at} 文目で止まりました（それまでの {} 文は済んでいます）。",
+                at - 1
+            )
+        } else {
+            String::new()
+        }
+    }
+}
+
+/// The words of a run of `total` statements that the app stopped at `CLIENT_LIMIT`. A write may have been committed on the server (autocommit) once the text was sent, so the words say so; for more than one statement they say which statement it stopped at and how many were done.
+pub fn timed_out(progress: &Progress, total: usize) -> String {
+    let write = if progress.body_started.load(Ordering::Relaxed) {
         TIMED_OUT_WRITE
     } else {
-        TIMED_OUT
+        ""
+    };
+    format!(
+        "{TIMED_OUT_HEAD}{}{write}{TIMED_OUT_TAIL}",
+        progress.stopped_at(total)
+    )
+}
+
+/// `failure` for a run of `total` statements: a session that is lost in the middle of them says which one it stopped at and how many were done, because their results are not returned.
+pub fn run_failure(error: &sqlx::Error, progress: &Progress, total: usize) -> QueryFailure {
+    let mut failed = failure(error);
+    if failed.lost {
+        failed.message = format!("{}{}", progress.stopped_at(total), failed.message);
     }
+    failed
 }
 
 /// What a run that failed is. An error that MySQL answered is worded by `server_message` and leaves the session as it was; the others are the words of every query (`mysql::query_failure`).
@@ -314,12 +355,12 @@ fn result_of(read: Read, elapsed: Duration) -> DatabaseSqlResult {
 
 /// Runs `statements` (already cut by `statements`) in `database` on the session, one after another, under the limits of MySQL, and puts the limits back.
 /// A statement that MySQL answers with an error ends the run: its words are in the answer, after the results of the statements before it. A failure of the session itself (or of the preface) is the `sqlx::Error` that the caller words.
-/// `body_started` is set once the preface is over and the text is about to be sent, so that the caller that stops the run (the `Elapsed` of a step that took `CLIENT_LIMIT`, for each step alone) knows how to word it (`timed_out`).
+/// `progress` is set once the preface is over and before each statement is sent, so that the caller that words a run which returned no result (the `Elapsed` of a step that took `CLIENT_LIMIT`, for each step alone, and a lost session) knows where it stopped (`timed_out`, `run_failure`).
 pub async fn run(
     connection: &mut MySqlConnection,
     database: &str,
     statements: &[&str],
-    body_started: &AtomicBool,
+    progress: &Progress,
 ) -> Result<Result<DatabaseSqlRun, sqlx::Error>, Elapsed> {
     // The statements of the preface and of the restore are run as text, because the protocol of a prepared statement does not take `USE`.
     let prepared = timeout(
@@ -332,8 +373,9 @@ pub async fn run(
     let mut preface = Ok(());
     match prepared {
         Ok(_) => {
-            body_started.store(true, Ordering::Relaxed);
+            progress.body_started.store(true, Ordering::Relaxed);
             for (n, text) in statements.iter().enumerate() {
+                progress.at.store(n + 1, Ordering::Relaxed);
                 let started = Instant::now();
                 match timeout(CLIENT_LIMIT, read(connection, text)).await? {
                     Ok(read) => results.push(result_of(read, started.elapsed())),
@@ -342,6 +384,9 @@ pub async fn run(
                         break;
                     }
                 }
+            }
+            if stopped.is_none() {
+                progress.at.store(0, Ordering::Relaxed);
             }
         }
         Err(e) => preface = Err(e),
@@ -472,6 +517,23 @@ mod tests {
     }
 
     #[test]
+    fn a_comment_that_mysql_runs_is_a_statement() {
+        assert_eq!(
+            statements("/*!40101 SET NAMES utf8 */;"),
+            Ok(vec!["/*!40101 SET NAMES utf8 */"])
+        );
+        assert_eq!(
+            statements("/*!40101 SET NAMES utf8 */; SELECT 1; /*! */ ;"),
+            Ok(vec!["/*!40101 SET NAMES utf8 */", "SELECT 1", "/*! */"])
+        );
+        // A comment that is not of that kind is still no statement.
+        assert_eq!(
+            statements("/* ! */;"),
+            Err("SQL を入力してください".to_owned())
+        );
+    }
+
+    #[test]
     fn non_ascii_text_is_cut_at_the_semicolons_only() {
         assert_eq!(
             statements("SELECT 'あ;い'; SELECT 'う' ;"),
@@ -551,16 +613,58 @@ mod tests {
     #[test]
     fn a_run_stopped_by_the_app_says_that_a_write_may_have_been_committed_only_once_the_text_was_sent(
     ) {
-        let before = timed_out(false);
+        let progress = Progress::default();
+        let before = timed_out(&progress, 1);
         assert_eq!(
             before,
             "実行が時間内に終わらなかったため、MySQL との接続を閉じました。もう一度開いてください"
         );
         assert!(!before.contains("書き込みの文は"));
-        let after = timed_out(true);
+        progress.body_started.store(true, Ordering::Relaxed);
+        let after = timed_out(&progress, 1);
         assert!(after.contains("書き込みの文は、サーバーで確定している場合があります"));
         assert!(after.starts_with("実行が時間内に終わらなかったため、MySQL との接続を閉じました。"));
         assert!(after.ends_with("もう一度開いてください"));
+    }
+
+    #[test]
+    fn a_run_that_stopped_in_the_middle_of_several_statements_says_which_one_and_how_many_were_done(
+    ) {
+        let progress = Progress::default();
+        progress.body_started.store(true, Ordering::Relaxed);
+        progress.at.store(3, Ordering::Relaxed);
+        assert_eq!(
+            timed_out(&progress, 5),
+            "実行が時間内に終わらなかったため、MySQL との接続を閉じました。3 文目で止まりました（それまでの 2 文は済んでいます）。書き込みの文は、サーバーで確定している場合があります。もう一度開いてください"
+        );
+        // One statement has no number to tell, as an error has none.
+        progress.at.store(1, Ordering::Relaxed);
+        assert!(!timed_out(&progress, 1).contains("文目"));
+        // The first of several: none was done.
+        assert!(timed_out(&progress, 2)
+            .contains("1 文目で止まりました（それまでの 0 文は済んでいます）"));
+        // Every statement was run (the restore was the step that took the time).
+        progress.at.store(0, Ordering::Relaxed);
+        assert!(!timed_out(&progress, 5).contains("文目"));
+
+        let broken = || {
+            sqlx::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "broken pipe",
+            ))
+        };
+        progress.at.store(2, Ordering::Relaxed);
+        let lost = run_failure(&broken(), &progress, 3);
+        assert!(lost.lost);
+        assert!(lost.message.starts_with(
+            "2 文目で止まりました（それまでの 1 文は済んでいます）。MySQL との接続が切れました"
+        ));
+        assert_eq!(
+            run_failure(&broken(), &progress, 1).message,
+            failure(&broken()).message
+        );
+        let other = run_failure(&sqlx::Error::RowNotFound, &progress, 3);
+        assert!(!other.lost && !other.message.contains("文目"));
     }
 
     #[test]
