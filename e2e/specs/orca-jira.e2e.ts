@@ -118,6 +118,21 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     expect(await count(CARDS)).toBe(0);
   });
 
+  it("closes the form when the save succeeds, and shows the reading while the boards are on their way (J-1, #1395)", async () => {
+    await openJira(jiraFixtures({ jira_settings: empty }));
+    await mock("jira_save", connected);
+    const boards = await mock("jira_boards", holds);
+    await fillForm("https://example.atlassian.net", "me@example.com", "tok-4");
+    await $("#orca-jira-save").click();
+    expect(await waitForCalls(boards)).toEqual([here]);
+    await expect($("#orca-jira-conn")).not.toBeDisplayed();
+    await expect($("#orca-jira-list .pending")).toBeDisplayed();
+    expect(await count("#orca-jira-list .orca-jira-issue")).toBe(0);
+    await release(boards, [board]);
+    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    await expect($("#orca-jira-conn")).not.toBeDisplayed();
+  });
+
   it("keeps the form as typed, with the reason in a card, when the save is refused (J-1, #1395)", async () => {
     await openJira(jiraFixtures({ jira_settings: empty }));
     const reason = "サイトの URL は Atlassian Cloud のものだけです";
