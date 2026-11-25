@@ -1350,8 +1350,6 @@ fn saved_connection(
 }
 
 /// The connection that the saved settings of a project and the keychain give, for the commands that read the project's Jira.
-// The commands of J-2 call it once they take the project (#1394).
-#[allow(dead_code)]
 async fn project_conn(
     app: &AppHandle,
     environment: Option<&str>,
@@ -1363,11 +1361,6 @@ async fn project_conn(
     let saved = blocking(move || connection_at(&dir, env.as_deref(), &proj)).await?;
     let (site, email, token) = saved_connection(&saved, stored_token(environment, project).await?)?;
     connect(&site, &email, &token, GATEWAY).await
-}
-
-/// The connection for the commands of J-2 that do not take a project yet (#1394): none is saved for them, so they say so.
-async fn saved_conn(_app: &AppHandle) -> Result<Conn, String> {
-    Err(NOT_SAVED.into())
 }
 
 /// Removes the file of the legacy connection (the one before the projects); a file that is not there is fine.
@@ -1551,48 +1544,107 @@ pub async fn jira_set_board(
 
 /// The boards that the credential can see, by name (at most `MAX_BOARDS`).
 #[tauri::command]
-pub async fn jira_boards(app: AppHandle) -> Result<Vec<JiraBoard>, String> {
-    let read = async { boards(&saved_conn(&app).await?).await };
+pub async fn jira_boards(
+    app: AppHandle,
+    environment: Option<String>,
+    project: String,
+) -> Result<Vec<JiraBoard>, String> {
+    let read = async { boards(&project_conn(&app, environment.as_deref(), &project).await?).await };
     read.await
         .map_err(|e| log_failure("jira_boards", LOG_ACCOUNT, e))
 }
 
 /// The active and future sprints of a board (at most `MAX_SPRINTS`). A board without sprints (a kanban one) is Jira's refusal, with its message.
 #[tauri::command]
-pub async fn jira_sprints(app: AppHandle, board_id: u64) -> Result<Vec<JiraSprint>, String> {
-    let read = async { sprints(&saved_conn(&app).await?, board_id).await };
+pub async fn jira_sprints(
+    app: AppHandle,
+    environment: Option<String>,
+    project: String,
+    board_id: u64,
+) -> Result<Vec<JiraSprint>, String> {
+    let read = async {
+        sprints(
+            &project_conn(&app, environment.as_deref(), &project).await?,
+            board_id,
+        )
+        .await
+    };
     read.await
         .map_err(|e| log_failure("jira_sprints", LOG_ACCOUNT, e))
 }
 
 /// The tickets of a sprint, in the order of the board's rank (at most `MAX_ISSUES`).
 #[tauri::command]
-pub async fn jira_sprint_issues(app: AppHandle, sprint_id: u64) -> Result<JiraIssues, String> {
-    let read = async { sprint_issues(&saved_conn(&app).await?, sprint_id).await };
+pub async fn jira_sprint_issues(
+    app: AppHandle,
+    environment: Option<String>,
+    project: String,
+    sprint_id: u64,
+) -> Result<JiraIssues, String> {
+    let read = async {
+        sprint_issues(
+            &project_conn(&app, environment.as_deref(), &project).await?,
+            sprint_id,
+        )
+        .await
+    };
     read.await
         .map_err(|e| log_failure("jira_sprint_issues", LOG_ACCOUNT, e))
 }
 
 /// The backlog of a board, in the order of its rank (at most `MAX_ISSUES`).
 #[tauri::command]
-pub async fn jira_backlog(app: AppHandle, board_id: u64) -> Result<JiraIssues, String> {
-    let read = async { backlog(&saved_conn(&app).await?, board_id).await };
+pub async fn jira_backlog(
+    app: AppHandle,
+    environment: Option<String>,
+    project: String,
+    board_id: u64,
+) -> Result<JiraIssues, String> {
+    let read = async {
+        backlog(
+            &project_conn(&app, environment.as_deref(), &project).await?,
+            board_id,
+        )
+        .await
+    };
     read.await
         .map_err(|e| log_failure("jira_backlog", LOG_ACCOUNT, e))
 }
 
 /// A ticket for its tab (J-2, #871): its description and comments read as Markdown, and the fields of its right column. `key` is checked to be a ticket key before anything is asked.
 #[tauri::command]
-pub async fn jira_issue(app: AppHandle, key: String) -> Result<JiraIssueDetail, String> {
-    let read = async { issue_detail(&saved_conn(&app).await?, &key).await };
+pub async fn jira_issue(
+    app: AppHandle,
+    environment: Option<String>,
+    project: String,
+    key: String,
+) -> Result<JiraIssueDetail, String> {
+    let read = async {
+        issue_detail(
+            &project_conn(&app, environment.as_deref(), &project).await?,
+            &key,
+        )
+        .await
+    };
     read.await
         .map_err(|e| log_failure("jira_issue", LOG_ACCOUNT, e))
 }
 
 /// The status changes that the ticket can take now (J-2, #872), each with the status it leads to.
 #[tauri::command]
-pub async fn jira_transitions(app: AppHandle, key: String) -> Result<Vec<JiraTransition>, String> {
-    let read = async { transitions(&saved_conn(&app).await?, &key).await };
+pub async fn jira_transitions(
+    app: AppHandle,
+    environment: Option<String>,
+    project: String,
+    key: String,
+) -> Result<Vec<JiraTransition>, String> {
+    let read = async {
+        transitions(
+            &project_conn(&app, environment.as_deref(), &project).await?,
+            &key,
+        )
+        .await
+    };
     read.await
         .map_err(|e| log_failure("jira_transitions", LOG_ACCOUNT, e))
 }
@@ -1601,10 +1653,19 @@ pub async fn jira_transitions(app: AppHandle, key: String) -> Result<Vec<JiraTra
 #[tauri::command]
 pub async fn jira_transition(
     app: AppHandle,
+    environment: Option<String>,
+    project: String,
     key: String,
     transition_id: String,
 ) -> Result<(), String> {
-    let write = async { transition(&saved_conn(&app).await?, &key, &transition_id).await };
+    let write = async {
+        transition(
+            &project_conn(&app, environment.as_deref(), &project).await?,
+            &key,
+            &transition_id,
+        )
+        .await
+    };
     write
         .await
         .map_err(|e| log_failure("jira_transition", LOG_ACCOUNT, e))
@@ -1612,8 +1673,19 @@ pub async fn jira_transition(
 
 /// The people the ticket can be assigned to (J-2, #872), at most `MAX_ASSIGNABLE`.
 #[tauri::command]
-pub async fn jira_assignable(app: AppHandle, key: String) -> Result<Vec<JiraPerson>, String> {
-    let read = async { assignable(&saved_conn(&app).await?, &key).await };
+pub async fn jira_assignable(
+    app: AppHandle,
+    environment: Option<String>,
+    project: String,
+    key: String,
+) -> Result<Vec<JiraPerson>, String> {
+    let read = async {
+        assignable(
+            &project_conn(&app, environment.as_deref(), &project).await?,
+            &key,
+        )
+        .await
+    };
     read.await
         .map_err(|e| log_failure("jira_assignable", LOG_ACCOUNT, e))
 }
@@ -1622,10 +1694,19 @@ pub async fn jira_assignable(app: AppHandle, key: String) -> Result<Vec<JiraPers
 #[tauri::command]
 pub async fn jira_assign(
     app: AppHandle,
+    environment: Option<String>,
+    project: String,
     key: String,
     account_id: Option<String>,
 ) -> Result<(), String> {
-    let write = async { assign(&saved_conn(&app).await?, &key, account_id.as_deref()).await };
+    let write = async {
+        assign(
+            &project_conn(&app, environment.as_deref(), &project).await?,
+            &key,
+            account_id.as_deref(),
+        )
+        .await
+    };
     write
         .await
         .map_err(|e| log_failure("jira_assign", LOG_ACCOUNT, e))
@@ -1633,8 +1714,19 @@ pub async fn jira_assign(
 
 /// The priorities the ticket can be given (J-2, #872): none when its priority cannot be edited.
 #[tauri::command]
-pub async fn jira_priorities(app: AppHandle, key: String) -> Result<Vec<JiraPriority>, String> {
-    let read = async { priorities(&saved_conn(&app).await?, &key).await };
+pub async fn jira_priorities(
+    app: AppHandle,
+    environment: Option<String>,
+    project: String,
+    key: String,
+) -> Result<Vec<JiraPriority>, String> {
+    let read = async {
+        priorities(
+            &project_conn(&app, environment.as_deref(), &project).await?,
+            &key,
+        )
+        .await
+    };
     read.await
         .map_err(|e| log_failure("jira_priorities", LOG_ACCOUNT, e))
 }
@@ -1643,10 +1735,19 @@ pub async fn jira_priorities(app: AppHandle, key: String) -> Result<Vec<JiraPrio
 #[tauri::command]
 pub async fn jira_set_priority(
     app: AppHandle,
+    environment: Option<String>,
+    project: String,
     key: String,
     priority_id: String,
 ) -> Result<(), String> {
-    let write = async { set_priority(&saved_conn(&app).await?, &key, &priority_id).await };
+    let write = async {
+        set_priority(
+            &project_conn(&app, environment.as_deref(), &project).await?,
+            &key,
+            &priority_id,
+        )
+        .await
+    };
     write
         .await
         .map_err(|e| log_failure("jira_set_priority", LOG_ACCOUNT, e))
@@ -1656,10 +1757,19 @@ pub async fn jira_set_priority(
 #[tauri::command]
 pub async fn jira_set_sprint(
     app: AppHandle,
+    environment: Option<String>,
+    project: String,
     key: String,
     sprint_id: Option<u64>,
 ) -> Result<(), String> {
-    let write = async { move_to_sprint(&saved_conn(&app).await?, &key, sprint_id).await };
+    let write = async {
+        move_to_sprint(
+            &project_conn(&app, environment.as_deref(), &project).await?,
+            &key,
+            sprint_id,
+        )
+        .await
+    };
     write
         .await
         .map_err(|e| log_failure("jira_set_sprint", LOG_ACCOUNT, e))
@@ -1669,11 +1779,21 @@ pub async fn jira_set_sprint(
 #[tauri::command]
 pub async fn jira_set_description(
     app: AppHandle,
+    environment: Option<String>,
+    project: String,
     key: String,
     base: String,
     markdown: String,
 ) -> Result<String, String> {
-    let write = async { set_description(&saved_conn(&app).await?, &key, &base, &markdown).await };
+    let write = async {
+        set_description(
+            &project_conn(&app, environment.as_deref(), &project).await?,
+            &key,
+            &base,
+            &markdown,
+        )
+        .await
+    };
     write
         .await
         .map_err(|e| log_failure("jira_set_description", LOG_ACCOUNT, e))
@@ -1683,10 +1803,19 @@ pub async fn jira_set_description(
 #[tauri::command]
 pub async fn jira_add_comment(
     app: AppHandle,
+    environment: Option<String>,
+    project: String,
     key: String,
     markdown: String,
 ) -> Result<JiraComment, String> {
-    let write = async { add_comment(&saved_conn(&app).await?, &key, &markdown).await };
+    let write = async {
+        add_comment(
+            &project_conn(&app, environment.as_deref(), &project).await?,
+            &key,
+            &markdown,
+        )
+        .await
+    };
     write
         .await
         .map_err(|e| log_failure("jira_add_comment", LOG_ACCOUNT, e))
@@ -1694,8 +1823,13 @@ pub async fn jira_add_comment(
 
 /// The projects that the credential can create a ticket in (J-2, #874), by name (at most `MAX_PROJECTS`).
 #[tauri::command]
-pub async fn jira_projects(app: AppHandle) -> Result<Vec<JiraProject>, String> {
-    let read = async { projects(&saved_conn(&app).await?).await };
+pub async fn jira_projects(
+    app: AppHandle,
+    environment: Option<String>,
+    project: String,
+) -> Result<Vec<JiraProject>, String> {
+    let read =
+        async { projects(&project_conn(&app, environment.as_deref(), &project).await?).await };
     read.await
         .map_err(|e| log_failure("jira_projects", LOG_ACCOUNT, e))
 }
@@ -1704,17 +1838,28 @@ pub async fn jira_projects(app: AppHandle) -> Result<Vec<JiraProject>, String> {
 #[tauri::command]
 pub async fn jira_issue_types(
     app: AppHandle,
+    environment: Option<String>,
+    project: String,
     project_id: String,
 ) -> Result<Vec<JiraIssueType>, String> {
-    let read = async { issue_types(&saved_conn(&app).await?, &project_id).await };
+    let read = async {
+        issue_types(
+            &project_conn(&app, environment.as_deref(), &project).await?,
+            &project_id,
+        )
+        .await
+    };
     read.await
         .map_err(|e| log_failure("jira_issue_types", LOG_ACCOUNT, e))
 }
 
 /// Creates a ticket in Jira (J-2, #874) and gives its key. `markdown` is the description (may be empty) and `sprint_id` the sprint to put it in (none leaves it where Jira puts a new ticket, the backlog).
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn jira_create_issue(
     app: AppHandle,
+    environment: Option<String>,
+    project: String,
     project_id: String,
     issue_type_id: String,
     summary: String,
@@ -1723,7 +1868,7 @@ pub async fn jira_create_issue(
 ) -> Result<JiraCreated, String> {
     let write = async {
         create_issue(
-            &saved_conn(&app).await?,
+            &project_conn(&app, environment.as_deref(), &project).await?,
             &project_id,
             &issue_type_id,
             &summary,

@@ -1,4 +1,5 @@
 // The Jira part of the file pane of the Orca screen (J-2, #870): the tickets of the Jira that J-1 connects, by sprint, with the backlog under them. Each ticket is a row of its key, its summary and its status; a ticket that is done (its status category) is struck through. The tickets belong to no worktree, so the part hides the heading of the pane, as the database part does (A-43).
+// The part follows the project of the worktree that the pane shows (`Place`: its target and its project key, #1394): every command takes them, so the connection that is read is the project's own, and another project reads everything again from the start.
 // `jira_settings` is read first (it asks Jira nothing): with no site or no token saved the part says so and leads to the card of the settings (J-1). Then the scrum boards (`jira_boards`: only a scrum board has sprints), the sprints of the board (`jira_sprints`) and, for the sprints that the choice names and for the backlog, the tickets, one section after another (`jira_sprint_issues`, `jira_backlog`). A section reads, fails and is read again on its own.
 // A double press on a row opens the ticket as a tab of the work pane (orca-jira-tab.ts), and 「＋」 opens the tab of a new ticket (#874).
 // Everything is read when the part comes to be shown, when 「再読み込み」 is pressed, and, while the connection is missing or the first read failed, when the window gets the focus back and when the screen is shown again after 「設定を開く」; nothing is read at an interval.
@@ -27,11 +28,19 @@ let openIssue: (key: string, boardId: number) => void = () => {};
 // 「＋」 was pressed (#874): the screen opens the tab of a new ticket, with the board the list shows and the sprint it has chosen (none for the backlog).
 let newIssue: (boardId: number, sprintId: number | null) => void = () => {};
 
+// Whose connection the part reads: the environment (null for this machine) and the key of the project, as the commands take them.
+export interface JiraPlace {
+  environment: string | null;
+  project: string;
+}
+
 const BACKLOG = "backlog";
 const ALL = "all";
 
 let stage: Stage = "idle";
 let failure = "";
+// The project shown (null: the pane has no worktree, so none).
+let place: JiraPlace | null = null;
 // The scrum boards, the one shown, its sprints (the active one first, as Jira gives them) and the sections read so far.
 let boards: JiraBoard[] = [];
 let boardId: number | null = null;
@@ -165,11 +174,12 @@ const draw = () => {
 // Reads the tickets of the section `key`, which the run `run` asked for; an answer of another run is dropped.
 async function readSection(run: number, key: string) {
   const id = boardId;
-  if (id === null) return;
+  const here = place;
+  if (id === null || here === null) return;
   sections.set(key, { state: "loading", issues: [], truncated: false, error: null });
   draw();
   try {
-    const read = key === BACKLOG ? await invoke("jira_backlog", { boardId: id }) : await invoke("jira_sprint_issues", { sprintId: Number(key.slice(1)) });
+    const read = key === BACKLOG ? await invoke("jira_backlog", { ...here, boardId: id }) : await invoke("jira_sprint_issues", { ...here, sprintId: Number(key.slice(1)) });
     if (run !== seq) return;
     sections.set(key, { state: "done", issues: read.issues, truncated: read.truncated, error: null });
   } catch (e) {
@@ -189,14 +199,14 @@ async function readSections(run: number) {
 async function readBoard(run: number) {
   sprints = [];
   sections.clear();
-  if (boardId === null) {
+  if (boardId === null || place === null) {
     stage = "ready";
     return draw();
   }
   stage = "loading";
   draw();
   try {
-    const read = await invoke("jira_sprints", { boardId });
+    const read = await invoke("jira_sprints", { ...place, boardId });
     if (run !== seq) return;
     sprints = read;
   } catch (e) {
@@ -216,17 +226,22 @@ async function readBoard(run: number) {
 async function read() {
   const run = ++seq;
   toSettings = false;
-  stage = "loading";
   sections.clear();
+  const here = place;
+  if (here === null) {
+    stage = "idle";
+    return draw();
+  }
+  stage = "loading";
   draw();
   try {
-    const settings = await invoke("jira_settings", { environment: null, project: "" }); // the project shown is passed by #1394
+    const settings = await invoke("jira_settings", here);
     if (run !== seq) return;
     if (settings.site === "" || !settings.hasToken) {
       stage = "none";
       return draw();
     }
-    const all = await invoke("jira_boards");
+    const all = await invoke("jira_boards", here);
     if (run !== seq) return;
     boards = all.filter((b) => b.type === "scrum");
     if (!boards.some((b) => b.id === boardId)) boardId = boards[0]?.id ?? null;
@@ -240,10 +255,23 @@ async function read() {
   await readBoard(run);
 }
 
-// Told whether the part is shown: it reads when it comes to be shown, and when the screen is shown again after the press on 「設定を開く」.
-export function syncOrcaJira(shown: boolean) {
+// Told whether the part is shown and which project it is for (null: no worktree): it reads when it comes to be shown, when the project changes, and when the screen is shown again after the press on 「設定を開く」. Another project forgets the board and the choices of the one before.
+export function syncOrcaJira(shown: boolean, next: JiraPlace | null) {
+  const moved = next?.environment !== place?.environment || next?.project !== place?.project;
   const back = shown && toSettings && !$("orca").hidden;
-  if (shown && (!on || back)) void read();
+  if (moved) {
+    place = next;
+    boardId = null;
+    sprintPick = "";
+    statusPick = "";
+    boards = [];
+    sprints = [];
+    sections.clear();
+    seq++;
+    stage = "idle";
+    draw();
+  }
+  if (shown && (!on || back || moved)) void read();
   on = shown;
 }
 

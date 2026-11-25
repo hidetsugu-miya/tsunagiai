@@ -2,7 +2,7 @@
 // The right column changes the status, the assignee, the priority and the sprint (#872): the value is a button that opens a menu of what Jira allows (the options are asked when it is pressed), the chosen value is shown at once, and when Jira refuses the old one is put back and the reason is shown as a card (A-28). The rows of the list in the right pane take the new value (orca-jira.ts).
 // The description is edited in the rich Markdown editor of A-26 (#873): a pencil beside it opens the editor with the Markdown it was read as, and 「保存」 sends that Markdown and the Markdown the editor started from to Rust (`jira_set_description`), which puts it back into the ADF that Jira holds so that what Markdown cannot say stays. A comment is added from a second editor under the comments (`jira_add_comment`). When Jira refuses, the typing stays in its editor and the reason is shown as a card (A-28).
 // The tab of a new ticket (#874): the same tab, with an empty key and the form of `NewTicket` in place of the ticket. The form asks for the projects (`jira_projects`), the issue types of the chosen project (`jira_issue_types`) and the sprints of the board of the list (`jira_sprints`) when the tab is opened and by 「読み直す」, and 「作る」 sends them with the summary and the description (`jira_create_issue`). When Jira has made the ticket the tab becomes the ticket's tab (its key, read at once), the screen selects it and the list reads its sections again; when Jira refuses, a card shows the reason (A-28) and the form keeps what was typed.
-// The tabs are kept in memory only, by target and project, as the tabs of the files and the diffs are (their ids are `jira:{n}`). Rust reads the ticket (`jira_issue`) and gives the description and the comments as Markdown (read from Jira's ADF), which the page draws through `markdownHtml` (it keeps only what a Todoist comment may keep). A ticket is read when its tab is opened and again by the button 「読み直す」, never by the clock; a read that ends after its tab was closed, or after a newer read began, is dropped.
+// The tabs are kept in memory only, by target and project, as the tabs of the files and the diffs are (their ids are `jira:{n}`), and each reads and writes through the connection of its project (`at`: the target and the project go to every command, #1394). Rust reads the ticket (`jira_issue`) and gives the description and the comments as Markdown (read from Jira's ADF), which the page draws through `markdownHtml` (it keeps only what a Todoist comment may keep). A ticket is read when its tab is opened and again by the button 「読み直す」, never by the clock; a read that ends after its tab was closed, or after a newer read began, is dropped.
 import type { JiraCreated } from "./bindings/JiraCreated";
 import type { JiraIssueDetail } from "./bindings/JiraIssueDetail";
 import type { JiraIssueType } from "./bindings/JiraIssueType";
@@ -70,6 +70,9 @@ export interface JiraTab {
 
 const tabs = new Map<string, JiraTab>();
 let lastId = 0;
+
+// The connection of a tab is the one of the project it was opened in (J-2, #1394): every command takes its environment and project.
+const at = (t: JiraTab) => ({ environment: t.target, project: t.project });
 
 function pending() {
   const row = tag("div", "pending");
@@ -143,16 +146,16 @@ async function menuOf<T>(anchor: HTMLButtonElement, load: () => Promise<T[]>, it
 function editStatus(t: JiraTab, issue: JiraIssueDetail, anchor: HTMLButtonElement) {
   void menuOf(
     anchor,
-    async () => (await invoke("jira_transitions", { key: t.key })).filter((x) => x.status !== issue.status),
-    (x) => ({ label: x.status, color: CATEGORY_COLOR[x.statusCategory] ?? "var(--muted)", current: false, pick: () => void write(t, { status: x.status, statusCategory: x.statusCategory }, () => invoke("jira_transition", { key: t.key, transitionId: x.id }), () => applyJiraChange(t.key, { status: x.status, statusCategory: x.statusCategory })) }),
+    async () => (await invoke("jira_transitions", { ...at(t), key: t.key })).filter((x) => x.status !== issue.status),
+    (x) => ({ label: x.status, color: CATEGORY_COLOR[x.statusCategory] ?? "var(--muted)", current: false, pick: () => void write(t, { status: x.status, statusCategory: x.statusCategory }, () => invoke("jira_transition", { ...at(t), key: t.key, transitionId: x.id }), () => applyJiraChange(t.key, { status: x.status, statusCategory: x.statusCategory })) }),
   );
 }
 
 function editAssignee(t: JiraTab, issue: JiraIssueDetail, anchor: HTMLButtonElement) {
-  const to = (accountId: string | null, name: string | null) => () => name === issue.assignee || void write(t, { assignee: name }, () => invoke("jira_assign", { key: t.key, accountId }), () => applyJiraChange(t.key, { assignee: name }));
+  const to = (accountId: string | null, name: string | null) => () => name === issue.assignee || void write(t, { assignee: name }, () => invoke("jira_assign", { ...at(t), key: t.key, accountId }), () => applyJiraChange(t.key, { assignee: name }));
   void menuOf(
     anchor,
-    () => invoke("jira_assignable", { key: t.key }),
+    () => invoke("jira_assignable", { ...at(t), key: t.key }),
     (p) => ({ label: p.displayName, color: "var(--muted)", current: p.displayName === issue.assignee, pick: to(p.accountId, p.displayName) }),
     [{ label: "未割り当て", current: issue.assignee === null, pick: to(null, null) }],
     "担当を探す",
@@ -162,16 +165,16 @@ function editAssignee(t: JiraTab, issue: JiraIssueDetail, anchor: HTMLButtonElem
 function editPriority(t: JiraTab, issue: JiraIssueDetail, anchor: HTMLButtonElement) {
   void menuOf(
     anchor,
-    () => invoke("jira_priorities", { key: t.key }),
-    (p) => ({ label: p.name, color: "var(--muted)", current: p.name === issue.priority, pick: () => p.name === issue.priority || void write(t, { priority: p.name }, () => invoke("jira_set_priority", { key: t.key, priorityId: p.id }), () => applyJiraChange(t.key, { priority: p.name })) }),
+    () => invoke("jira_priorities", { ...at(t), key: t.key }),
+    (p) => ({ label: p.name, color: "var(--muted)", current: p.name === issue.priority, pick: () => p.name === issue.priority || void write(t, { priority: p.name }, () => invoke("jira_set_priority", { ...at(t), key: t.key, priorityId: p.id }), () => applyJiraChange(t.key, { priority: p.name })) }),
   );
 }
 
 function editSprint(t: JiraTab, issue: JiraIssueDetail, anchor: HTMLButtonElement) {
-  const to = (sprintId: number | null, name: string | null) => () => name === issue.sprint || void write(t, { sprint: name }, () => invoke("jira_set_sprint", { key: t.key, sprintId }), () => void reloadJiraSections());
+  const to = (sprintId: number | null, name: string | null) => () => name === issue.sprint || void write(t, { sprint: name }, () => invoke("jira_set_sprint", { ...at(t), key: t.key, sprintId }), () => void reloadJiraSections());
   void menuOf(
     anchor,
-    () => invoke("jira_sprints", { boardId: t.boardId }),
+    () => invoke("jira_sprints", { ...at(t), boardId: t.boardId }),
     (s) => ({ label: s.name, color: "var(--muted)", current: s.name === issue.sprint, pick: to(s.id, s.name) }),
     [{ label: "バックログ", current: issue.sprint === null, pick: to(null, null) }],
   );
@@ -256,7 +259,7 @@ async function saveDescription(t: JiraTab) {
   editor.setBusy(true);
   draw(t);
   try {
-    const description = await invoke("jira_set_description", { key: t.key, base: t.base, markdown: editor.markdown() });
+    const description = await invoke("jira_set_description", { ...at(t), key: t.key, base: t.base, markdown: editor.markdown() });
     t.issue = { ...(t.issue ?? issue), description };
     t.editing = false;
     dropRead(t);
@@ -294,7 +297,7 @@ async function addComment(t: JiraTab) {
   editor.setBusy(true);
   draw(t);
   try {
-    const added = await invoke("jira_add_comment", { key: t.key, markdown: editor.markdown() });
+    const added = await invoke("jira_add_comment", { ...at(t), key: t.key, markdown: editor.markdown() });
     const now = t.issue ?? issue;
     t.issue = { ...now, comments: [...now.comments, added] };
     editor.set("");
@@ -403,7 +406,7 @@ async function read(t: JiraTab) {
   t.phase = "loading";
   draw(t);
   try {
-    const issue = await invoke("jira_issue", { key: t.key });
+    const issue = await invoke("jira_issue", { ...at(t), key: t.key });
     if (seq !== t.seq) return;
     t.issue = issue;
     t.phase = "ready";
@@ -560,7 +563,7 @@ async function readTypes(t: JiraTab, f: NewTicket) {
   draw(t);
   if (projectId === "") return;
   try {
-    const types = await invoke("jira_issue_types", { projectId });
+    const types = await invoke("jira_issue_types", { ...at(t), projectId });
     if (seq !== t.seq) return;
     f.types = types;
     f.typeId = types.some((x) => x.id === f.typeId) ? f.typeId : (types[0]?.id ?? "");
@@ -582,7 +585,7 @@ async function readOptions(t: JiraTab, f: NewTicket) {
   t.error = null;
   draw(t);
   try {
-    const [projects, sprints] = await Promise.all([invoke("jira_projects"), invoke("jira_sprints", { boardId: t.boardId })]);
+    const [projects, sprints] = await Promise.all([invoke("jira_projects", at(t)), invoke("jira_sprints", { ...at(t), boardId: t.boardId })]);
     if (seq !== t.seq) return;
     f.projects = projects;
     f.sprints = sprints;
@@ -611,7 +614,7 @@ async function submitNew(t: JiraTab) {
   draw(t);
   let made: JiraCreated;
   try {
-    made = await invoke("jira_create_issue", { projectId: f.projectId, issueTypeId: f.typeId, summary: f.summary.value, markdown: f.describe.markdown(), sprintId: f.sprintId });
+    made = await invoke("jira_create_issue", { ...at(t), projectId: f.projectId, issueTypeId: f.typeId, summary: f.summary.value, markdown: f.describe.markdown(), sprintId: f.sprintId });
   } catch (e) {
     t.writing = false;
     f.describe.setBusy(false);

@@ -137,7 +137,7 @@ function syncModes() {
   syncHistory(context === null ? null : { target: context.target, path: context.path }, shown && part === "history");
   syncLsp(context === null ? null : { target: context.target, project: context.project, path: context.path }, shown && part === "server");
   syncOrcaDatabase(shown && part === "database");
-  syncOrcaJira(shown && part === "jira");
+  syncOrcaJira(shown && part === "jira", context === null ? null : { environment: context.target, project: context.project });
   drawDrop();
   if (shown && part === "files" && context !== null && !listings.has("")) void readDir("");
 }

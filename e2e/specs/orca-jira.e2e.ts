@@ -4,6 +4,8 @@ import { filesToggle, openOrca, orcaOverview, project, sample, selectedTab, tabO
 // J-2: the Jira part of the file pane (#870). Rust reads the boards, the sprints and the tickets (unit tests); here the screen is checked: what it asks of Rust, and how it draws the answers.
 describe("orca: the Jira part of the file pane (J-2)", () => {
   const connected = { site: "https://example.atlassian.net", email: "me@example.com", hasToken: true, boardId: null };
+  // The project that the file pane shows (the example-app of the list, on this machine): every command takes its environment and its project (#1394).
+  const here = { environment: null, project: "proj_example-app" };
   const board = jiraBoard(1, "Example board");
   const sprint12 = jiraSprint(12, "Sprint 12");
   const sprint13 = jiraSprint(13, "Sprint 13", "future");
@@ -68,7 +70,7 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await expect($("#orca-jira")).toBeDisplayed();
     await expect($("#orca-files-tree")).not.toBeDisplayed();
     await expect($("#orca-files-head")).not.toBeDisplayed();
-    expect(await waitForCalls("jira_settings")).toEqual([{ environment: null, project: "" }]);
+    expect(await waitForCalls("jira_settings")).toEqual([here]);
     await paneMode("ファイル").click();
     await expect($("#orca-jira")).not.toBeDisplayed();
     await expect($("#orca-files-head")).toBeDisplayed();
@@ -97,10 +99,10 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
   it("reads the scrum boards, the sprints, the tickets of the first sprint and the backlog, and draws a row for each ticket (J-2)", async () => {
     await openJira(jiraFixtures());
     await waitForCount("#orca-jira-list .orca-jira-issue", 5);
-    expect(await callsOf("jira_boards")).toEqual([null]);
-    expect(await callsOf("jira_sprints")).toEqual([{ boardId: 1 }]);
-    expect(await callsOf("jira_sprint_issues")).toEqual([{ sprintId: 12 }]);
-    expect(await callsOf("jira_backlog")).toEqual([{ boardId: 1 }]);
+    expect(await callsOf("jira_boards")).toEqual([here]);
+    expect(await callsOf("jira_sprints")).toEqual([{ ...here, boardId: 1 }]);
+    expect(await callsOf("jira_sprint_issues")).toEqual([{ ...here, sprintId: 12 }]);
+    expect(await callsOf("jira_backlog")).toEqual([{ ...here, boardId: 1 }]);
     expect(await sectionsOf()).toEqual([["s12", "EX-1", "EX-2", "EX-3"], ["backlog", "EX-5", "EX-6"]]);
     expect(await textsOf(".orca-jira-head")).toEqual(["Sprint 12進行中3 件", "バックログ2 件"]);
     // Only the scrum board is read, so there is nothing to choose between.
@@ -133,7 +135,7 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await pick("orca-jira-sprint", "13");
     await waitForCount("#orca-jira-list .orca-jira-section", 2);
     expect(await sectionsOf()).toEqual([["s13", "EX-4"], ["backlog", "EX-5", "EX-6"]]);
-    expect(await callsOf("jira_sprint_issues")).toEqual([{ sprintId: 12 }, { sprintId: 13 }]);
+    expect(await callsOf("jira_sprint_issues")).toEqual([{ ...here, sprintId: 12 }, { ...here, sprintId: 13 }]);
     expect(await callsOf("jira_backlog")).toHaveLength(1);
   });
 
@@ -158,10 +160,10 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await mock("jira_sprints", [sprint13]);
     await mock("jira_backlog", jiraIssues([jiraIssue("OTH-1", "Other ticket", "To Do")]));
     await pick("orca-jira-board", "2");
-    expect(await waitForCalls("jira_sprints")).toEqual([{ boardId: 2 }]);
+    expect(await waitForCalls("jira_sprints")).toEqual([{ ...here, boardId: 2 }]);
     await waitForCount("#orca-jira-list .orca-jira-issue", 2);
     expect(await sectionsOf()).toEqual([["s13", "EX-4"], ["backlog", "OTH-1"]]);
-    expect(await callsOf("jira_backlog")).toEqual([{ boardId: 2 }]);
+    expect(await callsOf("jira_backlog")).toEqual([{ ...here, boardId: 2 }]);
   });
 
   it("says that a board has no scrum board when the boards are all of another kind (J-2)", async () => {
@@ -180,7 +182,7 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     expect(await count("#error-cards .error-card")).toBe(0);
     await mock("jira_backlog", backlog);
     await $("#orca-jira-list .pending.fail .text-btn").click();
-    expect(await waitForCalls("jira_backlog")).toEqual([{ boardId: 1 }]);
+    expect(await waitForCalls("jira_backlog")).toEqual([{ ...here, boardId: 1 }]);
     await waitForCount("#orca-jira-list .orca-jira-issue", 5);
     expect(await callsOf("jira_sprint_issues")).toHaveLength(1);
   });
@@ -208,6 +210,41 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await waitForCount("#orca-jira-list .orca-jira-issue", 5);
     expect(await count("#orca-jira-list .orca-file-note")).toBe(0);
     expect(await callsOf("jira_settings")).toHaveLength(2);
+  });
+
+  const api = { environment: null, project: "proj_example-api" };
+
+  it("reads the connection of the project that the pane shows, and reads everything again for another project (J-2, #1394)", async () => {
+    await openJira(withTickets());
+    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    expect(await callsOf("jira_settings")).toEqual([here]);
+    await project("example-api").click();
+    await waitForCalls("jira_settings", 2);
+    expect(await callsOf("jira_settings")).toEqual([here, api]);
+    await waitForCalls("jira_boards", 2);
+    expect(await callsOf("jira_boards")).toEqual([here, api]);
+    await waitForCalls("jira_sprints", 2);
+    expect(await callsOf("jira_sprints")).toEqual([{ ...here, boardId: 1 }, { ...api, boardId: 1 }]);
+    await waitForCalls("jira_backlog", 2);
+    expect(await callsOf("jira_backlog")).toEqual([{ ...here, boardId: 1 }, { ...api, boardId: 1 }]);
+    expect(await callsOf("jira_sprint_issues")).toEqual([{ ...here, sprintId: 12 }, { ...api, sprintId: 12 }]);
+  });
+
+  it("opens a ticket in a tab that reads and writes through the connection of the project it was opened in (J-2, #1394)", async () => {
+    await openJira(withTickets());
+    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    await openTicket("EX-1");
+    expect(await waitForCalls("jira_issue")).toEqual([{ ...here, key: "EX-1" }]);
+    await project("example-api").click();
+    await waitForCalls("jira_settings", 2);
+    await waitForCalls("jira_sprint_issues", 2);
+    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    await openTicket("EX-1");
+    await waitForCalls("jira_issue", 2);
+    expect(await callsOf("jira_issue")).toEqual([{ ...here, key: "EX-1" }, { ...api, key: "EX-1" }]);
+    await mock("jira_transitions", transitions);
+    await editButton(FIELD.status).click();
+    expect(await waitForCalls("jira_transitions")).toEqual([{ ...api, key: "EX-1" }]);
   });
 
   it("reads again each time the part is shown, and not at an interval (J-2)", async () => {
@@ -273,7 +310,7 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await expect(tabOf("jira:1").$(".orca-tab-btn")).toHaveAttribute("aria-selected", "true");
     await expect(tabOf("jira:1").$(".orca-tab-title")).toHaveText("EX-1");
     await expect(tabOf("jira:1").$(".orca-file-tab-ic svg")).toExist();
-    expect(await waitForCalls("jira_issue")).toEqual([{ key: "EX-1" }]);
+    expect(await waitForCalls("jira_issue")).toEqual([{ ...here, key: "EX-1" }]);
     await expect($(".orca-jira-tab .orca-jira-title")).toHaveText("Write the page");
     // The tickets of the list stay where they were: the part is still shown.
     await expect($("#orca-jira")).toBeDisplayed();
@@ -324,7 +361,7 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await expect($(".orca-jira-tab .orca-jira-title")).toHaveText("Write the page");
     await openTicket("EX-1");
     await waitForCalls("jira_issue", 3);
-    expect(await callsOf("jira_issue")).toEqual([{ key: "EX-1" }, { key: "EX-2" }, { key: "EX-1" }]);
+    expect(await callsOf("jira_issue")).toEqual([{ ...here, key: "EX-1" }, { ...here, key: "EX-2" }, { ...here, key: "EX-1" }]);
     expect(await count('.orca-tab[data-jira="true"]')).toBe(2);
     await expect(tabOf("jira:1").$(".orca-tab-btn")).toHaveAttribute("aria-selected", "true");
   });
@@ -344,7 +381,7 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await expect($(".orca-jira-tab .orca-jira-title")).toHaveText("Write the page");
     expect(await count(".orca-jira-tab .orca-file-note.fail")).toBe(0);
     // `mock` cleared the record: this is the read of the button.
-    expect(await callsOf("jira_issue")).toEqual([{ key: "EX-1" }]);
+    expect(await callsOf("jira_issue")).toEqual([{ ...here, key: "EX-1" }]);
   });
 
   it("says how many comments were read when Jira has more (J-2)", async () => {
@@ -410,11 +447,11 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await mock("jira_transitions", transitions);
     await mock("jira_transition", null);
     await editButton(FIELD.status).click();
-    expect(await waitForCalls("jira_transitions")).toEqual([{ key: "EX-1" }]);
+    expect(await waitForCalls("jira_transitions")).toEqual([{ ...here, key: "EX-1" }]);
     await waitForCount('.menu[role="menu"]', 1);
     expect(await menuTexts()).toEqual(["To Do", "Done"]);
     await (await menuItem(1)).click();
-    expect(await waitForCalls("jira_transition")).toEqual([{ key: "EX-1", transitionId: "21" }]);
+    expect(await waitForCalls("jira_transition")).toEqual([{ ...here, key: "EX-1", transitionId: "21" }]);
     await expect($(".orca-jira-side-row:nth-child(1) .orca-jira-pill")).toHaveText("Done");
     await expect($(".orca-jira-side-row:nth-child(1) .orca-jira-pill")).toHaveAttribute("data-category", "done");
     expect(await rowOf("EX-1")).toMatchObject({ status: "Done", category: "done", keyLine: "line-through" });
@@ -462,7 +499,7 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     ]);
     await mock("jira_assign", null);
     await editButton(FIELD.assignee).click();
-    expect(await waitForCalls("jira_assignable")).toEqual([{ key: "EX-1" }]);
+    expect(await waitForCalls("jira_assignable")).toEqual([{ ...here, key: "EX-1" }]);
     await waitForCount('.menu[role="menu"]', 1);
     expect(await menuTexts()).toEqual(["未割り当て", "Ann", "Mia"]);
     await expect($('.menu .menu-search[aria-label="担当を探す"]')).toBeDisplayed();
@@ -472,15 +509,15 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await editButton(FIELD.assignee).click();
     await waitForCount('.menu[role="menu"]', 1);
     await (await menuItem(1)).click();
-    expect(await waitForCalls("jira_assign")).toEqual([{ key: "EX-1", accountId: "a1" }]);
+    expect(await waitForCalls("jira_assign")).toEqual([{ ...here, key: "EX-1", accountId: "a1" }]);
     await expect(editButton(FIELD.assignee)).toHaveText("Ann");
     await editButton(FIELD.assignee).click();
     await waitForCount('.menu[role="menu"]', 1);
     await (await menuItem(0)).click();
     await waitForCalls("jira_assign", 2);
     expect(await callsOf("jira_assign")).toEqual([
-      { key: "EX-1", accountId: "a1" },
-      { key: "EX-1", accountId: null },
+      { ...here, key: "EX-1", accountId: "a1" },
+      { ...here, key: "EX-1", accountId: null },
     ]);
     await expect(editButton(FIELD.assignee)).toHaveText("未割り当て");
     await expect(editButton(FIELD.assignee)).toHaveElementClass("none");
@@ -494,11 +531,11 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     ]);
     await mock("jira_set_priority", null);
     await editButton(FIELD.priority).click();
-    expect(await waitForCalls("jira_priorities")).toEqual([{ key: "EX-1" }]);
+    expect(await waitForCalls("jira_priorities")).toEqual([{ ...here, key: "EX-1" }]);
     await waitForCount('.menu[role="menu"]', 1);
     expect(await menuTexts()).toEqual(["Highest", "High"]);
     await (await menuItem(0)).click();
-    expect(await waitForCalls("jira_set_priority")).toEqual([{ key: "EX-1", priorityId: "1" }]);
+    expect(await waitForCalls("jira_set_priority")).toEqual([{ ...here, key: "EX-1", priorityId: "1" }]);
     await expect(editButton(FIELD.priority)).toHaveText("Highest");
     await mock("jira_priorities", []);
     await editButton(FIELD.priority).click();
@@ -513,11 +550,11 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await mock("jira_set_sprint", null);
     const before = { sprint: (await callsOf("jira_sprint_issues")).length, backlog: (await callsOf("jira_backlog")).length };
     await editButton(FIELD.sprint).click();
-    expect(await waitForCalls("jira_sprints")).toEqual([{ boardId: 1 }]);
+    expect(await waitForCalls("jira_sprints")).toEqual([{ ...here, boardId: 1 }]);
     await waitForCount('.menu[role="menu"]', 1);
     expect(await menuTexts()).toEqual(["バックログ", "Sprint 12", "Sprint 13"]);
     await (await menuItem(2)).click();
-    expect(await waitForCalls("jira_set_sprint")).toEqual([{ key: "EX-1", sprintId: 13 }]);
+    expect(await waitForCalls("jira_set_sprint")).toEqual([{ ...here, key: "EX-1", sprintId: 13 }]);
     await expect(editButton(FIELD.sprint)).toHaveText("Sprint 13");
     await waitForCalls("jira_sprint_issues", before.sprint + 1);
     await waitForCalls("jira_backlog", before.backlog + 1);
@@ -526,8 +563,8 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await (await menuItem(0)).click();
     await waitForCalls("jira_set_sprint", 2);
     expect(await callsOf("jira_set_sprint")).toEqual([
-      { key: "EX-1", sprintId: 13 },
-      { key: "EX-1", sprintId: null },
+      { ...here, key: "EX-1", sprintId: 13 },
+      { ...here, key: "EX-1", sprintId: null },
     ]);
     await expect(editButton(FIELD.sprint)).toHaveText("なし");
     expect(await count(CARDS)).toBe(0);
@@ -546,7 +583,7 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     expect(await rowOf("EX-3")).toMatchObject({ status: "To Do", category: "new" });
     expect(await rowOf("EX-2")).toMatchObject({ status: "Done", category: "done" });
     // The change is taken as it is: the ticket is not read again.
-    expect(await callsOf("jira_issue")).toEqual([{ key: "EX-1" }]);
+    expect(await callsOf("jira_issue")).toEqual([{ ...here, key: "EX-1" }]);
   });
 
   // J-2 (#873): the description and the comments are edited in the rich Markdown editor of A-26.
@@ -599,12 +636,12 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await $(".orca-jira-desc-edit").click();
     await typeInto(descField, "The new description");
     await $(".orca-jira-save").click();
-    expect(await waitForCalls("jira_set_description")).toEqual([{ key: "EX-1", base: original, markdown: "The new description\n" }]);
+    expect(await waitForCalls("jira_set_description")).toEqual([{ ...here, key: "EX-1", base: original, markdown: "The new description\n" }]);
     await waitForCount("#orca-jira-desc-input", 0);
     expect(await descText()).toBe("The new description");
     expect(await $(".orca-jira-main .orca-jira-desc > .md strong").getText()).toBe("description");
     // The ticket is not read again, and the description is what Rust gave back for the next edit.
-    expect(await callsOf("jira_issue")).toEqual([{ key: "EX-1" }]);
+    expect(await callsOf("jira_issue")).toEqual([{ ...here, key: "EX-1" }]);
     await $(".orca-jira-desc-edit").click();
     await browser.waitUntil(async () => (await descField().getText()).includes("The new description"));
     await $(".orca-jira-cancel").click();
@@ -613,7 +650,7 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await typeInto(descField, "Again");
     await pressSubmit("#orca-jira-desc-input .ProseMirror");
     // `mock` cleared the record of the first save.
-    expect(await waitForCalls("jira_set_description")).toEqual([{ key: "EX-1", base: "The new **description**", markdown: "Again\n" }]);
+    expect(await waitForCalls("jira_set_description")).toEqual([{ ...here, key: "EX-1", base: "The new **description**", markdown: "Again\n" }]);
   });
 
   it("drops the answer of a read that was on its way when a description or a comment was saved, so that it does not put the old ticket back (J-2, #873)", async () => {
@@ -684,12 +721,12 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await typeInto(commentField, "A new comment");
     await expect($(".orca-jira-comment-submit")).toBeEnabled();
     await $(".orca-jira-comment-submit").click();
-    expect(await waitForCalls("jira_add_comment")).toEqual([{ key: "EX-1", markdown: "A new comment\n" }]);
+    expect(await waitForCalls("jira_add_comment")).toEqual([{ ...here, key: "EX-1", markdown: "A new comment\n" }]);
     await waitForCount("#orca-jira-comment-input", 0);
     expect(await textsOf(".orca-jira-comments-head")).toEqual(["コメント 3 件"]);
     expect((await textsOf(".orca-jira-comment"))[2]).toBe("Me2026-11-25 10:00A new comment");
     expect(await count(".orca-jira-comment-add")).toBe(1);
-    expect(await callsOf("jira_issue")).toEqual([{ key: "EX-1" }]);
+    expect(await callsOf("jira_issue")).toEqual([{ ...here, key: "EX-1" }]);
   });
 
   it("keeps the comment in its field with the reason in a card when Jira refuses, and drops it with the cancel button (J-2, #873)", async () => {
@@ -753,9 +790,9 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await expect(tabOf("jira:1").$(".orca-tab-btn")).toHaveAttribute("aria-selected", "true");
     await expect(tabOf("jira:1").$(".orca-tab-title")).toHaveText("新しいチケット");
     await expect($(".orca-jira-tab-head .orca-edit-path")).toHaveText("新しいチケット");
-    expect(await callsOf("jira_projects")).toEqual([null]);
-    expect(await callsOf("jira_sprints")).toEqual([{ boardId: 1 }, { boardId: 1 }]);
-    expect(await callsOf("jira_issue_types")).toEqual([{ projectId: "10000" }]);
+    expect(await callsOf("jira_projects")).toEqual([here]);
+    expect(await callsOf("jira_sprints")).toEqual([{ ...here, boardId: 1 }, { ...here, boardId: 1 }]);
+    expect(await callsOf("jira_issue_types")).toEqual([{ ...here, projectId: "10000" }]);
     expect(await callsOf("jira_issue")).toEqual([]);
     expect(await newOptions("プロジェクト")).toEqual([["10000", "Example (EX)"], ["10001", "Alpha (AB)"]]);
     expect(await newOptions("種類")).toEqual([["10001", "Task"], ["10002", "Bug"]]);
@@ -773,7 +810,7 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await newField("件名").setValue("Typed first");
     await pickNew("プロジェクト", "10001");
     await waitForCalls("jira_issue_types", 2);
-    expect(await callsOf("jira_issue_types")).toEqual([{ projectId: "10000" }, { projectId: "10001" }]);
+    expect(await callsOf("jira_issue_types")).toEqual([{ ...here, projectId: "10000" }, { ...here, projectId: "10001" }]);
     await browser.waitUntil(async () => JSON.stringify(await newOptions("種類")) === JSON.stringify([["10003", "Story"]]));
     await plus().click();
     await waitForCalls("jira_projects", 2);
@@ -797,10 +834,10 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await pickNew("種類", "10002");
     await pickNew("スプリント", "13");
     await submitNew().click();
-    expect(await waitForCalls("jira_create_issue")).toEqual([{ projectId: "10000", issueTypeId: "10002", summary: "Brand new", markdown: "Some **text**\n", sprintId: 13 }]);
+    expect(await waitForCalls("jira_create_issue")).toEqual([{ ...here, projectId: "10000", issueTypeId: "10002", summary: "Brand new", markdown: "Some **text**\n", sprintId: 13 }]);
     await expect(tabOf("jira:1").$(".orca-tab-title")).toHaveText("EX-9");
     await expect(tabOf("jira:1").$(".orca-tab-btn")).toHaveAttribute("aria-selected", "true");
-    expect(await waitForCalls("jira_issue")).toEqual([{ key: "EX-9" }]);
+    expect(await waitForCalls("jira_issue")).toEqual([{ ...here, key: "EX-9" }]);
     await expect($(".orca-jira-tab .orca-jira-title")).toHaveText("Brand new");
     expect(await count(".orca-jira-new")).toBe(0);
     await expect(tabOf("jira:2")).not.toExist();
@@ -815,7 +852,7 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await newField("件名").setValue("Brand new");
     await expect(submitNew()).toBeEnabled();
     await browser.keys("Enter");
-    expect(await waitForCalls("jira_create_issue")).toEqual([{ projectId: "10000", issueTypeId: "10001", summary: "Brand new", markdown: expect.any(String), sprintId: null }]);
+    expect(await waitForCalls("jira_create_issue")).toEqual([{ ...here, projectId: "10000", issueTypeId: "10001", summary: "Brand new", markdown: expect.any(String), sprintId: null }]);
     await expect(tabOf("jira:1").$(".orca-tab-title")).toHaveText("EX-9");
   });
 
@@ -853,7 +890,7 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await waitForCount(CARDS, 1);
     expect(await textsOf(CARD)).toEqual(["チケット EX-9 は作りましたが、スプリントに入れられませんでした: Jira が 400 を返しました: closed"]);
     await expect(tabOf("jira:1").$(".orca-tab-title")).toHaveText("EX-9");
-    expect(await waitForCalls("jira_issue")).toEqual([{ key: "EX-9" }]);
+    expect(await waitForCalls("jira_issue")).toEqual([{ ...here, key: "EX-9" }]);
     expect(await count(".orca-jira-new")).toBe(0);
   });
 
