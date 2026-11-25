@@ -36,7 +36,7 @@ Reading the code gives a cause, not a bug: run the failing behavior first, and w
 Reproduce a screen's behavior with a temporary spec in `e2e/specs/`, which runs in the real WKWebView with no window and touches no real service. It is the one exception to one spec per screen (`e2e.md`). Do not commit it: `run-ci.sh` and `run-e2e.sh` refuse a dirty tree, so run `npm run e2e:build` and then `npm run e2e`, which writes no record, and delete the spec afterwards.
 For the inside of a mail body's iframe, use the means in `frontend.md`.
 Reproduce Rust logic with a temporary `cargo test`, with a local `TcpListener` for an HTTP branch (`rust.md`), and delete the test afterwards.
-Do not start the real app for this. When the fault depends on a real service's answer, ask the owner for the check instead of writing to their account, and write in the issue what stayed unchecked.
+Do not start the real app for this. When the fault depends on a real service's answer, ask the owner for the check instead of writing to their account, and file the issue after the answer, with the result in its body ("Make an issue only once…" below).
 When a behavior does not reproduce, file nothing and tell the owner what was run.
 
 ```text
@@ -113,7 +113,7 @@ Bad:  a bug of 1 point with no label goes ahead of an issue with `importance:hig
 
 An issue of every scope is made only once its verification and its design are done, and its check on a real machine too where the matter depends on one, and its body carries all three (at the owner's instruction, 2026-11-25. It extends the rule of 2026-11-21, #1207, which asked this of the owner's decisions only):
 - Verification: what was run or read that shows the fact and, for a bug, its cause.
-- Design: the fix is settled, with the files to touch, the way and the order.
+- Design: the fix is settled, with the files to touch, the way and the order (for a flaky test, the fix to try and its grounds).
 - Check on a real machine, when the matter depends on the real WKWebView or app, a real outside service or the OS: done, with what it showed. A check that the AI cannot run itself is asked of the owner.
 
 When a design decision of the owner, or a real-machine check that the AI cannot run, is still open, no issue is made: put the matter to the owner in the session (the titles first, then one per reply), and make the issue only after the answer, with the answer in the body (at the owner's instruction, 2026-11-25).
