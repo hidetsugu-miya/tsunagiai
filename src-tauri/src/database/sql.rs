@@ -1,7 +1,7 @@
 //! The SQL tab (D-6, #635): the text the user typed, run as it is on the open session, and its rows turned into the cells of D-4.
 //!
 //! The session is not read only (D-2): a write (INSERT, UPDATE, DELETE and the like) is run as it is and is committed at once (autocommit, the server's own default). This module words the errors of the server (`server_message`) and keeps the run small.
-//! The text is cut into its statements at the semicolons that are not in a quote or a comment (`statements`), and they are run one after another, each as a prepared one, so its rows come in the binary protocol that `records::cells_of` reads. A statement is not rewritten: only the whitespace around it is cut. The run stops at the first statement that fails.
+//! The text is cut into its statements at the semicolons that are not in a quote or a comment (`statements`), and they are run one after another, each as text (`sqlx::raw_sql`, the text protocol), so that `PREPARE`, `EXECUTE` and `DEALLOCATE PREPARE` run too, which MySQL refuses inside a prepared statement (1295). Its rows come as text, which `records::text_cells_of` reads. A statement is not rewritten: only the whitespace around it is cut. The run stops at the first statement that fails.
 //! A run that the app stops at `CLIENT_LIMIT`, or that loses the session, returns no result, so its words say which statement it stopped at and how many were done (`Progress`).
 //! The database the tree has selected is chosen before the run by a `USE` of its own (the name quoted by `records::quote_identifier`), never put in the text of the user.
 //! Before the run, one round trip (`prepare_sql`) sets the limits (`max_execution_time` stops a SELECT at `SERVER_LIMIT` and `sql_select_limit` ends a SELECT with no LIMIT one row after the limit of the rows) and selects the database.
@@ -18,7 +18,7 @@ use futures_util::{future::ready, Stream, StreamExt, TryStreamExt};
 use serde::Serialize;
 use sqlx::{
     mysql::{MySqlConnection, MySqlDatabaseError, MySqlRow},
-    AssertSqlSafe, Column, Either, Executor, Row,
+    AssertSqlSafe, Column, Either, Row,
 };
 use tokio::time::{error::Elapsed, timeout};
 #[cfg(test)]
@@ -26,7 +26,7 @@ use ts_rs::TS;
 
 use super::{
     mysql::{query_failure, shorten, QueryFailure},
-    records::{cells_of, cells_tsv, quote_identifier, DatabaseCell},
+    records::{cells_tsv, quote_identifier, text_cells_of, DatabaseCell},
     session::format_rows,
 };
 
@@ -70,7 +70,7 @@ pub struct DatabaseSqlRun {
     pub error: Option<String>,
 }
 
-/// The statements of `sql`, in order, each without the whitespace around it: the text is cut at the semicolons that are not in a quote (`'`, `"` and the backtick, with a backslash and a doubled quote inside) or a comment (`-- `, `#` and `/* */`). A piece that holds nothing but whitespace and comments is no statement and is left out; a `/*!` comment is not one of them, because MySQL runs what is inside it (`/*!40101 SET NAMES utf8 */`). `DELIMITER` is not known: a statement that has `;` inside (a stored program) is cut there, as MySQL cannot run it as a prepared one either (1295).
+/// The statements of `sql`, in order, each without the whitespace around it: the text is cut at the semicolons that are not in a quote (`'`, `"` and the backtick, with a backslash and a doubled quote inside) or a comment (`-- `, `#` and `/* */`). A piece that holds nothing but whitespace and comments is no statement and is left out; a `/*!` comment is not one of them, because MySQL runs what is inside it (`/*!40101 SET NAMES utf8 */`). `DELIMITER` is not known: a statement that has `;` inside (a stored program) is cut there, as a stored program needs its own delimiter, and MySQL answers the pieces with an error (1064, or 1295 for one it takes only in another way).
 /// The reason there is nothing to run, or too many statements.
 pub fn statements(sql: &str) -> Result<Vec<&str>, String> {
     let bytes = sql.as_bytes();
@@ -320,12 +320,12 @@ pub(super) fn column_names(row: &MySqlRow) -> Vec<String> {
 /// What a run read: the columns (those of the first row), the rows up to `ROWS_MAX` as cells, whether the rows were cut, and the rows the statement changed.
 type Read = (Vec<String>, Vec<Vec<DatabaseCell>>, bool, u64);
 
-/// The rows of `text` on the session, up to `ROWS_MAX`, as cells, and the rows it changed. The statement is not kept in sqlx's cache of prepared statements.
+/// The rows of `text` on the session, up to `ROWS_MAX`, as cells, and the rows it changed. The statement is sent as text, so it is no prepared statement and sqlx keeps none.
 async fn read(connection: &mut MySqlConnection, text: &str) -> Result<Read, sqlx::Error> {
     let mut columns: Option<Vec<String>> = None;
     let mut changed = 0u64;
-    let query = sqlx::query(AssertSqlSafe(text.to_owned())).persistent(false);
-    let rows = (&mut *connection).fetch_many(query).try_filter_map(|item| {
+    let query = sqlx::raw_sql(AssertSqlSafe(text.to_owned()));
+    let rows = query.fetch_many(&mut *connection).try_filter_map(|item| {
         ready(Ok(match item {
             Either::Left(done) => {
                 changed += done.rows_affected();
@@ -333,7 +333,7 @@ async fn read(connection: &mut MySqlConnection, text: &str) -> Result<Read, sqlx
             }
             Either::Right(row) => {
                 columns.get_or_insert_with(|| column_names(&row));
-                Some(cells_of(&row))
+                Some(text_cells_of(&row))
             }
         }))
     });
@@ -362,7 +362,7 @@ pub async fn run(
     statements: &[&str],
     progress: &Progress,
 ) -> Result<Result<DatabaseSqlRun, sqlx::Error>, Elapsed> {
-    // The statements of the preface and of the restore are run as text, because the protocol of a prepared statement does not take `USE`.
+    // The preface and the restore are run as text as the statements are.
     let prepared = timeout(
         CLIENT_LIMIT,
         sqlx::raw_sql(AssertSqlSafe(prepare_sql(database))).execute(&mut *connection),
