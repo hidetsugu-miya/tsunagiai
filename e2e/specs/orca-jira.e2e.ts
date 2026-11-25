@@ -356,11 +356,10 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     const layout = await browser.execute(() => {
       const row = (k: string) => document.querySelector<HTMLElement>(`.orca-jira-issue[data-key="${k}"]`)!;
       const box = (k: string, part: string) => row(k).querySelector<HTMLElement>(`.orca-jira-${part}`)!.getBoundingClientRect();
-      const line = parseFloat(getComputedStyle(row("EX-2").querySelector(".orca-jira-summary")!).lineHeight);
-      return { longHeight: box("EX-1", "summary").height, shortHeight: box("EX-2", "summary").height, line, metaBelow: box("EX-1", "meta").top >= box("EX-1", "summary").bottom, order: [...row("EX-1").querySelectorAll(".orca-jira-meta > *")].map((n) => n.className) };
+      return { longHeight: box("EX-1", "summary").height, shortHeight: box("EX-2", "summary").height, metaBelow: box("EX-1", "meta").top >= box("EX-1", "summary").bottom, order: [...row("EX-1").querySelectorAll(".orca-jira-meta > *")].map((n) => n.className) };
     });
-    // The summary is cut at two lines, and the key, the status, the assignee and the priority are on the line under it.
-    expect(layout.longHeight).toBeLessThanOrEqual(layout.line * 2 + 1);
+    // The summary is cut at two lines (a short one is one line high), and the key, the status, the assignee and the priority are on the line under it.
+    expect(layout.longHeight).toBeLessThanOrEqual(layout.shortHeight * 2 + 1);
     expect(layout.longHeight).toBeGreaterThan(layout.shortHeight);
     expect(layout.metaBelow).toBe(true);
     expect(layout.order).toEqual(["orca-jira-key", "orca-jira-status", "orca-jira-assignee", "orca-jira-priority"]);
