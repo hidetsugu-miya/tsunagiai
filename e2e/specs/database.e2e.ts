@@ -828,19 +828,43 @@ describe("database: tree", () => {
       .move({ origin: "pointer", x: dx, y: 0 })
       .up()
       .perform();
-  // The left border of a header and a cell of each column: the first has none, the others have the vertical line. The header and the last row are read (`tr:first-child` alone would also take the first row of the body, the first child of its own parent).
+  // The four borders of a header and a cell of each column, the border of the table, and the grounds and colors of the header and of the body. The header and the last row are read (`tr:first-child` alone would also take the first row of the body, the first child of its own parent). The colors are read through a probe, which the computed style turns into rgb as it does for the borders.
   const lines = () =>
     browser.execute(() => {
-      const left = (e: Element) => getComputedStyle(e).borderLeftWidth;
-      return [...document.querySelectorAll("#database-work .database-grid thead tr > *, #database-work .database-grid tbody tr:last-child > *")].map(left);
+      const paint = (name: string) => {
+        const probe = document.createElement("div");
+        probe.style.color = `var(${name})`;
+        document.body.append(probe);
+        const color = getComputedStyle(probe).color;
+        probe.remove();
+        return color;
+      };
+      const border = (e: Element) => {
+        const s = getComputedStyle(e);
+        return [`${s.borderTopWidth} ${s.borderTopColor}`, `${s.borderRightWidth} ${s.borderRightColor}`, `${s.borderBottomWidth} ${s.borderBottomColor}`, `${s.borderLeftWidth} ${s.borderLeftColor}`];
+      };
+      const table = document.querySelector("#database-work .database-grid")!;
+      const head = document.querySelector("#database-work .database-grid thead th")!;
+      const body = document.querySelector("#database-work .database-grid tbody tr:last-child td")!;
+      return {
+        line: paint("--chip-line"),
+        bar: paint("--bar"),
+        table: border(table),
+        cells: [...document.querySelectorAll("#database-work .database-grid thead tr > *, #database-work .database-grid tbody tr:last-child > *")].map(border),
+        headBackground: getComputedStyle(head).backgroundColor,
+        bodyBackground: getComputedStyle(body).backgroundColor,
+        headColor: getComputedStyle(head).color,
+        tableColor: getComputedStyle(table).color,
+      };
     });
   const near = (actual: number, expected: number) => expect(Math.abs(actual - expected)).toBeLessThanOrEqual(2);
-  const onlyFirstHasNoLine = (all: string[]) => {
-    const per = all.length / 2;
-    for (const half of [all.slice(0, per), all.slice(per)]) {
-      expect(half[0]).toBe("0px");
-      for (const w of half.slice(1)) expect(w).toBe("1px");
-    }
+  const hasBorderAndRuledLines = (all: Awaited<ReturnType<typeof lines>>) => {
+    const one = `1px ${all.line}`;
+    expect(all.table).toEqual([one, one, one, one]);
+    for (const cell of all.cells) expect(cell).toEqual([one, one, one, one]);
+    expect(all.headBackground).toBe(all.bar);
+    expect(all.bodyBackground).not.toBe(all.bar);
+    expect(all.headColor).toBe(all.tableColor);
   };
 
   // The app with the connection p1 open on its database shop (tables mocked), and the tree drawn.
@@ -1247,9 +1271,9 @@ describe("database: tree", () => {
       expect(style).toEqual({ overflow: "ellipsis", align: "right" });
     });
 
-    it("draws a vertical line between the columns and a grip in each header, and no line at the left of the first column", async () => {
+    it("draws a border around the grid, a ruled line between every two cells, the ground of the header and a grip in each header", async () => {
       await openTable();
-      onlyFirstHasNoLine(await lines());
+      hasBorderAndRuledLines(await lines());
       expect(await count("#database-work .database-grid thead .database-grip")).toBe(columns.length);
     });
 
@@ -2458,12 +2482,12 @@ describe("database: tree", () => {
       return records;
     }
 
-    it("draws the vertical lines and changes the width of a column by its grip, kept when the structure is read again", async () => {
+    it("draws the border and the ruled lines and changes the width of a column by its grip, kept when the structure is read again", async () => {
       await openTable();
       await mock("database_structure", structure);
       await tab("structure").click();
       await expect($("#database-work .database-structure")).toExist();
-      onlyFirstHasNoLine(await lines());
+      hasBorderAndRuledLines(await lines());
       expect(await count("#database-work .database-structure thead .database-grip")).toBe(6);
       const before = await columnWidths(6);
       await dragGrip(6, 150);
@@ -2785,12 +2809,12 @@ describe("database: tree", () => {
       expect(await stripTabs()).toEqual(["オブジェクト", "無題 @shop", "無題 @information_schema"]);
     });
 
-    it("draws the vertical lines and changes the width of a column by its grip, kept when the statement is run again", async () => {
+    it("draws the border and the ruled lines and changes the width of a column by its grip, kept when the statement is run again", async () => {
       await openQuery();
       await mock("database_sql", result);
       await runText();
       await expect(range()).toHaveText("2 行 / 12 ms");
-      onlyFirstHasNoLine(await lines());
+      hasBorderAndRuledLines(await lines());
       expect(await count("#database-work .database-grid thead .database-grip")).toBe(3);
       const before = await columnWidths(2);
       await dragGrip(2, 80);

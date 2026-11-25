@@ -2520,11 +2520,10 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 .database-page-input { box-sizing: border-box; width: 64px; height: 28px; padding: 0 10px; border: 1px solid var(--chip-line); border-radius: 14px; background: var(--surface); color: inherit; font: inherit; text-align: center; font-variant-numeric: tabular-nums; }
 .database-page-input:focus { outline: 2px solid var(--accent); border-color: transparent; }
 .database-pages { min-width: 4.5em; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.database-grid { border-collapse: collapse; }
-.database-grid th, .database-grid td { padding: 6px 12px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--line); }
-.database-grid th + th, .database-grid td + td { border-left: 1px solid var(--line); }
+.database-grid { border-collapse: collapse; border: 1px solid var(--chip-line); }
+.database-grid th, .database-grid td { padding: 6px 12px; text-align: left; white-space: nowrap; border: 1px solid var(--chip-line); }
 .database-grid.resizing { user-select: none; cursor: col-resize; }
-.database-grid th { position: sticky; overflow: hidden; text-overflow: ellipsis; top: 0; background: var(--surface); border-top: 1px solid var(--line); color: var(--muted); font-size: calc(12px * var(--fs)); font-weight: normal; }
+.database-grid th { position: sticky; overflow: hidden; text-overflow: ellipsis; top: 0; background: var(--bar); box-shadow: inset 0 1px 0 var(--chip-line), inset 0 -1px 0 var(--chip-line); color: inherit; font-size: calc(12px * var(--fs)); font-weight: 600; }
 .database-sql-text { flex: none; box-sizing: border-box; width: 100%; min-height: 96px; resize: vertical; padding: 8px 12px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); color: inherit; font-family: var(--ff-mono, ) ui-monospace, Menlo, monospace; font-size: calc(13px * var(--fs)); line-height: 1.5; }
 .database-sql-text:focus { outline: 2px solid var(--accent); border-color: transparent; }
 /* D-9: a query tab: the selects of the connection and the database above the field, and between the field and the result a line that is dragged to change the height of the field (D-6). */
