@@ -8,6 +8,7 @@ use serde::Serialize;
 use ts_rs::TS;
 
 use crate::slack::{emojify, pieces, token_text, unescape, url_len, Piece};
+use crate::slack_blocks::http_url;
 
 /// Looks a user or a user group up by ID, as `plain_text` does for a mention.
 type NameOf<'a> = &'a dyn Fn(&str) -> Option<String>;
@@ -77,7 +78,22 @@ pub(crate) fn plain(text: String) -> Rich {
 
 /// A text as plain text, for Claude (S-7): the blocks one under another, a quote line starting with `> `, no style marks.
 pub(crate) fn rich_plain(rich: &Rich) -> String {
-    let spans = |spans: &[Span]| spans.iter().map(|s| s.text.as_str()).collect::<String>();
+    // A labeled link keeps its address beside the label, as `token_text` does; a mention of a user and a link to an unfurled message have none.
+    let spans = |spans: &[Span]| {
+        spans
+            .iter()
+            .map(|s| match &s.link {
+                Some(url)
+                    if s.text != *url
+                        && s.text != UNFURLED_LABEL
+                        && !(s.text.starts_with('@') && url.contains("/team/")) =>
+                {
+                    format!("{} ({url})", s.text)
+                }
+                _ => s.text.clone(),
+            })
+            .collect::<String>()
+    };
     rich.iter()
         .map(|block| match block {
             RichBlock::Paragraph { spans: s } => spans(s),
@@ -125,6 +141,11 @@ enum Atom {
         text: String,
         url: String,
     },
+    /// A `<address|label>` with an http or https address: the atoms of the label, read for marks as a line of their own, and the address they are a link to.
+    Labeled {
+        label: Vec<Atom>,
+        url: String,
+    },
 }
 
 /// A piece of the result before neighbours with the same style are joined; `raw` text still needs its entities undone and its emoji converted.
@@ -161,6 +182,7 @@ fn without_mark_tail(url: &str) -> &str {
 
 /// A line cut into characters, inline codes (closed on the line) and `<…>` tokens and web addresses (copied as they are). A mark at the end of an address is not part of it.
 /// A `<address>` with no label whose address is one of `unfurled` is a `Link`, and so is a mention of a user (`<@U1>`, `<@U1|name>`) that `user_link` gives an address.
+/// A `<address|label>` whose address is an http or https one (`http_url`) is `Labeled`: the label is read for marks and is the link.
 fn atoms(line: &str, name_of: NameOf, unfurled: &[String], workspace: Option<&str>) -> Vec<Atom> {
     let (mut out, mut rest, mut prev) = (Vec::new(), line, None::<char>);
     while let Some(c) = rest.chars().next() {
@@ -179,16 +201,26 @@ fn atoms(line: &str, name_of: NameOf, unfurled: &[String], workspace: Option<&st
                     let mention = token
                         .strip_prefix('@')
                         .and_then(|rest| user_link(workspace, rest.split('|').next()?));
-                    let atom = match (address, mention) {
-                        (Some(url), _) => Atom::Link {
+                    let labeled = token
+                        .split_once('|')
+                        .filter(|(_, label)| !label.is_empty())
+                        .and_then(|(target, label)| {
+                            http_url(Some(&unescape(target))).map(|url| (label, url))
+                        });
+                    let atom = match (labeled, address, mention) {
+                        (Some((label, url)), _, _) => Atom::Labeled {
+                            label: atoms(label, name_of, unfurled, workspace),
+                            url,
+                        },
+                        (None, Some(url), _) => Atom::Link {
                             text: UNFURLED_LABEL.to_owned(),
                             url,
                         },
-                        (None, Some(url)) => Atom::Link {
+                        (None, None, Some(url)) => Atom::Link {
                             text: token_text(token, name_of),
                             url,
                         },
-                        (None, None) => Atom::Lit(token_text(token, name_of)),
+                        (None, None, None) => Atom::Lit(token_text(token, name_of)),
                     };
                     (atom, end + 2)
                 }
@@ -253,15 +285,25 @@ fn styled(atoms: &[Atom], lo: usize, hi: usize, style: Style, out: &mut Vec<Part
                 no_end[kind] = true;
             }
         }
+        if let Atom::Labeled { label, url } = &atoms[i] {
+            let mut inner = Vec::new();
+            styled(label, 0, label.len(), style, &mut inner);
+            for part in &mut inner {
+                part.link = Some(url.clone());
+            }
+            out.extend(inner);
+            i += 1;
+            continue;
+        }
         if let (Atom::Ch(c), Some(last)) = (&atoms[i], out.last_mut()) {
             // Raw text next to raw text of the same style grows one string.
-            if last.raw && last.style == style {
+            if last.raw && last.link.is_none() && last.style == style {
                 last.text.push(*c);
                 i += 1;
                 continue;
             }
         }
-        out.push(match &atoms[i] {
+        let part = match &atoms[i] {
             Atom::Ch(c) => Part {
                 text: c.to_string(),
                 raw: true,
@@ -290,7 +332,9 @@ fn styled(atoms: &[Atom], lo: usize, hi: usize, style: Style, out: &mut Vec<Part
                 link: Some(url.clone()),
                 style,
             },
-        });
+            Atom::Labeled { .. } => unreachable!("a labeled link is read above"),
+        };
+        out.push(part);
         i += 1;
     }
 }
@@ -300,7 +344,15 @@ fn spans(parts: Vec<Part>) -> Vec<Span> {
     let mut joined: Vec<Part> = Vec::new();
     for p in parts {
         match joined.last_mut() {
-            Some(last) if last.raw && p.raw && last.style == p.style => last.text.push_str(&p.text),
+            Some(last)
+                if last.raw
+                    && p.raw
+                    && last.link.is_none()
+                    && p.link.is_none()
+                    && last.style == p.style =>
+            {
+                last.text.push_str(&p.text)
+            }
             _ => joined.push(p),
         }
     }
@@ -658,7 +710,9 @@ mod tests {
             read("*<@U1>* <https://a.example/x_y_z|l_a_b> _<#C1|dev>_"),
             vec![para(vec![
                 sp("@Alice", "b"),
-                sp(" l_a_b (https://a.example/x_y_z) ", ""),
+                sp(" ", ""),
+                link("l_a_b", "https://a.example/x_y_z"),
+                sp(" ", ""),
                 sp("#dev", "i"),
             ])]
         );
@@ -798,6 +852,74 @@ mod tests {
     }
 
     #[test]
+    fn a_labeled_link_is_its_label_as_a_link_and_the_label_is_read_for_marks() {
+        let url = "https://a.example/issues/1?a=1&b=2";
+        let raw = "https://a.example/issues/1?a=1&amp;b=2";
+        // The label alone, and the marks around the token or inside the label.
+        assert_eq!(
+            read(&format!("x <{raw}|Error> y")),
+            vec![para(vec![sp("x ", ""), link("Error", url), sp(" y", "")])]
+        );
+        let bold = |text: &str| Span {
+            bold: true,
+            ..link(text, url)
+        };
+        assert_eq!(
+            read(&format!("*<{raw}|Error>*")),
+            vec![para(vec![bold("Error")])]
+        );
+        assert_eq!(
+            read(&format!("<{raw}|*Error*>")),
+            vec![para(vec![bold("Error")])]
+        );
+        // A mark inside the label does not reach out of it, and the text around it stays a link.
+        assert_eq!(
+            read(&format!("<{raw}|a *b* c> *d*")),
+            vec![para(vec![
+                link("a ", url),
+                bold("b"),
+                link(" c", url),
+                sp(" ", ""),
+                sp("d", "b"),
+            ])]
+        );
+        assert_eq!(
+            read(&format!("*a <{raw}|b* c>")),
+            vec![para(vec![sp("*a ", ""), link("b* c", url)])]
+        );
+        // Entities and emoji of the label are read as in any text; the label may be the address.
+        assert_eq!(
+            read(&format!("<{raw}|a &lt;b&gt; :fire:>")),
+            vec![para(vec![link("a <b> 🔥", url)])]
+        );
+        assert_eq!(
+            read(&format!("<{raw}|{raw}>")),
+            vec![para(vec![link(url, url)])]
+        );
+        // Claude reads the label and its address.
+        assert_eq!(
+            rich_plain(&read(&format!("*<{raw}|Error>* <{raw}|{raw}>"))),
+            format!("Error ({url}) {url}")
+        );
+    }
+
+    #[test]
+    fn a_labeled_link_that_is_not_http_or_has_no_label_stays_text() {
+        assert_eq!(
+            read("<javascript:alert(1)|x> <ftp://a.example|y>"),
+            vec![para(vec![sp("x y", "")])]
+        );
+        assert_eq!(
+            read("<https://a.example|>"),
+            vec![para(vec![sp("https://a.example", "")])]
+        );
+        assert_eq!(
+            read("<mailto:a@b.example|mail> <!here|x> <#C1|dev>"),
+            vec![para(vec![sp("mail @x #dev", "")])]
+        );
+    }
+
+    #[test]
     fn a_link_to_an_unfurled_message_is_a_labeled_link() {
         let url = "https://one.slack.com/archives/C1/p123";
         assert_eq!(
@@ -845,10 +967,10 @@ mod tests {
             read_unfurled(&format!("<{url}>"), &[]),
             vec![para(vec![sp(url, "")])]
         );
-        // A label of its own stays: `label (URL)`.
+        // A label of its own is the link, whether or not the address is unfurled.
         assert_eq!(
             read_unfurled(&format!("<{url}|here>"), &[url]),
-            vec![para(vec![sp(&format!("here ({url})"), "")])]
+            vec![para(vec![link("here", url)])]
         );
         // An address in a code is not a link of the chip.
         assert_eq!(

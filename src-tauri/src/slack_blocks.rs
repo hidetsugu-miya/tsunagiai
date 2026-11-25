@@ -204,7 +204,7 @@ fn rich_of(
 
 /// `url` as it is when it is an http or https address, else `None`: a button never opens another scheme.
 /// The app's own origin on Windows and Android (`tauri.localhost`) is left out too: the navigation hook lets it through to the window itself.
-fn http_url(url: Option<&str>) -> Option<String> {
+pub(crate) fn http_url(url: Option<&str>) -> Option<String> {
     let url = url?;
     let parsed = Url::parse(url).ok()?;
     (matches!(parsed.scheme(), "http" | "https") && parsed.host_str() != Some("tauri.localhost"))
@@ -1099,10 +1099,18 @@ mod tests {
         assert_eq!(
             list,
             vec![ThreadBlock::Section {
-                text: Some(styled(&[
-                    ("Project", true),
-                    (" api (https://a.example/p) <1> 🔥", false)
-                ])),
+                text: Some({
+                    let mut text = styled(&[
+                        ("Project", true),
+                        (" ", false),
+                        ("api", false),
+                        (" <1> 🔥", false),
+                    ]);
+                    if let RichBlock::Paragraph { spans } = &mut text[0] {
+                        spans[2].link = Some("https://a.example/p".into());
+                    }
+                    text
+                }),
                 // A `plain_text` field is not read for styles.
                 fields: vec![
                     styled(&[("When", true), ("\nnow", false)]),
