@@ -1161,6 +1161,78 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     expect(await commentField().getText()).toBe("");
   });
 
+  // J-2, "Closing": a draft of the description or of a comment asks before the tab is closed.
+  const closeButton = '.orca-tab[data-jira="true"] .orca-tab-close';
+  // The page's own press: the driver's click focuses the button after the handler, which would take the focus back from the popup.
+  const pressClose = () =>
+    browser.execute(
+      (selector, once) => {
+        if (!window.__e2e_once__(once)) return;
+        document.querySelector(selector)!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      },
+      closeButton,
+      onceId(),
+    );
+  const dialog = '.pop[role="alertdialog"]';
+
+  it("closes at once with no draft: an editor that was not opened, an empty comment field and a cancelled description (J-2, Closing)", async () => {
+    await openEditable();
+    await $(".orca-jira-comment-add").click();
+    await waitForCount("#orca-jira-comment-input .ProseMirror", 1);
+    await $(closeButton).click();
+    await expect($('.orca-tab[data-jira="true"]')).not.toExist();
+    expect(await count(dialog)).toBe(0);
+    await openTicket("EX-1");
+    await expect($(".orca-jira-tab .orca-jira-title")).toBeDisplayed();
+    await $(".orca-jira-desc-edit").click();
+    await browser.waitUntil(async () => (await descField().getText()).includes("Show the ticket."));
+    await $(".orca-jira-cancel").click();
+    await $(closeButton).click();
+    await expect($('.orca-tab[data-jira="true"]')).not.toExist();
+    expect(await count(dialog)).toBe(0);
+  });
+
+  it("asks before closing a tab with a comment typed, keeps the tab and the text on the cancel, and closes it with 「破棄して閉じる」 (J-2, Closing)", async () => {
+    await openEditable();
+    await $(".orca-jira-comment-add").click();
+    await typeInto(commentField, "Half written");
+    await pressClose();
+    await expect($(dialog)).toBeDisplayed();
+    expect(await textsOf(`${dialog} button`)).toEqual(["破棄して閉じる", "キャンセル"]);
+    expect(await browser.execute(() => document.activeElement?.textContent)).toBe("キャンセル");
+    await expect($('.orca-tab[data-jira="true"]')).toExist();
+    await $(`${dialog} .text-btn:not(.danger)`).click();
+    await expect($(dialog)).not.toExist();
+    await expect($('.orca-tab[data-jira="true"]')).toExist();
+    expect(await commentField().getText()).toBe("Half written");
+    await $(closeButton).click();
+    await expect($(dialog)).toBeDisplayed();
+    await browser.keys("Escape");
+    await expect($(dialog)).not.toExist();
+    expect(await commentField().getText()).toBe("Half written");
+    await $(closeButton).click();
+    await $(`${dialog} .text-btn.danger`).click();
+    await expect($(dialog)).not.toExist();
+    await expect($('.orca-tab[data-jira="true"]')).not.toExist();
+    expect(await count(".orca-jira-tab")).toBe(0);
+    expect(await callsOf("jira_add_comment")).toEqual([]);
+  });
+
+  it("asks the same for a description that is being edited (J-2, Closing)", async () => {
+    await openEditable();
+    await $(".orca-jira-desc-edit").click();
+    await browser.waitUntil(async () => (await descField().getText()).includes("Show the ticket."));
+    await $(closeButton).click();
+    await expect($(dialog)).toBeDisplayed();
+    await $(`${dialog} .text-btn:not(.danger)`).click();
+    await expect($('.orca-tab[data-jira="true"]')).toExist();
+    await expect($("#orca-jira-desc-input")).toExist();
+    await $(closeButton).click();
+    await $(`${dialog} .text-btn.danger`).click();
+    await expect($('.orca-tab[data-jira="true"]')).not.toExist();
+    expect(await callsOf("jira_set_description")).toEqual([]);
+  });
+
   // J-2 (#874): the tab of a new ticket, opened by the plus of the list.
   const created = jiraDetail("EX-9", { summary: "Brand new", sprint: "Sprint 13" });
   const projectsOf = [jiraProject("10000", "EX", "Example"), jiraProject("10001", "AB", "Alpha")];

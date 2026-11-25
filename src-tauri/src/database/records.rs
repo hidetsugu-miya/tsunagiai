@@ -4,7 +4,7 @@
 //! The statement is a prepared one, so the rows come in the binary protocol: the value of a column is its type's binary form (an integer is its little-endian bytes, a DATETIME is a length and its parts, a DECIMAL and a JSON are their text).
 //! `cell_of` is the one place that turns it into what the screen draws, from the name of the column's type (`TypeInfo::name`) and the bytes, and it never fails: bytes that do not fit their type are told as binary.
 //! A NULL is the text "NULL", a binary value is its length only, and a text longer than `TEXT_MAX` characters is cut with "…" (the rest is kept nowhere).
-//! The SQL tab (#635) draws its result with the same cells.
+//! The SQL tab (#635) draws its result with the same cells, but it sends each statement as text, so its rows come in the text protocol: `text_cell_of` turns a value that came as text (a number or a date is the characters MySQL wrote) into the same cells, and takes the bytes of a binary value and of a BIT as `cell_of` does.
 //!
 //! The answer also tells what the screen may write back (#863): the columns that name one row (`key`, chosen by `choose_key` from the unique indexes of `information_schema.STATISTICS`),
 //! and for each row which cells can be written (`is_editable`: not binary, not a text that was cut) and whether the row can be updated or deleted at all (`row_edit`: the table has a key, and the cell of each key column can be written).
@@ -356,6 +356,49 @@ pub fn cell_of(type_name: &str, bytes: Option<&[u8]>) -> DatabaseCell {
     }
 }
 
+/// The number types, whose value in the text protocol is the digits as characters.
+fn is_number_type(type_name: &str) -> bool {
+    matches!(
+        type_name,
+        "BOOLEAN"
+            | "TINYINT"
+            | "TINYINT UNSIGNED"
+            | "SMALLINT"
+            | "SMALLINT UNSIGNED"
+            | "INT"
+            | "INT UNSIGNED"
+            | "MEDIUMINT"
+            | "MEDIUMINT UNSIGNED"
+            | "BIGINT"
+            | "BIGINT UNSIGNED"
+            | "FLOAT"
+            | "DOUBLE"
+            | "YEAR"
+            | "DECIMAL"
+    )
+}
+
+/// The value of one column that came in the text protocol (the SQL tab sends its statements as text, so that `PREPARE` and `EXECUTE` run), as the screen draws it: the same cell as `cell_of` makes of the same value.
+/// A number type is the characters that came, as a number. BIT and the binary types are the same bytes in both protocols, so `cell_of` reads them. Every other type is text, cut as `cell_of` cuts it, and bytes that are not UTF-8 are told as binary. It never fails.
+pub fn text_cell_of(type_name: &str, bytes: Option<&[u8]>) -> DatabaseCell {
+    let Some(bytes) = bytes else {
+        return cell(DatabaseCellKind::Null, "NULL".to_owned());
+    };
+    if is_number_type(type_name) {
+        return match std::str::from_utf8(bytes) {
+            Ok(number) => cell(DatabaseCellKind::Number, number.to_owned()),
+            Err(_) => binary_cell(bytes.len()),
+        };
+    }
+    if is_binary_type(type_name) {
+        return cell_of(type_name, Some(bytes));
+    }
+    match std::str::from_utf8(bytes) {
+        Ok(text) => cell(DatabaseCellKind::Text, cut_text(text)),
+        Err(_) => binary_cell(bytes.len()),
+    }
+}
+
 /// The text under the table: the rows that are shown (1 based, with thousands separators) and the estimated rows of the table.
 /// An estimate that is below the last row shown is stale and is left out.
 pub fn format_summary(offset: u64, shown: usize, estimate: Option<u64>) -> String {
@@ -434,13 +477,22 @@ pub fn cells_tsv(columns: &[String], rows: &[Vec<DatabaseCell>]) -> String {
 }
 
 pub(super) fn cells_of(row: &MySqlRow) -> Vec<DatabaseCell> {
+    cells_with(row, cell_of)
+}
+
+/// The cells of a row that came in the text protocol (`text_cell_of`).
+pub(super) fn text_cells_of(row: &MySqlRow) -> Vec<DatabaseCell> {
+    cells_with(row, text_cell_of)
+}
+
+fn cells_with(row: &MySqlRow, make: fn(&str, Option<&[u8]>) -> DatabaseCell) -> Vec<DatabaseCell> {
     row.columns()
         .iter()
         .enumerate()
         .map(|(i, column)| {
             // The bytes as they came, borrowed from the row, with no check of the type; an error is a NULL (and so is the zero date, which the typed decoders also take for one, so none is used).
             let bytes = row.try_get_unchecked::<&[u8], _>(i).ok();
-            cell_of(column.type_info().name(), bytes)
+            make(column.type_info().name(), bytes)
         })
         .collect()
 }
@@ -707,6 +759,97 @@ mod tests {
             (DatabaseCellKind::Text, String::new())
         );
         assert_eq!(plain("VARCHAR", b"NULL"), "NULL");
+    }
+
+    #[test]
+    fn a_value_in_the_text_protocol_is_the_same_cell_as_the_binary_one() {
+        let text = |name: &str, bytes: &[u8]| {
+            let c = text_cell_of(name, Some(bytes));
+            (c.kind, c.text)
+        };
+        let number = |s: &str| (DatabaseCellKind::Number, s.to_owned());
+        let plain = |s: &str| (DatabaseCellKind::Text, s.to_owned());
+        assert_eq!(text("INT", b"-12"), number("-12"));
+        assert_eq!(
+            text("BIGINT UNSIGNED", b"18446744073709551615"),
+            number("18446744073709551615")
+        );
+        assert_eq!(text("DECIMAL", b"1.50"), number("1.50"));
+        assert_eq!(text("DOUBLE", b"0.25"), number("0.25"));
+        assert_eq!(text("YEAR", b"2026"), number("2026"));
+        assert_eq!(
+            text("DATETIME", b"2026-11-25 12:34:56"),
+            plain("2026-11-25 12:34:56")
+        );
+        assert_eq!(text("DATE", b"2026-11-25"), plain("2026-11-25"));
+        assert_eq!(text("TIME", b"-26:00:01.5"), plain("-26:00:01.5"));
+        assert_eq!(text("VARCHAR", "注文 abc".as_bytes()), plain("注文 abc"));
+        assert_eq!(text("VARCHAR", b""), plain(""));
+        assert_eq!(text("JSON", br#"{"a": 1}"#), plain(r#"{"a": 1}"#));
+    }
+
+    #[test]
+    fn a_null_in_the_text_protocol_is_the_word_null() {
+        for name in ["INT", "DATETIME", "BLOB", "VARCHAR", "BIT"] {
+            let c = text_cell_of(name, None);
+            assert_eq!(
+                (c.kind, c.text.as_str()),
+                (DatabaseCellKind::Null, "NULL"),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_long_text_in_the_text_protocol_is_cut_as_the_binary_one_is() {
+        let long = "x".repeat(5000);
+        let c = text_cell_of("LONGTEXT", Some(long.as_bytes()));
+        assert_eq!(c.kind, DatabaseCellKind::Text);
+        assert_eq!(c.text.chars().count(), TEXT_MAX + 1);
+        assert!(c.text.ends_with('…'));
+        assert_eq!(c, cell_of("LONGTEXT", Some(long.as_bytes())));
+    }
+
+    #[test]
+    fn binary_and_bit_values_are_the_same_bytes_in_the_text_protocol() {
+        for name in [
+            "BINARY",
+            "VARBINARY",
+            "TINYBLOB",
+            "BLOB",
+            "MEDIUMBLOB",
+            "LONGBLOB",
+            "GEOMETRY",
+        ] {
+            let c = text_cell_of(name, Some(&[0xde, 0xad]));
+            assert_eq!(
+                (c.kind, c.text.as_str()),
+                (DatabaseCellKind::Binary, "バイナリ 2 B"),
+                "{name}"
+            );
+        }
+        // Valid UTF-8 in a binary column is still binary.
+        assert_eq!(
+            text_cell_of("VARBINARY", Some(b"abc")).kind,
+            DatabaseCellKind::Binary
+        );
+        let bit = text_cell_of("BIT", Some(&[0x01, 0x00]));
+        assert_eq!(
+            (bit.kind, bit.text.as_str()),
+            (DatabaseCellKind::Number, "256")
+        );
+    }
+
+    #[test]
+    fn bytes_that_are_not_utf8_in_the_text_protocol_are_told_as_binary() {
+        for name in ["VARCHAR", "TEXT", "DATETIME", "INT", "DECIMAL"] {
+            let c = text_cell_of(name, Some(&[0x61, 0xff, 0xfe, 0x00]));
+            assert_eq!(
+                (c.kind, c.text.as_str()),
+                (DatabaseCellKind::Binary, "バイナリ 4 B"),
+                "{name}"
+            );
+        }
     }
 
     #[test]

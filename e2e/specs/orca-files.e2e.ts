@@ -4513,6 +4513,25 @@ describe("orca: files and editor (A-18)", () => {
     expect(await callsOf("database_sql")).toHaveLength(1);
   });
 
+  it("writes the result of a run of one statement to a CSV file from the footer of the SQL tab, with the text it was run with (A-43, D-6)", async () => {
+    await openShop({ database_sql: databaseSqlResult(["n"], [[databaseCell("1", "number")]]), database_sql_csv: { name: "shop.csv", rows: "1" } });
+    await dbRow("p1/d/shop/t/orders").click();
+    await waitForCount(".orca-database-tab .database-grid", 1);
+    await $('.orca-database-tab [data-tab="sql"]').click();
+    const csv = $('.orca-database-tab [data-key="csv"]');
+    await expect(csv).toBeDisabled();
+    await typeSql("select 1");
+    await $('.orca-database-tab [data-key="run"]').click();
+    await waitForCalls("database_sql");
+    await expect(csv).toBeEnabled();
+    await expect(csv).toHaveAttribute("aria-label", "CSV に書き出す");
+    await typeSql("select 2");
+    await csv.click();
+    expect(await waitForCalls("database_sql_csv")).toEqual([{ id: "p1", database: "shop", sql: "select 1" }]);
+    await expect($(".toast")).toHaveText(expect.stringContaining("shop.csv に 1 行を書き出しました"));
+    expect(await callsOf("database_sql")).toHaveLength(1);
+  });
+
   it("closes the tab with its close button, calls nothing, and drops a read that ends after the tab was closed (A-43)", async () => {
     await openShop({ database_records: holds });
     await dbRow("p1/d/shop/t/orders").click();
@@ -5477,6 +5496,31 @@ describe("orca: drop on the file pane (A-47)", () => {
       { path: HERE, dir: "src", name: "empty.txt", data: "", onTaken: "copy", environment: null },
       { path: HERE, dir: "src", name: "notes.txt", data: note.base64, onTaken: "copy", environment: null },
     ]);
+    await expect($(CARD)).not.toExist();
+  });
+
+  it("leaves out a .DS_Store inside a dropped folder, at any depth, and one dropped by itself with other files", async () => {
+    await openTree();
+    const tree = folder("photos", named(".DS_Store"), named("a.jpg"), folder("2026", named(".DS_Store"), named("b.jpg")));
+    await drop("src", [named(".DS_Store"), note], [tree]);
+    expect(await waitForCalls("orca_drop_taken")).toEqual([{ path: HERE, dir: "src", names: ["notes.txt", "photos"], environment: null }]);
+    expect((await waitForCalls("orca_drop_file", 3)).map((c) => [(c as { dir: string }).dir, (c as { name: string }).name])).toEqual([
+      ["src/photos", "a.jpg"],
+      ["src/photos/2026", "b.jpg"],
+      ["src", "notes.txt"],
+    ]);
+    await idle();
+    expect(await callsOf("orca_drop_file")).toHaveLength(3);
+    await expect($(CARD)).not.toExist();
+  });
+
+  it("puts nothing and asks nothing for a .DS_Store dropped by itself", async () => {
+    await openTree();
+    await drop("src", [named(".DS_Store")]);
+    await browser.pause(300);
+    expect(await callsOf("orca_drop_taken")).toEqual([]);
+    expect(await callsOf("orca_drop_dir")).toEqual([]);
+    expect(await callsOf("orca_drop_file")).toEqual([]);
     await expect($(CARD)).not.toExist();
   });
 

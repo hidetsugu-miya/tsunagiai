@@ -107,6 +107,8 @@ const answers = {
   database_structure: { columns: [], summary: "0 列", tsv: "" },
   // D-6: a run of one statement with no row; a spec that runs one mocks `database_sql`.
   database_sql: { results: [{ columns: [], rows: [], label: "0 行", summary: "0 行 / 1 ms", tsv: "" }], error: null },
+  // D-6 (#1438): the save dialog of the CSV is cancelled; a spec that writes one mocks `database_sql_csv`.
+  database_sql_csv: null,
   database_connections: [],
   database_disconnect: null,
   // No orca command: the Orca screen reads once and stops.

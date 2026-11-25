@@ -23,7 +23,7 @@ The screens of the product are for ux-scout, and the structure of `ts/` and `src
 ## How to look
 
 - Use as a basis only an event that appears 2 times or more in the logs. Do not make a candidate from a failure that happened once.
-- Do not read the place of the pass record (`.claude/reviews/`) and the hook that writes it (the one in `.claude/hooks/` whose name starts with `record-` and has `review` in it). `guard-review.sh` stops a tool call just because its command text or file path holds that name, `.claude/reviews` or `/statuses/`. A path of Read, and a name written in the command text of `rg` or `git`, are the same, and the call is refused when it is stopped.
+- Read the place of the pass record (`.claude/reviews/`) and the hook that writes it only with one plain read-only command (`cat`, `head`, `grep`, `rg`, `sed -n`, `git diff`, `git show`, `git log`): `guard-review.sh` refuses any other command whose text names them.
 - You may read `.claude/e2e/` and `.claude/ci/`. `guard-e2e.sh` stops only writes.
 - Do not write personal information (host names, personal paths, mail addresses) even in the basis. Quote a log with the fewest lines that show the event, with personal information hidden.
 

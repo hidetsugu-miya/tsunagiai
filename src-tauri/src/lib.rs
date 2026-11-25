@@ -544,6 +544,7 @@ pub fn run() {
             database::database_apply,
             database::database_structure,
             database::database_sql,
+            database::database_sql_csv,
             database::database_disconnect,
             database::database_connections,
             markdown_patch::markdown_split,

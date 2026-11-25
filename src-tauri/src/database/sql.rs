@@ -1,7 +1,7 @@
 //! The SQL tab (D-6, #635): the text the user typed, run as it is on the open session, and its rows turned into the cells of D-4.
 //!
 //! The session is not read only (D-2): a write (INSERT, UPDATE, DELETE and the like) is run as it is and is committed at once (autocommit, the server's own default). This module words the errors of the server (`server_message`) and keeps the run small.
-//! The text is cut into its statements at the semicolons that are not in a quote or a comment (`statements`), and they are run one after another, each as a prepared one, so its rows come in the binary protocol that `records::cells_of` reads. A statement is not rewritten: only the whitespace around it is cut. The run stops at the first statement that fails.
+//! The text is cut into its statements at the semicolons that are not in a quote or a comment (`statements`), and they are run one after another, each as text (`sqlx::raw_sql`, the text protocol), so that `PREPARE`, `EXECUTE` and `DEALLOCATE PREPARE` run too, which MySQL refuses inside a prepared statement (1295). Its rows come as text, which `records::text_cells_of` reads. A statement is not rewritten: only the whitespace around it is cut. The run stops at the first statement that fails.
 //! A run that the app stops at `CLIENT_LIMIT`, or that loses the session, returns no result, so its words say which statement it stopped at and how many were done (`Progress`).
 //! The database the tree has selected is chosen before the run by a `USE` of its own (the name quoted by `records::quote_identifier`), never put in the text of the user.
 //! Before the run, one round trip (`prepare_sql`) sets the limits (`max_execution_time` stops a SELECT at `SERVER_LIMIT` and `sql_select_limit` ends a SELECT with no LIMIT one row after the limit of the rows) and selects the database.
@@ -10,6 +10,7 @@
 //! and the rows are read as a stream that stops after `ROWS_MAX` of them (`collect_limited`), so the rows past the limit are never held.
 
 use std::{
+    io::Write,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     time::{Duration, Instant},
 };
@@ -18,15 +19,16 @@ use futures_util::{future::ready, Stream, StreamExt, TryStreamExt};
 use serde::Serialize;
 use sqlx::{
     mysql::{MySqlConnection, MySqlDatabaseError, MySqlRow},
-    AssertSqlSafe, Column, Either, Executor, Row,
+    AssertSqlSafe, Column, Either, Row, TypeInfo,
 };
 use tokio::time::{error::Elapsed, timeout};
 #[cfg(test)]
 use ts_rs::TS;
 
 use super::{
+    csv::{self, CsvWriter, Outcome},
     mysql::{query_failure, shorten, QueryFailure},
-    records::{cells_of, cells_tsv, quote_identifier, DatabaseCell},
+    records::{cells_tsv, quote_identifier, text_cells_of, DatabaseCell},
     session::format_rows,
 };
 
@@ -43,6 +45,9 @@ const RESTORE: &str =
     "SET SESSION autocommit = 1, max_execution_time = DEFAULT, sql_select_limit = DEFAULT";
 const EMPTY: &str = "SQL を入力してください";
 const TOO_MANY: &str = "文が多すぎます（100 文まで）";
+const CSV_ONE_STATEMENT: &str = "CSV に書き出せるのは文が 1 つの SQL だけです";
+/// The words of a statement that gave no row, so that there was nothing to write.
+pub const CSV_NO_ROWS: &str = "行を返さない文のため、CSV に書き出せませんでした";
 const TIMED_OUT_HEAD: &str = "実行が時間内に終わらなかったため、MySQL との接続を閉じました。";
 const TIMED_OUT_WRITE: &str = "書き込みの文は、サーバーで確定している場合があります。";
 const TIMED_OUT_TAIL: &str = "もう一度開いてください";
@@ -70,7 +75,7 @@ pub struct DatabaseSqlRun {
     pub error: Option<String>,
 }
 
-/// The statements of `sql`, in order, each without the whitespace around it: the text is cut at the semicolons that are not in a quote (`'`, `"` and the backtick, with a backslash and a doubled quote inside) or a comment (`-- `, `#` and `/* */`). A piece that holds nothing but whitespace and comments is no statement and is left out; a `/*!` comment is not one of them, because MySQL runs what is inside it (`/*!40101 SET NAMES utf8 */`). `DELIMITER` is not known: a statement that has `;` inside (a stored program) is cut there, as MySQL cannot run it as a prepared one either (1295).
+/// The statements of `sql`, in order, each without the whitespace around it: the text is cut at the semicolons that are not in a quote (`'`, `"` and the backtick, with a backslash and a doubled quote inside) or a comment (`-- `, `#` and `/* */`). A piece that holds nothing but whitespace and comments is no statement and is left out; a `/*!` comment is not one of them, because MySQL runs what is inside it (`/*!40101 SET NAMES utf8 */`). `DELIMITER` is not known: a statement that has `;` inside (a stored program) is cut there, as a stored program needs its own delimiter, and MySQL answers the pieces with an error (1064, or 1295 for one it takes only in another way).
 /// The reason there is nothing to run, or too many statements.
 pub fn statements(sql: &str) -> Result<Vec<&str>, String> {
     let bytes = sql.as_bytes();
@@ -120,6 +125,15 @@ pub fn statements(sql: &str) -> Result<Vec<&str>, String> {
         return Err(TOO_MANY.to_owned());
     }
     Ok(parts)
+}
+
+/// The one statement of `sql` that a CSV is made of (#1438): a text of more than one statement is refused, so that no statement but the one whose rows are written is run.
+pub fn csv_statement(sql: &str) -> Result<&str, String> {
+    let parts = statements(sql)?;
+    match parts[..] {
+        [one] => Ok(one),
+        _ => Err(CSV_ONE_STATEMENT.to_owned()),
+    }
 }
 
 /// The index after the quote that closes the one at `open`, or the end of the text. A backslash escapes the next byte, except in a backtick name; a doubled quote is a closing and an opening one, and ends nothing.
@@ -320,12 +334,12 @@ pub(super) fn column_names(row: &MySqlRow) -> Vec<String> {
 /// What a run read: the columns (those of the first row), the rows up to `ROWS_MAX` as cells, whether the rows were cut, and the rows the statement changed.
 type Read = (Vec<String>, Vec<Vec<DatabaseCell>>, bool, u64);
 
-/// The rows of `text` on the session, up to `ROWS_MAX`, as cells, and the rows it changed. The statement is not kept in sqlx's cache of prepared statements.
+/// The rows of `text` on the session, up to `ROWS_MAX`, as cells, and the rows it changed. The statement is sent as text, so it is no prepared statement and sqlx keeps none.
 async fn read(connection: &mut MySqlConnection, text: &str) -> Result<Read, sqlx::Error> {
     let mut columns: Option<Vec<String>> = None;
     let mut changed = 0u64;
-    let query = sqlx::query(AssertSqlSafe(text.to_owned())).persistent(false);
-    let rows = (&mut *connection).fetch_many(query).try_filter_map(|item| {
+    let query = sqlx::raw_sql(AssertSqlSafe(text.to_owned()));
+    let rows = query.fetch_many(&mut *connection).try_filter_map(|item| {
         ready(Ok(match item {
             Either::Left(done) => {
                 changed += done.rows_affected();
@@ -333,7 +347,7 @@ async fn read(connection: &mut MySqlConnection, text: &str) -> Result<Read, sqlx
             }
             Either::Right(row) => {
                 columns.get_or_insert_with(|| column_names(&row));
-                Some(cells_of(&row))
+                Some(text_cells_of(&row))
             }
         }))
     });
@@ -362,7 +376,7 @@ pub async fn run(
     statements: &[&str],
     progress: &Progress,
 ) -> Result<Result<DatabaseSqlRun, sqlx::Error>, Elapsed> {
-    // The statements of the preface and of the restore are run as text, because the protocol of a prepared statement does not take `USE`.
+    // The preface and the restore are run as text as the statements are.
     let prepared = timeout(
         CLIENT_LIMIT,
         sqlx::raw_sql(AssertSqlSafe(prepare_sql(database))).execute(&mut *connection),
@@ -416,6 +430,96 @@ pub async fn run(
             error: None,
         }),
         Err(e) => Err(e),
+    })
+}
+
+/// What a CSV that was saved is told as: the name of the file and the rows written, with thousands separators (`format_rows`).
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct DatabaseCsvSaved {
+    pub name: String,
+    pub rows: String,
+}
+
+/// The words of a CSV run that the app stopped at `CLIENT_LIMIT`: the statement was sent, so a write may have been committed.
+pub fn csv_timed_out() -> String {
+    let progress = Progress::default();
+    progress.body_started.store(true, Ordering::Relaxed);
+    timed_out(&progress, 1)
+}
+
+/// The fields of a row, each as `csv::value` writes it.
+fn csv_fields(row: &MySqlRow) -> Vec<String> {
+    row.columns()
+        .iter()
+        .enumerate()
+        .map(|(i, column)| {
+            csv::value(
+                column.type_info().name(),
+                row.try_get_unchecked::<&[u8], _>(i).ok(),
+            )
+        })
+        .collect()
+}
+
+/// The rows of `text` (one statement), written to `out` as they come, with none held and no limit of rows or of characters (#1438).
+/// The first row writes the names of the columns, so a statement that gives no row is `Outcome::NoRows`. The wait for each row has `CLIENT_LIMIT`, which is the time of every step of `run`; MySQL's own limit of a SELECT is not set. A row that cannot be written ends the read with `WriteFailed`: the rest is left unread, as `collect_limited` leaves it.
+async fn stream_csv<W: Write>(
+    connection: &mut MySqlConnection,
+    text: &str,
+    out: &mut CsvWriter<W>,
+) -> Result<Result<Outcome, sqlx::Error>, Elapsed> {
+    let mut rows =
+        Box::pin(sqlx::raw_sql(AssertSqlSafe(text.to_owned())).fetch_many(&mut *connection));
+    while let Some(item) = timeout(CLIENT_LIMIT, rows.next()).await? {
+        let row = match item {
+            Ok(Either::Right(row)) => row,
+            Ok(Either::Left(_)) => continue,
+            Err(e) => return Ok(Err(e)),
+        };
+        let written = if out.rows() == 0 {
+            out.header(&column_names(&row))
+        } else {
+            Ok(())
+        }
+        .and_then(|()| out.row(&csv_fields(&row)));
+        if let Err(e) = written {
+            return Ok(Ok(Outcome::WriteFailed(format!("保存先に書けません: {e}"))));
+        }
+    }
+    Ok(Ok(if out.rows() == 0 {
+        Outcome::NoRows
+    } else {
+        Outcome::Done
+    }))
+}
+
+/// Runs the statement `text` in `database` on the session and writes its rows to `out` (#1438). The database is selected by a `USE` of its own and `RESTORE` follows, as in `run`; no limit of MySQL is set.
+/// The caller words the `sqlx::Error` of a failed session and the `Elapsed` of a step that took `CLIENT_LIMIT` (the connection is then closed, as for `run`).
+pub async fn run_csv<W: Write>(
+    connection: &mut MySqlConnection,
+    database: &str,
+    text: &str,
+    out: &mut CsvWriter<W>,
+) -> Result<Result<Outcome, sqlx::Error>, Elapsed> {
+    let prepared = timeout(
+        CLIENT_LIMIT,
+        sqlx::raw_sql(AssertSqlSafe(use_sql(database))).execute(&mut *connection),
+    )
+    .await?;
+    let written = match prepared {
+        Ok(_) => stream_csv(connection, text, out).await?,
+        Err(e) => Err(e),
+    };
+    let restored = timeout(
+        CLIENT_LIMIT,
+        sqlx::raw_sql(RESTORE).execute(&mut *connection),
+    )
+    .await?;
+    Ok(match (written, restored) {
+        (Err(e), _) | (Ok(_), Err(e)) => Err(e),
+        (Ok(outcome), Ok(_)) => Ok(outcome),
     })
 }
 
@@ -558,6 +662,33 @@ mod tests {
                 "{text:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_csv_is_made_of_one_statement_and_no_other_is_run() {
+        assert_eq!(csv_statement(" SELECT 1 ; "), Ok("SELECT 1"));
+        assert_eq!(csv_statement("SELECT 1; -- done"), Ok("SELECT 1"));
+        assert_eq!(csv_statement("SELECT 'a;b'"), Ok("SELECT 'a;b'"));
+        assert_eq!(
+            csv_statement("SELECT 1; SELECT 2"),
+            Err("CSV に書き出せるのは文が 1 つの SQL だけです".to_owned())
+        );
+        assert_eq!(
+            csv_statement("UPDATE a SET b = 1; DELETE FROM a"),
+            Err("CSV に書き出せるのは文が 1 つの SQL だけです".to_owned())
+        );
+        assert_eq!(
+            csv_statement("-- nothing"),
+            Err("SQL を入力してください".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_csv_run_stopped_by_the_app_says_that_a_write_may_have_been_committed() {
+        let told = csv_timed_out();
+        assert!(told.starts_with("実行が時間内に終わらなかったため"));
+        assert!(told.contains("書き込みの文は、サーバーで確定している場合があります"));
+        assert!(!told.contains("文目"));
     }
 
     #[test]

@@ -10,7 +10,7 @@ import { changesOf, cellKey, emptyEdit, type EditState, markable, originalText }
 import { drawDatabaseSide, showScriptOutput, type Selected, type SideActions, type SideState } from "./database-side.js";
 import { openDatabaseForm, syncDatabaseForm } from "./database-form.js";
 import { initDatabaseTerminal } from "./database-terminal.js";
-import { drawDatabaseWork, type EditActions, focusSqlField, lastResultTab, setCopy, type RecordsState, type StructureState, type WorkActions, type WorkBody, type WorkState } from "./database-work.js";
+import { csvFailed, drawDatabaseWork, type EditActions, focusSqlField, lastResultTab, setCopy, setCsvReport, writeCsv, type RecordsState, type StructureState, type WorkActions, type WorkBody, type WorkState } from "./database-work.js";
 import { $ } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
 import { confirmDelete, confirmDiscardChanges } from "./hint.js";
@@ -18,6 +18,7 @@ import { PLUS_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { initSplit } from "./split.js";
 import { logError, showFailure } from "./error-card.js";
+import { toast } from "./toast.js";
 import { copyText, show } from "./view.js";
 
 interface DatabaseState {
@@ -65,6 +66,9 @@ interface QueryTab {
   data: DatabaseSqlRun | null;
   // The selected tab of the results of the run (D-6).
   tab: number;
+  // The text the run was sent with, and whether its CSV is being written (#1438).
+  ran: string | null;
+  exporting: boolean;
   height: number | null;
 }
 
@@ -160,7 +164,7 @@ function workBody(): WorkBody {
         databases: c?.databases ?? [active.database],
         database: active.database,
         height: active.height,
-        sql: { text: active.text, loading: active.loading, error: active.error, data: active.data, tab: active.tab },
+        sql: { text: active.text, loading: active.loading, error: active.error, data: active.data, tab: active.tab, ran: active.ran, exporting: active.exporting },
       },
     };
   }
@@ -411,10 +415,13 @@ async function runQuery(q: QueryTab) {
   q.error = null;
   draw();
   try {
-    q.data = await invoke("database_sql", { id: q.id, database: q.database, sql: q.text });
+    const sent = q.text;
+    q.data = await invoke("database_sql", { id: q.id, database: q.database, sql: sent });
+    q.ran = sent;
     q.tab = lastResultTab(q.data);
   } catch (e) {
     q.data = null;
+    q.ran = null;
     q.tab = 0;
     q.error = String(e);
     // A stream that broke closes the connection: its tree closes and says why, and its tabs close.
@@ -428,10 +435,29 @@ async function runQuery(q: QueryTab) {
   draw();
 }
 
+// Writes the result of the last run of a query tab to a CSV file (#1438): Rust runs the statement again, with the connection and database the tab has now, and writes every row. A failure is a card (A-28); a stream that broke closes the connection as a run does.
+async function exportQuery(q: QueryTab) {
+  if (q.exporting || q.loading || q.ran === null) return;
+  q.exporting = true;
+  draw();
+  try {
+    await writeCsv(q.id, q.database, q.ran);
+  } catch (e) {
+    csvFailed(e);
+    if (openTabs.includes(q) && (await dropClosed()).includes(q.id)) {
+      connections.set(q.id, { ...emptyConnection(), expanded: true, error: String(e) });
+      draw();
+      return;
+    }
+  }
+  q.exporting = false;
+  draw();
+}
+
 // Opens a query tab on the connection and database, selects it and puts the caret in its field.
 function openQuery(id: string, database: string) {
   queries += 1;
-  const q: QueryTab = { kind: "query", key: `query-${queries}`, id, database, text: "", loading: false, error: null, data: null, tab: 0, height: null };
+  const q: QueryTab = { kind: "query", key: `query-${queries}`, id, database, text: "", loading: false, error: null, data: null, tab: 0, ran: null, exporting: false, height: null };
   openTabs.push(q);
   active = q;
   draw();
@@ -622,6 +648,10 @@ const workActions: WorkActions = {
     const q = activeQuery();
     if (q) void runQuery(q);
   },
+  sqlCsv: () => {
+    const q = activeQuery();
+    if (q) void exportQuery(q);
+  },
   sqlTab: (index) => {
     const q = activeQuery();
     if (!q || q.tab === index) return;
@@ -753,6 +783,7 @@ export function showDatabase() {
 
 export function initDatabase() {
   setCopy(copyText);
+  setCsvReport({ saved: (text) => toast(text), failed: (e) => showFailure("database", e) });
   const add = $("database-add");
   add.innerHTML = PLUS_SVG;
   add.onclick = () => openDatabaseForm(null, save, test);

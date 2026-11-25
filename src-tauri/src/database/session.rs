@@ -24,6 +24,7 @@ use tokio::sync::{watch, Mutex};
 use ts_rs::TS;
 
 use super::{
+    csv::{CsvWriter, Outcome},
     mysql::{self, QueryFailure},
     records::{self, DatabaseRecords},
     script::{Cancel, Scripts, STOPPED},
@@ -518,6 +519,34 @@ impl Sessions {
             read,
             |e| sql::run_failure(e, &progress, statements.len()),
             &sql::timed_out(&progress, statements.len()),
+        )
+        .await
+    }
+
+    /// The rows of the one `statement` run in `database`, written to `out` one by one (D-6, #1438), in one hold of the session.
+    pub async fn sql_csv<W: std::io::Write + Send>(
+        &self,
+        scripts: &Scripts,
+        id: &str,
+        database: &str,
+        statement: &str,
+        out: &mut CsvWriter<W>,
+    ) -> Result<Outcome, String> {
+        let session = self.session(scripts, id).await?;
+        let read = {
+            let mut guard = session.connection.lock().await;
+            let Some(connection) = guard.as_mut() else {
+                return Err(NOT_OPEN.to_owned());
+            };
+            sql::run_csv(connection, database, statement, out).await
+        };
+        self.settle_with(
+            scripts,
+            id,
+            &session,
+            read,
+            sql::failure,
+            &sql::csv_timed_out(),
         )
         .await
     }

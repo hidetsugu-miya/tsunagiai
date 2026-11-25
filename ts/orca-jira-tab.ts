@@ -665,6 +665,12 @@ export function openNewJiraTab(target: string | null, project: string, boardId: 
 // The Jira tabs of the project.
 export const jiraTabsOf = (target: string | null, project: string) => [...tabs.values()].filter((t) => t.target === target && t.project === project);
 
+// Whether the tab holds a description or a comment that was typed and not saved: the description is being edited, or the comment is being written, and the editor holds some text (J-2, "Closing").
+export function hasJiraDraft(id: string) {
+  const t = tabs.get(id);
+  return t !== undefined && ((t.editing && t.describe !== null && !t.describe.blank()) || (t.commenting && t.comment !== null && !t.comment.blank()));
+}
+
 export function closeJiraTab(id: string) {
   const t = tabs.get(id);
   if (!t) return;

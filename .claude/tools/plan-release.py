@@ -512,9 +512,21 @@ def to_issue(raw, repo):
 
 
 def released_at(repo, tags, last_tag):
-    """The time of the commit the last tag names: the merge of its Release PR. What closed after it waits for the next release."""
+    """The time of the commit the last tag names: the merge of its Release PR. What closed after it waits for the next release, except what that Release PR closed (`closed_by_release_pr`)."""
     sha = next((t["commit"]["sha"] for t in tags if t["name"] == last_tag), None)
     return api(f"repos/{repo}/commits/{sha}")["commit"]["committer"]["date"] if sha else None
+
+
+def closed_by_release_pr(merged, owner, sha):
+    """-> the numbers of the issues that the last release's own pull request closed (its `Closes`).
+    `merged`: what `gh pr list --state merged --head release/next` printed, parsed. `sha`: the commit of the last tag, the merge commit of that Release PR.
+    GitHub closes them a few seconds after the merge, so they come after `since` and would count as a change of the next version; the release carries them already."""
+    return {
+        ref["number"]
+        for p in merged
+        if sha and p["author"]["login"] == owner and (p.get("mergeCommit") or {}).get("oid") == sha
+        for ref in p.get("closingIssuesReferences", [])
+    }
 
 
 def read_tags_and_closed(repo):
@@ -530,10 +542,11 @@ def read_tags_and_closed(repo):
 def load_state(blockers=True):
     """`blockers` False leaves `blocked_by` empty: only `snapshot` and `next` read it, and it costs one request for each open issue.
     The requests that do not depend on each other are made at the same time."""
-    view, prs = parallel(
+    view, prs, merged = parallel(
         [
             lambda: json.loads(gh("repo", "view", "--json", "nameWithOwner,owner")),
             lambda: json.loads(gh("pr", "list", "--state", "open", "--limit", "200", "--json", "author,closingIssuesReferences")),
+            lambda: json.loads(gh("pr", "list", "--state", "merged", "--head", RELEASE_BRANCH, "--limit", "10", "--json", "author,mergeCommit,closingIssuesReferences")),
         ]
     )
     repo = view["nameWithOwner"]
@@ -546,9 +559,11 @@ def load_state(blockers=True):
     )
     names = [t["name"] for t in tags]
     last_tag = highest_tag(names)
+    last_sha = next((t["commit"]["sha"] for t in tags if t["name"] == last_tag), None)
+    released = closed_by_release_pr(merged, owner, last_sha)
 
     raw = [r for r in opened if "pull_request" not in r]
-    raw += [r for r in closed if "pull_request" not in r and (r.get("closed_at") or "") > since]
+    raw += [r for r in closed if "pull_request" not in r and (r.get("closed_at") or "") > since and r["number"] not in released]
     strangers = [(r["number"], r["user"]["login"]) for r in raw if r["state"] == "open" and r["user"]["login"] != owner]
     issues = {r["number"]: to_issue(r, repo) for r in raw if r["user"]["login"] == owner}
 
