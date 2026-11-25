@@ -2884,7 +2884,7 @@ describe("database: tree", () => {
       await runText();
       await expect(range()).toHaveText("2 行 / 12 ms");
       const order = await browser.execute(() => [...document.querySelectorAll("#database-work .database-pager > *")].map((n) => (n as HTMLElement).dataset.key ?? n.className));
-      expect(order).toEqual(["copy", "database-range"]);
+      expect(order).toEqual(["copy", "csv", "database-range"]);
       await expect(copy).toBeEnabled();
       await copy.click();
       await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "the clipboard was never written" });
@@ -2896,6 +2896,147 @@ describe("database: tree", () => {
       await release("database_sql", databaseSqlResult([], [], "0 行 / 2 ms"));
       await expect(range()).toHaveText("0 行 / 2 ms");
       await expect(copy).toBeDisabled();
+    });
+
+    describe("the CSV file (#1438)", () => {
+      const csv = () => $('#database-work [data-key="csv"]');
+      const saved = { name: "shop.csv", rows: "12,345" };
+
+      it("puts the button after the copy, off before a run, with an icon and the label as its tooltip, and on for a run of one statement that gave columns", async () => {
+        await openQuery();
+        await expect(csv()).toBeDisplayed();
+        await expect(csv()).toHaveAttribute("aria-label", "CSV に書き出す");
+        await expect(csv()).toHaveText("");
+        expect(await count('#database-work [data-key="csv"] svg')).toBe(1);
+        await expect(csv()).toBeDisabled();
+        const left = (key: string) => browser.execute((k) => document.querySelector(`#database-work [data-key="${k}"]`)!.getBoundingClientRect().left, key);
+        await mock("database_sql", result);
+        await runText();
+        await expect(range()).toHaveText("2 行 / 12 ms");
+        await expect(csv()).toBeEnabled();
+        expect(await left("copy")).toBeLessThan(await left("csv"));
+        expect(await callsOf("database_sql_csv")).toEqual([]);
+      });
+
+      it("sends the text that the shown result was run with, not what the field says now, and tells the file and the rows", async () => {
+        await openQuery();
+        await mock("database_sql", result);
+        await runText();
+        await expect(range()).toHaveText("2 行 / 12 ms");
+        await input().setValue("DELETE FROM users");
+        const command = await mock("database_sql_csv", saved);
+        await csv().click();
+        expect(await waitForCalls(command)).toEqual([ran()]);
+        await expect($(".toast")).toHaveText(expect.stringContaining("shop.csv に 12,345 行を書き出しました"));
+        await expect($(CARDS)).not.toExist();
+        expect(await callsOf("database_sql")).toHaveLength(1);
+        await expect(input()).toHaveValue("DELETE FROM users");
+        await expect(csv()).toBeEnabled();
+      });
+
+      it("goes to the database and the connection the tab has when it is pressed", async () => {
+        await openQuery();
+        await mock("database_sql", result);
+        await runText();
+        await choose("query-database", "information_schema");
+        const command = await mock("database_sql_csv", saved);
+        await csv().click();
+        expect(await waitForCalls(command)).toEqual([ran(text, "information_schema")]);
+      });
+
+      it("is off while the write goes on, and on again when it is done", async () => {
+        await openQuery();
+        await mock("database_sql", result);
+        await runText();
+        await expect(range()).toHaveText("2 行 / 12 ms");
+        const command = await mock("database_sql_csv", holds);
+        await csv().click();
+        await waitForCalls(command);
+        await expect(csv()).toBeDisabled();
+        await expect(run()).toBeEnabled();
+        await release("database_sql_csv", saved);
+        await expect($(".toast")).toHaveText(expect.stringContaining("shop.csv"));
+        await expect(csv()).toBeEnabled();
+      });
+
+      it("is off while a run goes on", async () => {
+        await openQuery();
+        await mock("database_sql", result);
+        await runText();
+        await expect(csv()).toBeEnabled();
+        const wait = await mock("database_sql", holds);
+        await run().click();
+        await waitForCalls(wait);
+        await expect(csv()).toBeDisabled();
+        await release("database_sql", result);
+        await expect(csv()).toBeEnabled();
+      });
+
+      it("is off for a run of more than one statement, for a statement with no column, and for an error", async () => {
+        await openQuery();
+        await mock("database_sql", databaseSqlRun([databaseSqlStatement(["n"], [[databaseCell("1", "number")]]), databaseSqlStatement(["n"], [[databaseCell("2", "number")]])]));
+        await runText("SELECT 1; SELECT 2");
+        await expect(range()).toHaveText("1 行 / 3 ms");
+        await expect(csv()).toBeDisabled();
+        await mock("database_sql", databaseSqlResult([], [], "3 行を変更 / 12 ms"));
+        await runText("UPDATE users SET name = 'x'");
+        await expect(range()).toHaveText("3 行を変更 / 12 ms");
+        await expect(csv()).toBeDisabled();
+        await mock("database_sql", databaseSqlRun([databaseSqlStatement(["n"], [[databaseCell("1", "number")]])], "列が見つかりません (1054): Unknown column 'x'"));
+        await runText("SELECT 1; SELECT x");
+        await expect($("#database-work .database-note")).toHaveText(expect.stringContaining("列が見つかりません"));
+        await expect(csv()).toBeDisabled();
+        await mock("database_sql", rejects("SQL を入力してください"));
+        await mock("database_connections", ["p1"]);
+        await runText("");
+        await waitForCalls("database_sql");
+        await expect(csv()).toBeDisabled();
+        expect(await callsOf("database_sql_csv")).toEqual([]);
+      });
+
+      it("shows nothing when the save dialog is cancelled", async () => {
+        await openQuery();
+        await mock("database_sql", result);
+        await runText();
+        await expect(range()).toHaveText("2 行 / 12 ms");
+        const command = await mock("database_sql_csv", null);
+        await csv().click();
+        await waitForCalls(command);
+        await browser.pause(300);
+        await expect($(".toast")).not.toBeDisplayed();
+        await expect($(CARDS)).not.toExist();
+        await expect(csv()).toBeEnabled();
+      });
+
+      it("shows the failure as a card, with no toast and the result kept", async () => {
+        await openQuery();
+        await mock("database_sql", result);
+        await runText();
+        await expect(range()).toHaveText("2 行 / 12 ms");
+        const message = "/Users/example/shop.csv を書けません: Permission denied";
+        const command = await mock("database_sql_csv", rejects(message));
+        await mock("database_connections", ["p1"]);
+        await csv().click();
+        await waitForCalls(command);
+        await expect($(CARD)).toHaveText(message);
+        await expect($(".toast")).not.toBeDisplayed();
+        await expect(range()).toHaveText("2 行 / 12 ms");
+        expect(await count("#database-work .database-grid tbody tr")).toBe(2);
+        await expect(csv()).toBeEnabled();
+      });
+
+      it("closes the tree of a connection that the write shows lost", async () => {
+        await openQuery();
+        await mock("database_sql", result);
+        await runText();
+        await expect(range()).toHaveText("2 行 / 12 ms");
+        await mock("database_sql_csv", rejects(lost));
+        await mock("database_connections", []);
+        await csv().click();
+        await waitForCalls("database_sql_csv");
+        await waitForCount('#database-side-feed [data-key^="p1/d/"]', 0);
+        await expect(dot("p1")).toHaveAttribute("data-state", "closed");
+      });
     });
 
     it("says under the table that the rows were cut, as Rust worded it", async () => {
@@ -3073,9 +3214,9 @@ describe("database: tree", () => {
       await expect($("#database-work .database-note")).toHaveText("SQL を入力してください");
     });
 
-    it("has no other control on a query than the two selects, 実行 and the copy, the line, and the field is the only input", async () => {
+    it("has no other control on a query than the two selects, 実行, the copy and the CSV, the line, and the field is the only input", async () => {
       await openQuery();
-      expect(await textsOf("#database-work button")).toEqual(["実行", ""]);
+      expect(await textsOf("#database-work button")).toEqual(["実行", "", ""]);
       expect(await count("#database-work select")).toBe(2);
       expect(await count("#database-work input, #database-work [contenteditable]")).toBe(0);
       expect(await count("#database-work textarea")).toBe(1);

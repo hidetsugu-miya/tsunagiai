@@ -15,6 +15,7 @@ import type { DatabaseChange } from "./bindings/DatabaseChange";
 import type { DatabaseProfile } from "./bindings/DatabaseProfile";
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import type { DatabaseRecords } from "./bindings/DatabaseRecords";
+import type { DatabaseCsvSaved } from "./bindings/DatabaseCsvSaved";
 import type { DatabaseSqlRun } from "./bindings/DatabaseSqlRun";
 import type { DatabaseStructure } from "./bindings/DatabaseStructure";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
@@ -649,6 +650,8 @@ export interface Commands {
   database_apply: { args: { id: string; database: string; table: string; changes: DatabaseChange[] }; result: DatabaseApplied };
   // D-6: runs the statements of the text `sql` one after another in `database` of the open connection `id`: for each, at most 1,000 rows as cells, the columns, and the line with the rows and the time; it stops at the first that fails, and the words of that are in the answer. A write is committed at once (D-2).
   database_sql: { args: { id: string; database: string; sql: string }; result: DatabaseSqlRun };
+  // D-6 (#1438): writes the rows of the one statement `sql` (the text of the last run, with one statement only) to a CSV file, every row and every character: Rust opens the save dialog, runs the statement in `database` of the open connection `id` and writes the rows as they come to a temporary file that it renames onto the place chosen. `null` when the dialog is cancelled (nothing is run).
+  database_sql_csv: { args: { id: string; database: string; sql: string }; result: DatabaseCsvSaved | null };
   // D-3: closes the connection `id` and ends its script.
   database_disconnect: { args: { id: string }; result: null };
   // D-3: the ids of the connections that are open now.

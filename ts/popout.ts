@@ -11,8 +11,9 @@ import { $, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
 import { CLOSE_SVG, fillIcons } from "./icons.js";
 import { invoke } from "./ipc.js";
+import { initToast, toast } from "./toast.js";
 import { initTooltip } from "./tooltip.js";
-import { setCopy } from "./database-work.js";
+import { setCopy, setCsvReport } from "./database-work.js";
 import { closeFile, initOrcaEditor, openFile, refreshEditors, saveFile, setAutosaveMs, showEditors } from "./orca-editor.js";
 import { closeDatabaseTab, initDatabaseTabs, restoreDatabaseTab, showDatabaseTabs } from "./orca-database-tabs.js";
 import { closeDefinition, initDefinition, openDefinition, showDefinitions } from "./orca-definition.js";
@@ -155,6 +156,7 @@ async function restore() {
 
 async function init() {
   fillIcons();
+  initToast();
   initTooltip();
   initOrcaTerminal(fail, () => {});
   initOrcaEditor({
@@ -169,6 +171,7 @@ async function init() {
   // What a definition tab opens, and a connection that a database tab found lost, are the screen's to show (A-46): the window tells it.
   initDefinition({ open: (place) => void invoke("orca_popout_place", { path: place.path, outside: place.outside, line: place.line, character: place.character }).catch(fail) });
   initDatabaseTabs({ lost: (connection, error) => void invoke("orca_popout_lost", { connection, error }).catch(fail) });
+  setCsvReport({ saved: (text) => toast(text), failed: fail });
   setCopy(async (text) => {
     try {
       await navigator.clipboard.writeText(text);

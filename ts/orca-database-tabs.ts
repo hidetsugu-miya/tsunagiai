@@ -1,6 +1,6 @@
 // The database tabs of the work pane of the Orca screen (A-43): a table of the tree of the database part opens as a tab with the tabs of D-4 to D-6 (records, structure, SQL), and the menu of a database opens the SQL of that database as a tab of its own. Drawing is `drawTableTab` of database-work.ts, which the database screen's work pane shares; this module holds what each tab shows and reads it (`database_records`, `database_structure`, `database_sql`), as the database screen does for its tabs (D-4 to D-6).
 // The tabs are kept in memory only, by target and project, as the tabs of the files are (their ids are `database:{n}`). A tab that is not shown keeps its box and what it read; a read that ends after its tab was closed is dropped. Nothing is read by the clock.
-import { drawTableTab, focusSqlField, lastResultTab, type RecordsState, type SqlState, type StructureState, type TabActions } from "./database-work.js";
+import { csvFailed, drawTableTab, focusSqlField, lastResultTab, type RecordsState, type SqlState, type StructureState, type TabActions, writeCsv } from "./database-work.js";
 import { tag } from "./dom.js";
 import { invoke } from "./ipc.js";
 
@@ -95,15 +95,34 @@ async function runSql(t: DatabaseTab) {
   mine.error = null;
   draw(t);
   try {
-    mine.data = await invoke("database_sql", { id: t.connection, database: t.database, sql: mine.text });
+    const sent = mine.text;
+    mine.data = await invoke("database_sql", { id: t.connection, database: t.database, sql: sent });
+    mine.ran = sent;
     mine.tab = lastResultTab(mine.data);
   } catch (e) {
     mine.data = null;
+    mine.ran = null;
     mine.tab = 0;
     mine.error = String(e);
     if (tabs.has(t.id)) lost(t.connection, mine.error);
   }
   mine.loading = false;
+  draw(t);
+}
+
+// Writes the result of the last run of the SQL tab to a CSV file (#1438): Rust runs the statement again and writes every row. A failure is a card (A-28), and a stream that broke is a lost connection as a run shows it.
+async function exportCsv(t: DatabaseTab) {
+  const mine = t.sql;
+  if (mine.exporting || mine.loading || mine.ran === null) return;
+  mine.exporting = true;
+  draw(t);
+  try {
+    await writeCsv(t.connection, t.database, mine.ran);
+  } catch (e) {
+    csvFailed(e);
+    if (tabs.has(t.id)) lost(t.connection, String(e));
+  }
+  mine.exporting = false;
   draw(t);
 }
 
@@ -123,7 +142,7 @@ function create(target: string | null, project: string, profile: { id: string; n
     title: table === null ? `SQL · ${database} · ${profile.name}` : `${table} · ${profile.name}`,
     records: null,
     structure: null,
-    sql: { text: "", loading: false, error: null, data: null, tab: 0 },
+    sql: { text: "", loading: false, error: null, data: null, tab: 0, ran: null, exporting: false },
     wantFocus: false,
     el,
     actions: {
@@ -145,6 +164,7 @@ function create(target: string | null, project: string, profile: { id: string; n
         t.sql.text = text;
       },
       runSql: () => void runSql(t),
+      sqlCsv: () => void exportCsv(t),
       sqlTab: (index) => {
         if (t.sql.tab === index) return;
         t.sql.tab = index;

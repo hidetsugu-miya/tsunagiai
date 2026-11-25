@@ -4,10 +4,11 @@
 //! The password of a profile is in the OS keychain (service `KEYRING_SERVICE`, user the profile's id), never in the file and never in the answer of a command:
 //! the screen is told only whether one is saved (`DatabaseProfileView::password_saved`).
 //! The id is made here at the first save and never changes, so that renaming a connection leaves its password where it is.
-//! The connections that are open (D-3) are in `session::Sessions`: `database_connect` opens one (the script of the connection when it has one, then the MySQL session) and reads the databases, `database_tables` reads the tables of one, `database_records` reads a page of a table's records (D-4, `records.rs`), `database_apply` writes the changes the records tab has gathered in one transaction (D-4, `write.rs`, #863), `database_structure` reads the columns of a table (D-5, `structure.rs`), `database_sql` runs the text of the SQL tab (D-6, `sql.rs`), `database_disconnect` closes it and ends its script (`script.rs`: the script that opens the way to the database, #718).
+//! The connections that are open (D-3) are in `session::Sessions`: `database_connect` opens one (the script of the connection when it has one, then the MySQL session) and reads the databases, `database_tables` reads the tables of one, `database_records` reads a page of a table's records (D-4, `records.rs`), `database_apply` writes the changes the records tab has gathered in one transaction (D-4, `write.rs`, #863), `database_structure` reads the columns of a table (D-5, `structure.rs`), `database_sql` runs the text of the SQL tab (D-6, `sql.rs`), `database_sql_csv` writes the rows of one statement of it to a CSV file (D-6, `csv.rs`, #1438), `database_disconnect` closes it and ends its script (`script.rs`: the script that opens the way to the database, #718).
 //! `tsunagiai-mcp` saves a connection (`save_without_password`) and tests a saved one (`test_saved`) through the same functions (D-8).
 //! The checks of an input (`check`, `upsert`, `password_change`) are pure functions; the keychain is behind `PasswordStore` so that the flows can be tried without it.
 
+pub mod csv;
 pub mod mysql;
 pub mod records;
 pub mod script;
@@ -23,7 +24,8 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, WebviewWindow};
+use tauri_plugin_dialog::DialogExt;
 #[cfg(test)]
 use ts_rs::TS;
 
@@ -843,6 +845,51 @@ pub async fn database_sql(
     sql: String,
 ) -> Result<sql::DatabaseSqlRun, String> {
     sessions.sql(&scripts, &id, &database, &sql).await
+}
+
+/// The rows of the one statement `sql` run in `database` on the open connection `id`, written to a CSV file (D-6, #1438): every row and every character, none cut, with no limit of MySQL's.
+/// The place is the save dialog's alone (the page gives none), and nothing is run when it is cancelled (`None`). The rows go to a temporary file beside the place, which is renamed onto it when the run is done and deleted when it is not.
+#[tauri::command]
+pub async fn database_sql_csv(
+    app: AppHandle,
+    window: WebviewWindow,
+    sessions: tauri::State<'_, session::Sessions>,
+    scripts: tauri::State<'_, script::Scripts>,
+    id: String,
+    database: String,
+    sql: String,
+) -> Result<Option<sql::DatabaseCsvSaved>, String> {
+    let statement = sql::csv_statement(&sql)?;
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_parent(&window)
+        .set_file_name(csv::suggested_name(&database))
+        .save_file(move |picked| {
+            let _ = sender.send(picked);
+        });
+    let Some(picked) = receiver
+        .await
+        .map_err(|_| "保存先を選べません".to_owned())?
+    else {
+        return Ok(None);
+    };
+    let dest = picked
+        .into_path()
+        .map_err(|_| "保存先の場所が正しくありません".to_owned())?;
+    let (mut out, tmp) = csv::create(&dest)?;
+    let outcome = sessions
+        .sql_csv(&scripts, &id, &database, statement, &mut out)
+        .await;
+    let rows = csv::finish(out, &tmp, &dest, outcome, sql::CSV_NO_ROWS)?;
+    let name = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .ok_or("保存先の場所が正しくありません")?;
+    Ok(Some(sql::DatabaseCsvSaved {
+        name,
+        rows: session::format_rows(Some(rows)),
+    }))
 }
 
 /// Closes the connection of `id` and ends its script. A connection that is still opening is stopped (`Sessions::stop`, D-3). A connection that is not open is closed already.

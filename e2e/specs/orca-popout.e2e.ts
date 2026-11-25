@@ -445,6 +445,15 @@ describe("orca: the window of a tab (A-46)", () => {
       expect(await waitForCalls("database_sql")).toEqual([{ id: "p1", database: "shop", sql: "select 1" }]);
     });
 
+    it("writes the result of the SQL to a CSV file and tells it with a toast of the window", async () => {
+      await openWindow({ ...orders, title: "SQL · shop · Example direct", content: { ...content, table: null, tab: "sql", page: 0 } }, { database_sql: databaseSqlResult(["n"], [[databaseCell("1", "number")]]), database_sql_csv: { name: "shop.csv", rows: "1" } });
+      await $('.orca-database-tab [data-key="run"]').click();
+      await waitForCalls("database_sql");
+      await $(".orca-database-tab [data-key='csv']").click();
+      expect(await waitForCalls("database_sql_csv")).toEqual([{ id: "p1", database: "shop", sql: "select 1" }]);
+      await expect($(".toast")).toHaveText(expect.stringContaining("shop.csv に 1 行を書き出しました"));
+    });
+
     it("tells Rust which connection was lost, with Rust's words, when the read of the records fails", async () => {
       await openWindow(orders, { database_records: rejects("接続が切れました"), orca_popout_lost: null });
       expect(await waitForCalls("orca_popout_lost")).toEqual([{ connection: "p1", error: "接続が切れました" }]);

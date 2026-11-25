@@ -4513,6 +4513,25 @@ describe("orca: files and editor (A-18)", () => {
     expect(await callsOf("database_sql")).toHaveLength(1);
   });
 
+  it("writes the result of a run of one statement to a CSV file from the footer of the SQL tab, with the text it was run with (A-43, D-6)", async () => {
+    await openShop({ database_sql: databaseSqlResult(["n"], [[databaseCell("1", "number")]]), database_sql_csv: { name: "shop.csv", rows: "1" } });
+    await dbRow("p1/d/shop/t/orders").click();
+    await waitForCount(".orca-database-tab .database-grid", 1);
+    await $('.orca-database-tab [data-tab="sql"]').click();
+    const csv = $('.orca-database-tab [data-key="csv"]');
+    await expect(csv).toBeDisabled();
+    await typeSql("select 1");
+    await $('.orca-database-tab [data-key="run"]').click();
+    await waitForCalls("database_sql");
+    await expect(csv).toBeEnabled();
+    await expect(csv).toHaveAttribute("aria-label", "CSV に書き出す");
+    await typeSql("select 2");
+    await csv.click();
+    expect(await waitForCalls("database_sql_csv")).toEqual([{ id: "p1", database: "shop", sql: "select 1" }]);
+    await expect($(".toast")).toHaveText(expect.stringContaining("shop.csv に 1 行を書き出しました"));
+    expect(await callsOf("database_sql")).toHaveLength(1);
+  });
+
   it("closes the tab with its close button, calls nothing, and drops a read that ends after the tab was closed (A-43)", async () => {
     await openShop({ database_records: holds });
     await dbRow("p1/d/shop/t/orders").click();

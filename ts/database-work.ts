@@ -2,13 +2,15 @@
 // Drawing only. The tabs of a table are `TABS`: the records tab (D-4), the structure tab (D-5) and the SQL tab (D-6), which only the Orca screen's tabs have (the database screen's SQL is in the query tabs, `queryNode`).
 // The body of a table (its tabs) and the SQL of a database are drawn into any box, with no screen state behind them: the database screen draws them in `#database-work` (`drawDatabaseWork`), and the work pane of the Orca screen draws one tab each into its own box (`drawTableTab`, A-43).
 import type { DatabaseRecords } from "./bindings/DatabaseRecords";
+import type { DatabaseCsvSaved } from "./bindings/DatabaseCsvSaved";
 import type { DatabaseSqlRun } from "./bindings/DatabaseSqlRun";
 import type { DatabaseStructure } from "./bindings/DatabaseStructure";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
 import { canEditCell, cellKey, changesOf, type EditState, isAdded, markable, originalText } from "./database-edit.js";
 import { type GridEdit, gridNode, syncEdit } from "./database-grid.js";
 import { $, onEnter, tag } from "./dom.js";
-import { CHECK_SVG, CHEVRON_LEFT_SVG, CHEVRON_SVG, CLOSE_SVG, COPY_SVG, MINUS_SVG, PAGE_FIRST_SVG, PAGE_LAST_SVG, PLUS_SVG, RELOAD_SVG } from "./icons.js";
+import { invoke } from "./ipc.js";
+import { CHECK_SVG, CHEVRON_LEFT_SVG, CHEVRON_SVG, CLOSE_SVG, COPY_SVG, DOWNLOAD_SVG, MINUS_SVG, PAGE_FIRST_SVG, PAGE_LAST_SVG, PLUS_SVG, RELOAD_SVG } from "./icons.js";
 
 // The page of records that was asked for last. `data` stays while the next page is read, and is none after an error. `edit` is what the page has gathered to write (D-10); a screen that cannot write gives none, and its records tab has no control to write.
 export interface RecordsState {
@@ -26,13 +28,15 @@ export interface StructureState {
   data: DatabaseStructure | null;
 }
 
-// The text of a SQL field as typed, and the result of the run asked for last (a query tab of the database screen, D-9, or a tab of the Orca screen, A-43). `data` is none before a run and after an error. `tab` is the selected tab of the results of the run (D-6): the index of a result, or one past the last for the statement that failed.
+// The text of a SQL field as typed, and the result of the run asked for last (a query tab of the database screen, D-9, or a tab of the Orca screen, A-43). `data` is none before a run and after an error. `tab` is the selected tab of the results of the run (D-6): the index of a result, or one past the last for the statement that failed. `ran` is the text that run was sent with (the field may have changed since), which the CSV is made from (#1438), and `exporting` is whether that is being written.
 export interface SqlState {
   text: string;
   loading: boolean;
   error: string | null;
   data: DatabaseSqlRun | null;
   tab: number;
+  ran: string | null;
+  exporting: boolean;
 }
 
 // The tab that a run opens on: the last one, which is the statement that failed when one did.
@@ -108,6 +112,8 @@ export interface WorkActions {
   runSql: () => void;
   // Selects the result tab `index` of the last run.
   sqlTab: (index: number) => void;
+  // Writes the result of the last run to a CSV file (#1438).
+  sqlCsv: () => void;
   // Opens the table of a row of the table list, as a press on its row in the tree does.
   openTable: (table: string) => void;
   edit: EditActions;
@@ -132,7 +138,7 @@ export interface EditActions {
 }
 
 // What the body of a table or of a SQL tab asks of its screen; `edit` is the screen's that can write.
-export type TabActions = Pick<WorkActions, "page" | "pageInput" | "tab" | "sqlText" | "runSql" | "sqlTab"> & { edit?: EditActions };
+export type TabActions = Pick<WorkActions, "page" | "pageInput" | "tab" | "sqlText" | "runSql" | "sqlTab" | "sqlCsv"> & { edit?: EditActions };
 
 // The tabs of a table, in order. The body of the selected one is drawn in `drawDatabaseWork`, where the body of a tab that is added goes.
 const TABS = [
@@ -274,6 +280,25 @@ function copyButton(data: { columns: unknown[]; tsv: string } | null, loading: b
   });
 }
 
+// Where the end of a CSV that is written is told (#1438): the screens give the toast and the card of a failure (A-28), and the window of a tab (A-46) its own, since this module is loaded there without the screens.
+let csvReport: { saved: (text: string) => void; failed: (e: unknown) => void } = { saved: () => {}, failed: () => {} };
+export function setCsvReport(report: typeof csvReport) {
+  csvReport = report;
+}
+export const csvFailed = (e: unknown) => csvReport.failed(e);
+
+// Writes the rows of the statement `sql` of a run to a CSV file (D-6, #1438): Rust opens the save dialog and runs the statement again, writing every row as it comes, so the page names no place. Nothing is said when the dialog is cancelled. A failure is thrown, for the screen that holds the connection to tell it (`csvFailed`).
+export async function writeCsv(id: string, database: string, sql: string) {
+  const saved: DatabaseCsvSaved | null = await invoke("database_sql_csv", { id, database, sql });
+  if (saved !== null) csvReport.saved(`${saved.name} に ${saved.rows} 行を書き出しました`);
+}
+
+// The button after the copy that writes the result as a CSV file: on only for a run of one statement that did not fail and gave columns, while nothing is run or written.
+function csvButton(sql: SqlState, shown: DatabaseSqlRun["results"][number] | null, actions: TabActions) {
+  const ready = sql.data !== null && sql.data.results.length === 1 && sql.data.error === null && sql.ran !== null && shown !== null && shown.columns.length > 0;
+  return iconButton("csv", "CSV に書き出す", DOWNLOAD_SVG, !ready || sql.loading || sql.exporting, actions.sqlCsv);
+}
+
 // The grid of the records tab with what it gathers (D-10): its cells, the marked rows and the pressed ones are drawn from `edit`. The grid is made once for an answer of Rust, as every grid is (`gridOf`), and each draw brings it up to date in place (`syncEdit`).
 function editGridNode(data: DatabaseRecords, edit: EditState, actions: EditActions, sizes: string) {
   const current: GridEdit = {
@@ -406,7 +431,7 @@ function resultTabsNode(run: DatabaseSqlRun, active: number, pick: (index: numbe
   return tabs.length > 1 ? bar : null;
 }
 
-// The result of a run as a grid, and under it the copy, and the rows and the time as Rust worded them: those of the selected tab when the run had more than one statement. A failed statement shows its words in place of the grid.
+// The result of a run as a grid, and under it the copy and the CSV button, and the rows and the time as Rust worded them: those of the selected tab when the run had more than one statement. A failed statement shows its words in place of the grid.
 function sqlResultNodes(sql: SqlState, sizes: string, actions: TabActions) {
   const { data } = sql;
   const shown = data !== null && sql.tab < data.results.length ? data.results[sql.tab] : null;
@@ -421,7 +446,7 @@ function sqlResultNodes(sql: SqlState, sizes: string, actions: TabActions) {
   const footer = tag("div", "database-pager");
   const summary = tag("span", "database-range", sql.loading ? "実行中…" : (shown?.summary ?? ""));
   summary.setAttribute("role", "status");
-  footer.append(copyButton(shown, sql.loading), summary);
+  footer.append(copyButton(shown, sql.loading), csvButton(sql, shown, actions), summary);
   nodes.push(scroll, footer);
   return nodes;
 }
