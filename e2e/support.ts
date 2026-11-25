@@ -749,7 +749,7 @@ export const quote = (...spans: Span[]): RichBlock => ({ type: "quote", spans })
 export const plain = (text: string): RichBlock[] => [para(span(text))];
 
 // A message of a thread (`slack_thread`); its `rich` is its text with no style unless `extra` sets it.
-export const threadMessage = (ts: string, name: string, text: string, extra: Partial<ThreadMessage> = {}): ThreadMessage => ({ ts, user: "U1", name, iconUrl: null, text, rich: plain(text), files: [], blocks: [], showText: true, attachments: [], slackLink: null, imageUrls: [], reactions: [], ...extra });
+export const threadMessage = (ts: string, name: string, text: string, extra: Partial<ThreadMessage> = {}): ThreadMessage => ({ ts, user: "U1", name, iconUrl: null, text, rich: plain(text), files: [], blocks: [], showText: true, attachments: [], slackLink: null, sentry: null, imageUrls: [], reactions: [], ...extra });
 
 // A reaction under a message (S-22): Slack's `name`, the `emoji` drawn for it, how many gave it, for a custom emoji the address of its `image` (S-26), and whether the user gave it themselves, `mine` (S-25).
 export const reaction = (name: string, emoji: string, count: number, image: string | null = null, mine = false): Reaction => ({ name, emoji, count, image, mine });

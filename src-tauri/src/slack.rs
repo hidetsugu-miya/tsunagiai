@@ -28,7 +28,7 @@ use crate::{
     keychain,
     slack_blocks::{
         image_urls, mentioned_users, message_attachments, message_blocks, message_plain,
-        needs_slack, unfurled_urls, ThreadAttachment, ThreadBlock,
+        needs_slack, sentry_issue, unfurled_urls, SentryIssue, ThreadAttachment, ThreadBlock,
     },
     slack_emoji,
     slack_markdown::to_mrkdwn,
@@ -1607,6 +1607,8 @@ pub struct ThreadMessage {
     attachments: Vec<ThreadAttachment>,
     /// The message's address in Slack, set only when the message has a part that works only in Slack and is not drawn (`needs_slack`, S-11).
     slack_link: Option<String>,
+    /// The Sentry issue of the message and the buttons the screen presses (S-30), set only for a Sentry notification in a workspace that has a Sentry token.
+    sentry: Option<SentryIssue>,
     reactions: Vec<Reaction>,
     /// The https addresses of the images of `blocks` and `attachments`, once each; the screen asks for them only when the user presses "画像を表示".
     image_urls: Vec<String>,
@@ -3653,7 +3655,7 @@ fn timeline_message(
 ) -> TimelineMessage {
     let sender = raw.bot.clone().or(user);
     let workspace_url = workspace_base(&workspace.url);
-    let drawn = drawn_of(&raw.source, name_of, workspace_url.as_deref());
+    let drawn = drawn_of(&raw.source, name_of, workspace_url.as_deref(), false);
     let link = permalink(
         &workspace.url,
         &raw.channel,
@@ -3708,7 +3710,7 @@ fn timeline_reply(
     workspace: Option<&str>,
 ) -> TimelineReply {
     let sender = raw.bot.clone().or(user);
-    let drawn = drawn_of(&raw.source, name_of, workspace);
+    let drawn = drawn_of(&raw.source, name_of, workspace, false);
     TimelineReply {
         ts: raw.ts.clone(),
         name: sender
@@ -3874,15 +3876,24 @@ struct Drawn {
     attachments: Vec<ThreadAttachment>,
     /// Whether the message has a part that works only in Slack (`needs_slack`).
     needs_slack: bool,
+    /// The Sentry issue of the message and the buttons the screen presses, only when `sentry` of `drawn_of` is true (`sentry_issue`).
+    sentry: Option<SentryIssue>,
 }
 
 /// `workspace` is the checked address of the message's workspace (`workspace_base`): a mention of a user is a link to the profile there (S-12), and text with `None`.
-fn drawn_of(m: &Value, name_of: &dyn Fn(&str) -> Option<String>, workspace: Option<&str>) -> Drawn {
+/// `sentry` is whether the workspace has a Sentry token and the screen can press the buttons of a Sentry notification (S-30): they are not a part that works only in Slack then.
+fn drawn_of(
+    m: &Value,
+    name_of: &dyn Fn(&str) -> Option<String>,
+    workspace: Option<&str>,
+    sentry: bool,
+) -> Drawn {
     let text = m["text"].as_str().unwrap_or_default();
     // A person's ordinary post carries a `rich_text` block that repeats `text`, so it stays `text`; a bot's post, or one with no text, draws its blocks.
     let draw_rich_text =
         bot_of(m).is_some() || m["text"].as_str().is_none_or(|t| t.trim().is_empty());
     let (blocks, show_text) = message_blocks(&m["blocks"], draw_rich_text, name_of, workspace);
+    let issue = sentry.then(|| sentry_issue(m, name_of)).flatten();
     Drawn {
         // A message posted with `mrkdwn: false` shows its marks as they are.
         rich: if m["mrkdwn"] == false {
@@ -3893,11 +3904,13 @@ fn drawn_of(m: &Value, name_of: &dyn Fn(&str) -> Option<String>, workspace: Opti
         attachments: message_attachments(&m["attachments"], name_of, workspace),
         blocks,
         show_text,
-        needs_slack: needs_slack(m, name_of),
+        needs_slack: needs_slack(m, name_of, issue.is_some()),
+        sentry: issue,
     }
 }
 
-/// A message of a thread with its names put to it. `workspace` is the checked address of its workspace (`workspace_base`); `link` makes the address of a message in Slack from its `ts` and its parent's `thread_ts` (`permalink`).
+/// A message of a thread with its names put to it. `workspace` is the checked address of its workspace (`workspace_base`); `link` makes the address of a message in Slack from its `ts` and its parent's `thread_ts` (`permalink`); `sentry` is whether the workspace has a Sentry token (S-30).
+#[allow(clippy::too_many_arguments)]
 fn thread_message(
     m: &Value,
     user: Option<SlackUser>,
@@ -3906,6 +3919,7 @@ fn thread_message(
     custom: &EmojiList,
     own: Option<&str>,
     link: &dyn Fn(&str, Option<&str>) -> String,
+    sentry: bool,
 ) -> ThreadMessage {
     let sender = bot_of(m).or(user);
     let text = m["text"].as_str().unwrap_or_default();
@@ -3915,7 +3929,8 @@ fn thread_message(
         show_text,
         attachments,
         needs_slack,
-    } = drawn_of(m, name_of, workspace);
+        sentry,
+    } = drawn_of(m, name_of, workspace, sentry);
     let ts = m["ts"].as_str().unwrap_or_default();
     let text_for_claude =
         message_plain(&plain_text(text, name_of), show_text, &blocks, &attachments);
@@ -3925,6 +3940,7 @@ fn thread_message(
         show_text,
         attachments,
         slack_link: needs_slack.then(|| link(ts, m["thread_ts"].as_str().filter(|t| *t != ts))),
+        sentry,
         reactions: reactions_of(m, custom, own),
         ts: ts.to_owned(),
         user: m["user"]
@@ -5648,7 +5664,8 @@ pub async fn slack_thread(
     if token_key(&team_id).is_err() || !valid_channel(&channel) || !valid_ts(&ts) {
         return Err(log_failure(command, &team_id, BAD_TARGET));
     }
-    let workspaces = load_workspaces(&config_dir(&app)?)
+    let dir = config_dir(&app)?;
+    let workspaces = load_workspaces(&dir)
         .await
         .map_err(|e| log_failure(command, &team_id, e))?;
     let workspace = workspaces
@@ -5658,6 +5675,8 @@ pub async fn slack_thread(
     let token = token_of(&team_id)
         .await
         .map_err(|e| log_failure(command, &team_id, e))?;
+    // The buttons of a Sentry notification are pressed in the app only when the workspace has a Sentry token (S-30).
+    let sentry = crate::sentry::has_token(&dir, &team_id).await;
     let Pages { pages, more } = read_pages(
         auth.http(),
         command,
@@ -5731,6 +5750,7 @@ pub async fn slack_thread(
                 &custom,
                 own.as_deref(),
                 &|ts, parent| permalink(&workspace.url, &channel, ts, parent),
+                sentry,
             )
         })
         .collect();
@@ -8225,6 +8245,7 @@ mod tests {
                 &EmojiList::new(),
                 None,
                 &|_, _| String::new(),
+                false,
             )
         };
         let read = message(json!({}));
@@ -9944,6 +9965,7 @@ mod tests {
             &EmojiList::new(),
             None,
             &|_, _| String::new(),
+            false,
         );
         assert_eq!(row.blocks, thread.blocks);
         assert!(!row.blocks.is_empty());
@@ -9996,6 +10018,7 @@ mod tests {
                     &EmojiList::new(),
                     None,
                     &|ts, parent| link(ts, parent),
+                    false,
                 )
             };
             assert_eq!(thread(&m(ts, parent, true)).slack_link, expected);
@@ -10012,6 +10035,7 @@ mod tests {
             &EmojiList::new(),
             None,
             &|ts, parent| link(ts, parent),
+            false,
         );
         assert_eq!(thread.slack_link, Some(link("10.000001", None)));
         let raw = raw_from("T1", &channel("C1"), &m("10.000001", None, false)).unwrap();
@@ -10049,6 +10073,7 @@ mod tests {
             &EmojiList::new(),
             None,
             &|_, _| String::new(),
+            false,
         );
         assert_eq!(links(&thread.rich), [None, profile]);
         assert_eq!(thread.text, "hi @不明");
@@ -10468,6 +10493,7 @@ mod tests {
             &cache.custom_emoji("T1"),
             cache.own_user("T1").as_deref(),
             &|_, _| String::new(),
+            false,
         );
         assert_eq!(rows[0].reactions, want);
         assert_eq!(rows[0].reactions, thread.reactions);

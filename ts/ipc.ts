@@ -256,6 +256,8 @@ export interface Commands {
   sentry_save: { args: { teamId: string; token: string }; result: SentryConnection[] };
   // S-29: deletes the workspace's token; answers the connections.
   sentry_delete: { args: { teamId: string }; result: SentryConnection[] };
+  // S-30: sets the status of the issue of a Sentry notification (`value` is one of Sentry's own: resolved, resolved:inNextRelease, resolved:inCurrentRelease, unresolved:ongoing, ignored:archived_until_escalating, ignored:archived_until_condition_met:{10|100|1000}, ignored:archived_forever) with the workspace's token.
+  sentry_set_status: { args: { teamId: string; org: string; issueId: string; value: string }; result: null };
   // The connected Notion workspaces; `reconnect` is true when no token is kept. Asks Notion nothing.
   notion_accounts: { args: undefined; result: NotionAccount[] };
   // Opens the browser for Notion's consent and answers the connected workspace.

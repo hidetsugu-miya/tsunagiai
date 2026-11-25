@@ -2071,3 +2071,93 @@ describe("slack thread: the pane under the thread", () => {
     expect((await callsOf(close)).filter((c) => (c as { id: string }).id === "slack-thread")).toEqual([]);
   });
 });
+
+describe("slack thread: a Sentry notification (S-30)", () => {
+  const issue = { org: "acme", issueId: "123456", projectId: "22", buttons: [{ text: "Resolve", value: "resolve_dialog" }, { text: "Archive", value: "archive_dialog" }] };
+  const sentry = (extra: Parameters<typeof threadMessage>[3] = {}) =>
+    slackThread([threadMessage(root, "Sentry", "Error", { blocks: [{ type: "section", text: plain("Error"), fields: [], accessory: null }], showText: false, sentry: issue, ...extra })]);
+  const button = (name: string) => $("#st-msgs .st-sentry").$(`button=${name}`);
+  const dialog = () => $(".sentry-dialog");
+  const choices = () => textsOf(".sentry-select option");
+  // Chooses the option with that value in the select of the dialog.
+  const choose = (value: string) =>
+    browser.execute((v) => {
+      const select = document.querySelector<HTMLSelectElement>(".sentry-select")!;
+      select.value = v;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    }, value);
+  const sent = (value: string) => ({ teamId: workspace.teamId, org: "acme", issueId: "123456", value });
+
+  it("draws the buttons of the issue as buttons under the message, before the link to Slack for what only Slack can do", async () => {
+    await openDetail({}, sentry({ slackLink: permalinkOf(root) }));
+    expect(await textsOf("#st-msgs .st-sentry button")).toEqual(["Resolve", "Archive"]);
+    expect(await browser.execute(() => document.querySelector("#st-msgs .st-sentry")!.nextElementSibling!.textContent)).toBe("Slack で操作する");
+    expect(await count("#st-msgs button.text-btn:disabled")).toBe(0);
+  });
+
+  it("draws no buttons for a message that is not a Sentry notification", async () => {
+    await openDetail({}, sentry({ sentry: null }));
+    expect(await count("#st-msgs .st-sentry")).toBe(0);
+  });
+
+  it("opens a dialog with Sentry's choices for Resolve, Immediately chosen, and sends nothing until its button is pressed", async () => {
+    await openDetail({}, sentry());
+    const send = await mock("sentry_set_status", null);
+    await button("Resolve").click();
+    await expect(dialog()).toBeDisplayed();
+    await expect(dialog().$("h2")).toHaveText("Resolve Issue");
+    expect(await choices()).toEqual(["Immediately", "In the next release", "In the current release"]);
+    await expect($(".sentry-select")).toHaveValue("resolved");
+    await dialog().$("button=キャンセル").click();
+    expect(await count(".sentry-dialog")).toBe(0);
+    expect(await callsOf(send)).toEqual([]);
+  });
+
+  it("opens the dialog of Archive with its five choices, Until escalating chosen, and closes it with Escape", async () => {
+    await openDetail({}, sentry());
+    const send = await mock("sentry_set_status", null);
+    await button("Archive").click();
+    await expect(dialog().$("h2")).toHaveText("Archive Issue");
+    expect(await choices()).toEqual(["Until escalating", "Until 10 events", "Until 100 events", "Until 1000 events", "Forever"]);
+    await expect($(".sentry-select")).toHaveValue("ignored:archived_until_escalating");
+    await browser.keys("Escape");
+    expect(await count(".sentry-dialog")).toBe(0);
+    expect(await callsOf(send)).toEqual([]);
+  });
+
+  it("sends the choice with the workspace, the organization and the issue, tells it, and reads the thread again", async () => {
+    const read = await openDetail({}, sentry());
+    const send = await mock("sentry_set_status", null);
+    await button("Resolve").click();
+    await choose("resolved:inNextRelease");
+    await dialog().$("button=Resolve").click();
+    expect(await waitForCalls(send)).toEqual([sent("resolved:inNextRelease")]);
+    expect(await count(".sentry-dialog")).toBe(0);
+    await expect($(".toast")).toHaveText(expect.stringContaining("Sentry に送りました: Resolve"));
+    await waitForCalls(read, 2);
+    await button("Archive").click();
+    await choose("ignored:archived_until_condition_met:100");
+    await dialog().$("button=Archive").click();
+    expect((await waitForCalls(send, 2))[1]).toEqual(sent("ignored:archived_until_condition_met:100"));
+  });
+
+  it("sends a button that has no dialog at once", async () => {
+    await openDetail({}, sentry({ sentry: { ...issue, buttons: [{ text: "Unresolve", value: "unresolved:ongoing" }] } }));
+    const send = await mock("sentry_set_status", null);
+    await button("Unresolve").click();
+    expect(await waitForCalls(send)).toEqual([sent("unresolved:ongoing")]);
+    expect(await count(".sentry-dialog")).toBe(0);
+  });
+
+  it("turns the buttons off while it sends, and tells a refusal and turns them on again", async () => {
+    await openDetail({}, sentry({ sentry: { ...issue, buttons: [{ text: "Unresolve", value: "unresolved:ongoing" }, { text: "Archive", value: "archive_dialog" }] } }));
+    const send = await mock("sentry_set_status", holds);
+    await button("Unresolve").click();
+    await waitForCalls(send);
+    expect(await count("#st-msgs .st-sentry button:disabled")).toBe(2);
+    await release("sentry_set_status", rejects("トークンの権限が足りません。event:write のスコープを足してください"));
+    await expect($(".toast")).toHaveText(expect.stringContaining("Sentry に送れませんでした: トークンの権限が足りません。event:write のスコープを足してください"));
+    await browser.waitUntil(async () => (await count("#st-msgs .st-sentry button:disabled")) === 0);
+    expect((await callsOf(send)).length).toBe(1);
+  });
+});

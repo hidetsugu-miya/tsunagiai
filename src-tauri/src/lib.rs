@@ -418,6 +418,7 @@ pub fn run() {
             sentry::sentry_connections,
             sentry::sentry_save,
             sentry::sentry_delete,
+            sentry::sentry_set_status,
             notion::notion_accounts,
             notion::notion_connect,
             notion::notion_disconnect,

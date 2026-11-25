@@ -2,11 +2,13 @@
 //! A token is never shown, logged, written to a file or returned: the screen gets the last four characters (`SentryConnection::tail`) to tell one from another.
 //! It goes to `https://sentry.io/api/0` alone, as a Bearer credential, with a timeout and no redirect followed. A token is kept only once Sentry accepts it (`GET /organizations/`).
 //! Removing the Slack workspace removes its Sentry token with it (`forget_workspace`, called by `slack_remove_workspace`).
+//! The token is used to set the status of the issue of a Sentry notification (S-30, #1448): `sentry_set_status` sends one of a fixed list of values to `PUT /organizations/{org}/issues/{issue_id}/`, and `has_token` tells the thread whether the buttons can be pressed.
 
 use std::{path::Path, time::Duration};
 
 use reqwest::header::{HeaderValue, AUTHORIZATION};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use tauri::{AppHandle, State};
 #[cfg(test)]
 use ts_rs::TS;
@@ -17,6 +19,7 @@ use crate::{
     gmail::log_failure,
     keychain,
     slack::{blocking, has_workspace, token_key, SlackState},
+    slack_blocks::sentry_id,
 };
 
 const TOKEN_SERVICE: &str = "jp.mysis.tsunagiai.sentry";
@@ -28,6 +31,22 @@ const BAD_TOKEN: &str = "トークンが正しくありません";
 const EMPTY_TOKEN: &str = "トークンを入力してください";
 const NO_SCOPE: &str = "トークンの権限が足りません。org:read のスコープを足してください";
 const NO_SUCH_WORKSPACE: &str = "このワークスペースは接続されていません";
+const NO_TOKEN: &str = "このワークスペースには Sentry のトークンがありません";
+const NO_WRITE: &str = "トークンの権限が足りません。event:write のスコープを足してください";
+const NO_ISSUE: &str = "Sentry で issue が見つかりません";
+const BAD_STATUS: &str = "Sentry への操作が正しくありません";
+/// The values of Sentry's buttons (`webhooks/action.py`, `on_status`) that can be sent: nothing else goes to Sentry.
+const STATUS_VALUES: [&str; 9] = [
+    "resolved",
+    "resolved:inNextRelease",
+    "resolved:inCurrentRelease",
+    "unresolved:ongoing",
+    "ignored:archived_until_escalating",
+    "ignored:archived_until_condition_met:10",
+    "ignored:archived_until_condition_met:100",
+    "ignored:archived_until_condition_met:1000",
+    "ignored:archived_forever",
+];
 
 /// A workspace that has a Sentry token, and the last four characters of the token.
 #[derive(Serialize, Debug, PartialEq, Clone)]
@@ -95,6 +114,39 @@ fn verdict(status: u16) -> Result<(), String> {
     }
 }
 
+/// What an answer of `PUT /organizations/{org}/issues/{issue_id}/` says.
+fn put_verdict(status: u16) -> Result<(), String> {
+    match status {
+        200..=299 => Ok(()),
+        401 => Err(BAD_TOKEN.into()),
+        403 => Err(NO_WRITE.into()),
+        404 => Err(NO_ISSUE.into()),
+        _ => Err(format!("Sentry に送れませんでした（{status}）")),
+    }
+}
+
+/// The body that Sentry's own button of that value sends to update the issue (`on_status` of Sentry's Slack integration), or `None` for a value that is not in `STATUS_VALUES`.
+fn status_body(value: &str) -> Option<Value> {
+    if !STATUS_VALUES.contains(&value) {
+        return None;
+    }
+    let data: Vec<&str> = value.splitn(3, ':').collect();
+    let mut body = json!({ "status": data[0] });
+    // The second part is the sub-status of an archived issue only.
+    if data[0] == "ignored" {
+        body["substatus"] = json!(data[1]);
+        if data[1] == "archived_until_condition_met" {
+            body["statusDetails"] = json!({ "ignoreCount": data[2].parse::<u32>().ok()? });
+        }
+    }
+    match data[data.len() - 1] {
+        "inNextRelease" => body["statusDetails"] = json!({ "inNextRelease": true }),
+        "inCurrentRelease" => body["statusDetails"] = json!({ "inRelease": "latest" }),
+        _ => {}
+    }
+    Some(body)
+}
+
 fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -103,18 +155,42 @@ fn client() -> Result<reqwest::Client, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Asks Sentry (`base` is `API_URL`, a local port in the tests) whether it accepts the token.
-async fn check_token(http: &reqwest::Client, base: &str, token: &str) -> Result<(), String> {
+/// The `Authorization` header of a token, marked sensitive so that it is not written to a log.
+fn bearer(token: &str) -> Result<HeaderValue, String> {
     let mut header =
         HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| BAD_TOKEN.to_owned())?;
     header.set_sensitive(true);
+    Ok(header)
+}
+
+/// Asks Sentry (`base` is `API_URL`, a local port in the tests) whether it accepts the token.
+async fn check_token(http: &reqwest::Client, base: &str, token: &str) -> Result<(), String> {
     let answer = http
         .get(format!("{base}/organizations/"))
-        .header(AUTHORIZATION, header)
+        .header(AUTHORIZATION, bearer(token)?)
         .send()
         .await
         .map_err(|e| format!("Sentry に接続できません（{}）", e.without_url()))?;
     verdict(answer.status().as_u16())
+}
+
+/// Sets the status of an issue (`base` is `API_URL`, a local port in the tests). `org` and `issue_id` are IDs that go into the address as they are (`sentry_id`).
+async fn put_status(
+    http: &reqwest::Client,
+    base: &str,
+    token: &str,
+    org: &str,
+    issue_id: &str,
+    body: &Value,
+) -> Result<(), String> {
+    let answer = http
+        .put(format!("{base}/organizations/{org}/issues/{issue_id}/"))
+        .header(AUTHORIZATION, bearer(token)?)
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| format!("Sentry に接続できません（{}）", e.without_url()))?;
+    put_verdict(answer.status().as_u16())
 }
 
 async fn read_secret(team_id: String) -> Result<Option<String>, String> {
@@ -161,6 +237,36 @@ pub(crate) async fn forget_workspace(app: &AppHandle, team_id: &str) {
     if let Err(e) = saved {
         log_failure(command, team_id, e);
     }
+}
+
+/// Whether the workspace has a Sentry token: it is in the list and in the keychain. Asks Sentry nothing, and a failure to read is "no" (S-30).
+pub(crate) async fn has_token(dir: &Path, team_id: &str) -> bool {
+    let (dir, team) = (dir.to_owned(), team_id.to_owned());
+    let listed = blocking(move || load(&dir).map(|teams| teams.contains(&team))).await;
+    matches!(listed, Ok(true)) && matches!(read_secret(team_id.to_owned()).await, Ok(Some(_)))
+}
+
+/// Sets the status of the issue of a Sentry notification with the workspace's token (S-30): `value` is one of Sentry's own (`STATUS_VALUES`), `org` and `issue_id` are the ones in the address of the notification's title.
+#[tauri::command]
+pub async fn sentry_set_status(
+    team_id: String,
+    org: String,
+    issue_id: String,
+    value: String,
+) -> Result<(), String> {
+    let command = "sentry_set_status";
+    let team = token_key(&team_id).map_err(|e| log_failure(command, &team_id, e))?;
+    let body = status_body(&value)
+        .filter(|_| sentry_id(&org) && sentry_id(&issue_id))
+        .ok_or_else(|| log_failure(command, &team_id, BAD_STATUS))?;
+    let token = read_secret(team)
+        .await
+        .map_err(|e| log_failure(command, &team_id, e))?
+        .ok_or_else(|| log_failure(command, &team_id, NO_TOKEN))?;
+    let http = client().map_err(|e| log_failure(command, &team_id, e))?;
+    put_status(&http, API_URL, &token, &org, &issue_id, &body)
+        .await
+        .map_err(|e| log_failure(command, &team_id, e))
 }
 
 /// The workspaces that have a Sentry token, with the last four characters of each. Asks Sentry nothing.
@@ -328,7 +434,19 @@ mod tests {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut request = Vec::new();
             let mut buf = [0u8; 1024];
-            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+            // The head, and then the body that its `content-length` announces.
+            loop {
+                let text = String::from_utf8_lossy(&request).to_ascii_lowercase();
+                if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                    let wanted = head
+                        .lines()
+                        .find_map(|l| l.strip_prefix("content-length: "))
+                        .and_then(|n| n.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    if body.len() >= wanted {
+                        break;
+                    }
+                }
                 let n = socket.read(&mut buf).await.unwrap();
                 if n == 0 {
                     break;
@@ -394,11 +512,130 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_value_becomes_the_body_that_sentrys_own_button_sends() {
+        let body = |v: &str| status_body(v).unwrap();
+        assert_eq!(body("resolved"), json!({"status": "resolved"}));
+        assert_eq!(
+            body("resolved:inNextRelease"),
+            json!({"status": "resolved", "statusDetails": {"inNextRelease": true}})
+        );
+        assert_eq!(
+            body("resolved:inCurrentRelease"),
+            json!({"status": "resolved", "statusDetails": {"inRelease": "latest"}})
+        );
+        // The second part is a sub-status of an archived issue only.
+        assert_eq!(body("unresolved:ongoing"), json!({"status": "unresolved"}));
+        assert_eq!(
+            body("ignored:archived_until_escalating"),
+            json!({"status": "ignored", "substatus": "archived_until_escalating"})
+        );
+        assert_eq!(
+            body("ignored:archived_forever"),
+            json!({"status": "ignored", "substatus": "archived_forever"})
+        );
+        for count in [10, 100, 1000] {
+            assert_eq!(
+                body(&format!("ignored:archived_until_condition_met:{count}")),
+                json!({"status": "ignored", "substatus": "archived_until_condition_met", "statusDetails": {"ignoreCount": count}})
+            );
+        }
+        assert!(STATUS_VALUES.iter().all(|v| status_body(v).is_some()));
+    }
+
+    #[test]
+    fn a_value_that_is_not_in_the_list_is_not_sent() {
+        for bad in [
+            "",
+            "resolve_dialog",
+            "resolved:inNextReleases",
+            "ignored",
+            "ignored:archived_until_condition_met",
+            "ignored:archived_until_condition_met:5",
+            "ignored:archived_until_condition_met:10:1",
+            "ignored:other",
+            "deleted",
+            " resolved",
+        ] {
+            assert_eq!(status_body(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_status_of_the_update_is_a_verdict() {
+        assert_eq!(put_verdict(200), Ok(()));
+        assert_eq!(put_verdict(204), Ok(()));
+        assert_eq!(put_verdict(401), Err(BAD_TOKEN.into()));
+        assert_eq!(put_verdict(403), Err(NO_WRITE.into()));
+        assert_eq!(put_verdict(404), Err(NO_ISSUE.into()));
+        assert_eq!(
+            put_verdict(500),
+            Err("Sentry に送れませんでした（500）".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn the_status_is_put_to_the_issue_with_the_bearer_credential() {
+        let (base, seen) = serve_once(OK).await;
+        let http = client().unwrap();
+        let body = status_body("ignored:archived_until_condition_met:100").unwrap();
+        assert_eq!(
+            put_status(&http, &base, "sntryu_abc", "acme", "1234", &body).await,
+            Ok(())
+        );
+        let request = seen.await.unwrap();
+        assert!(
+            request.starts_with("PUT /organizations/acme/issues/1234/ HTTP/1.1"),
+            "{request}"
+        );
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("authorization: bearer sntryu_abc"),
+            "{request}"
+        );
+        let sent = request.split_once("\r\n\r\n").unwrap().1;
+        assert_eq!(serde_json::from_str::<Value>(sent).unwrap(), body);
+    }
+
+    #[tokio::test]
+    async fn an_answer_of_sentry_to_the_update_is_told_as_it_is() {
+        let http = client().unwrap();
+        let body = status_body("resolved").unwrap();
+        for (answer, want) in [
+            (UNAUTHORIZED, BAD_TOKEN),
+            (FORBIDDEN, NO_WRITE),
+            ("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", NO_ISSUE),
+            (
+                "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:9/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                "Sentry に送れませんでした（302）",
+            ),
+        ] {
+            let (base, _seen) = serve_once(answer).await;
+            assert_eq!(
+                put_status(&http, &base, "sntryu_abc", "acme", "1234", &body).await,
+                Err(want.into())
+            );
+        }
+    }
+
     #[tokio::test]
     async fn a_token_with_a_line_break_is_refused_before_anything_is_sent() {
         let http = client().unwrap();
         assert_eq!(
             check_token(&http, "http://127.0.0.1:9", "a\r\nX: y").await,
+            Err(BAD_TOKEN.into())
+        );
+        assert_eq!(
+            put_status(
+                &http,
+                "http://127.0.0.1:9",
+                "a\r\nX: y",
+                "acme",
+                "1",
+                &json!({})
+            )
+            .await,
             Err(BAD_TOKEN.into())
         );
     }

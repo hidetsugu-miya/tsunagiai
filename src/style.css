@@ -2416,6 +2416,16 @@ a.st-file:hover { background: var(--hover); }
 .st-acts { display: flex; flex-wrap: wrap; gap: 8px; }
 .st-acts .text-btn { display: inline-flex; align-items: center; gap: 6px; box-sizing: border-box; height: 28px; padding: 0 12px; font: inherit; font-size: calc(13px * var(--fs)); text-decoration: none; }
 .st-acts .text-btn svg { width: 13px; height: 13px; }
+/* S-30: the buttons of a Sentry notification, and the dialog of Resolve and Archive over the dimmed screen of .scrim, in the frame of #account-popup. */
+.st-sentry { margin-top: 6px; }
+.st-sentry + .st-acts { margin-top: 6px; }
+.sentry-scrim { align-items: center; justify-content: center; }
+.sentry-dialog { display: flex; flex-direction: column; gap: 12px; width: 320px; max-width: calc(100vw - 32px); box-sizing: border-box; padding: 14px 16px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); box-shadow: 0 8px 24px rgba(0, 0, 0, .18); font-size: calc(13px * var(--fs)); }
+.sentry-dialog h2 { margin: 0; font-size: calc(15px * var(--fs)); }
+.sentry-row { display: flex; align-items: center; gap: 10px; }
+.sentry-select { flex: 1; min-width: 0; height: 30px; padding: 0 10px; border: 1px solid var(--chip-line); border-radius: 15px; background: var(--surface); font: inherit; color: inherit; }
+.sentry-select:focus { outline: 2px solid var(--accent); border-color: transparent; }
+.sentry-foot { display: flex; justify-content: flex-end; gap: 8px; }
 .st-sec > .text-btn { flex: none; display: inline-flex; align-items: center; height: 28px; padding: 0 12px; font: inherit; font-size: calc(13px * var(--fs)); text-decoration: none; }
 .st-acts .text-btn:disabled, .st-sec > .text-btn:disabled { opacity: .6; cursor: default; }
 .st-att > .st-more { align-self: flex-start; height: 28px; padding: 0 12px; font: inherit; font-size: calc(13px * var(--fs)); }
