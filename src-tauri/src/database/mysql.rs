@@ -242,7 +242,7 @@ pub async fn server_version(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -381,7 +381,7 @@ mod tests {
     const OK: &[u8] = b"\x00\x00\x00\x02\x00\x00\x00";
 
     #[derive(Clone, Copy)]
-    enum Server {
+    pub(in crate::database) enum Server {
         /// Takes the connection and closes it.
         Close,
         /// Takes the connection and says nothing.
@@ -409,7 +409,9 @@ mod tests {
     }
 
     /// The server on a local port, and the task that ends with the queries it was sent.
-    async fn serve(how: Server) -> (Endpoint, tokio::task::JoinHandle<Vec<String>>) {
+    pub(in crate::database) async fn serve(
+        how: Server,
+    ) -> (Endpoint, tokio::task::JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let task = tokio::spawn(async move {
