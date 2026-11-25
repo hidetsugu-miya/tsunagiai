@@ -3,6 +3,7 @@
 //! A session is opened by `database::open_session` (the script of the connection when it has one, then `mysql::connect`) and put here under the id of the connection.
 //! It lives until `disconnect` (the menu of the row, a save of the connection, a delete, a query that shows the stream broken, a script that has ended) or the app's exit (`close_all`, called from `lib.rs` before the scripts are ended).
 //! `disconnect` also ends the script of the session (`script::Scripts::close`).
+//! A connection that is still opening (the script awaited, the login) has no session yet: `begin` registers each attempt (`Opening`) with a signal of its own, and `stop` (the "切断" of a connection that is opening) sends it and then closes the session, so the attempt ends its script, answers `STOPPED` and `add` puts no session in. The signal is of one attempt: a connection opened again afterwards has its own and is not stopped by the old one.
 //! A script that ends after it was ready closes its session (D-1): `reap` looks for such sessions before a session is looked up or listed, and a query that fails because of it is told with the words of the script's end.
 //! The databases are read from `information_schema.SCHEMATA` and the tables from `information_schema.TABLES`, the name of the database as a bound value, never put in the SQL text.
 //! The format of the row count and of the size (`format_rows`, `format_size`) are pure functions.
@@ -10,22 +11,22 @@
 use std::{
     collections::HashMap,
     sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Mutex as StdMutex,
     },
     time::Duration,
 };
 
 use serde::Serialize;
 use sqlx::{mysql::MySqlConnection, Connection};
-use tokio::sync::Mutex;
+use tokio::sync::{watch, Mutex};
 #[cfg(test)]
 use ts_rs::TS;
 
 use super::{
     mysql::{self, QueryFailure},
     records::{self, DatabaseRecords},
-    script::Scripts,
+    script::{Cancel, Scripts, STOPPED},
     sql::{self, DatabaseSqlResult},
     structure::{self, DatabaseStructure},
     write::{self, DatabaseApplied, DatabaseChange},
@@ -124,10 +125,47 @@ struct Session {
     connection: Mutex<Option<MySqlConnection>>,
 }
 
+/// The attempts to open a connection that are on their way, by the id of the connection: the serial of each and the sender of its signal.
+type Pending = Arc<StdMutex<HashMap<String, Vec<(u64, watch::Sender<bool>)>>>>;
+
+/// One attempt to open a connection (D-3), made by `Sessions::begin` and forgotten when it is dropped.
+pub struct Opening {
+    id: String,
+    serial: u64,
+    stopped: watch::Receiver<bool>,
+    pending: Pending,
+}
+
+impl Opening {
+    /// The signal that `Sessions::stop` sends to this attempt, for the script's wait and the login.
+    pub fn signal(&self) -> Cancel {
+        self.stopped.clone()
+    }
+
+    /// Whether the connection was stopped while this attempt was on its way.
+    pub fn stopped(&self) -> bool {
+        *self.stopped.borrow()
+    }
+}
+
+impl Drop for Opening {
+    fn drop(&mut self) {
+        let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(attempts) = pending.get_mut(&self.id) {
+            attempts.retain(|(serial, _)| *serial != self.serial);
+            if attempts.is_empty() {
+                pending.remove(&self.id);
+            }
+        }
+    }
+}
+
 /// The open sessions by the id of the connection. Managed by Tauri (`lib.rs`), so that the app's exit closes them.
 #[derive(Default)]
 pub struct Sessions {
     open: Mutex<HashMap<String, Arc<Session>>>,
+    pending: Pending,
+    serial: AtomicU64,
 }
 
 async fn close_connection(connection: MySqlConnection) {
@@ -154,7 +192,37 @@ impl Sessions {
         ids
     }
 
+    /// Registers an attempt to open the connection of `id`, which `stop` can reach until it is dropped.
+    pub fn begin(&self, id: &str) -> Opening {
+        let serial = self.serial.fetch_add(1, Ordering::Relaxed);
+        let (sender, stopped) = watch::channel(false);
+        self.pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(id.to_owned())
+            .or_default()
+            .push((serial, sender));
+        Opening {
+            id: id.to_owned(),
+            serial,
+            stopped,
+            pending: self.pending.clone(),
+        }
+    }
+
+    /// Stops the attempts to open the connection of `id` that are on their way, and closes its session and its script (`disconnect`): the signal goes first, so that `add`, which looks at it under the lock of the sessions, either sees it or has put its session in before `disconnect` takes the lock.
+    pub async fn stop(&self, scripts: &Scripts, id: &str) {
+        {
+            let pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+            for (_, sender) in pending.get(id).into_iter().flatten() {
+                sender.send_replace(true);
+            }
+        }
+        self.disconnect(scripts, id).await;
+    }
+
     /// Keeps `connection` under `id`. When another press opened one first, that one stays and this one is closed with its script.
+    /// When `opening` was stopped, nothing is kept: the connection and its script are closed and the answer is `STOPPED`.
     pub async fn add(
         &self,
         scripts: &Scripts,
@@ -162,15 +230,21 @@ impl Sessions {
         script: Option<u64>,
         login: Login,
         connection: MySqlConnection,
-    ) {
+        opening: Option<&Opening>,
+    ) -> Result<(), String> {
         let mut open = self.open.lock().await;
-        if open.contains_key(id) {
+        let stopped = opening.is_some_and(Opening::stopped);
+        if stopped || open.contains_key(id) {
             drop(open);
             close_connection(connection).await;
             if let Some(script) = script {
                 scripts.close(script).await;
             }
-            return;
+            return if stopped {
+                Err(STOPPED.to_owned())
+            } else {
+                Ok(())
+            };
         }
         open.insert(
             id.to_owned(),
@@ -180,6 +254,7 @@ impl Sessions {
                 connection: Mutex::new(Some(connection)),
             }),
         );
+        Ok(())
     }
 
     /// Closes every session whose script has ended since it was ready, and answers the id of each with the words of the end.
@@ -587,6 +662,79 @@ mod tests {
         assert!(!sessions.has(&scripts, "a").await);
     }
 
+    async fn logged_in() -> (MySqlConnection, tokio::task::JoinHandle<Vec<String>>) {
+        use super::super::mysql::tests::{serve, Server};
+        let (endpoint, server) = serve(Server::Allow).await;
+        let connection = mysql::connect(&endpoint, "reader", "pw").await.unwrap();
+        (connection, server)
+    }
+
+    #[tokio::test]
+    async fn a_stopped_attempt_puts_no_session_in_even_after_the_login_and_a_new_one_is_not_stopped(
+    ) {
+        let sessions = Sessions::default();
+        let scripts = Scripts::default();
+        let old = sessions.begin("a");
+        assert!(!old.stopped());
+        sessions.stop(&scripts, "a").await;
+        assert!(old.stopped());
+        // The login was done before the stop was seen: the session is closed and not kept.
+        let (connection, _server) = logged_in().await;
+        let told = sessions
+            .add(
+                &scripts,
+                "a",
+                None,
+                Login::default(),
+                connection,
+                Some(&old),
+            )
+            .await;
+        assert_eq!(told, Err(STOPPED.to_owned()));
+        assert!(!sessions.has(&scripts, "a").await);
+        // The connection is opened again: its attempt has its own signal.
+        let new = sessions.begin("a");
+        assert!(!new.stopped());
+        let (connection, _server) = logged_in().await;
+        sessions
+            .add(
+                &scripts,
+                "a",
+                None,
+                Login::default(),
+                connection,
+                Some(&new),
+            )
+            .await
+            .unwrap();
+        assert!(sessions.has(&scripts, "a").await);
+        // The old attempt, late, closes neither the session of the new one nor itself into it.
+        let (connection, _server) = logged_in().await;
+        assert_eq!(
+            sessions
+                .add(
+                    &scripts,
+                    "a",
+                    None,
+                    Login::default(),
+                    connection,
+                    Some(&old)
+                )
+                .await,
+            Err(STOPPED.to_owned())
+        );
+        assert!(sessions.has(&scripts, "a").await);
+        // A stop of another connection reaches neither.
+        sessions.stop(&scripts, "b").await;
+        assert!(!new.stopped());
+        // The close of an open connection is as it was: the session goes, and the attempt that put it in is stopped too.
+        sessions.stop(&scripts, "a").await;
+        assert!(!sessions.has(&scripts, "a").await);
+        assert!(new.stopped());
+        drop((old, new));
+        assert!(sessions.pending.lock().unwrap().is_empty());
+    }
+
     #[tokio::test]
     async fn a_connection_that_is_not_open_is_closed_already_and_cannot_be_read() {
         let sessions = Sessions::default();
@@ -669,6 +817,7 @@ mod tests {
             &format!("touch '{}'\nsleep 30", up_marker.display()),
             timing,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -683,6 +832,7 @@ mod tests {
                 down_marker.display()
             ),
             timing,
+            None,
             None,
         )
         .await

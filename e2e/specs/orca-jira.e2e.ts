@@ -616,6 +616,38 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     expect(await waitForCalls("jira_set_description")).toEqual([{ key: "EX-1", base: "The new **description**", markdown: "Again\n" }]);
   });
 
+  it("drops the answer of a read that was on its way when a description or a comment was saved, so that it does not put the old ticket back (J-2, #873)", async () => {
+    await openEditable();
+    const reload = $('.orca-jira-tab-head .icon-btn[aria-label="読み直す"]');
+    await mock("jira_issue", holds);
+    await reload.click();
+    await waitForCalls("jira_issue");
+    await expect(reload).toBeDisabled();
+    // The pencil and the button of a new comment work while the read is on its way.
+    await mock("jira_set_description", "The new **description**");
+    await $(".orca-jira-desc-edit").click();
+    await typeInto(descField, "The new description");
+    await $(".orca-jira-save").click();
+    await waitForCalls("jira_set_description");
+    await waitForCount("#orca-jira-desc-input", 0);
+    expect(await descText()).toBe("The new description");
+    await expect(reload).toBeEnabled();
+    const added = { author: "Me", created: "2026-11-25 10:00", body: "A new comment" };
+    await mock("jira_add_comment", added);
+    await $(".orca-jira-comment-add").click();
+    await typeInto(commentField, "A new comment");
+    await $(".orca-jira-comment-submit").click();
+    await waitForCalls("jira_add_comment");
+    await waitForCount("#orca-jira-comment-input", 0);
+    expect(await textsOf(".orca-jira-comments-head")).toEqual(["コメント 3 件"]);
+    // The read answers late with the ticket as it was: the tab keeps the description and the comment that Jira has taken.
+    await release("jira_issue", detailOf["EX-1"]);
+    await expect($(".orca-jira-tab .orca-jira-title")).toBeDisplayed();
+    expect(await descText()).toBe("The new description");
+    expect(await textsOf(".orca-jira-comments-head")).toEqual(["コメント 3 件"]);
+    await expect(reload).toBeEnabled();
+  });
+
   it("keeps the editor off while Jira answers, and keeps the typing with the reason in a card when Jira refuses (J-2, #873)", async () => {
     await openEditable();
     await mock("jira_set_description", holds);

@@ -35,6 +35,26 @@ use tokio::{
 
 use super::mysql::shorten;
 
+/// The words of a connection that was stopped while it opened (D-3). The screen drops them, because it asked for the stop.
+pub const STOPPED: &str = "接続を切断しました";
+
+/// The signal that stops a connection that is opening: it holds `true` once sent, and stays so. `Sessions::begin` makes one for each attempt.
+pub type Cancel = watch::Receiver<bool>;
+
+fn is_cancelled(cancel: &Option<Cancel>) -> bool {
+    cancel.as_ref().is_some_and(|c| *c.borrow())
+}
+
+/// Resolves when the signal is sent; never when there is none.
+pub async fn cancelled(cancel: &mut Option<Cancel>) {
+    if let Some(cancel) = cancel {
+        if cancel.wait_for(|sent| *sent).await.is_ok() {
+            return;
+        }
+    }
+    std::future::pending::<()>().await;
+}
+
 /// The environment variable that gives the script the port it is to listen on.
 pub const PORT_ENV: &str = "TSUNAGIAI_PORT";
 /// The name that the variable had before the app was renamed. It is given the same value, so that a saved script that reads it keeps working.
@@ -443,6 +463,7 @@ impl Drop for Script {
 /// Starts the script `body` written in a folder of `dir`, with `port` given as `TSUNAGIAI_PORT` and `COOKAPPS_PORT`, and answers when `host:port` answers, or why it does not.
 /// A port that answers before the script is run is an error, and nothing is run.
 /// While the script is awaited, each line of its output goes to `on_line` (none: the output is read and dropped).
+/// When `cancel` is sent while the script is awaited (or before), its group is ended as it is when the wait runs out, and the answer is `STOPPED`; before the script is run nothing is run.
 pub async fn start(
     dir: &Path,
     host: &str,
@@ -450,11 +471,18 @@ pub async fn start(
     body: &str,
     timing: Timing,
     on_line: Option<OnLine>,
+    mut cancel: Option<Cancel>,
 ) -> Result<Script, String> {
     // A name that cannot be looked up is not in use: the script may be what makes it known.
-    let mut addrs = resolve(host, port).await;
+    let mut addrs = tokio::select! {
+        found = resolve(host, port) => found,
+        _ = cancelled(&mut cancel) => return Err(STOPPED.to_owned()),
+    };
     if !addrs.is_empty() && answers(&addrs).await {
         return Err(in_use_text(host, port));
+    }
+    if is_cancelled(&cancel) {
+        return Err(STOPPED.to_owned());
     }
     let folder = {
         let (dir, body) = (dir.to_owned(), body.to_owned());
@@ -514,6 +542,10 @@ pub async fn start(
     let deadline = Instant::now() + timing.ready;
     let mut looked_up = Instant::now();
     loop {
+        if is_cancelled(&cancel) {
+            let _ = script.finish().await;
+            return Err(STOPPED.to_owned());
+        }
         let ended = script.done.borrow().clone();
         if let Some(exit) = ended {
             let _ = script.finish().await;
@@ -528,6 +560,7 @@ pub async fn start(
             let lookup = tokio::select! {
                 found = resolve(host, port) => Some(found),
                 _ = script.done.changed() => None,
+                _ = cancelled(&mut cancel) => None,
                 _ = tokio::time::sleep(left) => None,
             };
             looked_up = Instant::now();
@@ -549,6 +582,7 @@ pub async fn start(
         tokio::select! {
             _ = tokio::time::sleep(POLL.min(deadline - now)) => {}
             _ = script.done.changed() => {}
+            _ = cancelled(&mut cancel) => {}
         }
     }
 }
@@ -562,15 +596,25 @@ pub struct Scripts {
 
 impl Scripts {
     /// Starts the script `body`, in a folder of the system's temporary folder, and answers its id (what `close` takes) once `host:port` answers. The error is in Japanese.
-    /// The lines of its output go to `on_line` until then (`start`).
+    /// The lines of its output go to `on_line` until then, and `cancel` stops the wait (`start`).
     pub async fn open(
         &self,
         host: &str,
         port: u16,
         body: &str,
         on_line: Option<OnLine>,
+        cancel: Option<Cancel>,
     ) -> Result<u64, String> {
-        let script = start(&std::env::temp_dir(), host, port, body, TIMING, on_line).await?;
+        let script = start(
+            &std::env::temp_dir(),
+            host,
+            port,
+            body,
+            TIMING,
+            on_line,
+            cancel,
+        )
+        .await?;
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         self.open.lock().await.insert(id, script);
         Ok(id)
@@ -933,7 +977,7 @@ mod tests {
                 "echo \"${PORT_ENV} ${OLD_PORT_ENV}\" > '{}'\nsleep 30",
                 out.display()
             );
-            let script = start(&dir.0, HOST, port, &body, quick(10_000), None)
+            let script = start(&dir.0, HOST, port, &body, quick(10_000), None, None)
                 .await
                 .unwrap();
             assert_eq!(script.exited(), None);
@@ -965,7 +1009,7 @@ mod tests {
                 "#!/bin/bash\necho \"$BASH_VERSION\" > '{}'\nsleep 30",
                 out.display()
             );
-            let script = start(&dir.0, HOST, port, &body, quick(10_000), None)
+            let script = start(&dir.0, HOST, port, &body, quick(10_000), None, None)
                 .await
                 .unwrap();
             for _ in 0..100 {
@@ -996,7 +1040,7 @@ mod tests {
                 free_port(),
                 "echo one\nsleep 0.3\necho two >&2\nsleep 0.3\necho '  '\nprintf 'x\\033y\\n'\nexit 1",
                 quick(10_000),
-                Some(on_line),
+                Some(on_line), None,
             )
             .await;
             assert_eq!(*lines.lock().unwrap(), ["one", "two", "xy"]);
@@ -1018,9 +1062,17 @@ mod tests {
                 "echo before\ntouch '{}'\nsleep 1\necho late\necho late >&2\nsleep 30",
                 marker.display()
             );
-            let script = start(&dir.0, HOST, port, &body, quick(10_000), Some(on_line))
-                .await
-                .unwrap();
+            let script = start(
+                &dir.0,
+                HOST,
+                port,
+                &body,
+                quick(10_000),
+                Some(on_line),
+                None,
+            )
+            .await
+            .unwrap();
             tokio::time::sleep(Duration::from_millis(1_800)).await;
             assert!(!lines.lock().unwrap().contains(&"late".to_owned()));
             assert_eq!(script.exited(), None);
@@ -1036,6 +1088,7 @@ mod tests {
                 free_port(),
                 "echo one >&2\necho two >&2\necho three >&2\nexit 0",
                 quick(10_000),
+                None,
                 None,
             )
             .await;
@@ -1055,6 +1108,7 @@ mod tests {
                 free_port(),
                 "echo nope >&2\nexit 7",
                 quick(10_000),
+                None,
                 None,
             )
             .await
@@ -1076,7 +1130,7 @@ mod tests {
             );
             let started = Instant::now();
             // 2 s, not less: on a loaded machine the stderr of the script was not read yet after 400 ms.
-            let err = start(&dir.0, HOST, free_port(), &body, quick(2_000), None)
+            let err = start(&dir.0, HOST, free_port(), &body, quick(2_000), None, None)
                 .await
                 .err()
                 .unwrap();
@@ -1085,6 +1139,58 @@ mod tests {
             assert!(err.ends_with("waiting"), "{err}");
             // The `sleep` is a child of the script, in its group: it is ended with it.
             assert!(gone(read_pid(&pid_file).await).await);
+            assert_eq!(dir.leftovers(), 0);
+        }
+
+        #[tokio::test]
+        async fn a_stop_while_it_is_awaited_ends_its_whole_group_and_answers_that_it_was_stopped() {
+            let dir = Dir::new("stopped");
+            let pid_file = dir.file("pid");
+            let body = format!("sleep 30 &\necho $! > '{}'\nwait", pid_file.display());
+            let (stop, cancel) = watch::channel(false);
+            let started = Instant::now();
+            let (result, _) = tokio::join!(
+                start(
+                    &dir.0,
+                    HOST,
+                    free_port(),
+                    &body,
+                    quick(60_000),
+                    None,
+                    Some(cancel)
+                ),
+                async {
+                    let pid = read_pid(&pid_file).await;
+                    stop.send(true).unwrap();
+                    pid
+                }
+            );
+            assert_eq!(result.err().as_deref(), Some(STOPPED));
+            assert!(started.elapsed() < Duration::from_secs(10));
+            // The `sleep` is a child of the script, in its group: it is ended with it.
+            assert!(gone(read_pid(&pid_file).await).await);
+            assert_eq!(dir.leftovers(), 0);
+        }
+
+        #[tokio::test]
+        async fn a_stop_sent_before_it_starts_runs_nothing() {
+            let dir = Dir::new("stopped-first");
+            let marker = dir.file("ran");
+            let body = format!("touch '{}'\nsleep 30", marker.display());
+            let (_stop, cancel) = watch::channel(true);
+            let err = start(
+                &dir.0,
+                HOST,
+                free_port(),
+                &body,
+                quick(10_000),
+                None,
+                Some(cancel),
+            )
+            .await
+            .err();
+            assert_eq!(err.as_deref(), Some(STOPPED));
+            assert!(!marker.exists());
             assert_eq!(dir.leftovers(), 0);
         }
 
@@ -1100,6 +1206,7 @@ mod tests {
                 port,
                 &format!("touch '{}'\nsleep 1\necho oops >&2\nexit 3", up.display()),
                 quick(10_000),
+                None,
                 None,
             )
             .await
@@ -1130,7 +1237,7 @@ mod tests {
                 "trap '' TERM\necho $$ > '{}'\nwhile true; do sleep 0.1; done",
                 pid_file.display()
             );
-            let script = start(&dir.0, HOST, port, &body, quick(10_000), None)
+            let script = start(&dir.0, HOST, port, &body, quick(10_000), None, None)
                 .await
                 .unwrap();
             let pid = read_pid(&pid_file).await;
@@ -1151,7 +1258,7 @@ mod tests {
             let body = format!("sleep 300 &\necho $! > '{}'\nwait", pid_file.display());
             let runtime = tokio::runtime::Runtime::new().unwrap();
             let script = runtime
-                .block_on(start(&dir.0, HOST, port, &body, quick(10_000), None))
+                .block_on(start(&dir.0, HOST, port, &body, quick(10_000), None, None))
                 .unwrap();
             let child = runtime.block_on(read_pid(&pid_file));
             assert!(alive(child));
@@ -1177,7 +1284,7 @@ mod tests {
                 grace: Duration::from_secs(3),
             };
             let body = format!("touch '{}'\nsleep 30", up.display());
-            let script = start(&dir.0, HOST, port, &body, timing, None)
+            let script = start(&dir.0, HOST, port, &body, timing, None, None)
                 .await
                 .unwrap();
             let started = Instant::now();
@@ -1195,7 +1302,7 @@ mod tests {
             let port = listener.local_addr().unwrap().port();
             let ran = dir.file("ran");
             let body = format!("echo run > '{}'\nsleep 30", ran.display());
-            let err = start(&dir.0, HOST, port, &body, quick(10_000), None)
+            let err = start(&dir.0, HOST, port, &body, quick(10_000), None, None)
                 .await
                 .err()
                 .unwrap();
@@ -1214,7 +1321,7 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             let _listener = listen_after(port, ran);
-            let script = start(&dir.0, HOST, port, &body, quick(10_000), None)
+            let script = start(&dir.0, HOST, port, &body, quick(10_000), None, None)
                 .await
                 .unwrap();
             script.stop().await;
@@ -1227,7 +1334,7 @@ mod tests {
             assert!(resolve(host, 3307).await.is_empty());
             let ran = dir.file("ran");
             let body = format!("echo run > '{}'\necho waiting >&2\nsleep 30", ran.display());
-            let err = start(&dir.0, host, free_port(), &body, quick(1_500), None)
+            let err = start(&dir.0, host, free_port(), &body, quick(1_500), None, None)
                 .await
                 .err()
                 .unwrap();
@@ -1245,7 +1352,7 @@ mod tests {
             let _listener = listen_after(port, up.clone());
             let scripts = Scripts::default();
             let body = format!("touch '{}'\nsleep 30", up.display());
-            let id = scripts.open(HOST, port, &body, None).await.unwrap();
+            let id = scripts.open(HOST, port, &body, None, None).await.unwrap();
             assert_eq!(scripts.exited(id).await, None);
             scripts.close(id).await;
             assert!(scripts.open.lock().await.is_empty());
@@ -1259,7 +1366,7 @@ mod tests {
             let _listener = listen_after(port, up.clone());
             let scripts = Scripts::default();
             let body = format!("touch '{}'\nsleep 30", up.display());
-            let script = start(&dir.0, HOST, port, &body, quick(10_000), None)
+            let script = start(&dir.0, HOST, port, &body, quick(10_000), None, None)
                 .await
                 .unwrap();
             scripts.open.lock().await.insert(5, script);

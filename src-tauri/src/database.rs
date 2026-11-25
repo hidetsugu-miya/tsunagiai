@@ -463,11 +463,12 @@ fn test_password(
 /// Starts the script of `profile` when it has one (D-1) and answers where MySQL is reached, and the id of the script to end (none when there is no script).
 /// The host and the port are the connection's own, and are checked here too: a profile saved with none (#719) is refused until they are put in.
 /// The test of a connection (D-2) and the opening of one (D-3) both go through this.
-/// `on_line` gets the lines of the script's output while it is awaited (D-3).
+/// `on_line` gets the lines of the script's output while it is awaited (D-3), and `cancel` stops the wait (D-3, `Sessions::stop`).
 async fn open_endpoint(
     scripts: &script::Scripts,
     profile: &DatabaseProfile,
     on_line: Option<script::OnLine>,
+    cancel: Option<script::Cancel>,
 ) -> Result<(mysql::Endpoint, Option<u64>), String> {
     let port = check_address(&profile.db_host, profile.db_port)?;
     let script = if profile.script.is_empty() {
@@ -475,7 +476,7 @@ async fn open_endpoint(
     } else {
         Some(
             scripts
-                .open(&profile.db_host, port, &profile.script, on_line)
+                .open(&profile.db_host, port, &profile.script, on_line, cancel)
                 .await?,
         )
     };
@@ -495,7 +496,7 @@ pub async fn test_connection(
     password: &str,
 ) -> Result<String, String> {
     let profile = check(profile, &[])?;
-    let (endpoint, script) = open_endpoint(scripts, &profile, None).await?;
+    let (endpoint, script) = open_endpoint(scripts, &profile, None, None).await?;
     let tested = mysql::server_version(&endpoint, &profile.username, password).await;
     if let Some(id) = script {
         scripts.close(id).await;
@@ -578,15 +579,22 @@ fn login_unchanged(
 }
 
 /// Starts the script and opens the session of `profile` and keeps it in `sessions`. A script started for a session that cannot be logged in to is ended again.
+/// When `opening` is stopped (`Sessions::stop`) while the script is awaited or the login is on its way, the script is ended and the answer is `script::STOPPED`; one stopped after the login is not kept (`Sessions::add`).
 async fn open_session(
     sessions: &session::Sessions,
     scripts: &script::Scripts,
     profile: &DatabaseProfile,
     password: &str,
     on_line: Option<script::OnLine>,
+    opening: Option<&session::Opening>,
 ) -> Result<(), String> {
-    let (endpoint, script) = open_endpoint(scripts, profile, on_line).await?;
-    let connection = match mysql::connect(&endpoint, &profile.username, password).await {
+    let mut cancel = opening.map(session::Opening::signal);
+    let (endpoint, script) = open_endpoint(scripts, profile, on_line, cancel.clone()).await?;
+    let connected = tokio::select! {
+        connected = mysql::connect(&endpoint, &profile.username, password) => connected,
+        _ = script::cancelled(&mut cancel) => Err(script::STOPPED.to_owned()),
+    };
+    let connection = match connected {
         Ok(connection) => connection,
         Err(e) => {
             if let Some(id) = script {
@@ -596,9 +604,15 @@ async fn open_session(
         }
     };
     sessions
-        .add(scripts, &profile.id, script, Login::of(profile), connection)
-        .await;
-    Ok(())
+        .add(
+            scripts,
+            &profile.id,
+            script,
+            Login::of(profile),
+            connection,
+            opening,
+        )
+        .await
 }
 
 /// The saved connections, each with whether its password is saved.
@@ -705,6 +719,7 @@ pub async fn database_profile_delete(
 
 /// Opens the connection of `id` when it is not open (the script, then the session with the saved password) and answers the names of its databases.
 /// A connection whose databases cannot be read is closed again.
+/// `database_disconnect` of the same `id` while it opens (the script awaited, the login, the read of the databases) stops it: the script is ended, no session is kept, and the answer is `script::STOPPED` (D-3).
 #[tauri::command]
 pub async fn database_connect(
     app: AppHandle,
@@ -712,6 +727,7 @@ pub async fn database_connect(
     scripts: tauri::State<'_, script::Scripts>,
     id: String,
 ) -> Result<Vec<String>, String> {
+    let opening = sessions.begin(&id);
     if !sessions.has(&scripts, &id).await {
         let dir = config_dir(&app)?;
         let wanted = id.clone();
@@ -720,7 +736,15 @@ pub async fn database_connect(
                 .await
                 .map_err(|e| e.to_string())??;
         let on_line = script_output_to_screen(&app, &id);
-        open_session(&sessions, &scripts, &profile, &password, Some(on_line)).await?;
+        open_session(
+            &sessions,
+            &scripts,
+            &profile,
+            &password,
+            Some(on_line),
+            Some(&opening),
+        )
+        .await?;
         // A save or a delete that came while it opened found no session to close: look again, and close what was opened with a login that is gone.
         let dir = config_dir(&app)?;
         let wanted = id.clone();
@@ -735,7 +759,12 @@ pub async fn database_connect(
             return Err(why);
         }
     }
-    match sessions.databases(&scripts, &id).await {
+    let read = sessions.databases(&scripts, &id).await;
+    // A stop that came while the databases were read has closed the session itself, and what this answers is for a screen that dropped the row; a session opened again meanwhile is not touched.
+    if opening.stopped() {
+        return Err(script::STOPPED.to_owned());
+    }
+    match read {
         Ok(databases) => Ok(databases),
         Err(e) => {
             sessions.disconnect(&scripts, &id).await;
@@ -816,14 +845,14 @@ pub async fn database_sql(
     sessions.sql(&scripts, &id, &database, &sql).await
 }
 
-/// Closes the connection of `id` and ends its script. A connection that is not open is closed already.
+/// Closes the connection of `id` and ends its script. A connection that is still opening is stopped (`Sessions::stop`, D-3). A connection that is not open is closed already.
 #[tauri::command]
 pub async fn database_disconnect(
     sessions: tauri::State<'_, session::Sessions>,
     scripts: tauri::State<'_, script::Scripts>,
     id: String,
 ) -> Result<(), String> {
-    sessions.disconnect(&scripts, &id).await;
+    sessions.stop(&scripts, &id).await;
     Ok(())
 }
 
@@ -1585,7 +1614,7 @@ mod tests {
             db_port: 3307,
             ..direct("a")
         };
-        let (endpoint, script) = open_endpoint(&scripts, &profile, None).await.unwrap();
+        let (endpoint, script) = open_endpoint(&scripts, &profile, None, None).await.unwrap();
         assert_eq!(
             (endpoint.host.as_str(), endpoint.port, endpoint.scripted),
             ("db.example.com", 3307, false)
@@ -1603,7 +1632,7 @@ mod tests {
             ..scripted("a")
         };
         assert_eq!(
-            open_endpoint(&scripts, &old, None).await.unwrap_err(),
+            open_endpoint(&scripts, &old, None, None).await.unwrap_err(),
             "DB のホストを入力してください"
         );
         assert_eq!(
@@ -1617,7 +1646,7 @@ mod tests {
             ..scripted("a")
         };
         assert_eq!(
-            open_endpoint(&scripts, &out_of_range, None)
+            open_endpoint(&scripts, &out_of_range, None, None)
                 .await
                 .unwrap_err(),
             "ポートは 1 から 65535 の間で入力してください"
@@ -1627,12 +1656,14 @@ mod tests {
             ..direct("a")
         };
         assert_eq!(
-            open_endpoint(&scripts, &no_port, None).await.unwrap_err(),
+            open_endpoint(&scripts, &no_port, None, None)
+                .await
+                .unwrap_err(),
             "ポートは 1 から 65535 の間で入力してください"
         );
         let sessions = session::Sessions::default();
         assert_eq!(
-            open_session(&sessions, &scripts, &old, "pw", None)
+            open_session(&sessions, &scripts, &old, "pw", None, None)
                 .await
                 .unwrap_err(),
             "DB のホストを入力してください"
@@ -1657,7 +1688,7 @@ mod tests {
             db_port: u32::from(port),
             ..direct("a")
         };
-        let (endpoint, script) = open_endpoint(&scripts, &profile, None).await.unwrap();
+        let (endpoint, script) = open_endpoint(&scripts, &profile, None, None).await.unwrap();
         assert_eq!(
             (endpoint.host.as_str(), endpoint.port, endpoint.scripted),
             ("127.0.0.1", port, true)
@@ -1666,6 +1697,60 @@ mod tests {
         assert_eq!(scripts.exited(id).await, None);
         scripts.close(id).await;
         let _ = std::fs::remove_file(&marker);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_stop_while_the_script_is_awaited_ends_it_and_the_connection_can_be_opened_again() {
+        use script::support::free_port;
+        let scripts = script::Scripts::default();
+        let sessions = session::Sessions::default();
+        let pid_file = std::env::temp_dir().join(format!(
+            "tsunagiai-database-stop-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&pid_file);
+        let profile = DatabaseProfile {
+            script: format!("echo $$ > '{}'\nsleep 30", pid_file.display()),
+            db_host: "127.0.0.1".to_owned(),
+            db_port: u32::from(free_port()),
+            ..direct("a")
+        };
+        let opening = sessions.begin("a");
+        let (told, pid) = tokio::join!(
+            open_session(&sessions, &scripts, &profile, "pw", None, Some(&opening)),
+            async {
+                let pid = loop {
+                    if let Ok(pid) = std::fs::read_to_string(&pid_file)
+                        .unwrap_or_default()
+                        .trim()
+                        .parse::<i32>()
+                    {
+                        break pid;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                };
+                sessions.stop(&scripts, "a").await;
+                pid
+            }
+        );
+        assert_eq!(told, Err(script::STOPPED.to_owned()));
+        assert!(opening.stopped());
+        assert!(!sessions.has(&scripts, "a").await);
+        // The group of the script is ended (SIGKILL 0 only asks whether the process is there).
+        let mut alive = true;
+        for _ in 0..100 {
+            // SAFETY: signal 0 only asks whether the process exists.
+            alive = unsafe { libc::kill(pid, 0) } == 0;
+            if !alive {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(!alive);
+        let _ = std::fs::remove_file(&pid_file);
+        // The same id opens again with an attempt of its own.
+        assert!(!sessions.begin("a").stopped());
     }
 
     #[cfg(unix)]
@@ -1688,7 +1773,7 @@ mod tests {
         );
         let sessions = session::Sessions::default();
         assert_eq!(
-            open_session(&sessions, &scripts, &profile, "pw", None)
+            open_session(&sessions, &scripts, &profile, "pw", None, None)
                 .await
                 .unwrap_err(),
             expected
@@ -1698,7 +1783,7 @@ mod tests {
             script: String::new(),
             ..profile
         };
-        assert!(open_endpoint(&scripts, &plain, None).await.is_ok());
+        assert!(open_endpoint(&scripts, &plain, None, None).await.is_ok());
     }
 
     #[test]
@@ -1773,7 +1858,9 @@ mod tests {
         };
         let expected = "接続のスクリプトが、準備ができる前に終了しました（終了コード 0）。標準エラーの最後の行: no route";
         assert_eq!(
-            open_endpoint(&scripts, &profile, None).await.unwrap_err(),
+            open_endpoint(&scripts, &profile, None, None)
+                .await
+                .unwrap_err(),
             expected
         );
         assert_eq!(
@@ -1784,7 +1871,7 @@ mod tests {
         );
         let sessions = session::Sessions::default();
         assert_eq!(
-            open_session(&sessions, &scripts, &profile, "pw", None)
+            open_session(&sessions, &scripts, &profile, "pw", None, None)
                 .await
                 .unwrap_err(),
             expected

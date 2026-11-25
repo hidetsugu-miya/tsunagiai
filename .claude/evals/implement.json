@@ -154,6 +154,34 @@
         "R-1 のレビューの文を、引用かデータの囲みの中に入れている（地の文に混ぜない）",
         "Release PR の本文に `Closes #1450` を書くことを求めている（Release PR のマージのあとに別に閉じるのではない）"
       ]
+    },
+    {
+      "id": 12,
+      "name": "one-issue-bundle-lets-implementer-run-only-spec",
+      "prompt": "あなたは implement の実行の手順 3 にいるリードです。`.claude/skills/implement/SKILL.md` の手順 3 を読み、`.claude/evals/files/implement/bundle-one-e2e-issue.md` の束について、#1710 を実装する `code-implementer` を起動する prompt を書き出してください。この記録が、あなたの持つ実行の文脈です。起動はせず、コマンドも実行しないでください。",
+      "expected_output": "束は 1 件だけで同時に動く担当がいないので、起動の prompt が、担当に足した spec を `run-e2e.sh --only orca-sort` で自分で回して、落ちたら直してから返すよう命じている。全件の `run-e2e.sh` と `run-ci.sh` は許していない。担当は commit しない。",
+      "files": [
+        ".claude/evals/files/implement/bundle-one-e2e-issue.md"
+      ],
+      "assertions": [
+        "起動の prompt が、担当に足した spec を `run-e2e.sh --only orca-sort` で自分で回すよう命じている（回してよい、ではなく、回して失敗を直してから返す形）",
+        "起動の prompt が、全件の `run-e2e.sh` と `run-ci.sh` を許していない",
+        "起動の prompt が、担当に commit させておらず、ほかの担当が同じ木で動くという文（ほかのファイルを触らない、git add などを打たない）を入れていない"
+      ]
+    },
+    {
+      "id": 13,
+      "name": "two-issue-bundle-keeps-implementers-off-e2e",
+      "prompt": "あなたは implement の実行の手順 3 にいるリードです。`.claude/skills/implement/SKILL.md` の手順 3 を読み、`.claude/evals/files/implement/bundle-two-issues.md` の束について、#1710 を実装する `code-implementer` を起動する prompt を書き出してください。この記録が、あなたの持つ実行の文脈です。起動はせず、コマンドも実行しないでください。",
+      "expected_output": "束は 2 件で担当が同じ木で同時に動くので、起動の prompt は、担当に `run-e2e.sh`（`--only` を含む）も `run-ci.sh` も回させない。ほかの担当が別のファイルで動くので、ほかのファイルを触らず、git add、git commit、git stash、git checkout、git reset を打たないと書く。",
+      "files": [
+        ".claude/evals/files/implement/bundle-two-issues.md"
+      ],
+      "assertions": [
+        "起動の prompt が、担当に `run-e2e.sh --only` を含めて `run-e2e.sh` を回させていない",
+        "起動の prompt が、担当に `run-ci.sh` を回させていない",
+        "起動の prompt が、ほかの担当が同じ木で別のファイルを触っているので、ほかのファイルを触らず、git add、git commit、git stash、git checkout、git reset を打たないと書いている"
+      ]
     }
   ]
 }
