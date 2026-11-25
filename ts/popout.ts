@@ -11,6 +11,7 @@ import { $, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
 import { CLOSE_SVG, fillIcons } from "./icons.js";
 import { invoke } from "./ipc.js";
+import { initTooltip } from "./tooltip.js";
 import { setCopy } from "./database-work.js";
 import { closeFile, initOrcaEditor, openFile, refreshEditors, saveFile, setAutosaveMs, showEditors } from "./orca-editor.js";
 import { closeDatabaseTab, initDatabaseTabs, restoreDatabaseTab, showDatabaseTabs } from "./orca-database-tabs.js";
@@ -154,6 +155,7 @@ async function restore() {
 
 async function init() {
   fillIcons();
+  initTooltip();
   initOrcaTerminal(fail, () => {});
   initOrcaEditor({
     changed: () => {

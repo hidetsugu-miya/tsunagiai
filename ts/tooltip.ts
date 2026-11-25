@@ -1,5 +1,4 @@
 // Tooltip for icon-only controls. The native title is slow or missing in WKWebView, so the text is the control's aria-label (and its `data-shortcut`, when it has one).
-import { popupOpen } from "./accounts.js";
 import { el } from "./dom.js";
 
 const TIP_DELAY_MS = 300;
@@ -11,12 +10,14 @@ function hideTip() {
   tip.hidden = true;
 }
 
-// Right of a sidebar control, above a footer control (the footer is at the window's bottom edge), below any other; kept inside the window. While the account popup is open it covers that area, so the sidebar's account, workspace and Claude avatars show none.
+// Right of a sidebar control, above a footer control (the footer is at the window's bottom edge), below any other; kept inside the window. A target that `covered` names shows none (the main window passes the avatars of the sidebar while the account popup, which covers that area, is open).
+let covered: (target: Element) => boolean = () => false;
+
 function showTip(target: Element) {
   hideTip();
   const inSidebar = target.closest("#sidebar");
   const inFooter = target.closest("#footer");
-  if (popupOpen() && target.closest("#account-list, #slack-workspace-list, #claude-btn")) return;
+  if (covered(target)) return;
   tipTimer = setTimeout(() => {
     // A sidebar button that a number key reaches (A-5) adds it: "Slack ⌘3".
     const key = (target as HTMLElement).dataset.shortcut;
@@ -34,7 +35,9 @@ function showTip(target: Element) {
 const TIP_TARGET = "button[aria-label]:not(.feed-open), input[aria-label], a.icon-btn[aria-label]";
 const targetOf = (e: Event) => (e.target as Element).closest?.(TIP_TARGET);
 
-export function initTooltip() {
+// The page of a window of a tab (`popout.ts`) calls it with no argument: it must not load the modules of the main window, which `covered` would need.
+export function initTooltip(covers?: (target: Element) => boolean) {
+  if (covers) covered = covers;
   tip = el("tooltip");
   tip.hidden = true;
   document.body.append(tip);

@@ -72,6 +72,17 @@ describe("orca: the window of a tab (A-46)", () => {
     expect(await count(".orca-tabs")).toBe(0);
   });
 
+  it("shows the label of the pin and of the button that puts the tab back as the tooltip of the app, and no native title", async () => {
+    await openWindow(shell);
+    expect(await browser.execute(() => [...document.querySelectorAll("#popout-head button")].map((b) => b.hasAttribute("title")))).toEqual([false, false]);
+    for (const [id, label] of [["popout-pin", "最前面に固定"], ["popout-restore", "戻す"]]) {
+      // The window has no pointer to put over the button, so the mouseover that the tooltip listens for is dispatched, once.
+      await browser.execute((once, target) => window.__e2e_once__(once) && document.getElementById(target)!.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })), onceId(), id);
+      await expect($(".tooltip")).toBeDisplayed();
+      await expect($(".tooltip")).toHaveText(label);
+    }
+  });
+
   it("shows the Claude session as a terminal, with the status of the list in its icon", async () => {
     const session = popoutTab("claude:p", "term_c", "Write the docs", { status: "working", label: "作業中", content: { kind: "claude", handle: "term_c", path: "/work/example-app", stream: false, ended: false } });
     await openWindow(session, { orca_terminal_read: ["$ claude", "> Write the docs"] });
