@@ -32,10 +32,11 @@ import { AGENT_SVG, CHEVRON_SVG, CLAUDE_SVG, CLOSE_SVG, COLUMNS_SVG, COPY_PATH_S
 import { invoke } from "./ipc.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
 import { closeMenu, type MenuItem, openMenu, showMenu } from "./menu.js";
+import { confirmCloseDraft } from "./hint.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { closeDefinition, type DefinitionOpen, type DefinitionQuery, definitionsOf, hasDefinitionIn, initDefinition, openDefinition, showDefinitions } from "./orca-definition.js";
 import { openAddProject } from "./orca-add.js";
-import { closeJiraTab, initJiraTab, jiraTabsOf, jiraTitleOf, openJiraTab, openNewJiraTab, showJiraTabs } from "./orca-jira-tab.js";
+import { closeJiraTab, hasJiraDraft, initJiraTab, jiraTabsOf, jiraTitleOf, openJiraTab, openNewJiraTab, showJiraTabs } from "./orca-jira-tab.js";
 import { closeConnectionTabs, closeDatabaseTab, conditionOf, databaseTabsOf, initDatabaseTabs, openQuery, openTable, showDatabaseTabs } from "./orca-database-tabs.js";
 import { initOrcaDatabase, lostConnection } from "./orca-database.js";
 import { closeDiff, type DiffCommit, diffsOf, hasDiffIn, openDiff as openDiffTab, refreshDiffs, showDiffs } from "./orca-diff.js";
@@ -934,7 +935,8 @@ function tabNode(t: Tab, selected: boolean) {
   close.setAttribute("aria-label", "閉じる");
   close.innerHTML = CLOSE_SVG;
   close.disabled = (t.kind === "claude" && t.handle === null) || closing.has(t.id);
-  close.onclick = () => closeTab(t);
+  // A Jira tab with a description or a comment typed and not saved asks first (J-2, "Closing"); every other tab closes at once.
+  close.onclick = () => (t.kind === "jira" && hasJiraDraft(t.id) ? confirmCloseDraft(close, () => void closeTab(t)) : closeTab(t));
   wrap.append(select, close);
   return wrap;
 }

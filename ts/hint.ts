@@ -87,6 +87,11 @@ export function confirmDelete(button: Element, name: string, onConfirm: () => vo
   confirmPop(button, `${name} を削除`, "削除しますか？", `${name} を完全に削除します。元に戻せません。`, "削除", onConfirm, " pop-confirm");
 }
 
+// The confirmation before a Jira tab with a description or a comment typed and not saved is closed (J-2, "Closing").
+export function confirmCloseDraft(button: Element, onConfirm: () => void) {
+  confirmPop(button, "書きかけを破棄して閉じる", "書きかけを破棄しますか？", "保存していない説明やコメントは、閉じると消えます。", "破棄して閉じる", onConfirm, " pop-confirm");
+}
+
 // The confirmation before the changes of a file or folder are put back as HEAD has them (A-44). `fresh` is whether the row's mark is `new`: a file that is new (untracked or added) is deleted for good, and so is every file of a folder that is new. A folder that is `changed` may hold new files too, so the words say that they go.
 export function confirmRevert(button: Element, name: string, folder: boolean, fresh: boolean, onConfirm: () => void) {
   const body = folder
