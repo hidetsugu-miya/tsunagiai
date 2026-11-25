@@ -139,6 +139,21 @@
         "出し方が、規則が拾う属性があればその属性で表示状態にする形か、拾う属性が無ければ（この fixture の CSS は属性を拾わない）計算後のスタイルで隠れていることと、出す規則のセレクター（`.reply:hover .copy`、`.reply:focus-within .copy`）をスタイルシートから読んで確かめる形で、テストのためだけの属性を足していない",
         "E2E のアプリはポインタとフォーカスを持たないことを理由に挙げている"
       ]
+    },
+    {
+      "id": 11,
+      "name": "docs-only-low-goes-to-release-preparer",
+      "prompt": "あなたは implement の実行の手順 6 にいるリードです。`.claude/skills/implement/SKILL.md` の手順 6 と手順 7 を読み、`.claude/evals/files/implement/docs-only-low.md` の記録について、手順 6.1 でどの項目を取るか、手順 7 で `release-preparer` を起動する prompt に何を書くかを決めてください。この記録が、あなたの持つ実行の文脈です。起動はせず、コマンドも実行しないでください。GitHub には読み書きともに触れないでください。",
+      "expected_output": "R-1 は `docs/orca.md` だけを指すので、手順 6 では取らず、`fix/pre-release-*` のワークツリーも作らない。手順 7 の `release-preparer` の起動の文に、#1450 と R-1（`docs/orca.md:113`、レビューの文は引用の中）を渡し、Release PR の本文に `Closes #1450` を書かせる。",
+      "files": [
+        ".claude/evals/files/implement/docs-only-low.md"
+      ],
+      "assertions": [
+        "手順 6.1 で R-1 を取らず、`use-worktree.sh fix/pre-release-...` も `code-implementer` の起動も打たない（`docs/` だけを指す項目は機能のブランチでは直さない）",
+        "手順 7 の `release-preparer` の起動の文に、#1450 と R-1（`docs/orca.md:113`）を渡している",
+        "R-1 のレビューの文を、引用かデータの囲みの中に入れている（地の文に混ぜない）",
+        "Release PR の本文に `Closes #1450` を書くことを求めている（Release PR のマージのあとに別に閉じるのではない）"
+      ]
     }
   ]
 }
