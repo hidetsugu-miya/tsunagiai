@@ -114,6 +114,8 @@ import type { HeldThread } from "./bindings/HeldThread";
 import type { HiddenChannel } from "./bindings/HiddenChannel";
 import type { SlackLoad } from "./bindings/SlackLoad";
 import type { SlackThread } from "./bindings/SlackThread";
+import type { SentryAssignees } from "./bindings/SentryAssignees";
+import type { SentryConnection } from "./bindings/SentryConnection";
 import type { SocketStatus } from "./bindings/SocketStatus";
 import type { Summary } from "./bindings/Summary";
 import type { TaskHit } from "./bindings/TaskHit";
@@ -249,6 +251,18 @@ export interface Commands {
   slack_app_token_remove: { args: { teamId: string }; result: SocketStatus[] };
   // S-16: the connections now. A change is sent to the screen as the event `slack-socket-status` (one `SocketStatus`).
   slack_socket_status: { args: undefined; result: SocketStatus[] };
+  // S-29: the workspaces that have a Sentry Personal Token, with the last four characters of each. Asks Sentry nothing.
+  sentry_connections: { args: undefined; result: SentryConnection[] };
+  // S-29: keeps the workspace's token once Sentry accepts it (it replaces one kept already); answers the connections.
+  sentry_save: { args: { teamId: string; token: string }; result: SentryConnection[] };
+  // S-29: deletes the workspace's token; answers the connections.
+  sentry_delete: { args: { teamId: string }; result: SentryConnection[] };
+  // S-30: sets the status of the issue of a Sentry notification (`value` is one of Sentry's own: resolved, resolved:inNextRelease, resolved:inCurrentRelease, unresolved:ongoing, ignored:archived_until_escalating, ignored:archived_until_condition_met:{10|100|1000}, ignored:archived_forever) with the workspace's token.
+  sentry_set_status: { args: { teamId: string; org: string; issueId: string; value: string }; result: null };
+  // S-30: the teams and the members that the issue of a Sentry notification can be assigned to (those of the project Sentry says the issue belongs to), with the workspace's token.
+  sentry_assignees: { args: { teamId: string; org: string; issueId: string }; result: SentryAssignees };
+  // S-30: assigns the issue (`assignee` is a `value` of `sentry_assignees`: `user:{id}` or `team:{id}`) with the workspace's token.
+  sentry_assign: { args: { teamId: string; org: string; issueId: string; assignee: string }; result: null };
   // The connected Notion workspaces; `reconnect` is true when no token is kept. Asks Notion nothing.
   notion_accounts: { args: undefined; result: NotionAccount[] };
   // Opens the browser for Notion's consent and answers the connected workspace.

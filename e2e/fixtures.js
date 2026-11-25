@@ -92,6 +92,8 @@ const answers = {
   slack_unhide_channel: true,
   slack_icons: [],
   slack_socket_status: [],
+  // S-29: no workspace has a Sentry token; a spec that saves or deletes one mocks `sentry_save` or `sentry_delete`.
+  sentry_connections: [],
   slack_file_images: {},
   // S-25: no emoji has been used, so the picker has no "よく使う"; a spec of the picker mocks `slack_emoji_frequent` with the names it should list.
   slack_emoji_frequent: [],

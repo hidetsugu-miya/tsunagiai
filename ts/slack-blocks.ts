@@ -7,6 +7,7 @@ import type { ThreadBlock } from "./bindings/ThreadBlock";
 import type { ThreadButton } from "./bindings/ThreadButton";
 import type { ThreadImage } from "./bindings/ThreadImage";
 import { tag } from "./dom.js";
+import { OPEN_SVG } from "./icons.js";
 import { linkify } from "./mail-text.js";
 import { richNodes } from "./slack-rich.js";
 
@@ -25,17 +26,23 @@ function linked<K extends "p" | "h3" | "b">(name: K, className: string, text: st
 
 const paragraph = (text: string, className = "st-text") => linked("p", className, text);
 
-// A button with an address is a link (Rust's navigation hook opens it in the default browser); one without cannot be pressed, and only its name shows.
+// A button is a link (Rust's navigation hook opens it in the default browser); Rust leaves out the ones with no address.
 function buttonNode(b: ThreadButton) {
-  if (!b.url) {
-    const off = tag("button", "text-btn", b.text);
-    off.disabled = true;
-    return off;
-  }
   const link = tag("a", "text-btn", b.text);
   link.href = b.url;
   link.title = link.href;
   return link;
+}
+
+// What the app cannot press in a message (a button with no address, a menu) is not drawn; this link opens the message in Slack, where it works. Rust gives the address (`slackLink`) only when the message has such a part.
+export function slackLinkNode(url: string) {
+  const row = tag("div", "st-acts");
+  const link = tag("a", "text-btn", "Slack で操作する");
+  link.href = url;
+  link.title = link.href;
+  link.insertAdjacentHTML("beforeend", OPEN_SVG);
+  row.append(link);
+  return row;
 }
 
 function imageNode(img: ThreadImage, ctx: ImageContext, className: string) {

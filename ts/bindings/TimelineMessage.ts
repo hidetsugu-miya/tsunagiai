@@ -20,7 +20,11 @@ repliers: Array<Replier>,
 /**
  * The `ts` of the thread's newest reply (`latest_reply`), when Slack gave a usable one.
  */
-latestReply: string | null, permalink: string, hasFiles: boolean, 
+latestReply: string | null, permalink: string, 
+/**
+ * The message's address in Slack, set only when the message has a part that works only in Slack and is not drawn (`needs_slack`, S-11).
+ */
+slackLink: string | null, hasFiles: boolean, 
 /**
  * Whether the message is past the channel's `last_read` (`is_unread`).
  */

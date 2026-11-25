@@ -1,5 +1,6 @@
 import type { NotionAccount } from "../../ts/bindings/NotionAccount";
-import { account, boot, copiedTexts, logLine, skill, stubClipboard, checked, chooseAppearance, chooseOption, fontSettings, formationConsent, chooseTheme, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, emitEvent, holds, inbox, mock, rejects, onceId, release, slackLoad, socketStatus, terminalThemes, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf, CARD, CARDS, waitForLog } from "../support";
+import type { SentryConnection } from "../../ts/bindings/SentryConnection";
+import { account, boot, copiedTexts, logLine, skill, stubClipboard, checked, chooseAppearance, chooseOption, fontSettings, formationConsent, chooseTheme, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, emitEvent, holds, inbox, mock, rejects, onceId, release, slackLoad, socketStatus, workspace, terminalThemes, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf, CARD, CARDS, waitForLog } from "../support";
 
 type Tab = "google" | "calendar" | "todoist" | "slack" | "notion" | "claude" | "skill" | "orca" | "font" | "update" | "log";
 
@@ -450,6 +451,131 @@ describe("settings: Slack リアルタイム更新", () => {
     const hint = $('[role="dialog"][aria-label="リアルタイム更新の設定方法"]');
     await expect(hint).toBeDisplayed();
     expect(await hint.$$("code").map((code) => code.getText())).toEqual(["message.channels", "message.groups", "connections:write", "xapp-"]);
+  });
+});
+
+describe("settings: Slack の Sentry", () => {
+  const second = { ...workspace, teamId: "T2", team: "Second Team" };
+  const two = { workspaces: [workspace, second] };
+  const kept = (teamId: string, tail: string): SentryConnection => ({ teamId, tail });
+  const names = () => textsOf("#sentry-items .item-name");
+  const tokenField = () => $("#sentry-token");
+  const addButton = () => $("#sentry-form button");
+  const unlink = (team: string) => $(`button[aria-label="${team} の Sentry のトークンを削除"]`);
+  const openSentry = async (fixtures: Record<string, unknown> = {}) => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, ...fixtures });
+    await $("#nav-settings").click();
+    await openTab("slack");
+  };
+
+  it("shows the card after the others of the tab, with the workspace to add and a password field, and no row for none", async () => {
+    await openSentry();
+    await expect($("#sentry-items .card-empty")).toHaveText("接続はまだありません");
+    await expect($("#sentry-items .item")).not.toExist();
+    expect(await textsOf("#sentry-team option")).toEqual(["Example Team"]);
+    await expect(tokenField()).toHaveAttribute("type", "password");
+    await expect(tokenField()).toHaveAttribute("placeholder", "Personal Token");
+    await expect($("#settings-panel-slack .card:last-child .card-head h2")).toHaveText(expect.stringContaining("Sentry"));
+    await expect($("#settings-panel-slack .card:last-child #sentry-items")).toExist();
+  });
+
+  it("lists the workspaces that have a token with the tail of it, and offers the others to add", async () => {
+    await openSentry({ slack_load: two, sentry_connections: [kept("T2", "a3f9")] });
+    await browser.waitUntil(async () => (await names()).join() === "Second Team", { timeoutMsg: "the row of the connection was not drawn" });
+    await expect($("#sentry-items .item-meta")).toHaveText("…a3f9");
+    await expect($("#sentry-items .status")).toHaveText("接続済み");
+    await expect($("#sentry-items .status")).toHaveElementClass("ok");
+    expect(await textsOf("#sentry-team option")).toEqual(["Example Team"]);
+  });
+
+  it("saves the token for the workspace chosen, empties the field and draws the row Rust answers", async () => {
+    await openSentry({ slack_load: two });
+    const save = await mock("sentry_save", [kept("T2", "9z8y")]);
+    await chooseOption("sentry-team", "T2");
+    await tokenField().setValue("sntryu_0123456789z8y");
+    await addButton().click();
+    expect(await waitForCalls(save)).toEqual([{ teamId: "T2", token: "sntryu_0123456789z8y" }]);
+    await expect(tokenField()).toHaveValue("");
+    await browser.waitUntil(async () => (await names()).join() === "Second Team", { timeoutMsg: "the row was not drawn" });
+    await expect($("#sentry-items .item-meta")).toHaveText("…9z8y");
+    expect(await textsOf("#sentry-team option")).toEqual(["Example Team"]);
+  });
+
+  it("turns the add row off when every workspace has a token", async () => {
+    await openSentry({ sentry_connections: [kept("T1", "a3f9")] });
+    await browser.waitUntil(async () => (await names()).join() === "Example Team", { timeoutMsg: "the row was not drawn" });
+    await expect(tokenField()).toBeDisabled();
+    await expect(addButton()).toBeDisabled();
+    await expect($("#sentry-team")).toBeDisabled();
+  });
+
+  it("shows why the token was refused on a card, draws no row, and empties the field", async () => {
+    await openSentry();
+    await mock("sentry_save", rejects("トークンが正しくありません"));
+    await tokenField().setValue("sntryu_wrong");
+    await addButton().click();
+    await expect($(CARD)).toHaveText(expect.stringContaining("トークンが正しくありません"));
+    await expect($("#sentry-items .item")).not.toExist();
+    await expect(tokenField()).toHaveValue("");
+  });
+
+  it("asks before deleting: キャンセル sends nothing, 解除 calls sentry_delete and draws what Rust answers", async () => {
+    await openSentry({ sentry_connections: [kept("T1", "a3f9")] });
+    const gone = await mock("sentry_delete", []);
+    await expect(unlink("Example Team")).toExist();
+
+    await unlink("Example Team").click();
+    const dialog = $('[role="alertdialog"]');
+    await expect(dialog).toBeDisplayed();
+    await dialog.$("button=キャンセル").click();
+    await expect(dialog).not.toExist();
+    expect(await callsOf(gone)).toHaveLength(0);
+
+    await unlink("Example Team").click();
+    await $('[role="alertdialog"]').$("button=解除").click();
+    expect(await waitForCalls(gone)).toEqual([{ teamId: "T1" }]);
+    await expect($("#sentry-items .item")).not.toExist();
+    expect(await textsOf("#sentry-team option")).toEqual(["Example Team"]);
+  });
+
+  it("keeps the row and shows the failure on a card when the token cannot be deleted", async () => {
+    await openSentry({ sentry_connections: [kept("T1", "a3f9")] });
+    await mock("sentry_delete", rejects("資格情報の削除に失敗"));
+    await expect(unlink("Example Team")).toExist();
+    await unlink("Example Team").click();
+    await $('[role="alertdialog"]').$("button=解除").click();
+    await expect($(CARD)).toHaveText(expect.stringContaining("資格情報の削除に失敗"));
+    expect(await names()).toEqual(["Example Team"]);
+  });
+
+  it("takes the row off when its Slack workspace is disconnected", async () => {
+    await openSentry({ sentry_connections: [kept("T1", "a3f9")] });
+    await expect(unlink("Example Team")).toExist();
+    await mock("slack_remove_workspace", []);
+    await unlinkButton().click();
+    await $('[role="alertdialog"]').$("button=解除").click();
+    await expect($("#sentry-items .item")).not.toExist();
+    await expect($("#sentry-items .card-empty")).toHaveText("ワークスペースはまだありません");
+    expect(await textsOf("#sentry-team option")).toEqual([]);
+  });
+
+  it("writes a failed read of the connections to the log and draws no row", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, sentry_connections: rejects("読めません") });
+    await $("#nav-settings").click();
+    await openTab("slack");
+    const line = await waitForLog("読めません");
+    expect(line).toMatchObject({ level: "error", source: "sentry-settings" });
+    await expect($("#sentry-items .item")).not.toExist();
+  });
+
+  it("lists the scopes and the page of the token in the setup hint", async () => {
+    await openSentry();
+    await $("#sentry-help").click();
+    const hint = $('[role="dialog"][aria-label="Sentry の設定方法"]');
+    await expect(hint).toBeDisplayed();
+    const named = await hint.$$("code").map((code) => code.getText());
+    for (const scope of ["event:write", "org:read", "member:read", "team:read", "project:read"]) expect(named).toContain(scope);
+    await expect(hint.$("a")).toHaveAttribute("href", "https://sentry.io/settings/account/api/auth-tokens/");
   });
 });
 

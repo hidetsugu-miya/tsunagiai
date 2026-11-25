@@ -1,4 +1,4 @@
-:root { --accent-text: #14573a; --ink-soft: #444; --surface: #fff; --on-accent: #fff; --dot: #d93025; --danger: #b00020; --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --agent-working: #edb200; --agent-question: #f05100; --agent-done: #00bb7f; --agent-idle: rgba(115, 115, 115, .4); --agent-failed: #e7000b; --agent-muted: #737373; --term-bg: #101714; --term-fg: #d8e6de; --slack: #4a154b; --todoist: #db4c3f; --google: #1a73e8; --notion: #191919; --muted: #5a6b62; --accent-dim: #7fb89e; --del-bg: #fdecea; --del: #8c1d18; --ins: #14573a; --effort-low: #5f6368; --effort-low-bg: #f1f1f1; --effort-medium: #1e7b52; --effort-medium-bg: #e3f4ea; --effort-high: #7a5c00; --effort-high-bg: #fff6cc; --effort-xhigh: #a04d00; --effort-xhigh-bg: #ffe8d1; --effort-max: #8c1d18; --effort-max-bg: #fdecea; --hl-comment: #5a6b62; --hl-keyword: #cf222e; --hl-string: #0a3069; --hl-number: #0550ae; --hl-title: #8250df; --hl-type: #953800; --hl-attr: #116329; --hl-meta: #6639ba; --hl-select: rgba(30, 123, 82, .25); --diff-del-bg: #ffebe9; --diff-del-mark: #cf222e; --diff-ins-bg: #dafbe1; --diff-ins-mark: #1a7f37; --diff-blank-bg: #f6f8fa; --priority-1: #d1453b; --priority-2: #eb8909; --priority-3: #246fe0; --priority-4: #b4b9c2; --cursor-band: rgba(90, 107, 98, .1); }
+:root { --accent-text: #14573a; --ink-soft: #444; --surface: #fff; --on-accent: #fff; --dot: #d93025; --danger: #b00020; --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --agent-working: #edb200; --agent-question: #f05100; --agent-done: #00bb7f; --agent-idle: rgba(115, 115, 115, .4); --agent-failed: #e7000b; --agent-muted: #737373; --term-bg: #101714; --term-fg: #d8e6de; --slack: #4a154b; --todoist: #db4c3f; --google: #1a73e8; --notion: #191919; --sentry: #362d59; --muted: #5a6b62; --accent-dim: #7fb89e; --del-bg: #fdecea; --del: #8c1d18; --ins: #14573a; --effort-low: #5f6368; --effort-low-bg: #f1f1f1; --effort-medium: #1e7b52; --effort-medium-bg: #e3f4ea; --effort-high: #7a5c00; --effort-high-bg: #fff6cc; --effort-xhigh: #a04d00; --effort-xhigh-bg: #ffe8d1; --effort-max: #8c1d18; --effort-max-bg: #fdecea; --hl-comment: #5a6b62; --hl-keyword: #cf222e; --hl-string: #0a3069; --hl-number: #0550ae; --hl-title: #8250df; --hl-type: #953800; --hl-attr: #116329; --hl-meta: #6639ba; --hl-select: rgba(30, 123, 82, .25); --diff-del-bg: #ffebe9; --diff-del-mark: #cf222e; --diff-ins-bg: #dafbe1; --diff-ins-mark: #1a7f37; --diff-blank-bg: #f6f8fa; --priority-1: #d1453b; --priority-2: #eb8909; --priority-3: #246fe0; --priority-4: #b4b9c2; --cursor-band: rgba(90, 107, 98, .1); }
 [hidden] { display: none !important; }
 html, body { height: 100%; }
 /* A-20: the font of a place is chosen in the settings (`ts/font-settings.ts` sets --ff-* and --fs-* on :root). --fs is the size of the text in this place as a multiple of 14px, and every font-size below is its px times it. The place "app" is the root's: it is what a part outside the places below draws with, and --ff-base, which the places fall back to, follows its family. --ff-mono is the family chosen for the monospace text, with a comma after it, so that each monospace stack below starts with it. */
@@ -820,6 +820,7 @@ a.c-file:hover { background: var(--hover); }
 .logo.slack { background: var(--slack); }
 .logo.todoist { background: var(--todoist); }
 .logo.notion { background: var(--notion); font-size: calc(13px * var(--fs)); font-weight: bold; }
+.logo.sentry { background: var(--sentry); font-size: calc(13px * var(--fs)); font-weight: bold; }
 .logo.claude { background: var(--claude); }
 .logo.update, .logo.calendar, .logo.orca { background: var(--accent); }
 .day-picks { display: flex; gap: 4px; }
@@ -2413,7 +2414,26 @@ a.st-file:hover { background: var(--hover); }
 .st-hr { width: 100%; margin: 4px 0; border: 0; border-top: 1px solid var(--line); }
 .st-alt { color: var(--muted); font-size: calc(12px * var(--fs)); overflow-wrap: anywhere; }
 .st-acts { display: flex; flex-wrap: wrap; gap: 8px; }
-.st-acts .text-btn { display: inline-flex; align-items: center; box-sizing: border-box; height: 28px; padding: 0 12px; font: inherit; font-size: calc(13px * var(--fs)); text-decoration: none; }
+.st-acts .text-btn { display: inline-flex; align-items: center; gap: 6px; box-sizing: border-box; height: 28px; padding: 0 12px; font: inherit; font-size: calc(13px * var(--fs)); text-decoration: none; }
+.st-acts .text-btn svg { width: 13px; height: 13px; }
+/* S-30: the buttons of a Sentry notification, the dialog of Resolve and Archive over the dimmed screen of .scrim, and the popup of the assignees, in the frame of #account-popup. */
+.st-sentry { margin-top: 6px; }
+.st-sentry + .st-acts { margin-top: 6px; }
+.sentry-scrim { align-items: center; justify-content: center; }
+.sentry-dialog { display: flex; flex-direction: column; gap: 12px; width: 320px; max-width: calc(100vw - 32px); box-sizing: border-box; padding: 14px 16px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); box-shadow: 0 8px 24px rgba(0, 0, 0, .18); font-size: calc(13px * var(--fs)); }
+.sentry-dialog h2 { margin: 0; font-size: calc(15px * var(--fs)); }
+.sentry-row { display: flex; align-items: center; gap: 10px; }
+.sentry-select { flex: 1; min-width: 0; height: 30px; padding: 0 10px; border: 1px solid var(--chip-line); border-radius: 15px; background: var(--surface); font: inherit; color: inherit; }
+.sentry-select:focus { outline: 2px solid var(--accent); border-color: transparent; }
+.sentry-foot { display: flex; justify-content: flex-end; gap: 8px; }
+.st-acts .sentry-assign::after { content: "▾"; color: var(--muted); }
+.pop.sentry-pop { display: flex; flex-direction: column; gap: 8px; width: 240px; padding: 8px; }
+.sentry-search { box-sizing: border-box; width: 100%; height: 30px; padding: 0 12px; border: 1px solid var(--chip-line); border-radius: 15px; background: var(--surface); font: inherit; color: inherit; }
+.sentry-search:focus { outline: 2px solid var(--accent); border-color: transparent; }
+.sentry-opts { display: flex; flex-direction: column; max-height: 240px; overflow-y: auto; }
+.sentry-group { padding: 6px 8px 2px; color: var(--muted); font-size: calc(12px * var(--fs)); }
+.sentry-opt { padding: 6px 8px; border: 0; border-radius: 8px; background: none; font: inherit; color: inherit; text-align: left; overflow-wrap: anywhere; }
+.sentry-opt:hover, .sentry-opt:focus-visible { background: var(--hover); }
 .st-sec > .text-btn { flex: none; display: inline-flex; align-items: center; height: 28px; padding: 0 12px; font: inherit; font-size: calc(13px * var(--fs)); text-decoration: none; }
 .st-acts .text-btn:disabled, .st-sec > .text-btn:disabled { opacity: .6; cursor: default; }
 .st-att > .st-more { align-self: flex-start; height: 28px; padding: 0 12px; font: inherit; font-size: calc(13px * var(--fs)); }

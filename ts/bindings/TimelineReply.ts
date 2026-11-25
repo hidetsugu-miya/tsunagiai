@@ -6,4 +6,8 @@ import type { ThreadBlock } from "./ThreadBlock";
 /**
  * An unread reply under a row, drawn as a row is.
  */
-export type TimelineReply = { ts: string, name: string, iconUrl: string | null, text: string, rich: Array<RichBlock>, blocks: Array<ThreadBlock>, showText: boolean, attachments: Array<ThreadAttachment>, hasFiles: boolean, };
+export type TimelineReply = { ts: string, name: string, iconUrl: string | null, text: string, rich: Array<RichBlock>, blocks: Array<ThreadBlock>, showText: boolean, attachments: Array<ThreadAttachment>, 
+/**
+ * The message's address in Slack, set only when the message has a part that works only in Slack and is not drawn (`needs_slack`, S-11).
+ */
+slackLink: string | null, hasFiles: boolean, };

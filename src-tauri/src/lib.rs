@@ -50,6 +50,7 @@ pub mod orca_theme;
 pub mod orca_titles;
 pub mod preview_plugin;
 pub mod screen_bridge;
+pub mod sentry;
 pub mod side_menu;
 pub mod skills;
 pub mod slack;
@@ -414,6 +415,12 @@ pub fn run() {
             slack::socket::slack_app_token_set,
             slack::socket::slack_app_token_remove,
             slack::socket::slack_socket_status,
+            sentry::sentry_connections,
+            sentry::sentry_save,
+            sentry::sentry_delete,
+            sentry::sentry_set_status,
+            sentry::sentry_assignees,
+            sentry::sentry_assign,
             notion::notion_accounts,
             notion::notion_connect,
             notion::notion_disconnect,

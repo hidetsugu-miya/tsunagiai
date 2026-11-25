@@ -2,6 +2,8 @@
 //!
 //! Pure functions from Slack's JSON: nothing here calls Slack. The text is plain text (`plain_text`), never markup; a mrkdwn text is a `Rich` (S-12).
 //! A button's address is http or https, an image's address is https, and anything else is left out here, so the screen does not decide.
+//! A part that works only in Slack (a button with no address, a menu) is not drawn; `needs_slack` says whether a message has one.
+//! The buttons and the menu to assign of a Sentry notification are the exception for a workspace with a Sentry token: `sentry_issue` reads the issue, the buttons and the menu the screen presses (S-30).
 
 use std::collections::HashSet;
 
@@ -17,14 +19,14 @@ use crate::slack_mrkdwn::{parse, plain, rich_plain, user_link, Rich, RichBlock, 
 /// Looks a user or a user group up by ID, as `plain_text` does for a mention.
 type NameOf<'a> = &'a dyn Fn(&str) -> Option<String>;
 
-/// A button. Without `url` it cannot be pressed and the screen shows its name only.
+/// A button with an address: a link. A button with none cannot be used here and is not drawn (`needs_slack`).
 #[derive(Serialize, Debug, PartialEq, Clone)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadButton {
     text: String,
-    url: Option<String>,
+    url: String,
 }
 
 /// An image. `url` is an https address that may be fetched when the user asks for the images; without it only `alt` is drawn.
@@ -204,7 +206,7 @@ fn rich_of(
 
 /// `url` as it is when it is an http or https address, else `None`: a button never opens another scheme.
 /// The app's own origin on Windows and Android (`tauri.localhost`) is left out too: the navigation hook lets it through to the window itself.
-fn http_url(url: Option<&str>) -> Option<String> {
+pub(crate) fn http_url(url: Option<&str>) -> Option<String> {
     let url = url?;
     let parsed = Url::parse(url).ok()?;
     (matches!(parsed.scheme(), "http" | "https") && parsed.host_str() != Some("tauri.localhost"))
@@ -219,11 +221,167 @@ fn image_url(url: Option<&str>) -> Option<String> {
     (parsed.scheme() == "https" && host != "files.slack.com").then(|| url.to_owned())
 }
 
+/// A button that can be drawn: one with a name and an http or https address.
 fn button(b: &Value, name_of: NameOf) -> Option<ThreadButton> {
     (b["type"] == "button").then_some(())?;
     Some(ThreadButton {
         text: text_of(&b["text"], name_of)?,
-        url: http_url(b["url"].as_str()),
+        url: http_url(b["url"].as_str())?,
+    })
+}
+
+/// Whether the message has a part that can be used only in Slack, which the screen does not draw (S-11): a button with no address, a select menu, an overflow menu, a date picker or any other part that is not a button with an address or an image,
+/// as the accessory of a section or among the actions of the message's blocks, of the blocks of an attachment, or of an attachment's own actions. The screen then offers a link to the message in Slack.
+/// `sentry` is true when the screen presses the buttons of a Sentry notification (`sentry_issue` found them): those buttons and the menu to assign are not such a part.
+pub(crate) fn needs_slack(message: &Value, name_of: NameOf, sentry: bool) -> bool {
+    let in_blocks = |blocks: &Value| {
+        items(blocks).iter().any(|b| match b["type"].as_str() {
+            Some("actions") => items(&b["elements"]).iter().any(|e| {
+                button(e, name_of).is_none()
+                    && !(sentry
+                        && (sentry_button(e, name_of).is_some()
+                            || sentry_menu(e, name_of).is_some()))
+            }),
+            Some("section") => {
+                let a = &b["accessory"];
+                a.is_object() && a["type"] != "image" && accessory(a, name_of).is_none()
+            }
+            _ => false,
+        })
+    };
+    in_blocks(&message["blocks"])
+        || items(&message["attachments"]).iter().any(|a| {
+            in_blocks(&a["blocks"])
+                || items(&a["actions"])
+                    .iter()
+                    .any(|e| button(e, name_of).is_none())
+        })
+}
+
+/// A button of a Sentry notification that the screen presses (S-30): its name, and Sentry's own `value` for it (`resolve_dialog`, `archive_dialog`, `resolved` or `unresolved:ongoing`).
+#[derive(Serialize, Debug, PartialEq, Clone)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct SentryButton {
+    text: String,
+    value: String,
+}
+
+/// The Sentry issue that a notification is about (S-30): `org` is the organization's name in the address of the title (`https://{org}.sentry.io/issues/{issue_id}/`), `project_id` the project's ID from the `action_id` of the buttons, `buttons` the buttons the screen presses,
+/// and `assign` the text of the menu to assign when the notification has one (its chosen option, else its placeholder).
+#[derive(Serialize, Debug, PartialEq, Clone)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct SentryIssue {
+    org: String,
+    issue_id: String,
+    project_id: String,
+    buttons: Vec<SentryButton>,
+    assign: Option<String>,
+}
+
+/// An ID or a name of Sentry (an organization, an issue, a project): letters, digits and hyphens only, so that it goes into an address as it is.
+pub(crate) fn sentry_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+/// The organization and the issue that the first link of the first section's text names, when it is `https://{org}.sentry.io/issues/{issue_id}/`: the host ends with `.sentry.io` and has nothing else in front of it than the organization's name.
+fn sentry_title(blocks: &Value) -> Option<(String, String)> {
+    let text = items(blocks).iter().find(|b| b["type"] == "section")?["text"]["text"].as_str()?;
+    let link = text.split('<').nth(1)?.split(['|', '>']).next()?;
+    let url = Url::parse(link).ok()?;
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+    {
+        return None;
+    }
+    let org = url.host_str()?.strip_suffix(".sentry.io")?;
+    let mut path = url.path_segments()?;
+    let (issues, id) = (path.next()?, path.next()?);
+    let rest: Vec<&str> = path.collect();
+    (issues == "issues" && (rest.is_empty() || rest == [""]) && sentry_id(org) && sentry_id(id))
+        .then(|| (org.to_owned(), id.to_owned()))
+}
+
+/// The action and the IDs of an element of an `actions` block of a Sentry notification: its `action_id` is `{action}::{organization ID}::{project ID}`, with `|…` after it when Sentry tracks the click.
+fn sentry_action(e: &Value) -> Option<(&str, &str, &str)> {
+    let routing = e["action_id"].as_str()?.split('|').next()?;
+    let mut parts = routing.split("::");
+    let (action, org, project) = (parts.next()?, parts.next()?, parts.next()?);
+    (parts.next().is_none()
+        && [
+            "resolve_dialog",
+            "archive_dialog",
+            "status",
+            "unresolved:ongoing",
+            "assign",
+        ]
+        .contains(&action)
+        && sentry_id(org)
+        && sentry_id(project))
+    .then_some((action, org, project))
+}
+
+/// A button that Sentry puts in its notification for Resolve, Archive and Unresolve, with the value it gives each.
+fn sentry_button(e: &Value, name_of: NameOf) -> Option<SentryButton> {
+    (e["type"] == "button").then_some(())?;
+    let (action, _, _) = sentry_action(e)?;
+    let value = e["value"].as_str()?;
+    matches!(
+        (action, value),
+        ("resolve_dialog", "resolve_dialog")
+            | ("archive_dialog", "archive_dialog")
+            | ("status", "resolved")
+            | ("unresolved:ongoing", "unresolved:ongoing")
+    )
+    .then_some(())?;
+    Some(SentryButton {
+        text: text_of(&e["text"], name_of)?,
+        value: value.to_owned(),
+    })
+}
+
+/// The menu to assign of a Sentry notification (`external_select`, `action_id` `assign::…`) and the text it shows: its chosen option, else its placeholder. One with no text is not pressed.
+fn sentry_menu(e: &Value, name_of: NameOf) -> Option<String> {
+    (e["type"] == "external_select").then_some(())?;
+    let (action, _, _) = sentry_action(e)?;
+    (action == "assign").then_some(())?;
+    text_of(&e["initial_option"]["text"], name_of).or_else(|| text_of(&e["placeholder"], name_of))
+}
+
+/// The issue of a Sentry notification and the buttons that the screen can press, or `None` when the message is not one (S-30): its blocks have a title that links to an issue, and an `actions` block of Sentry's `action_id`s
+/// (the buttons only count when there is one; the menu to assign is read for its IDs, which every element of the block must share with the first). Sentry's blocks are the message's own: nothing in an attachment is read.
+pub(crate) fn sentry_issue(message: &Value, name_of: NameOf) -> Option<SentryIssue> {
+    let blocks = &message["blocks"];
+    let (org, issue_id) = sentry_title(blocks)?;
+    let mut ids: Option<(&str, &str)> = None;
+    let mut buttons = Vec::new();
+    let mut assign = None;
+    for e in items(blocks)
+        .iter()
+        .filter(|b| b["type"] == "actions")
+        .flat_map(|b| items(&b["elements"]))
+    {
+        let Some((_, org_id, project)) = sentry_action(e) else {
+            continue;
+        };
+        if *ids.get_or_insert((org_id, project)) != (org_id, project) {
+            continue;
+        }
+        buttons.extend(sentry_button(e, name_of));
+        assign = assign.or_else(|| sentry_menu(e, name_of));
+    }
+    let (_, project_id) = ids?;
+    (!buttons.is_empty()).then(|| SentryIssue {
+        org,
+        issue_id,
+        project_id: project_id.to_owned(),
+        buttons,
+        assign,
     })
 }
 
@@ -782,6 +940,7 @@ pub(crate) fn mentioned_users(message: &Value) -> Vec<String> {
     collect_mentions(&message["blocks"], &mut found);
     for a in items(&message["attachments"]) {
         collect_mentions(a, &mut found);
+        // The actions count only when one is drawn (a button with an address).
         let other = [
             "pretext",
             "author_name",
@@ -789,13 +948,15 @@ pub(crate) fn mentioned_users(message: &Value) -> Vec<String> {
             "text",
             "fields",
             "footer",
-            "actions",
             "blocks",
             "image_url",
             "thumb_url",
         ]
         .iter()
-        .any(|k| !a[*k].is_null());
+        .any(|k| !a[*k].is_null())
+            || items(&a["actions"])
+                .iter()
+                .any(|b| b["type"] == "button" && http_url(b["url"].as_str()).is_some());
         if !other {
             collect_mentions(&a["fallback"], &mut found);
         }
@@ -805,12 +966,9 @@ pub(crate) fn mentioned_users(message: &Value) -> Vec<String> {
     found
 }
 
-/// A button as text: its name, and its address when it has one.
+/// A button as text: its name and its address.
 fn button_line(b: &ThreadButton) -> String {
-    match &b.url {
-        Some(url) => format!("{} ({url})", b.text),
-        None => b.text.clone(),
-    }
+    format!("{} ({})", b.text, b.url)
 }
 
 /// The description of an image, when it has one.
@@ -1041,12 +1199,12 @@ mod tests {
         ] {
             let a = one(own);
             assert_eq!(a.title_link, None, "{own}");
-            assert_eq!(a.actions[0].url, None, "{own}");
+            assert_eq!(a.actions, vec![], "{own}");
         }
         // Another host that only looks like it is a link.
         let other = one("https://tauri.localhost.example.com/");
         assert!(other.title_link.is_some());
-        assert!(other.actions[0].url.is_some());
+        assert_eq!(other.actions[0].url, "https://tauri.localhost.example.com/");
     }
 
     #[test]
@@ -1099,10 +1257,18 @@ mod tests {
         assert_eq!(
             list,
             vec![ThreadBlock::Section {
-                text: Some(styled(&[
-                    ("Project", true),
-                    (" api (https://a.example/p) <1> 🔥", false)
-                ])),
+                text: Some({
+                    let mut text = styled(&[
+                        ("Project", true),
+                        (" ", false),
+                        ("api", false),
+                        (" <1> 🔥", false),
+                    ]);
+                    if let RichBlock::Paragraph { spans } = &mut text[0] {
+                        spans[2].link = Some("https://a.example/p".into());
+                    }
+                    text
+                }),
                 // A `plain_text` field is not read for styles.
                 fields: vec![
                     styled(&[("When", true), ("\nnow", false)]),
@@ -1110,7 +1276,7 @@ mod tests {
                 ],
                 accessory: Some(ThreadAccessory::Button(ThreadButton {
                     text: "View Job".into(),
-                    url: Some("https://a.example/job".into())
+                    url: "https://a.example/job".into()
                 })),
             }]
         );
@@ -1350,47 +1516,304 @@ mod tests {
     }
 
     #[test]
-    fn a_button_opens_only_an_http_or_https_address() {
-        let one = |url: Value| match &blocks(json!([
-            {"type": "actions", "elements": [{"type": "button", "text": {"type": "plain_text", "text": "Go"}, "url": url}]}
-        ]))[..]
-        {
-            [ThreadBlock::Actions { buttons }] => buttons.clone(),
-            other => panic!("{other:?}"),
+    fn a_button_is_drawn_only_with_a_name_and_an_http_or_https_address() {
+        let one = |url: Value| {
+            blocks(json!([
+                {"type": "actions", "elements": [{"type": "button", "text": {"type": "plain_text", "text": "Go"}, "url": url}]}
+            ]))
         };
-        let go = |url: Option<&str>| {
-            vec![ThreadButton {
-                text: "Go".into(),
-                url: url.map(str::to_owned),
+        let go = |url: &str| {
+            vec![ThreadBlock::Actions {
+                buttons: vec![ThreadButton {
+                    text: "Go".into(),
+                    url: url.into(),
+                }],
             }]
         };
         assert_eq!(
             one(json!("https://a.example/x?y=1")),
-            go(Some("https://a.example/x?y=1"))
+            go("https://a.example/x?y=1")
         );
-        assert_eq!(
-            one(json!("http://a.example/x")),
-            go(Some("http://a.example/x"))
-        );
+        assert_eq!(one(json!("http://a.example/x")), go("http://a.example/x"));
+        // A button that cannot be a link is not drawn, and the block with it.
         for bad in [
-            "javascript:alert(1)",
-            "slack://channel?id=C1",
-            "mailto:a@a.example",
-            "file:///etc/passwd",
-            "ftp://a.example",
-            "//a.example",
-            "not a url",
-            "",
+            json!("javascript:alert(1)"),
+            json!("slack://channel?id=C1"),
+            json!("mailto:a@a.example"),
+            json!("file:///etc/passwd"),
+            json!("ftp://a.example"),
+            json!("//a.example"),
+            json!("not a url"),
+            json!(""),
+            Value::Null,
         ] {
-            assert_eq!(one(json!(bad)), go(None), "{bad}");
+            assert_eq!(one(bad.clone()), vec![], "{bad}");
         }
-        assert_eq!(one(Value::Null), go(None));
-        // A button with no name is dropped.
-        let nameless = json!([{"type": "actions", "elements": [{"type": "button", "url": "https://a.example"}, {"type": "button", "text": {"type": "plain_text", "text": "Go"}}]}]);
+        // A button with no name is dropped; the one beside it with an address stays.
+        let nameless = json!([{"type": "actions", "elements": [{"type": "button", "url": "https://a.example"}, {"type": "button", "text": {"type": "plain_text", "text": "Go"}, "url": "https://a.example/go"}]}]);
+        assert_eq!(blocks(nameless), go("https://a.example/go"));
+    }
+
+    #[test]
+    fn a_message_needs_slack_when_a_part_that_works_only_there_is_not_drawn() {
+        let needs = |m: Value| needs_slack(&m, &|_| None, false);
+        let go = json!({"type": "button", "text": {"type": "plain_text", "text": "Go"}, "url": "https://a.example/go"});
+        let rerun = json!({"type": "button", "text": {"type": "plain_text", "text": "Rerun"}});
+        // Buttons with an address and images are drawn: nothing to do in Slack.
+        assert!(!needs(
+            json!({"blocks": [{"type": "actions", "elements": [go]}]})
+        ));
+        assert!(!needs(json!({"blocks": [
+            {"type": "section", "text": {"type": "mrkdwn", "text": "x"}, "accessory": go},
+            {"type": "section", "text": {"type": "mrkdwn", "text": "x"}, "accessory": {"type": "image", "image_url": "https://a.example/t.png", "alt_text": "t"}},
+            {"type": "section", "text": {"type": "mrkdwn", "text": "x"}},
+            {"type": "divider"}
+        ]})));
+        assert!(!needs(
+            json!({"attachments": [{"text": "t", "actions": [go]}]})
+        ));
+        assert!(!needs(json!({})));
+        // A button with no address, a menu of any kind, in the actions or as the accessory.
+        assert!(needs(
+            json!({"blocks": [{"type": "actions", "elements": [go, rerun]}]})
+        ));
+        for menu in [
+            "static_select",
+            "external_select",
+            "users_select",
+            "conversations_select",
+            "channels_select",
+            "overflow",
+            "datepicker",
+            "checkboxes",
+        ] {
+            assert!(
+                needs(json!({"blocks": [{"type": "actions", "elements": [{"type": menu}]}]})),
+                "{menu}"
+            );
+            assert!(
+                needs(
+                    json!({"blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "x"}, "accessory": {"type": menu}}]})
+                ),
+                "{menu}"
+            );
+        }
+        assert!(needs(
+            json!({"blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "x"}, "accessory": rerun}]})
+        ));
+        // The same in an attachment: its own actions, and its blocks.
+        assert!(needs(
+            json!({"attachments": [{"text": "t", "actions": [rerun]}]})
+        ));
+        assert!(needs(
+            json!({"attachments": [{"blocks": [{"type": "actions", "elements": [{"type": "static_select"}]}]}]})
+        ));
+        // A button of the app's own origin is not drawn either.
+        assert!(needs(
+            json!({"blocks": [{"type": "actions", "elements": [{"type": "button", "text": {"type": "plain_text", "text": "Go"}, "url": "https://tauri.localhost/x"}]}]})
+        ));
+    }
+
+    /// A Sentry notification as Slack gives it: the title links to the issue, and Sentry's buttons and menu are in an `actions` block.
+    fn sentry_message(link: &str, elements: Value) -> Value {
+        json!({"blocks": [
+            {"type": "section", "text": {"type": "mrkdwn", "text": format!("🔴 <{link}|*Error*>")}},
+            {"type": "actions", "elements": elements}
+        ]})
+    }
+
+    fn sentry_buttons() -> Value {
+        let button = |action: &str, text: &str, value: &str| json!({"type": "button", "action_id": format!("{action}::11::22"), "text": {"type": "plain_text", "text": text}, "value": value});
+        json!([
+            button("resolve_dialog", "Resolve", "resolve_dialog"),
+            button("archive_dialog", "Archive", "archive_dialog"),
+            {"type": "external_select", "action_id": "assign::11::22", "placeholder": {"type": "plain_text", "text": "Select Assignee..."}}
+        ])
+    }
+
+    const SENTRY_LINK: &str = "https://acme.sentry.io/issues/123456/?referrer=slack&amp;alert=1";
+
+    #[test]
+    fn a_sentry_notification_gives_its_issue_and_the_buttons_to_press() {
+        let issue =
+            sentry_issue(&sentry_message(SENTRY_LINK, sentry_buttons()), &|_| None).unwrap();
+        let button = |text: &str, value: &str| SentryButton {
+            text: text.into(),
+            value: value.into(),
+        };
         assert_eq!(
-            blocks(nameless),
-            vec![ThreadBlock::Actions { buttons: go(None) }]
+            issue,
+            SentryIssue {
+                org: "acme".into(),
+                issue_id: "123456".into(),
+                project_id: "22".into(),
+                buttons: vec![
+                    button("Resolve", "resolve_dialog"),
+                    button("Archive", "archive_dialog")
+                ],
+                assign: Some("Select Assignee...".into()),
+            }
         );
+        // The pairs Sentry sends for a resolve with no release, and for an issue that is resolved or archived; a tracking part after the routing is read past.
+        let more = json!([
+            {"type": "button", "action_id": "status::11::22|n=abc&s=slack", "text": {"type": "plain_text", "text": "Resolve"}, "value": "resolved"},
+            {"type": "button", "action_id": "unresolved:ongoing::11::22", "text": {"type": "plain_text", "text": "Unresolve"}, "value": "unresolved:ongoing"}
+        ]);
+        let issue = sentry_issue(
+            &sentry_message("https://acme.sentry.io/issues/9", more),
+            &|_| None,
+        )
+        .unwrap();
+        let values: Vec<&str> = issue.buttons.iter().map(|b| b.value.as_str()).collect();
+        assert_eq!(values, ["resolved", "unresolved:ongoing"]);
+        assert_eq!(issue.issue_id, "9");
+    }
+
+    #[test]
+    fn the_menu_to_assign_shows_its_chosen_option_else_its_placeholder() {
+        let read = |menu: Value| {
+            sentry_issue(
+                &sentry_message(SENTRY_LINK, json!([sentry_buttons()[0], menu])),
+                &|_| None,
+            )
+            .unwrap()
+            .assign
+        };
+        let select = |extra: Value| {
+            let mut e = json!({"type": "external_select", "action_id": "assign::11::22|n=1"});
+            e.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            e
+        };
+        assert_eq!(read(select(json!({}))), None);
+        assert_eq!(
+            read(select(
+                json!({"placeholder": {"type": "plain_text", "text": "Select Assignee..."}})
+            )),
+            Some("Select Assignee...".into())
+        );
+        assert_eq!(
+            read(select(json!({
+                "placeholder": {"type": "plain_text", "text": "Select Assignee..."},
+                "initial_option": {"text": {"type": "plain_text", "text": "#backend"}, "value": "team:5"}
+            }))),
+            Some("#backend".into())
+        );
+        // A menu of another project is left out like a button of one.
+        let other = json!({"type": "external_select", "action_id": "assign::11::33", "placeholder": {"type": "plain_text", "text": "x"}});
+        assert_eq!(read(other), None);
+    }
+
+    #[test]
+    fn a_message_that_only_looks_like_sentrys_is_not_one() {
+        let read = |m: Value| sentry_issue(&m, &|_| None);
+        // The address of the title: an https address of an organization's subdomain of sentry.io, and `/issues/{id}/` alone.
+        for link in [
+            "https://acme.example.com/issues/1/",
+            "https://acme.sentry.io.example.com/issues/1/",
+            "https://sentry.io/issues/1/",
+            "https://a.b.sentry.io/issues/1/",
+            "https://notsentry.io/issues/1/",
+            "http://acme.sentry.io/issues/1/",
+            "https://user@acme.sentry.io/issues/1/",
+            "https://acme.sentry.io:8443/issues/1/",
+            "https://acme.sentry.io/issues/1/events/2/",
+            "https://acme.sentry.io/issues/1%2F..%2F/",
+            "https://acme.sentry.io/projects/1/",
+            "https://acme.sentry.io/issues/",
+        ] {
+            assert_eq!(read(sentry_message(link, sentry_buttons())), None, "{link}");
+        }
+        // The `action_id`: Sentry's actions, and both IDs.
+        for id in [
+            "resolve_dialog",
+            "resolve_dialog::11",
+            "other::11::22",
+            "resolve_dialog::1.1::22",
+            "resolve_dialog::11::22::x",
+            "resolve_dialog::::22",
+        ] {
+            let button = json!([{"type": "button", "action_id": id, "text": {"type": "plain_text", "text": "Resolve"}, "value": "resolve_dialog"}]);
+            assert_eq!(read(sentry_message(SENTRY_LINK, button)), None, "{id}");
+        }
+        // The value of the button must be the one of its action.
+        for (action, value) in [
+            ("resolve_dialog", "archive_dialog"),
+            ("status", "resolve_dialog"),
+            ("archive_dialog", "ignored:archived_forever"),
+            ("status", "deleted"),
+        ] {
+            let button = json!([{"type": "button", "action_id": format!("{action}::11::22"), "text": {"type": "plain_text", "text": "X"}, "value": value}]);
+            assert_eq!(
+                read(sentry_message(SENTRY_LINK, button)),
+                None,
+                "{action} {value}"
+            );
+        }
+        // No button to press (the menu to assign alone), a button with no name, no actions, and a title that is not the first section's first link.
+        let menu = json!([{"type": "external_select", "action_id": "assign::11::22"}]);
+        assert_eq!(read(sentry_message(SENTRY_LINK, menu)), None);
+        let nameless = json!([{"type": "button", "action_id": "resolve_dialog::11::22", "value": "resolve_dialog"}]);
+        assert_eq!(read(sentry_message(SENTRY_LINK, nameless)), None);
+        assert_eq!(
+            read(
+                json!({"blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": format!("<{SENTRY_LINK}|x>")}}]})
+            ),
+            None
+        );
+        let mut late = sentry_message(SENTRY_LINK, sentry_buttons());
+        late["blocks"][0]["text"]["text"] =
+            json!(format!("see <https://example.com/|this> <{SENTRY_LINK}|x>"));
+        assert_eq!(read(late), None);
+        assert_eq!(
+            read(json!({"attachments": [sentry_message(SENTRY_LINK, sentry_buttons())]})),
+            None
+        );
+    }
+
+    #[test]
+    fn the_buttons_of_another_project_in_the_same_message_are_not_pressed() {
+        let element = |org: &str, project: &str, action: &str, value: &str| json!({"type": "button", "action_id": format!("{action}::{org}::{project}"), "text": {"type": "plain_text", "text": action}, "value": value});
+        let elements = json!([
+            element("11", "22", "resolve_dialog", "resolve_dialog"),
+            element("11", "33", "archive_dialog", "archive_dialog"),
+            element("99", "22", "status", "resolved")
+        ]);
+        let issue = sentry_issue(&sentry_message(SENTRY_LINK, elements), &|_| None).unwrap();
+        assert_eq!(issue.project_id, "22");
+        assert_eq!(issue.buttons.len(), 1);
+        assert_eq!(issue.buttons[0].value, "resolve_dialog");
+    }
+
+    #[test]
+    fn the_buttons_of_sentry_stop_needing_slack_only_when_they_are_pressed_here() {
+        let name = |_: &str| None;
+        let buttons_only = sentry_message(
+            SENTRY_LINK,
+            json!([sentry_buttons()[0], sentry_buttons()[1]]),
+        );
+        assert!(needs_slack(&buttons_only, &name, false));
+        assert!(!needs_slack(&buttons_only, &name, true));
+        // The menu to assign is pressed here too, and it needs Slack without the flag.
+        let with_menu = sentry_message(SENTRY_LINK, sentry_buttons());
+        assert!(needs_slack(&with_menu, &name, false));
+        assert!(!needs_slack(&with_menu, &name, true));
+        // A menu with no text to show, one that is not Sentry's and one of another type are not pressed.
+        for menu in [
+            json!({"type": "external_select", "action_id": "assign::11::22"}),
+            json!({"type": "external_select", "action_id": "other", "placeholder": {"type": "plain_text", "text": "x"}}),
+            json!({"type": "static_select", "action_id": "assign::11::22", "placeholder": {"type": "plain_text", "text": "x"}}),
+        ] {
+            let message = sentry_message(SENTRY_LINK, json!([sentry_buttons()[0], menu]));
+            assert!(needs_slack(&message, &name, true), "{menu}");
+        }
+        // A button that is not Sentry's is not helped by the flag.
+        let other = sentry_message(
+            SENTRY_LINK,
+            json!([{"type": "button", "action_id": "x", "text": {"type": "plain_text", "text": "Go"}, "value": "go"}]),
+        );
+        assert!(needs_slack(&other, &name, true));
     }
 
     #[test]
@@ -1600,16 +2023,11 @@ mod tests {
                     },
                 ],
                 footer: Some("via CI".into()),
-                actions: vec![
-                    ThreadButton {
-                        text: "Open".into(),
-                        url: Some("https://a.example/open".into())
-                    },
-                    ThreadButton {
-                        text: "Rerun".into(),
-                        url: None
-                    },
-                ],
+                // "Rerun" has no address and is not drawn.
+                actions: vec![ThreadButton {
+                    text: "Open".into(),
+                    url: "https://a.example/open".into()
+                }],
                 blocks: vec![],
                 image: None,
                 thumb: None,
@@ -1688,7 +2106,7 @@ mod tests {
             json!({"footer": "t"}),
             json!({"fields": [{"title": "a", "value": "b"}]}),
             json!({"blocks": [{"type": "divider"}]}),
-            json!({"actions": [{"type": "button", "text": "B"}]}),
+            json!({"actions": [{"type": "button", "text": "B", "url": "https://a.example/b"}]}),
             json!({"image_url": "https://a.example/i.png"}),
             json!({"thumb_url": "https://a.example/t.png"}),
         ] {
@@ -1913,12 +2331,15 @@ mod tests {
             "blocks": [{"type": "actions", "block_id": "<@U6>", "elements": [{"type": "button", "text": {"type": "plain_text", "text": "Go"}, "url": "https://a.example/<@U7>"}]}],
             "attachments": [
                 {"text": "x", "fallback": "<@U8>", "callback_id": "<@U9>"},
-                {"fallback": "<@U10>"}
+                {"fallback": "<@U10>"},
+                // Actions that are not drawn (no address) leave the fallback as what is drawn; a button with an address is drawn beside it.
+                {"fallback": "<@U11>", "actions": [{"type": "button", "text": "Rerun"}]},
+                {"fallback": "<@U12>", "actions": [{"type": "button", "text": "Go", "url": "https://a.example/go"}]}
             ]
         });
         let mut found = mentioned_users(&m);
         found.sort();
-        assert_eq!(found, vec!["U10"]);
+        assert_eq!(found, vec!["U10", "U11"]);
         assert_eq!(mentioned_users(&json!({"text": "x"})), Vec::<String>::new());
     }
 
@@ -2007,11 +2428,12 @@ mod tests {
             {"type": "divider"},
             {"type": "context", "elements": [{"type": "mrkdwn", "text": "ctx"}, {"type": "image", "image_url": "https://a.example/i.png", "alt_text": "icon"}]},
             {"type": "image", "image_url": "https://a.example/p.png", "alt_text": "chart", "title": {"type": "plain_text", "text": "Sales"}},
-            {"type": "actions", "elements": [{"type": "button", "text": {"type": "plain_text", "text": "Ok"}}]},
+            {"type": "actions", "elements": [{"type": "button", "text": {"type": "plain_text", "text": "Ok"}, "url": "https://a.example/ok"}, {"type": "button", "text": {"type": "plain_text", "text": "Rerun"}}]},
         ]});
+        // A button with no address is not drawn, so it is not here either.
         assert_eq!(
             plain_of(m, "alt"),
-            "H\nbold body\nf1\nf2\nOpen (https://a.example/x)\nctx\nicon\nchart\nSales\nOk"
+            "H\nbold body\nf1\nf2\nOpen (https://a.example/x)\nctx\nicon\nchart\nSales\nOk (https://a.example/ok)"
         );
     }
 

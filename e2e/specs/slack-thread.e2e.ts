@@ -444,7 +444,7 @@ describe("slack thread: blocks and attachments", () => {
     { type: "section", text: plain("Project: api"), fields: [plain("When\nnow"), plain("Branch\nmain")], accessory: { type: "button", text: "View Job", url: "https://app.example.com/jobs/1" } },
     { type: "context", elements: [{ type: "text", text: plain("built by the bot") }] },
     { type: "divider" },
-    { type: "actions", buttons: [{ text: "Rerun", url: null }, { text: "Docs", url: "https://docs.example.com/" }] },
+    { type: "actions", buttons: [{ text: "Docs", url: "https://docs.example.com/" }] },
   ];
   // A thread of one message from a bot: `text` is only the alternative text.
   // (Rust sends showText false for a message whose blocks are drawn in place of the text.)
@@ -524,12 +524,27 @@ describe("slack thread: blocks and attachments", () => {
     expect(await textsOf("#st-msgs .st-att")).toEqual(["No link", "Only a fallback"]);
   });
 
-  it("gives a button with an address as a link, and one without as its name that cannot be pressed", async () => {
+  it("gives a button with an address as a link, and draws no button that cannot be pressed", async () => {
     await openDetail({}, bot({ blocks }));
     const links = await browser.execute(() => [...document.querySelectorAll<HTMLAnchorElement>("#st-msgs a.text-btn")].map((a) => [a.textContent, a.getAttribute("href")]));
     expect(links).toEqual([["View Job", "https://app.example.com/jobs/1"], ["Docs", "https://docs.example.com/"]]);
-    await expect($("#st-msgs button.text-btn")).toHaveText("Rerun");
-    await expect($("#st-msgs button.text-btn")).toBeDisabled();
+    expect(await count("#st-msgs button.text-btn")).toBe(0);
+  });
+
+  it("links a message with a part that works only in Slack to the message there, under its blocks and attachments (S-11)", async () => {
+    await openDetail({}, bot({ blocks, attachments: [attachment({ title: "Job", text: plain("done") })], slackLink: permalinkOf(root) }));
+    const link = await browser.execute(() => {
+      const a = [...document.querySelectorAll<HTMLAnchorElement>("#st-msgs .st-msg > div > .st-acts > a.text-btn")].find((x) => x.textContent === "Slack で操作する")!;
+      const att = document.querySelector("#st-msgs .st-att")!;
+      return { text: a.textContent, href: a.getAttribute("href"), title: a.title === a.href, icon: a.querySelectorAll("svg").length, below: !!(att.compareDocumentPosition(a) & Node.DOCUMENT_POSITION_FOLLOWING) };
+    });
+    expect(link).toEqual({ text: "Slack で操作する", href: permalinkOf(root), title: true, icon: 1, below: true });
+    expect(await count(`#st-msgs a.text-btn[href='${permalinkOf(root)}']`)).toBe(1);
+  });
+
+  it("draws no link to Slack for a message without such a part", async () => {
+    await openDetail({}, bot({ blocks }));
+    expect(await textsOf("#st-msgs a.text-btn")).toEqual(["View Job", "Docs"]);
   });
 
   it("draws every text as text: no markup, and only URLs are links", async () => {
@@ -2054,5 +2069,185 @@ describe("slack thread: the pane under the thread", () => {
     await browser.pause(500);
     expect(((await callsOf("claude_code_start")) as { id: string }[]).filter((c) => c.id === "slack-thread")).toHaveLength(1);
     expect((await callsOf(close)).filter((c) => (c as { id: string }).id === "slack-thread")).toEqual([]);
+  });
+});
+
+describe("slack thread: a Sentry notification (S-30)", () => {
+  const issue = { org: "acme", issueId: "123456", projectId: "22", buttons: [{ text: "Resolve", value: "resolve_dialog" }, { text: "Archive", value: "archive_dialog" }], assign: null };
+  const withMenu = { ...issue, assign: "Select Assignee..." };
+  const assignees = { teams: [{ name: "#backend", value: "team:7" }, { name: "#web", value: "team:8" }], members: [{ name: "Owner", value: "user:1" }, { name: "Tanaka", value: "user:2" }] };
+  const menu = () => $("#st-msgs .sentry-assign");
+  const pop = () => $(".sentry-pop");
+  const assigned = (assignee: string) => ({ teamId: workspace.teamId, org: "acme", issueId: "123456", assignee });
+  const sentry = (extra: Parameters<typeof threadMessage>[3] = {}) =>
+    slackThread([threadMessage(root, "Sentry", "Error", { blocks: [{ type: "section", text: plain("Error"), fields: [], accessory: null }], showText: false, sentry: issue, ...extra })]);
+  const button = (name: string) => $("#st-msgs .st-sentry").$(`button=${name}`);
+  const dialog = () => $(".sentry-dialog");
+  const choices = () => textsOf(".sentry-select option");
+  // Chooses the option with that value in the select of the dialog.
+  const choose = (value: string) =>
+    browser.execute((v) => {
+      const select = document.querySelector<HTMLSelectElement>(".sentry-select")!;
+      select.value = v;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    }, value);
+  const sent = (value: string) => ({ teamId: workspace.teamId, org: "acme", issueId: "123456", value });
+
+  it("draws the buttons of the issue as buttons under the message, before the link to Slack for what only Slack can do", async () => {
+    await openDetail({}, sentry({ slackLink: permalinkOf(root) }));
+    expect(await textsOf("#st-msgs .st-sentry button")).toEqual(["Resolve", "Archive"]);
+    expect(await browser.execute(() => document.querySelector("#st-msgs .st-sentry")!.nextElementSibling!.textContent)).toBe("Slack で操作する");
+    expect(await count("#st-msgs button.text-btn:disabled")).toBe(0);
+  });
+
+  it("draws no buttons for a message that is not a Sentry notification", async () => {
+    await openDetail({}, sentry({ sentry: null }));
+    expect(await count("#st-msgs .st-sentry")).toBe(0);
+  });
+
+  it("opens a dialog with Sentry's choices for Resolve, Immediately chosen, and sends nothing until its button is pressed", async () => {
+    await openDetail({}, sentry());
+    const send = await mock("sentry_set_status", null);
+    await button("Resolve").click();
+    await expect(dialog()).toBeDisplayed();
+    await expect(dialog().$("h2")).toHaveText("Resolve Issue");
+    expect(await choices()).toEqual(["Immediately", "In the next release", "In the current release"]);
+    await expect($(".sentry-select")).toHaveValue("resolved");
+    await dialog().$("button=キャンセル").click();
+    expect(await count(".sentry-dialog")).toBe(0);
+    expect(await callsOf(send)).toEqual([]);
+  });
+
+  it("opens the dialog of Archive with its five choices, Until escalating chosen, and closes it with Escape", async () => {
+    await openDetail({}, sentry());
+    const send = await mock("sentry_set_status", null);
+    await button("Archive").click();
+    await expect(dialog().$("h2")).toHaveText("Archive Issue");
+    expect(await choices()).toEqual(["Until escalating", "Until 10 events", "Until 100 events", "Until 1000 events", "Forever"]);
+    await expect($(".sentry-select")).toHaveValue("ignored:archived_until_escalating");
+    await browser.keys("Escape");
+    expect(await count(".sentry-dialog")).toBe(0);
+    expect(await callsOf(send)).toEqual([]);
+  });
+
+  it("sends the choice with the workspace, the organization and the issue, tells it, and reads the thread again", async () => {
+    const read = await openDetail({}, sentry());
+    const send = await mock("sentry_set_status", null);
+    await button("Resolve").click();
+    await choose("resolved:inNextRelease");
+    await dialog().$("button=Resolve").click();
+    expect(await waitForCalls(send)).toEqual([sent("resolved:inNextRelease")]);
+    expect(await count(".sentry-dialog")).toBe(0);
+    await expect($(".toast")).toHaveText(expect.stringContaining("Sentry に送りました: Resolve"));
+    await waitForCalls(read, 2);
+    await button("Archive").click();
+    await choose("ignored:archived_until_condition_met:100");
+    await dialog().$("button=Archive").click();
+    expect((await waitForCalls(send, 2))[1]).toEqual(sent("ignored:archived_until_condition_met:100"));
+  });
+
+  it("sends a button that has no dialog at once", async () => {
+    await openDetail({}, sentry({ sentry: { ...issue, buttons: [{ text: "Unresolve", value: "unresolved:ongoing" }] } }));
+    const send = await mock("sentry_set_status", null);
+    await button("Unresolve").click();
+    expect(await waitForCalls(send)).toEqual([sent("unresolved:ongoing")]);
+    expect(await count(".sentry-dialog")).toBe(0);
+  });
+
+  it("turns the buttons off while it sends, and tells a refusal and turns them on again", async () => {
+    await openDetail({}, sentry({ sentry: { ...issue, buttons: [{ text: "Unresolve", value: "unresolved:ongoing" }, { text: "Archive", value: "archive_dialog" }] } }));
+    const send = await mock("sentry_set_status", holds);
+    await button("Unresolve").click();
+    await waitForCalls(send);
+    expect(await count("#st-msgs .st-sentry button:disabled")).toBe(2);
+    await release("sentry_set_status", rejects("トークンの権限が足りません。event:write のスコープを足してください"));
+    await expect($(".toast")).toHaveText(expect.stringContaining("Sentry に送れませんでした: トークンの権限が足りません。event:write のスコープを足してください"));
+    await browser.waitUntil(async () => (await count("#st-msgs .st-sentry button:disabled")) === 0);
+    expect((await callsOf(send)).length).toBe(1);
+  });
+
+  it("draws the menu to assign after the buttons, with its own text, and none when the message has no menu", async () => {
+    await openDetail({}, sentry({ sentry: withMenu }));
+    expect(await textsOf("#st-msgs .st-sentry button")).toEqual(["Resolve", "Archive", "Select Assignee..."]);
+    await expect(menu()).toHaveAttribute("aria-haspopup", "dialog");
+    expect(await count(".sentry-pop")).toBe(0);
+  });
+
+  it("reads the choices of the issue when the menu is pressed, and draws the teams and the members under a search field", async () => {
+    await openDetail({}, sentry({ sentry: withMenu }));
+    const read = await mock("sentry_assignees", assignees);
+    const send = await mock("sentry_assign", null);
+    await menu().click();
+    await expect(pop()).toBeDisplayed();
+    expect(await waitForCalls(read)).toEqual([{ teamId: workspace.teamId, org: "acme", issueId: "123456" }]);
+    await expect(pop().$(".sentry-search")).toHaveAttribute("placeholder", "検索");
+    await expect(pop().$(".sentry-search")).toBeFocused();
+    expect(await textsOf(".sentry-pop .sentry-group")).toEqual(["Teams", "Members"]);
+    expect(await textsOf(".sentry-pop .sentry-opt")).toEqual(["#backend", "#web", "Owner", "Tanaka"]);
+    expect(await callsOf(send)).toEqual([]);
+  });
+
+  it("narrows the choices as the search field is typed in, and drops a group with none", async () => {
+    await openDetail({}, sentry({ sentry: withMenu }));
+    await mock("sentry_assignees", assignees);
+    await menu().click();
+    await pop().$(".sentry-search").setValue("TAN");
+    expect(await textsOf(".sentry-pop .sentry-group")).toEqual(["Members"]);
+    expect(await textsOf(".sentry-pop .sentry-opt")).toEqual(["Tanaka"]);
+    await pop().$(".sentry-search").setValue("zzz");
+    expect(await count(".sentry-pop .sentry-opt")).toBe(0);
+    expect(await count(".sentry-pop .sentry-group")).toBe(0);
+  });
+
+  it("closes the popup with Escape, with a press elsewhere and with the menu again, and sends nothing", async () => {
+    await openDetail({}, sentry({ sentry: withMenu }));
+    await mock("sentry_assignees", assignees);
+    const send = await mock("sentry_assign", null);
+    await menu().click();
+    await browser.keys("Escape");
+    expect(await count(".sentry-pop")).toBe(0);
+    await menu().click();
+    await expect(pop()).toBeDisplayed();
+    await menu().click();
+    expect(await count(".sentry-pop")).toBe(0);
+    await menu().click();
+    await expect(pop()).toBeDisplayed();
+    // WebDriver's element click sends no pointerdown, which is what closes the popup: the page's own press elsewhere.
+    await browser.execute(() => document.querySelector("#st-msgs .st-meta")!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerId: 5, isPrimary: true })));
+    expect(await count(".sentry-pop")).toBe(0);
+    expect(await callsOf(send)).toEqual([]);
+  });
+
+  it("sends the chosen team or member at once, tells it, closes the popup and reads the thread again", async () => {
+    const read = await openDetail({}, sentry({ sentry: withMenu }));
+    await mock("sentry_assignees", assignees);
+    const send = await mock("sentry_assign", null);
+    await menu().click();
+    await pop().$("button=Tanaka").click();
+    expect(await waitForCalls(send)).toEqual([assigned("user:2")]);
+    expect(await count(".sentry-pop")).toBe(0);
+    await expect($(".toast")).toHaveText(expect.stringContaining("Sentry に送りました: 担当者 Tanaka"));
+    await waitForCalls(read, 2);
+    await menu().click();
+    await pop().$("button=#web").click();
+    expect((await waitForCalls(send, 2))[1]).toEqual(assigned("team:8"));
+  });
+
+  it("tells a failure to read the choices and opens no popup, and turns the buttons off while it sends and on again after a refusal", async () => {
+    await openDetail({}, sentry({ sentry: withMenu }));
+    await mock("sentry_assignees", rejects("トークンの権限が足りません。member:read、team:read、project:read のスコープを足してください"));
+    await menu().click();
+    await expect($(".toast")).toHaveText(expect.stringContaining("Sentry から読めませんでした: トークンの権限が足りません。member:read"));
+    expect(await count(".sentry-pop")).toBe(0);
+    expect(await count("#st-msgs .st-sentry button:disabled")).toBe(0);
+    await mock("sentry_assignees", assignees);
+    const send = await mock("sentry_assign", holds);
+    await menu().click();
+    await pop().$("button=Owner").click();
+    await waitForCalls(send);
+    expect(await count("#st-msgs .st-sentry button:disabled")).toBe(3);
+    await release("sentry_assign", rejects("トークンの権限が足りません。event:write のスコープを足してください"));
+    await expect($(".toast")).toHaveText(expect.stringContaining("Sentry に送れませんでした: トークンの権限が足りません。event:write のスコープを足してください"));
+    await browser.waitUntil(async () => (await count("#st-msgs .st-sentry button:disabled")) === 0);
   });
 });

@@ -21,6 +21,7 @@ import { showConsentCard } from "./formation-consent-settings.js";
 import { showOrcaPairingCard } from "./orca-pairing-settings.js";
 import { showLogTab } from "./log-settings.js";
 import { initNotionTab, showNotionTab } from "./notion-settings.js";
+import { initSentryCard, loadSentryCard } from "./sentry-settings.js";
 import { hideSkillClaude, showSkillTab } from "./skill-settings.js";
 import { logError, showFailure } from "./error-card.js";
 
@@ -326,6 +327,7 @@ export async function loadSettings() {
   loadCalendarCard();
   loadTodoistCard();
   loadHiddenCard();
+  loadSentryCard();
   let loaded: SlackLoad;
   try {
     loaded = await invoke("slack_load");
@@ -340,6 +342,7 @@ export async function loadSettings() {
 
 export function initSettings() {
   initNotionTab();
+  initSentryCard();
   for (const t of SETTINGS_TABS) $(`settings-tab-${t}`).onclick = () => selectSettingsTab(t);
   // Left and right move to the neighbour tab (the first and the last are neighbours), and the focus goes with it.
   $("settings-tabs").onkeydown = (e) => {
