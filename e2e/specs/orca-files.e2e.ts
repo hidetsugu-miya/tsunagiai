@@ -5485,9 +5485,10 @@ describe("orca: drop on the file pane (A-47)", () => {
     await release(asked, ["a.rs"]);
     await waitForCalls(asked, 3);
     await release(asked, []);
+    // The names asked of 'src/lib' are its file and the folder of the drop directly under it.
     expect(await callsOf(asked)).toEqual([
       { path: HERE, dir: "src", names: ["lib"], environment: null },
-      { path: HERE, dir: "src/lib", names: ["a.rs"], environment: null },
+      { path: HERE, dir: "src/lib", names: ["a.rs", "inner"], environment: null },
       { path: HERE, dir: "src/lib/inner", names: ["b.rs"], environment: null },
     ]);
     await expect(question()).toHaveText(expect.stringContaining("a.rs は src/lib/ にもうあります。"));
@@ -5496,6 +5497,86 @@ describe("orca: drop on the file pane (A-47)", () => {
     const calls = (await waitForCalls("orca_drop_file", 2)) as { dir: string; name: string; onTaken: string }[];
     expect(calls.map((c) => [c.dir, c.name, c.onTaken])).toEqual([["src/lib", "a.rs", "overwrite"], ["src/lib/inner", "b.rs", "copy"]]);
     expect(await callsOf("orca_drop_dir")).toEqual([{ path: HERE, dir: "src/lib/inner", environment: null }]);
+  });
+
+  it("puts nothing and says so on a card when a dropped folder has the name of a file that is there, before any question", async () => {
+    await openTree();
+    await mock("orca_drop_taken", ["notes.txt", "main.rs"]);
+    await drop("src", [note], [folder("main.rs")]);
+    await expect($(CARD)).toHaveText("main.rs と同じ名前のファイルが置き先にあるので、何も置きません");
+    await browser.pause(300);
+    await expect(question()).not.toExist();
+    expect(await callsOf("orca_drop_dir")).toEqual([]);
+    expect(await callsOf("orca_drop_file")).toEqual([]);
+    await idle();
+  });
+
+  it("stops the same way when a folder inside a dropped folder has the name of a file in the folder that is there", async () => {
+    await openTree();
+    const asked = await mock("orca_drop_taken", holds);
+    await drop("src", [], [folder("lib", folder("deep"))]);
+    await waitForCalls(asked);
+    await release(asked, ["lib"]);
+    await waitForCalls(asked, 2);
+    expect(await callsOf(asked)).toEqual([
+      { path: HERE, dir: "src", names: ["lib"], environment: null },
+      { path: HERE, dir: "src/lib", names: ["deep"], environment: null },
+    ]);
+    await mock("orca_files_list", dirOf("src/lib", [["deep", false]]));
+    await release(asked, ["deep"]);
+    await expect($(CARD)).toHaveText("lib/deep と同じ名前のファイルが置き先にあるので、何も置きません");
+    await browser.pause(300);
+    expect(await callsOf("orca_drop_dir")).toEqual([]);
+    expect(await callsOf("orca_drop_file")).toEqual([]);
+  });
+
+  it("asks nothing under a dropped folder whose name is a file there, even with files inside it", async () => {
+    await openTree();
+    await mock("orca_files_list", dirOf("src", [["lib", false], ["main.rs", false]]));
+    const asked = await mock("orca_drop_taken", holds);
+    await drop("src", [], [folder("lib", named("a.rs"))]);
+    await waitForCalls(asked);
+    await release(asked, ["lib"]);
+    await expect($(CARD)).toHaveText("lib と同じ名前のファイルが置き先にあるので、何も置きません");
+    await browser.pause(300);
+    expect(await callsOf(asked)).toEqual([{ path: HERE, dir: "src", names: ["lib"], environment: null }]);
+    expect(await callsOf("orca_drop_dir")).toEqual([]);
+    expect(await callsOf("orca_drop_file")).toEqual([]);
+  });
+
+  it("asks nothing under a folder inside a dropped folder whose name is a file there, even with files inside it", async () => {
+    await openTree();
+    const asked = await mock("orca_drop_taken", holds);
+    await drop("src", [], [folder("lib", folder("deep", named("x.txt")))]);
+    await waitForCalls(asked);
+    await release(asked, ["lib"]);
+    await waitForCalls(asked, 2);
+    await mock("orca_files_list", dirOf("src/lib", [["deep", false]]));
+    await release(asked, ["deep"]);
+    await expect($(CARD)).toHaveText("lib/deep と同じ名前のファイルが置き先にあるので、何も置きません");
+    await browser.pause(300);
+    expect(await callsOf(asked)).toEqual([
+      { path: HERE, dir: "src", names: ["lib"], environment: null },
+      { path: HERE, dir: "src/lib", names: ["deep"], environment: null },
+    ]);
+    expect(await callsOf("orca_drop_dir")).toEqual([]);
+    expect(await callsOf("orca_drop_file")).toEqual([]);
+  });
+
+  it("offers no replace for a file whose name is a folder there, and still asks about it after 'replace' was answered for the rest", async () => {
+    await openTree();
+    await mock("orca_drop_taken", ["a.txt", "lib"]);
+    await drop("src", [named("a.txt"), named("lib")]);
+    await expect(question()).toHaveText(expect.stringContaining("a.txt は src/ にもうあります。"));
+    expect(await textsOf(".orca-drop-pop button")).toEqual(["やめる", "別名で置く", "上書き"]);
+    await question().$("input[type=checkbox]").click();
+    await answer("上書き");
+    await expect(question()).toHaveText(expect.stringContaining("lib は src/ にフォルダーとしてもうあります。"));
+    expect(await textsOf(".orca-drop-pop button")).toEqual(["やめる", "別名で置く"]);
+    await expect(question()).not.toHaveText(expect.stringContaining("残りの"));
+    await answer("別名で置く");
+    const calls = (await waitForCalls("orca_drop_file", 2)) as { name: string; onTaken: string }[];
+    expect(calls.map((c) => [c.name, c.onTaken])).toEqual([["a.txt", "overwrite"], ["lib", "copy"]]);
   });
 
   it("counts the files inside a dropped folder against the limit, and puts nothing when they are over it", async () => {

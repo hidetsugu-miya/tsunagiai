@@ -666,7 +666,7 @@ fn merge(
         }
     }
     // A run of deleted and inserted blocks between two kept ones: the n-th one deleted is replaced by the n-th one inserted.
-    let mut replaced: HashMap<usize, Value> = HashMap::new();
+    let mut replaced: HashMap<usize, Vec<Value>> = HashMap::new();
     let (mut dels, mut inserts) = (Vec::new(), Vec::new());
     for op in ops.iter().map(Some).chain([None]) {
         match op {
@@ -675,9 +675,9 @@ fn merge(
             _ => {
                 for (j, k) in dels.iter().zip(&inserts) {
                     let owner = flat[*j].0;
-                    if groups[owner].len() == 1 && units[owner].len() == 1 {
-                        let block = &old[units[owner].start];
-                        replaced.insert(*k, replace(block, new[*k].clone(), depth));
+                    if groups[owner].len() == 1 {
+                        let blocks = &old[units[owner].clone()];
+                        replaced.insert(*k, replace_run(blocks, new[*k].clone(), depth));
                     }
                 }
                 dels.clear();
@@ -710,7 +710,10 @@ fn merge(
                 }
             }
             Op::Del(j) => flush_empty(flat[j].0, &mut out),
-            Op::Ins(k) => out.push(replaced.remove(&k).unwrap_or_else(|| new[k].clone())),
+            Op::Ins(k) => match replaced.remove(&k) {
+                Some(blocks) => out.extend(blocks),
+                None => out.push(new[k].clone()),
+            },
         }
     }
     flush_empty(units.len(), &mut out);
@@ -742,6 +745,54 @@ fn is_line(kind: &str) -> bool {
 
 fn is_plain_list(kind: &str) -> bool {
     matches!(kind, "bulletList" | "orderedList")
+}
+
+/// The new block `new` that replaces the old blocks `old` of one unit (`units_of`), as the blocks that take its place. One old block is `replace`d. Lists that stood together are one list in Markdown, so when `new` has as many items as they held, each list gets its items back by position and is matched item by item, as a list of its own kind: a task list gets a task list when its items still carry the task mark. When the number of items differs, `new` stands as the Markdown made it.
+fn replace_run(old: &[Value], new: Value, depth: usize) -> Vec<Value> {
+    if let [one] = old {
+        return vec![replace(one, new, depth)];
+    }
+    let items = content(&new);
+    let total: usize = old.iter().map(|n| content(n).len()).sum();
+    if depth >= MAX_DEPTH
+        || !matches!(kind(&new), "bulletList" | "orderedList" | "taskList")
+        || items.len() != total
+        || old.iter().any(|n| content(n).is_empty())
+    {
+        return vec![new];
+    }
+    let mut from = 0;
+    old.iter()
+        .enumerate()
+        .map(|(i, node)| {
+            let part = items[from..from + content(node).len()].to_vec();
+            from += part.len();
+            let mut list = new.clone();
+            if i > 0 {
+                // The start of a later ordered list is its own; the attrs of any other kind of old list (a `localId`) are not the new list's.
+                match node.get("attrs") {
+                    Some(attrs) if kind(node) == "orderedList" && kind(&new) == "orderedList" => {
+                        list["attrs"] = attrs.clone();
+                    }
+                    _ => {
+                        list.as_object_mut().map(|o| o.remove("attrs"));
+                    }
+                }
+            }
+            if kind(node) == "taskList" && kind(&new) == "bulletList" {
+                let lines = part.iter().map(|item| (None, content(item).to_vec()));
+                let derived = list_node(None, lines.collect(), Ctx::Doc);
+                if kind(&derived) == "taskList" {
+                    list = derived;
+                } else {
+                    list["content"] = Value::Array(part);
+                }
+            } else {
+                list["content"] = Value::Array(part);
+            }
+            replace(node, list, depth)
+        })
+        .collect()
 }
 
 /// The new block `new` that replaces the old block `old`, with what the old one held that Markdown could not say: a list is matched item by item, a quote and an item block by block, and a line gets back its mentions, emoji, dates, statuses and cards.
@@ -1261,6 +1312,45 @@ mod tests {
         let out = merged(&old, &format!("{text}\n- c"));
         assert_eq!(out.len(), 1);
         assert_eq!(content(&out[0]).len(), 3);
+    }
+
+    #[test]
+    fn lists_that_stand_together_keep_their_kinds_when_one_item_is_edited() {
+        let old = vec![
+            json!({"type": "bulletList", "content": [{"type": "listItem", "content": [para(json!([mention("@Taro")]))]}]}),
+            json!({"type": "taskList", "attrs": {"localId": "t"}, "content": [{"type": "taskItem", "attrs": {"localId": "i", "state": "TODO"}, "content": [txt("a")]}]}),
+        ];
+        let text = doc_md(&old);
+        let out = merged(&old, &text.replace("☐ a", "☐ b"));
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0], old[0]);
+        assert_eq!(kind(&out[1]), "taskList");
+        let item = &content(&out[1])[0];
+        assert_eq!(item["attrs"]["state"], "TODO");
+        assert_eq!(item["content"], json!([txt("b")]));
+        let done = merged(&old, &text.replace("☐ a", "☑ a"));
+        assert_eq!(done[0], old[0]);
+        assert_eq!(kind(&done[1]), "taskList");
+        assert_eq!(content(&done[1])[0]["attrs"]["state"], "DONE");
+        let plain = merged(&old, &text.replace("☐ a", "a"));
+        assert_eq!(plain[0], old[0]);
+        assert_eq!(kind(&plain[1]), "bulletList");
+        assert!(plain[1].get("attrs").is_none());
+        assert_eq!(content(&content(&plain[1])[0])[0], para(json!([txt("a")])));
+    }
+
+    #[test]
+    fn ordered_lists_that_stand_together_keep_their_start_when_one_item_is_edited() {
+        let item = |t: &str| json!({"type": "listItem", "content": [para(json!([txt(t)]))]});
+        let old = vec![
+            json!({"type": "orderedList", "content": [item("a"), item("b")]}),
+            json!({"type": "orderedList", "attrs": {"order": 3}, "content": [item("c")]}),
+        ];
+        let out = merged(&old, &doc_md(&old).replace("c", "d"));
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0], old[0]);
+        assert_eq!(out[1]["attrs"], json!({"order": 3}));
+        assert_eq!(content(&out[1]), [item("d")]);
     }
 
     #[test]
