@@ -44,6 +44,19 @@
         "`gh issue comment 1290` が 1 件あり、その本文がこの実行の出来事（3 回目のレビューと HEAD の SHA）を根拠として含む",
         "コメントの本文を `gh` に渡す前に `guard-public.sh text` に通している"
       ]
+    },
+    {
+      "id": 4,
+      "name": "owner-decision-cause-goes-to-owner-not-issue",
+      "prompt": "あなたは implement の実行を終えたリードです。`.claude/skills/retrospective/SKILL.md` を読み、その手順どおりに、`.claude/evals/files/retrospective/run-design-cause.md` に書かれた実行を振り返ってください。この記録が、あなたの持つ実行の文脈です。GitHub には読み書きともに触れないでください。開いている issue は記録の末尾の一覧を `gh issue list` の結果として使い、`gh issue create` や `gh issue comment` を打つなら、実行せずに、打つはずのコマンド、題、ラベル、本文をそのまま書き出してください。最後に手順 5 の報告を書いてください。",
+      "expected_output": "原因（手順 6.3 が、直し方の選び方がオーナーの決めごとのときの行き先を書いていない）の直しは、オーナーが決めるまで AI が選べない設計の判断を要するので、issue は作らず、手順 5 の報告にオーナーへの質問として載せる。",
+      "files": [
+        ".claude/evals/files/retrospective/run-design-cause.md"
+      ],
+      "assertions": [
+        "`gh issue create` も `gh issue comment` も打っていない",
+        "手順 5 の報告に、この原因をオーナーへの質問として載せ、何を決めてほしいか（手順 6.3 でオーナーの決めごとが要る項目の行き先）を書いている"
+      ]
     }
   ]
 }

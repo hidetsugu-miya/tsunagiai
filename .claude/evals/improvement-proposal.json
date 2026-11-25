@@ -30,6 +30,19 @@
         "手順 9 で worktree を park するとき、main checkout の `tmp/` のモックを消さない",
         "issue の本文の末尾の `<details>` の中に `html` のコードブロックでモックの HTML を載せ、Artifact の URL を書かず、issue を作ったあとにモックのファイルを消す"
       ]
+    },
+    {
+      "id": 3,
+      "name": "real-machine-check-candidate-goes-to-owner",
+      "prompt": "あなたは improvement-proposal の実行で、手順 6 まで終えたリードです。`.claude/skills/improvement-proposal/SKILL.md` の手順 7 と 8 を読み、`.claude/evals/files/improvement-proposal/candidate-real-machine.md` の候補を振り分けてください。スカウトは起動せず、worktree も取らず、手順 7 と 8 だけを行ってください。GitHub には読み書きともに触れないでください。`gh issue create` を打つなら、実行せずに、打つはずのコマンド、題、ラベル、本文をそのまま書き出してください。打たないなら、オーナーに何を示すかを書いてください。",
+      "expected_output": "検証が実機の GUI セッションでの `codesign` に依存し、AI は回せないので「オーナーへの候補」に振り分け、issue は作らない。手順 10 でオーナーに、問題、根拠、実機で確かめてほしいことを示す。",
+      "files": [
+        ".claude/evals/files/improvement-proposal/candidate-real-machine.md"
+      ],
+      "assertions": [
+        "候補を「オーナーへの候補」に振り分け、`gh issue create` を打っていない（実機の確認を AI が回せないため）",
+        "オーナーに示す内容に、問題、根拠と、実機の GUI セッションで `codesign` を回して確かめてほしいことが含まれている"
+      ]
     }
   ]
 }
