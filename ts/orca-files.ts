@@ -779,26 +779,38 @@ async function putDropped(dir: string, read: Promise<Dropped>) {
     const files = dropped.files.filter((f) => f.file.size <= DROP_FILE).map((f) => ({ file: f.file, dir: joinDir(dir, f.dir), top: f.dir.split("/")[0] }));
     if (files.length === 0 && dropped.folders.length === 0) return;
     // Which names are taken: the names the drop puts in `dir` itself (a folder's name too, so that one that is there is known), then the files of each folder of the drop, only where the folder of the drop is there already (a folder that is new holds nothing).
-    // The taken names are keyed by folder and name, and hold whether what is there is a folder (read from the folder's listing; null when the listing does not show it, as when Orca's page was full).
+    // The taken names are keyed by folder and name, and hold whether what is there is a folder (read from the folder's listing; null when the listing does not show it, as when Orca's page was full). A folder's listing is read once, for all the questions of that folder.
     const taken = new Map<string, boolean | null>();
+    const listed = new Map<string, Map<string, boolean>>();
     const ask = async (where: string, names: string[]) => {
       for (let at = 0; at < names.length; at += DROP_FILES) {
         const found = await invoke("orca_drop_taken", { path: here.path, dir: where, names: names.slice(at, at + DROP_FILES), environment: here.target });
         if (found.length === 0) continue;
-        const kinds = new Map((await listDir(here, where, false)).entries.map((e) => [e.name, e.isDirectory]));
+        let kinds = listed.get(where);
+        if (kinds === undefined) {
+          kinds = new Map((await listDir(here, where, false)).entries.map((e) => [e.name, e.isDirectory]));
+          listed.set(where, kinds);
+        }
         for (const name of found) taken.set(`${where}\n${name}`, kinds.get(name) ?? null);
       }
     };
     const own = [...files.filter((f) => f.dir === dir).map((f) => f.file.name), ...dropped.folders.filter((f) => !f.includes("/"))];
     if (own.length > 0) await ask(dir, own);
     if (mine !== generation) return;
-    const there = new Set(own.filter((name) => taken.has(`${dir}\n${name}`)));
+    // A name that is a file there holds nothing, so nothing is asked under it (the questions would be answered by an error of Orca, not by a name).
+    const there = new Set(own.filter((name) => taken.has(`${dir}\n${name}`) && taken.get(`${dir}\n${name}`) !== false));
     // In each folder of the drop under a folder that is there: its files, and the folders of the drop directly under it.
     const inside = new Map<string, string[]>();
     const put = (where: string, name: string) => inside.set(where, [...(inside.get(where) ?? []), name]);
     for (const f of files) if (f.dir !== dir && there.has(f.top)) put(f.dir, f.file.name);
     for (const f of dropped.folders) if (f.includes("/") && there.has(f.split("/")[0])) put(joinDir(dir, f.slice(0, f.lastIndexOf("/"))), f.slice(f.lastIndexOf("/") + 1));
-    for (const [where, names] of inside) {
+    // The folders nearer the folder under the pointer are asked first, so that a folder that is a file there is known before the folders under it are asked about.
+    const underFile = (where: string) => {
+      const parts = where.slice(dir === "" ? 0 : dir.length + 1).split("/");
+      return parts.some((name, i) => taken.get(`${joinDir(dir, parts.slice(0, i).join("/"))}\n${name}`) === false);
+    };
+    for (const [where, names] of [...inside].sort((a, b) => a[0].split("/").length - b[0].split("/").length)) {
+      if (underFile(where)) continue;
       await ask(where, names);
       if (mine !== generation) return;
     }
