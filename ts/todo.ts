@@ -15,12 +15,12 @@ import { initSplit, type SplitHandle } from "./split.js";
 import { initTodoClaude, syncTodoClaude, toggleTodoClaude } from "./todo-claude.js";
 import { renderDetail } from "./todo-detail.js";
 import { discardDraft, draftOpen } from "./todo-draft.js";
-import { loadedComments } from "./todo-comments.js";
+import { clearCommentNotices, loadedComments } from "./todo-comments.js";
 import { editingField, projectName, projectOf, recountTodo, searching, setTodoCount, settleLocal, todoState } from "./todo-data.js";
 import { renderList, renderProjects } from "./todo-list.js";
 import { clearSearch, initTodoSearch, searchTodo } from "./todo-search.js";
 import { cancelTodoReload, todoCall } from "./todo-write.js";
-import { logError, showFailure } from "./error-card.js";
+import { logError, setNotice, showFailure } from "./error-card.js";
 import { copyText } from "./view.js";
 
 const TODO_REFRESH_MS = 10 * 1000;
@@ -114,6 +114,8 @@ export function todoMode(mode: "token" | "list" | "detail" | "draft") {
   $("todo-main").classList.toggle("drafting", mode === "draft");
   document.getElementById("todo-draft")?.toggleAttribute("hidden", mode !== "draft");
   $("todo-more").hidden = mode !== "detail";
+  // The comments' card belongs to the detail of a task.
+  if (mode !== "detail") clearCommentNotices();
   // The search has no place in the token form or the page of a draft.
   $("todo-search").hidden = mode === "token" || mode === "draft";
   // Only a task can be handed over, so the button is in the header of a task only.
@@ -127,7 +129,7 @@ export function todoMode(mode: "token" | "list" | "detail" | "draft") {
 }
 
 // Shows the token form and forgets the content: a missing token, or one the settings screen just removed.
-export function showTokenForm(note = "") {
+export function showTokenForm() {
   // No reload is due: the form is what the screen shows now, and a load still in flight must not draw over it.
   cancelTodoReload();
   todoState.seq++;
@@ -138,10 +140,9 @@ export function showTokenForm(note = "") {
   setTodoCount([]);
   todoState.open = null;
   clearSearch();
-  $("todo-notice").replaceChildren();
+  setNotice(NOTICE_OFFLINE, null);
   todoMode("token");
   $("todo-title").textContent = "Todo";
-  $("todo-token-note").textContent = note;
   // Not from the settings screen: the form is hidden there.
   if (currentScreen() === "todo") $("todo-token-input").focus();
 }
@@ -165,19 +166,23 @@ export function renderTodo() {
   else renderList();
 }
 
-// Says that the list is the last one fetched (`offline` is set by the backend), or clears the notice.
+// The card that says the list is the last one fetched (A-28, `setNotice`): a warning, drawn while the Todo screen is shown.
+const NOTICE_OFFLINE = "todo:offline";
+
+// Says that the list is the last one fetched (`offline` is set by the backend), or takes the card off.
 function drawTodoNotice(offline: Offline | null | undefined) {
-  const notice = $("todo-notice");
   let text = "";
   if (offline) {
     const d = new Date(offline.fetchedAt);
     text = `Todoist に接続できません（${offline.reason}）。${d.getMonth() + 1}月${d.getDate()}日 ${pad2(d.getHours())}:${pad2(d.getMinutes())} 時点の内容を表示しています。`;
   }
-  // Drawn again only when the words change.
-  if (notice.textContent === text) return;
-  const div = document.createElement("div");
-  div.textContent = text;
-  notice.replaceChildren(...(text ? [div] : []));
+  setNotice(NOTICE_OFFLINE, text ? { text, warn: true } : null);
+}
+
+// Takes off the cards that belong to the Todo screen, with their ×, when another screen is shown (`hideTodoClaude`, which `setScreen` calls for every other screen, calls it).
+export function clearTodoNotices() {
+  setNotice(NOTICE_OFFLINE, null);
+  clearCommentNotices();
 }
 
 // Consecutive timed refreshes that failed; the log gets one line at the third, as the inbox's sync does (M-7), so that an offline Mac does not fill it.
@@ -430,7 +435,7 @@ export function initTodo() {
       return showFailure("todo", err);
     }
     // Only a rejected token says so; a failed load (network, 5xx) shows its own error.
-    if (await loadTodo()) showTokenForm("トークンを確認できませんでした。もう一度入力してください");
+    if (await loadTodo()) showFailure("todo", "トークンを確認できませんでした。もう一度入力してください");
   };
   showKeptTodo();
   loadTodoCount();

@@ -1,4 +1,4 @@
-import { askScreen, boot, callsOf, count, claudeReady, holds, inbox, mock, rejects, release, slackLoad, textsOf, todoPrompt, waitForCalls, waitForText } from "../support";
+import { askScreen, boot, callsOf, count, claudeReady, holds, inbox, mock, rejects, release, slackLoad, textsOf, todoPrompt, waitForCalls, waitForCard, waitForText } from "../support";
 
 const edited = { ...todoPrompt, body: "My body", edited: true };
 
@@ -76,7 +76,7 @@ describe("todo prompt screen", () => {
     await mock("claude_todo_prompt_save", rejects("指示が空です。デフォルトに戻すか、指示を書いてください"));
     await body().setValue(" ");
     await $("#prompt-save").click();
-    await expect($("#prompt-error")).toHaveText(expect.stringContaining("指示が空です"));
+    await waitForCard("指示が空です");
     await expect($("#prompt-status")).toBeDisplayed();
     await expect($("#prompt-save")).toBeEnabled();
   });
@@ -288,12 +288,12 @@ describe("todo prompt screen: Claude Code", () => {
     expect(await waitForCalls(save)).toEqual([{ body: "Written" }]);
   });
 
-  it("shows a refused save as the error line, as for a text typed by hand", async () => {
+  it("shows a refused save as a card, as for a text typed by hand", async () => {
     await openPrompt();
     await askScreen("write", "todo-prompt", { body: " " });
     await mock("claude_todo_prompt_save", rejects("指示が空です。デフォルトに戻すか、指示を書いてください"));
     await $("#prompt-save").click();
-    await expect($("#prompt-error")).toHaveText(expect.stringContaining("指示が空です"));
+    await waitForCard("指示が空です");
     await expect($("#prompt-status")).toBeDisplayed();
   });
 });

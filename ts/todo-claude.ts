@@ -7,6 +7,7 @@ import { closeClaudeCode, claudeCodeStarted, hideClaudeCode, isClaudeCodeShowing
 import { $ } from "./dom.js";
 import { isoDate } from "./format.js";
 import { onScreenChanged } from "./screen-bridge.js";
+import { clearTodoNotices } from "./todo.js";
 import { scheduleTodoReload } from "./todo-write.js";
 
 // The id of the pane (Rust names the process by it) and its owner in ts/orca-terminal.ts.
@@ -42,8 +43,11 @@ export function syncTodoClaude() {
   if (!isClaudeCodeShowing(host, ID, OWNER)) showClaudeCode(host, { id: ID, prompt: firstPrompt() }, OWNER);
 }
 
-// The screen is left.
-export const hideTodoClaude = () => hideClaudeCode(OWNER);
+// The screen is left (`setScreen` calls it for every other screen, so it also takes off the cards that belong to the Todo screen, A-28).
+export function hideTodoClaude() {
+  hideClaudeCode(OWNER);
+  clearTodoNotices();
+}
 
 // Opens the pane: shows the terminal, which starts the process and takes the keyboard because it is new.
 function openTodoClaude() {

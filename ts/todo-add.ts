@@ -3,7 +3,7 @@ import { getClaude } from "./claude.js";
 import type { Summary } from "./bindings/Summary";
 import { $, composing, isMac, tag } from "./dom.js";
 import { hostOf } from "./format.js";
-import { CLAUDE_SVG, CLOSE_SVG, DATE_SVG, FOLDER_SVG, SLACK_SVG } from "./icons.js";
+import { CLAUDE_SVG, DATE_SVG, FOLDER_SVG, SLACK_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { getSlackWorkspaces, loadSlackWorkspaces } from "./slack-workspaces.js";
@@ -13,7 +13,7 @@ import { openDueEditor, openProjectPicker } from "./todo-detail.js";
 import { draftOpen, type DraftHooks, openDraft } from "./todo-draft.js";
 import { todoCall } from "./todo-write.js";
 import { loadTodo } from "./todo.js";
-import { showFailure } from "./error-card.js";
+import { setNotice, showFailure } from "./error-card.js";
 
 // Creates a Todoist task in the inbox that points at the thread, and says so. The button shows a spinner in place of its icon meanwhile.
 export async function makeTodo(account: string, id: string, subject: string, button: HTMLButtonElement) {
@@ -111,10 +111,9 @@ export interface ReviewHooks {
 export const addSlackTodo = (job: ReviewJob, content: string, description: string, due: string) =>
   invoke("todoist_add_from_slack", { url: job.url, content, description, due, projectId: job.projectId, today: job.today });
 
-// The Slack links being summarised, waiting for the user's confirmation, or that failed, above the list. Several may be there at once.
+// The Slack links being summarised or waiting for the user's confirmation, above the list. Several may be there at once. A summary that failed leaves the list and is a card (A-28).
 // `el` is the row drawn for it: a row is replaced alone, so a row being typed in keeps its focus when another one changes.
 interface PendingAdd extends ReviewJob {
-  failed: string | null;
   // Set when Claude has answered; the draft page then asks the user to confirm it.
   summary: Summary | null;
   // Whether the draft page was opened for it; its row is then gone.
@@ -123,18 +122,10 @@ interface PendingAdd extends ReviewJob {
 }
 const pendingAdds: PendingAdd[] = [];
 
-function closeButton(onclick: () => void) {
-  const close = tag("button", "icon-btn");
-  close.innerHTML = CLOSE_SVG;
-  close.setAttribute("aria-label", "閉じる");
-  close.onclick = onclick;
-  return close;
-}
-
 // Draws the job's row where it is, or at the end for a new job.
 function showPending(job: PendingAdd) {
   if (job.opened) return;
-  const row = job.failed ? failedRow(job) : job.summary ? readyRow(job) : busyRow(job);
+  const row = job.summary ? readyRow(job) : busyRow(job);
   if (job.el) job.el.replaceWith(row);
   else $("todo-pending").append(row);
   job.el = row;
@@ -170,17 +161,14 @@ function busyRow(job: PendingAdd) {
   return row;
 }
 
-function failedRow(job: PendingAdd) {
-  const row = tag("div", "pending fail");
-  row.append(tag("span", "sp", `要約できませんでした: ${job.failed}`));
-  // Rust's wording for a token that cannot read the message (slack.rs read_error).
-  if (job.failed?.includes("権限がありません")) {
-    const open = tag("button", "text-btn", "設定を開く");
-    open.onclick = () => setScreen("settings", "slack");
-    row.append(open);
-  }
-  row.append(closeButton(() => removePending(job)));
-  return row;
+// How many summaries failed for want of a permission: each has a card of its own, so the × of one does not hide the next.
+let deniedSummaries = 0;
+
+// A summary that failed is a card. A token that cannot read the message (Rust's wording, slack.rs read_error) is a warning, with the button to the Slack settings.
+function summaryFailed(e: unknown) {
+  const text = `要約できませんでした: ${e}`;
+  if (!text.includes("権限がありません")) return showFailure("todo-add", text);
+  setNotice(`todo-add:summary-${++deniedSummaries}`, { text, warn: true, actions: [{ label: "設定を開く", run: () => setScreen("settings", "slack") }] });
 }
 
 // The draft page of the Todo add field: it goes away when dropped or added (the next waiting one opens), and the list is read again after an add.
@@ -271,8 +259,6 @@ export function reviewCard(job: ReviewJob, summary: Summary, hooks: ReviewHooks)
   const omitted = summary.omitted > 0 ? [tag("div", "review-omitted", `${summary.omitted} 件のメッセージは要約に含まれていません`)] : [];
   // Only when the linked message was long enough to be cut before it was summarised.
   const targetCut = summary.targetCut ? [tag("div", "review-target-cut", "対象のメッセージは長いため、先頭だけを要約しました")] : [];
-  const error = tag("div", "pending fail review-err");
-  error.hidden = true;
   const drop = tag("button", "text-btn review-drop", "破棄");
   const add = tag("button", "text-btn primary review-add", "追加");
   const keys = tag("span", "review-keys");
@@ -285,7 +271,7 @@ export function reviewCard(job: ReviewJob, summary: Summary, hooks: ReviewHooks)
   const chips = tag("div", "review-chips");
   chips.append(dueChip, project);
   const body = tag("div", "review-body");
-  body.append(reviewField("名前", name), reviewField("説明", description), chips, source, ...omitted, ...targetCut, error, actions);
+  body.append(reviewField("名前", name), reviewField("説明", description), chips, source, ...omitted, ...targetCut, actions);
   const card = tag("div", "review");
   card.append(head, body);
 
@@ -296,13 +282,11 @@ export function reviewCard(job: ReviewJob, summary: Summary, hooks: ReviewHooks)
     saving = true;
     drop.disabled = add.disabled = true;
     add.replaceChildren(tag("span", "spin"), "追加中");
-    error.hidden = true;
     try {
       hooks.added(await addSlackTodo(job, name.value, description.value, dueText));
     } catch (e) {
       // The card stays as the user left it.
-      error.textContent = `追加できませんでした: ${e}`;
-      error.hidden = false;
+      showFailure("todo-add", `追加できませんでした: ${e}`);
       saving = false;
       drop.disabled = add.disabled = false;
       add.textContent = "追加";
@@ -334,7 +318,7 @@ function addFromSlack(url: string) {
   input.value = "";
   updateAddMode();
   input.focus();
-  const job: PendingAdd = { url, host: slackMessageHost(url), failed: null, summary: null, opened: false, projectId: inToday ? null : (viewProjectId(todoState.view) ?? null), recommended: null, today: inToday, el: null };
+  const job: PendingAdd = { url, host: slackMessageHost(url), summary: null, opened: false, projectId: inToday ? null : (viewProjectId(todoState.view) ?? null), recommended: null, today: inToday, el: null };
   pendingAdds.push(job);
   showPending(job);
   invoke("todoist_summarize_slack", { url }).then(
@@ -352,8 +336,8 @@ function addFromSlack(url: string) {
       openNextDraft();
     },
     (e) => {
-      job.failed = String(e);
-      showPending(job);
+      removePending(job);
+      summaryFailed(e);
     },
   );
 }

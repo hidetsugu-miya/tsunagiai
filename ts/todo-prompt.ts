@@ -10,7 +10,7 @@ import { setScreen, showPromptScreen } from "./nav.js";
 import { type Fields, registerDraftTarget } from "./screen-bridge.js";
 import { itemRow, settingsTab } from "./settings.js";
 import { toast } from "./toast.js";
-import { logError } from "./error-card.js";
+import { logError, showFailure } from "./error-card.js";
 
 // The instructions as saved; null until read.
 let saved: TodoPrompt | null = null;
@@ -63,11 +63,6 @@ export async function loadPromptState() {
   refreshPrompt();
 }
 
-function showPromptError(e: unknown) {
-  $("prompt-error").textContent = String(e);
-  $("prompt-error").hidden = false;
-}
-
 // Draws what follows from the state: the status, the buttons and the field.
 function refreshPrompt() {
   const [now, text] = [saved, draft];
@@ -82,15 +77,14 @@ function refreshPrompt() {
   $<HTMLTextAreaElement>("prompt-body").disabled = !loaded;
 }
 
-// Runs a save or a reset with both buttons disabled; null when it failed (the error is shown).
+// Runs a save or a reset with both buttons disabled; null when it failed (the error is a card, A-28).
 async function write(call: () => Promise<TodoPrompt>) {
-  $("prompt-error").hidden = true;
   busy = true;
   refreshPrompt();
   try {
     return await call();
   } catch (e) {
-    showPromptError(e);
+    showFailure("todo-prompt", e);
     return null;
   } finally {
     busy = false;
@@ -107,7 +101,6 @@ function disarmReset() {
 // Opens the screen. The first time, the field takes the saved instructions; after that it keeps what the user left in it.
 async function openPrompt() {
   showPromptScreen();
-  $("prompt-error").hidden = true;
   if (draft === null) {
     if (saved === null) await loadPromptState();
     if (saved === null) return;
@@ -141,7 +134,6 @@ function writeFields(fields: Fields) {
   const before = draft!;
   draft = fields.body;
   $<HTMLTextAreaElement>("prompt-body").value = draft;
-  $("prompt-error").hidden = true;
   if (draft !== before) undos.push({ before, after: draft });
   refreshPrompt();
 }
@@ -150,7 +142,6 @@ export function initPrompt() {
   $("prompt-back").onclick = () => setScreen("settings", settingsTab());
   $<HTMLTextAreaElement>("prompt-body").oninput = (e) => {
     draft = (e.currentTarget as HTMLTextAreaElement).value;
-    $("prompt-error").hidden = true;
     refreshPrompt();
   };
   $("prompt-save").onclick = async () => {
@@ -199,7 +190,6 @@ export function initPrompt() {
     undos.pop();
     draft = last.before;
     $<HTMLTextAreaElement>("prompt-body").value = draft;
-    $("prompt-error").hidden = true;
     refreshPrompt();
   };
   registerDraftTarget("todo-prompt", {
