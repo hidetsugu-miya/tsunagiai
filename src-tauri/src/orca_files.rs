@@ -127,7 +127,7 @@ pub struct OrcaFileEntry {
     pub icon: Option<&'static str>,
 }
 
-/// How git sees an entry of a folder against HEAD (A-18): `Changed` for a file that is modified, renamed or copied, `New` for one that is untracked or added. A file that is deleted and not committed is neither: it has no row, so it marks nothing, not itself and not the folders above it (A-39). A file that has an entry that is untracked or added is `New` whatever else it has (HEAD has no such file), and a folder is what its files are, and `Changed` when they are both.
+/// How git sees an entry of a folder against HEAD (A-18): `Changed` for a file that is modified, renamed or copied, `New` for one that is untracked or added. A file that is deleted and not committed is neither: it has no row, so it marks nothing, not itself and not the folders above it (A-39). A file is `New` by an untracked entry whatever else it has (HEAD has no such file), and by an added entry unless it also has a `deleted` entry (git's `AD`), and a folder is what its files are, and `Changed` when they are both.
 #[derive(Serialize, Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
