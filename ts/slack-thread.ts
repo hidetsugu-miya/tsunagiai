@@ -636,6 +636,8 @@ export function initSlackThread() {
   box.addEventListener("load", (e) => {
     if (!(e.target as Element).classList.contains("av-img")) follow();
   }, true);
+  // The box's own height changes when the reply field or the panes around it are laid out (the rich field is read later than the thread): a box that follows the end stays at it.
+  new ResizeObserver(follow).observe(box);
   // A third to a half of the screen's width; under the body (S-7) it is the thread's height, a third to a half, kept apart from the width.
   const replySplit = initSplit($("slack-thread"), $("reply-split"), { lying: { min: 1 / 3, max: 1 / 2 } });
   // The place follows the width of the screen and of the list of channels only, never the pane's own width, so that the two places cannot flip each other.
