@@ -326,7 +326,7 @@ fn sentry_action(e: &Value) -> Option<(&str, &str, &str)> {
     .then_some((action, org, project))
 }
 
-/// A button that Sentry puts in its notification for Resolve, Archive and Unresolve, with the value it gives each.
+/// A button that Sentry puts in its notification for Resolve, Archive, Unresolve and Mark as Ongoing (the button of an archived issue), with the value it gives each.
 fn sentry_button(e: &Value, name_of: NameOf) -> Option<SentryButton> {
     (e["type"] == "button").then_some(())?;
     let (action, _, _) = sentry_action(e)?;
@@ -336,6 +336,7 @@ fn sentry_button(e: &Value, name_of: NameOf) -> Option<SentryButton> {
         ("resolve_dialog", "resolve_dialog")
             | ("archive_dialog", "archive_dialog")
             | ("status", "resolved")
+            | ("status", "unresolved:ongoing")
             | ("unresolved:ongoing", "unresolved:ongoing")
     )
     .then_some(())?;
@@ -1654,10 +1655,11 @@ mod tests {
                 assign: Some("Select Assignee...".into()),
             }
         );
-        // The pairs Sentry sends for a resolve with no release, and for an issue that is resolved or archived; a tracking part after the routing is read past.
+        // The pairs Sentry sends for a resolve with no release, and for an issue that is resolved or archived (`Mark as Ongoing` of an archived one is `status` with `unresolved:ongoing`); a tracking part after the routing is read past.
         let more = json!([
             {"type": "button", "action_id": "status::11::22|n=abc&s=slack", "text": {"type": "plain_text", "text": "Resolve"}, "value": "resolved"},
-            {"type": "button", "action_id": "unresolved:ongoing::11::22", "text": {"type": "plain_text", "text": "Unresolve"}, "value": "unresolved:ongoing"}
+            {"type": "button", "action_id": "unresolved:ongoing::11::22", "text": {"type": "plain_text", "text": "Unresolve"}, "value": "unresolved:ongoing"},
+            {"type": "button", "action_id": "status::11::22", "text": {"type": "plain_text", "text": "Mark as Ongoing"}, "value": "unresolved:ongoing"}
         ]);
         let issue = sentry_issue(
             &sentry_message("https://acme.sentry.io/issues/9", more),
@@ -1665,7 +1667,10 @@ mod tests {
         )
         .unwrap();
         let values: Vec<&str> = issue.buttons.iter().map(|b| b.value.as_str()).collect();
-        assert_eq!(values, ["resolved", "unresolved:ongoing"]);
+        assert_eq!(
+            values,
+            ["resolved", "unresolved:ongoing", "unresolved:ongoing"]
+        );
         assert_eq!(issue.issue_id, "9");
     }
 
