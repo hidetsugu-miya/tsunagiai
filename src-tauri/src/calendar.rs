@@ -719,13 +719,9 @@ pub struct EventNotice {
 }
 
 /// The events that C-8 tells of at `now`, the one that starts first first. Only a timed event is given, so an all-day one is never told of.
-/// An event that is not declined is told of from 5 minutes before its start to its start. One with a Google Meet link is told of after its start too, on the day it starts in `tz`: it stays until the owner has pressed a button of its card.
+/// An event that is not declined is told of from 5 minutes before its start to its start. One with a Google Meet link is told of after its start too, until its end: it stays until the owner has pressed a button of its card, and goes at its end whether or not one was pressed. One whose end cannot be read is gone at its start.
 /// An event that runs past midnight has an item on each day, and is told of once.
-fn event_notices<Tz: TimeZone>(
-    tz: &Tz,
-    events: &[TimedItem],
-    now: DateTime<Utc>,
-) -> Vec<EventNotice> {
+fn event_notices(events: &[TimedItem], now: DateTime<Utc>) -> Vec<EventNotice> {
     let mut seen = HashSet::new();
     let mut found: Vec<(DateTime<FixedOffset>, EventNotice)> = Vec::new();
     for item in events {
@@ -741,7 +737,7 @@ fn event_notices<Tz: TimeZone>(
         };
         let due = if started {
             info.meet_url.is_some()
-                && start.with_timezone(tz).date_naive() == now.with_timezone(tz).date_naive()
+                && DateTime::parse_from_rfc3339(&info.end).is_ok_and(|end| now < end)
         } else {
             wait <= Duration::minutes(NOTICE_LEAD_MIN)
         };
@@ -773,7 +769,7 @@ fn event_notices<Tz: TimeZone>(
 pub fn calendar_notices(events: Vec<TimedItem>, now_ms: i64) -> Result<Vec<EventNotice>, String> {
     let now = DateTime::from_timestamp_millis(now_ms)
         .ok_or_else(|| format!("時刻が不正です: {now_ms}"))?;
-    Ok(event_notices(&Local, &events, now))
+    Ok(event_notices(&events, now))
 }
 
 const SELECTION_FILE: &str = "calendar-selection.json";
@@ -3327,7 +3323,7 @@ mod tests {
     }
 
     fn told(items: &[TimedItem], now: &str) -> Vec<(u32, bool)> {
-        event_notices(&jst(), items, at(now))
+        event_notices(items, at(now))
             .iter()
             .map(|n| (n.minutes, n.started))
             .collect()
@@ -3351,7 +3347,7 @@ mod tests {
     }
 
     #[test]
-    fn an_event_with_meet_stays_after_its_start_on_the_day_it_starts() {
+    fn an_event_with_meet_stays_after_its_start_until_its_end() {
         let items = notice_items(vec![meet(timed(
             "2026-10-29T10:00:00+09:00",
             "2026-10-29T10:30:00+09:00",
@@ -3360,9 +3356,31 @@ mod tests {
         assert_eq!(told(&items, "2026-10-29T01:00:00Z"), vec![(0, true)]);
         assert_eq!(told(&items, "2026-10-29T01:00:59Z"), vec![(0, true)]);
         assert_eq!(told(&items, "2026-10-29T01:03:10Z"), vec![(3, true)]);
-        // Past its end it stays, until the day ends in the zone of the owner (23:59 JST is 14:59Z).
-        assert_eq!(told(&items, "2026-10-29T14:59:00Z"), vec![(839, true)]);
-        assert_eq!(told(&items, "2026-10-29T15:00:00Z"), vec![]);
+        // The last second before its end it stays, at its end (10:30 JST is 01:30Z) and after it, it is gone.
+        assert_eq!(told(&items, "2026-10-29T01:29:59Z"), vec![(29, true)]);
+        assert_eq!(told(&items, "2026-10-29T01:30:00Z"), vec![]);
+        assert_eq!(told(&items, "2026-10-29T14:59:00Z"), vec![]);
+    }
+
+    #[test]
+    fn an_event_with_meet_that_runs_past_midnight_stays_to_its_end_and_one_with_no_end_goes_at_its_start(
+    ) {
+        let night = notice_items(vec![meet(timed(
+            "2026-10-29T23:00:00+09:00",
+            "2026-10-30T01:00:00+09:00",
+        ))]);
+        // 23:30 JST on the first day and 0:30 JST on the second day; the end is 1:00 JST (16:00Z).
+        assert_eq!(told(&night, "2026-10-29T14:30:00Z"), vec![(30, true)]);
+        assert_eq!(told(&night, "2026-10-29T15:30:00Z"), vec![(90, true)]);
+        assert_eq!(told(&night, "2026-10-29T15:59:59Z"), vec![(119, true)]);
+        assert_eq!(told(&night, "2026-10-29T16:00:00Z"), vec![]);
+        let mut unread = notice_items(vec![meet(timed(
+            "2026-10-29T10:00:00+09:00",
+            "2026-10-29T10:30:00+09:00",
+        ))]);
+        unread[0].info.end.clear();
+        assert_eq!(told(&unread, "2026-10-29T00:57:00Z"), vec![(3, false)]);
+        assert_eq!(told(&unread, "2026-10-29T01:05:00Z"), vec![]);
     }
 
     #[test]
@@ -3399,7 +3417,7 @@ mod tests {
             ..timed("2026-10-29T08:59:00+09:00", "2026-10-29T09:30:00+09:00")
         };
         let items = notice_items(vec![at_nine, at_eight_fifty_nine]);
-        let got: Vec<_> = event_notices(&jst(), &items, at("2026-10-28T23:58:00Z"))
+        let got: Vec<_> = event_notices(&items, at("2026-10-28T23:58:00Z"))
             .iter()
             .map(|n| (n.event.info.event_id.clone(), n.minutes))
             .collect();
@@ -3415,8 +3433,9 @@ mod tests {
         let items = notice_items(vec![night]);
         assert_eq!(items.len(), 2);
         assert_eq!(told(&items, "2026-10-29T14:55:00Z"), vec![(3, false)]);
-        // On the second day the event started the day before, so it is no longer told of.
-        assert_eq!(told(&items, "2026-10-29T15:30:00Z"), vec![]);
+        // On the second day it is still the one notice, until its end at 1:00 JST (16:00Z).
+        assert_eq!(told(&items, "2026-10-29T15:30:00Z"), vec![(32, true)]);
+        assert_eq!(told(&items, "2026-10-29T16:00:00Z"), vec![]);
     }
 
     #[test]
