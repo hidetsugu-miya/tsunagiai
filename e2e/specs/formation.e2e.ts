@@ -45,11 +45,11 @@ describe("development screen: orchestration", () => {
     await expect($("#nav-orca")).toHaveAttribute("aria-current", "page");
   });
 
-  it("has no switch of a mode in the footer, on the development screen too: the bell alone", async () => {
+  it("has no switch of a mode in the footer, on the development screen too: the resources and the bell alone", async () => {
     await $("#nav-orca").click();
     await expect($("#orca")).toBeDisplayed();
     expect(await browser.execute(() => ["footer-modes", "footer-mode-orca", "footer-mode-formation"].map((id) => document.getElementById(id)))).toEqual([null, null, null]);
-    expect(await browser.execute(() => [...document.querySelectorAll("#footer button")].map((b) => b.id))).toEqual(["footer-bell"]);
+    expect(await browser.execute(() => [...document.querySelectorAll("#footer button")].map((b) => b.id))).toEqual(["footer-stats", "footer-bell"]);
     await expect($("#footer-bell")).toBeDisplayed();
   });
 

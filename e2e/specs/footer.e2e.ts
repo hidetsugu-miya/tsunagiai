@@ -1,4 +1,7 @@
-import { account, boot, callsOf, claudeReady, holds, inbox, mock, onceId, rejects, release, slackLoad, slackThread, slackTs, textsOf, thread, threadDetail, threadLoaded, threadMessage, timeline, timelineMessage, waitForCalls, waitForCount, waitForText, weekOfToday, workspace, CARD } from "../support";
+import type { AiUsage } from "../../ts/bindings/AiUsage";
+import type { MachineResources } from "../../ts/bindings/MachineResources";
+import type { MachineUsage } from "../../ts/bindings/MachineUsage";
+import { account, boot, callsOf, claudeReady, holds, inbox, mock, onceId, rejects, release, slackLoad, slackThread, slackTs, textsOf, thread, threadDetail, threadLoaded, threadMessage, timeline, timelineMessage, timers, waitForCalls, waitForCount, waitForText, weekOfToday, workspace, CARD } from "../support";
 
 // `unread` unread messages of the Slack list, each in a channel of its own.
 const heap = (unread: number) => Array.from({ length: unread }, (_, i) => timelineMessage(slackTs(i + 1, i), `Person ${i}`, "dev", `unread ${i}`, { unread: true, channel: `C${i}` }));
@@ -449,5 +452,196 @@ describe("footer", () => {
         await waitForText("#footer-bell .footer-count", "4");
       });
     });
+  });
+});
+
+describe("footer: the resources (A-48)", () => {
+  const reset = new Date(2026, 10, 27, 11, 0).getTime();
+  const machine = (name: string, extra: Partial<MachineResources> = {}): MachineResources => ({ environment: null, name, cpuPercent: 38, loadAverage: 4.52, cores: 12, memoryPercent: 10, usedBytes: 6871947674, totalBytes: 68719476736, error: null, ...extra });
+  const saved = (name: string, extra: Partial<MachineResources> = {}) => machine(name, { environment: name, cpuPercent: 9, loadAverage: 1.56, cores: 18, memoryPercent: 11, ...extra });
+  const ai = (status: string, session: number | null, weekly: number | null): AiUsage => ({
+    status,
+    session: session === null ? null : { usedPercent: session, resetsAt: reset },
+    weekly: weekly === null ? null : { usedPercent: weekly, resetsAt: reset },
+  });
+  const usageOf = (environment: string | null, claude: AiUsage, antigravity: AiUsage): MachineUsage => ({ environment, name: environment ?? "この Mac", claude, antigravity });
+  const idle = ai("idle", null, null);
+  const start = (fixtures: Record<string, unknown> = {}) =>
+    boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline(heap(3), { refreshSecs: 1 }), claude_status: claudeReady, calendar_week: weekOfToday(), ...fixtures });
+  // The two readings never come by themselves in a spec that does not shorten them: only the start and the opening of the pane read.
+  const quiet = timers({ machineResources: 600_000, machineUsage: 600_000 });
+  const stats = () => textsOf("#footer-stats .stat");
+  const names = () => textsOf("#footer-stats .stat-name");
+  // The pane as it is drawn: a line for each machine's heading, group heading and row (the texts of its parts).
+  const pane = () =>
+    browser.execute(() =>
+      [...document.querySelectorAll("#resource-pane-list .res-machine")].map((section) =>
+        [...section.querySelectorAll("h3, .res-group-name, .res-row")].map((n) => (n.matches(".res-row") ? [...n.children].map((c) => c.textContent).join(" ") : (n.textContent ?? ""))),
+      ),
+    );
+  const open = async () => {
+    await $("#footer-stats").click();
+    await expect($("#resource-pane")).toBeDisplayed();
+  };
+
+  it("shows the CPU and the memory of each machine and the weekly of this Mac's Claude and Antigravity as numbers at the left of the footer, before the bell, with a dash where there is none", async () => {
+    await start({ machine_resources: [machine("この Mac"), saved("PC 1")], machine_usage: [usageOf(null, ai("ok", 30, 74), idle), usageOf("PC 1", ai("ok", null, 12), ai("ok", 46, 93))], ...quiet });
+    await waitForText("#footer-stats", "AG");
+    expect(await names()).toEqual(["この Mac", "PC 1"]);
+    expect(await stats()).toEqual(["CPU 38%", "メモリ 10%", "CPU 9%", "メモリ 11%", "Claude 74%", "AG —"]);
+    const place = await browser.execute(() => {
+      const s = document.getElementById("footer-stats")!.getBoundingClientRect();
+      const b = document.getElementById("footer-bell")!.getBoundingClientRect();
+      const f = document.getElementById("footer")!.getBoundingClientRect();
+      return { atLeft: Math.round(s.left - f.left), beforeBell: s.right <= b.left };
+    });
+    expect(place.atLeft).toBeLessThan(24);
+    expect(place.beforeBell).toBe(true);
+  });
+
+  it("draws a dash for a machine that gave nothing and for an AI whose status is not ok, and draws 80% and over in orange", async () => {
+    await start({
+      machine_resources: [machine("この Mac", { cpuPercent: 80, memoryPercent: 79 }), saved("PC 1", { cpuPercent: null, loadAverage: null, cores: null, memoryPercent: null, usedBytes: null, totalBytes: null, error: "unavailable" })],
+      machine_usage: [usageOf(null, ai("error", null, 90), ai("ok", null, 100))],
+      ...quiet,
+    });
+    await waitForText("#footer-stats", "AG");
+    expect(await stats()).toEqual(["CPU 80%", "メモリ 79%", "CPU —", "メモリ —", "Claude —", "AG 100%"]);
+    const colors = await browser.execute(() => [...document.querySelectorAll("#footer-stats .stat-num")].map((n) => getComputedStyle(n).color));
+    const [hot, plain] = [colors[0], colors[1]];
+    expect(hot).toBe("rgb(154, 91, 0)");
+    expect(plain).not.toBe(hot);
+    expect(colors.map((c) => c === hot)).toEqual([true, false, false, false, false, true]);
+  });
+
+  it("draws no AI before the first reading of the usage is back, and nothing when there is no machine", async () => {
+    await start({ machine_usage: holds, ...quiet });
+    await waitForText("#footer-stats", "CPU 38%");
+    expect(await stats()).toEqual(["CPU 38%", "メモリ 10%"]);
+    await boot({ machine_resources: [], ...quiet });
+    await waitForCalls("machine_resources");
+    await expect($("#footer-stats")).not.toBeDisplayed();
+  });
+
+  it("draws a name that comes from outside as text", async () => {
+    await start({ machine_resources: [machine("<i>PC</i>")], ...quiet });
+    await waitForText("#footer-stats", "CPU 38%");
+    expect(await names()).toEqual(["<i>PC</i>"]);
+    expect(await browser.execute(() => document.querySelectorAll("#footer-stats i:not(.stat-dot):not(.stat-sep)").length)).toBe(0);
+  });
+
+  it("opens the pane from the right, with the heading リソース, the same place and width as the pane of the unread, and the numbers of each machine under it", async () => {
+    await start({ machine_resources: [machine("この Mac"), saved("PC 1", { cpuPercent: 85 })], machine_usage: [usageOf(null, ai("ok", null, 74), idle), usageOf("PC 1", ai("error", null, null), ai("ok", 46, 93))], ...quiet });
+    await waitForText("#footer-stats", "AG");
+    await expect($("#resource-pane")).not.toBeDisplayed();
+    await open();
+    await expect($("#resource-pane h2")).toHaveText("リソース");
+    await expect($("#footer-stats")).toHaveAttribute("aria-expanded", "true");
+    const place = await browser.execute(() => {
+      const p = document.getElementById("resource-pane")!.getBoundingClientRect();
+      const f = document.getElementById("footer")!.getBoundingClientRect();
+      return { width: Math.round(p.width), right: Math.round(innerWidth - p.right), above: Math.round(f.top - p.bottom) };
+    });
+    expect(place).toEqual({ width: 380, right: 0, above: 0 });
+    expect(await pane()).toEqual([
+      ["この Mac", "CPU 38% 4.52 / 12 コア", "メモリ 10% 6.4 / 64 GB", "Claude", "weekly 74% 金 11:00 にリセット", "Antigravity", "weekly —"],
+      ["PC 1", "CPU 85% 1.56 / 18 コア", "メモリ 11% 6.4 / 64 GB", "Claude", "weekly —", "Antigravity", "5 時間 46% 金 11:00 にリセット", "weekly 93% 金 11:00 にリセット"],
+    ]);
+    const hot = await browser.execute(() => [...document.querySelectorAll("#resource-pane-list .stat-num")].filter((n) => n.classList.contains("hot")).map((n) => n.textContent));
+    expect(hot).toEqual(["85%", "93%"]);
+  });
+
+  it("draws a machine that gave nothing in the pane as dashes with no small text", async () => {
+    await start({ machine_resources: [machine("この Mac", { cpuPercent: null, loadAverage: null, cores: null, memoryPercent: null, usedBytes: null, totalBytes: null, error: "unavailable" })], machine_usage: [usageOf(null, ai("unavailable", null, null), ai("unavailable", null, null))], ...quiet });
+    await waitForText("#footer-stats", "AG");
+    await open();
+    expect(await pane()).toEqual([["この Mac", "CPU —", "メモリ —", "Claude", "weekly —", "Antigravity", "weekly —"]]);
+  });
+
+  it("closes the pane with the close button, with the button of the footer and with a press outside it", async () => {
+    await start(quiet);
+    await waitForText("#footer-stats", "CPU 38%");
+    await open();
+    await $("#resource-pane-close").click();
+    await expect($("#resource-pane")).not.toBeDisplayed();
+    await expect($("#footer-stats")).toHaveAttribute("aria-expanded", "false");
+    await open();
+    await $("#footer-stats").click();
+    await expect($("#resource-pane")).not.toBeDisplayed();
+    await open();
+    await $("#footer").click({ x: 300 });
+    await expect($("#resource-pane")).not.toBeDisplayed();
+  });
+
+  it("does not stand with the pane of the unread: opening one closes the other", async () => {
+    await start(quiet);
+    await waitForText("#footer-bell .footer-count", "5");
+    await waitForText("#footer-stats", "CPU 38%");
+    await open();
+    await $("#footer-bell").click();
+    await expect($("#unread-pane")).toBeDisplayed();
+    await expect($("#resource-pane")).not.toBeDisplayed();
+    await expect($("#footer-stats")).toHaveAttribute("aria-expanded", "false");
+    await $("#footer-stats").click();
+    await expect($("#resource-pane")).toBeDisplayed();
+    await expect($("#unread-pane")).not.toBeDisplayed();
+    await expect($("#footer-bell")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("reads both commands at once when the pane is opened, and reads again by the period only", async () => {
+    await start(quiet);
+    await waitForText("#footer-stats", "CPU 38%");
+    const resources = await mock("machine_resources", [machine("この Mac", { cpuPercent: 51 })]);
+    const usage = await mock("machine_usage", [usageOf(null, ai("ok", null, 20), idle)]);
+    await browser.pause(300);
+    expect(await callsOf(resources)).toEqual([]);
+    expect(await callsOf(usage)).toEqual([]);
+    await open();
+    await waitForCalls(resources);
+    await waitForCalls(usage);
+    expect(await callsOf(resources)).toHaveLength(1);
+    expect(await callsOf(usage)).toHaveLength(1);
+    await waitForText("#resource-pane-list", "51%");
+    await waitForText("#footer-stats", "Claude 20%");
+  });
+
+  it("reads the load every period and the usage by its own, one reading at a time", async () => {
+    await start(timers({ machineResources: 300, machineUsage: 700 }));
+    await waitForText("#footer-stats", "Claude 74%");
+    const resources = await mock("machine_resources", holds);
+    const usage = await mock("machine_usage", [usageOf(null, ai("ok", null, 74), idle)]);
+    await waitForCalls(resources);
+    await waitForCalls(usage, 2);
+    // The reading that is not back is not followed by another.
+    await browser.pause(900);
+    expect(await callsOf(resources)).toHaveLength(1);
+    await release(resources, [machine("この Mac", { cpuPercent: 44 })]);
+    await waitForText("#footer-stats", "CPU 44%");
+    await waitForCalls(resources, 2);
+  });
+
+  it("reads nothing while the window is hidden, and reads again when it is shown", async () => {
+    await start(timers({ machineResources: 300, machineUsage: 300 }));
+    await waitForText("#footer-stats", "Claude 74%");
+    await browser.execute(() => Object.defineProperty(document, "hidden", { get: () => true, configurable: true }));
+    const resources = await mock("machine_resources", [machine("この Mac")]);
+    const usage = await mock("machine_usage", [usageOf(null, idle, idle)]);
+    await browser.pause(1000);
+    expect(await callsOf(resources)).toEqual([]);
+    expect(await callsOf(usage)).toEqual([]);
+    await browser.execute(() => Object.defineProperty(document, "hidden", { get: () => false, configurable: true }));
+    await waitForCalls(resources);
+    await waitForCalls(usage);
+  });
+
+  it("draws the machines of the last reading only: a saved environment that left the list goes from the footer and from the open pane", async () => {
+    await start({ machine_resources: [machine("この Mac"), saved("PC 1")], ...timers({ machineResources: 300 }) });
+    await waitForText("#footer-stats", "PC 1");
+    await open();
+    expect((await pane()).map((s) => s[0])).toEqual(["この Mac", "PC 1"]);
+    await mock("machine_resources", [machine("この Mac")]);
+    await browser.waitUntil(async () => (await names()).length === 1);
+    expect(await names()).toEqual(["この Mac"]);
+    expect((await pane()).map((s) => s[0])).toEqual(["この Mac"]);
   });
 });

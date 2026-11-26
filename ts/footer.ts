@@ -7,6 +7,15 @@ export function watchFooterCount(listener: (count: number) => void) {
   onCount = listener;
 }
 
+// The panes that open from the footer over the screen (the unread, A-35, and the resources, A-48) stand one at a time: a pane registers how it closes, and one that opens closes the others.
+const panes = new Map<string, () => void>();
+export function registerPane(name: string, close: () => void) {
+  panes.set(name, close);
+}
+export function closeOtherPanes(name: string) {
+  for (const [other, close] of panes) if (other !== name) close();
+}
+
 // The count on the bell (99+ from 100; none for 0). The label carries it too.
 export function setFooterCount(count: number) {
   const badge = $("footer-bell").querySelector<HTMLElement>(".footer-count")!;
