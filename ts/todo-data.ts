@@ -93,6 +93,12 @@ export function recountTodo() {
   setNavCount("nav-todo", passed, "Todo", "期限到来", upcoming);
 }
 
+// The open tasks whose due moment has come: the ones the count above is made of, for the rows of the pane of the notices (A-35).
+export function dueTasks() {
+  const now = Date.now();
+  return counted.filter((t) => t.dueAt !== null && t.dueAt <= now);
+}
+
 // Remembers `tasks` (the open tasks, subtasks included) as what the count is made of, and counts them. An empty list clears the count.
 export function setTodoCount(tasks: TaskItem[]) {
   counted = tasks;

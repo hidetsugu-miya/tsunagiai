@@ -92,7 +92,13 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .res-group { display: flex; flex-direction: column; gap: 8px; }
 .res-group-name { display: flex; align-items: center; font-size: calc(12px * var(--fs)); color: var(--muted); }
 .unread-item { display: grid; grid-template-columns: 16px 32px minmax(0, 1fr); column-gap: 10px; align-items: start; padding: 10px 8px; border-radius: 12px; cursor: pointer; }
+.unread-item.bare { grid-template-columns: 16px minmax(0, 1fr); }
+.unread-item.bare .unread-actions { grid-column: 2; }
 .unread-item:hover { background: var(--hover); }
+#unread-pane-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 8px 0; }
+.unread-tab { height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); color: var(--ink-soft); font: inherit; font-size: calc(12px * var(--fs)); font-variant-numeric: tabular-nums; cursor: pointer; }
+.unread-tab:hover { background: var(--hover); }
+.unread-tab[aria-selected="true"] { border-color: var(--accent); background: var(--soft); color: var(--accent-text); font-weight: 600; }
 .unread-kind { padding-top: 7px; color: var(--muted); }
 .unread-kind svg { width: 16px; height: 16px; }
 .unread-body { min-width: 0; display: flex; flex-direction: column; }

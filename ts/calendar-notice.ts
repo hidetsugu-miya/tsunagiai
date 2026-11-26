@@ -26,16 +26,19 @@ let reading = false;
 let drawSeq = 0;
 // The events whose card was pressed (参加, 予定を開く or ×), by `keyOf`.
 const pressed = new Set<string>();
-const cards = new Map<string, { root: HTMLElement; when: HTMLElement }>();
+const cards = new Map<string, { root: HTMLElement; when: HTMLElement; n: EventNotice }>();
 
 const tickMs = () => periodMs("calendarNotice", TICK_MS);
 // An event is told by its account, calendar, ID and start, so an event moved to another time is a new one.
 const keyOf = (e: EventNotice["event"]) => `${e.account}\n${e.calendarId}\n${e.eventId}\n${e.start}`;
 
-function whenText({ event: e, minutes, started }: EventNotice) {
-  const left = !started ? `${minutes} 分後` : minutes === 0 ? "開始" : `開始から ${minutes} 分`;
-  return `${left} · ${hhmm(e.startMin)}–${hhmm(e.endMin)}`;
-}
+// How long to the start, or since it: 「5 分後」, 「開始」, 「開始から 3 分」.
+export const leftText = ({ minutes, started }: EventNotice) => (!started ? `${minutes} 分後` : minutes === 0 ? "開始" : `開始から ${minutes} 分`);
+
+const whenText = (n: EventNotice) => `${leftText(n)} · ${hhmm(n.event.startMin)}–${hhmm(n.event.endMin)}`;
+
+// The events whose card is shown now, for the rows of the pane of the notices (A-35).
+export const shownNotices = () => [...cards.values()].map((c) => c.n);
 
 const showCount = () => setNavCount("nav-calendar", cards.size, "カレンダー", "予定");
 
@@ -44,6 +47,12 @@ function press(key: string) {
   cards.get(key)?.root.remove();
   cards.delete(key);
   showCount();
+}
+
+// 「予定を開く」 of a card, and of the row of the pane (A-35): takes the card and the count off, and opens the detail of the event on the calendar.
+export function openNoticeEvent(e: EventNotice["event"]) {
+  press(keyOf(e));
+  openCalendarEvent(e);
 }
 
 function makeCard(key: string, n: EventNotice) {
@@ -57,17 +66,14 @@ function makeCard(key: string, n: EventNotice) {
   }
   const open = tag("button", "text-btn", "予定を開く");
   open.type = "button";
-  open.onclick = () => {
-    press(key);
-    openCalendarEvent(e);
-  };
+  open.onclick = () => openNoticeEvent(e);
   actions.append(open);
   const { root, close } = card(whenText(n), [tag("div", "event-card-title", e.summary || "(件名なし)"), actions], "event-card");
   root.setAttribute("role", "status");
   const when = root.querySelector<HTMLElement>(".error-card-text")!;
   when.classList.add("event-card-when");
   close.onclick = () => press(key);
-  return { root, when };
+  return { root, when, n };
 }
 
 // Draws the cards and the number from what Rust says is to be told of now.
@@ -95,8 +101,10 @@ async function draw() {
   for (const n of due) {
     const key = keyOf(n.event);
     const kept = cards.get(key);
-    if (kept) kept.when.textContent = whenText(n);
-    else cards.set(key, makeCard(key, n));
+    if (kept) {
+      kept.when.textContent = whenText(n);
+      kept.n = n;
+    } else cards.set(key, makeCard(key, n));
   }
   showCount();
 }
