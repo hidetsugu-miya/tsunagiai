@@ -255,12 +255,13 @@ export function openBranchList(anchor: Element, here: BranchSource, options: Bra
       s.label.textContent = s.expanded ? "たたむ" : `ほか ${matched - limit} 件を表示`;
     }
   };
-  // Draws the answer of a section: its rows, or the message of the read that failed.
+  // Draws the answer of a section: its rows, or, for a read that failed, nothing and a failure card (A-28).
   const fill = (s: typeof localSection, rows: HTMLElement[], error: string | null) => {
     s.rows = rows;
     s.answered = true;
     s.failed = error !== null;
-    s.box.replaceChildren(...(error !== null ? [tag("p", "empty fail", error)] : [...rows, ...(s.limit === null ? [] : [s.more]), s.none]));
+    if (error !== null) showFailure("orca-branch", error);
+    s.box.replaceChildren(...(error !== null ? [] : [...rows, ...(s.limit === null ? [] : [s.more]), s.none]));
     if (s === worktreeSection && !s.section.isConnected && (error !== null || rows.length > 0)) list.prepend(s.section);
     narrow();
   };

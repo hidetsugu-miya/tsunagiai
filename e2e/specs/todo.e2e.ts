@@ -1,4 +1,4 @@
-import { askScreen, boot, callsOf, claudeKeyReady, claudeMissing, claudeReady, comment, copiedTexts, count, dueToday, holds, inbox, mock, onceId, pickFile, rejects, release, setClock, slackLoad, slackMessageUrl, slackSummary, stubClipboard, task, textsOf, today, todoData, waitForCalls, waitForCount, waitForText, openTodo, taskHit, CARD, CARDS } from "../support";
+import { askScreen, boot, callsOf, claudeKeyReady, claudeMissing, claudeReady, comment, copiedTexts, count, dueToday, holds, inbox, mock, onceId, pickFile, rejects, release, setClock, slackLoad, slackMessageUrl, slackSummary, stubClipboard, task, textsOf, today, todoData, waitForCalls, waitForCount, waitForText, openTodo, taskHit, CARD, CARDS, WARN_CARDS, waitForCard } from "../support";
 
 // A press as a mouse makes it. WebDriver's element click sends no pointerdown, which is what closes a popover (as in calendar.e2e.ts).
 const press = (target: ChainablePromiseElement) => browser.action("pointer").move({ origin: target }).down().up().perform();
@@ -700,7 +700,7 @@ describe("todo", () => {
       expect(await askScreen("write", "todo-draft", { name: "Other" })).toEqual({ ok: false, error: expect.stringContaining("追加の最中") });
       await expect(name()).toHaveValue("Written");
       await release("todoist_add_from_slack", rejects("todoist failed"));
-      await expect($("#todo-draft .draft-err")).toBeDisplayed();
+      await waitForCard("todoist failed");
       await expect(undo()).toBeEnabled();
       expect(await askScreen("write", "todo-draft", { name: "Other" })).toEqual({ ok: true });
       await expect(name()).toHaveValue("Other");
@@ -842,7 +842,7 @@ describe("todo", () => {
     await mock("todoist_add_from_slack", rejects("Todoist に接続できません"));
     await $("#todo-draft .draft-name").setValue("My own name");
     await $("#todo-draft .draft-add").click();
-    await expect($("#todo-draft .draft-err")).toHaveText(expect.stringContaining("Todoist に接続できません"));
+    await waitForCard("追加できませんでした: Todoist に接続できません");
     await expect($("#todo-draft .draft-name")).toHaveValue("My own name");
     await expect($("#todo-draft .draft-desc")).toHaveValue(slackSummary.description);
     await expect($("#todo-draft .draft-add")).toBeEnabled();
@@ -851,15 +851,17 @@ describe("todo", () => {
     expect(await callsOf(addFromSlack)).toHaveLength(1);
   });
 
-  it("shows a failed summary as a closable warning row", async () => {
+  it("shows a failed summary as a card, with no row above the list", async () => {
     await openTodo();
     const summarize = await mock("todoist_summarize_slack", rejects("Claude が時間内に終わりませんでした"));
     await $("#todo-add-input").setValue(slackMessageUrl);
     await $("#todo-add-button").click();
     await waitForCalls(summarize);
-    await expect($("#todo-pending .pending.fail")).toHaveText(expect.stringContaining("Claude が時間内に終わりませんでした"));
-    await $("#todo-pending .pending.fail .icon-btn").click();
-    await $("#todo-pending .pending").waitForExist({ reverse: true });
+    await waitForCard("要約できませんでした: Claude が時間内に終わりませんでした");
+    await expect($("#todo-pending .pending")).not.toExist();
+    expect(await count(WARN_CARDS)).toBe(0);
+    await $("#error-cards .error-card-close").click();
+    await $(CARDS).waitForExist({ reverse: true });
   });
 
   it("shows a spinner and 追加中 on the add button, with the field and the button disabled, until the add is answered", async () => {
@@ -1665,8 +1667,10 @@ describe("todo summary failure: the way to the Slack settings", () => {
     await mock("todoist_summarize_slack", rejects("このメッセージを読む権限がありません"));
     await $("#todo-add-input").setValue(slackMessageUrl);
     await $("#todo-add-button").click();
-    await $("#todo-pending .pending.fail").waitForExist();
-    await $("#todo-pending .pending.fail").$("button=設定を開く").click();
+    await waitForCard("このメッセージを読む権限がありません");
+    await expect($("#todo-pending .pending")).not.toExist();
+    await waitForCount(WARN_CARDS, 1);
+    await $(WARN_CARDS).$("button=設定を開く").click();
     await expect($("#settings")).toBeDisplayed();
     await expect($("#settings-tab-slack")).toHaveAttribute("aria-selected", "true");
     await expect($("#settings-panel-slack")).toBeDisplayed();
@@ -1720,6 +1724,16 @@ describe("todo detail menu", () => {
     await $("#nav-todo").click();
     await expect($("#todo-token")).toBeDisplayed();
     await expect($(more)).not.toBeDisplayed();
+  });
+
+  it("says on a card that the token was not accepted, and keeps the form", async () => {
+    await boot({ inbox: inbox(), todoist_load: null, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await mock("todoist_save_token", null);
+    await $("#todo-token-input").setValue("bad-token");
+    await $("#todo-token button").click();
+    await waitForCard("トークンを確認できませんでした");
+    await expect($("#todo-token")).toBeDisplayed();
   });
 
   it("lists タスクのリンクをコピー and then 削除, which is the dangerous one", async () => {
@@ -2087,8 +2101,17 @@ describe("todo completed tasks after an offline answer", () => {
     await boot({ inbox: inbox(), todoist_load: offlineData(), slack_load: slackLoad, claude_status: claudeReady });
     await $("#nav-todo").click();
     await waitForCount(ROWS, 1);
-    await waitForCount("#todo-notice div", 1);
+    await waitForCount(WARN_CARDS, 1);
   }
+
+  it("says on a warning card that the list is the last one fetched, and takes the card off with the screen", async () => {
+    await openOffline();
+    await waitForCard("Todoist に接続できません（network）");
+    await $("#nav-mail").click();
+    await waitForCount(WARN_CARDS, 0);
+    await $("#nav-todo").click();
+    await waitForCount(WARN_CARDS, 1);
+  });
 
   it("asks for the completed tasks again on each timed refresh until an answer is not from the cache, and an offline answer later does not ask again", async () => {
     await openOffline();
@@ -2100,7 +2123,7 @@ describe("todo completed tasks after an offline answer", () => {
     loads = await mock("todoist_load", todoData());
     await refreshNow();
     expect(await withDone(loads)).toEqual([true]);
-    await waitForCount("#todo-notice div", 0);
+    await waitForCount(WARN_CARDS, 0);
     loads = await mock("todoist_load", todoData());
     await refreshNow();
     expect(await withDone(loads)).toEqual([false]);
@@ -2119,7 +2142,7 @@ describe("todo completed tasks after an offline answer", () => {
     let loads = await mock("todoist_load", todoData());
     await reopen();
     expect(await withDone(loads)).toEqual([true]);
-    await waitForCount("#todo-notice div", 0);
+    await waitForCount(WARN_CARDS, 0);
     loads = await mock("todoist_load", todoData());
     await reopen();
     expect(await withDone(loads)).toEqual([false]);
@@ -2786,11 +2809,13 @@ describe("todo detail comments", () => {
     await expect($(field)).toBeDisplayed();
   });
 
-  it("shows a failed fetch in the section, not as the screen's error", async () => {
+  it("shows a failed fetch as a card, not in the section, and takes the card off when the detail is left", async () => {
     await openReport(rejects("boom"));
-    await expect($("#todo-detail .c-note.fail")).toHaveText(expect.stringContaining("boom"));
-    await expect($(CARDS)).not.toExist();
+    await waitForCard("コメントを読み込めませんでした: boom");
+    expect(await count(CARDS)).toBe(1);
     await expect($(field)).toBeDisplayed();
+    await $("#todo-back").click();
+    await $(CARDS).waitForExist({ reverse: true });
   });
 
   it("shows what it holds while it fetches, and keeps what an answer for a task no longer open brings", async () => {

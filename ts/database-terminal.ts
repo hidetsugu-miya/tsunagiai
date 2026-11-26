@@ -8,6 +8,7 @@ import type { OrcaWorktree } from "./bindings/OrcaWorktree";
 import { closeClaudeCode, hideClaudeCode, isClaudeCodeShowing, showClaudeCode } from "./claude-code.js";
 import { $, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
+import { showFailure } from "./error-card.js";
 import { CLOSE_SVG, PLUS_SVG, TERMINAL_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { heldOrca, noticeOf, openWorktreeDialog, readDestination, refreshOrca, streamsEnvironment, worktreeLabel } from "./orca.js";
@@ -44,9 +45,8 @@ let claude = false;
 let claudeHost: HTMLElement | null = null;
 // The handles whose close is on its way.
 const closing = new Set<string>();
-// The element the selected terminal is drawn in (there while a terminal is held), and the notice above it (Orca's missing, a read, an open or a close that failed).
+// The element the selected terminal is drawn in (there while a terminal is held).
 let host: HTMLElement | null = null;
-let notice: HTMLElement | null = null;
 let timer: number | null = null;
 // The press of the plus is on its way (the list is read, or the terminal is opened).
 let busy = false;
@@ -57,15 +57,6 @@ let drawn = "";
 const body = () => $("database-terminal-body");
 const plus = () => $("database-terminal-plus") as HTMLButtonElement;
 const selectedTerminal = () => terminals.find((t) => t.handle === selected) ?? null;
-
-function say(text: string | null) {
-  notice?.remove();
-  notice = null;
-  if (text === null) return;
-  notice = tag("div", "pending fail");
-  notice.append(tag("span", "sp", text));
-  body().prepend(notice);
-}
 
 // A tab, as the tabs of the Orca screen are: the close button is beside the tab, not in it, so that pressing it never selects the tab.
 function makeTab(title: string, key: string, onSelect: () => void, onClose: () => void, closeOff: boolean) {
@@ -162,7 +153,7 @@ async function check() {
         else if (terminal.listed) forget(terminal.handle);
         else if (now - terminal.since > WAIT_MS) {
           forget(terminal.handle);
-          say("ターミナルが Orca の一覧に現れませんでした");
+          showFailure("database-terminal", "ターミナルが Orca の一覧に現れませんでした");
         }
       }
     }
@@ -204,17 +195,16 @@ async function tick() {
   if (!isShowing(placement, OWNER)) showTerminals([placement], terminal.handle, OWNER);
 }
 
-// Closes the terminal in Orca, as the close button of a tab of the Orca screen does (`orca_close`): its tab goes once Orca has closed it. A failure keeps the tab, says why, and reads the list again, so that a terminal Orca no longer holds goes at once.
+// Closes the terminal in Orca, as the close button of a tab of the Orca screen does (`orca_close`): its tab goes once Orca has closed it. A failure keeps the tab, says why on a card (A-28), and reads the list again, so that a terminal Orca no longer holds goes at once.
 async function closeTab(terminal: Held) {
   if (closing.has(terminal.handle)) return;
   closing.add(terminal.handle);
-  say(null);
   draw();
   try {
     await invoke("orca_close", { handle: terminal.handle, environment: terminal.environment });
   } catch (e) {
     closing.delete(terminal.handle);
-    say(String(e));
+    showFailure("database-terminal", e);
     draw();
     terminal.readAt = 0;
     void check();
@@ -227,12 +217,11 @@ async function closeTab(terminal: Held) {
 async function open(worktree: OrcaWorktree) {
   if (busy) return;
   busy = true;
-  say(null);
   draw();
   try {
     const environment = worktree.environment ?? null;
     const launched = await invoke("orca_terminal_create", { path: worktree.path, environment });
-    if (launched.handle === null) return say("Orca がターミナルの名前を返しませんでした");
+    if (launched.handle === null) return showFailure("database-terminal", "Orca がターミナルの名前を返しませんでした");
     const handle = launched.handle;
     if (!terminals.some((t) => t.handle === handle)) terminals.push({ handle, environment, path: worktree.path, title: worktreeLabel(worktree), since: Date.now(), listed: false, readAt: 0 });
     selected = handle;
@@ -246,7 +235,7 @@ async function open(worktree: OrcaWorktree) {
       void tick();
     }
   } catch (e) {
-    say(String(e));
+    showFailure("database-terminal", e);
   } finally {
     busy = false;
     draw();
@@ -257,12 +246,11 @@ async function open(worktree: OrcaWorktree) {
 async function press() {
   if (busy) return;
   busy = true;
-  say(null);
   draw();
   try {
     const list = await refreshOrca(true);
     const text = noticeOf(list);
-    if (text !== null || list === null) return say(text ?? "読み込めませんでした");
+    if (text !== null || list === null) return showFailure("database-terminal", text ?? "読み込めませんでした");
     openWorktreeDialog(plus(), list.worktrees, null, (worktree) => void open(worktree));
   } finally {
     busy = false;

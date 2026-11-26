@@ -8,6 +8,7 @@ import { $, composing, isMac, partMatcher, tag } from "./dom.js";
 import { DOWN_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, showMenu } from "./menu.js";
+import { showFailure } from "./error-card.js";
 import { setScreen } from "./nav.js";
 import { toast } from "./toast.js";
 
@@ -28,11 +29,10 @@ const field = () => $<HTMLTextAreaElement>("mail-slack-text");
 
 export const mailSlackOpen = () => open;
 
-// A mail is opened (S-28): the text written for the mail before is not the new one's, so the field and its error are emptied; a text whose post is still on its way stays.
+// A mail is opened (S-28): the text written for the mail before is not the new one's, so the field is emptied; a text whose post is still on its way stays.
 export function resetMailSlack() {
   if (posting) return;
   field().value = "";
-  $("mail-slack-error").hidden = true;
   draw();
 }
 
@@ -57,17 +57,15 @@ function setOpen(on: boolean) {
   if (!on) return;
   // The field opens empty; a text whose post is still on its way stays.
   if (!posting) field().value = "";
-  $("mail-slack-error").hidden = true;
   draw();
   field().focus();
 }
 
-// Posts the field's text to the chosen channel. A failure shows the error and keeps the text (a toast when the pane is no longer shown); a success empties the field and says so.
+// Posts the field's text to the chosen channel. A failure shows a card and keeps the text; a success empties the field and says so.
 async function post() {
   const to = chosen;
   const text = field().value;
   if (posting || !to || !text.trim()) return;
-  $("mail-slack-error").hidden = true;
   posting = true;
   draw();
   try {
@@ -75,11 +73,8 @@ async function post() {
   } catch (e) {
     posting = false;
     draw();
-    if ($("mail-slack").hidden) toast(`#${to.name} に投稿できませんでした: ${e}`);
-    else {
-      $("mail-slack-error").textContent = `投稿できませんでした: ${e}`;
-      $("mail-slack-error").hidden = false;
-    }
+    // A pane that is no longer shown does not tell which channel it was, so the card does.
+    showFailure("mail-slack", `${$("mail-slack").hidden ? `#${to.name} に` : ""}投稿できませんでした: ${e}`);
     return;
   }
   posting = false;
@@ -89,14 +84,13 @@ async function post() {
 }
 
 // Draws the list of the channels, grouped by workspace, in `list`: the ones whose name holds `query`, and a line when none does. `pick` is called with the choice.
-function drawList(list: HTMLElement, groups: { workspace: Workspace; channels: Channel[] | string }[], query: string, pick: (c: Chosen) => void) {
+function drawList(list: HTMLElement, groups: { workspace: Workspace; channels: Channel[] | null }[], query: string, pick: (c: Chosen) => void) {
   const re = partMatcher(query);
   const nodes: Node[] = [];
   let hits = 0;
   for (const { workspace, channels } of groups) {
-    if (typeof channels === "string") {
-      // A workspace whose list could not be read says why, under its name.
-      nodes.push(tag("div", "menu-group", workspace.team), tag("div", "menu-group fail", channels));
+    if (channels === null) {
+      // A workspace whose list could not be read is a card (A-28) and has no part in the list.
       continue;
     }
     const found = channels.filter((c) => !re || re.test(c.name));
@@ -112,7 +106,7 @@ function drawList(list: HTMLElement, groups: { workspace: Workspace; channels: C
       nodes.push(b);
     }
   }
-  if (!hits && !groups.some((g) => typeof g.channels === "string")) nodes.push(tag("div", "menu-empty", "該当するチャンネルがありません"));
+  if (!hits && !groups.some((g) => g.channels === null)) nodes.push(tag("div", "menu-empty", "該当するチャンネルがありません"));
   list.replaceChildren(...nodes);
 }
 
@@ -132,10 +126,9 @@ async function openList() {
   pop.append(input, list);
   showMenu(anchor, pop);
   const seq = ++listSeq;
-  let groups: { workspace: Workspace; channels: Channel[] | string }[] = [];
+  let groups: { workspace: Workspace; channels: Channel[] | null }[] = [];
   const pick = (c: Chosen) => {
     chosen = c;
-    $("mail-slack-error").hidden = true;
     closeMenu();
     draw();
     field().focus();
@@ -159,11 +152,15 @@ async function openList() {
     if (seq !== listSeq || !pop.isConnected) return;
     groups = workspaces.map((workspace, i) => {
       const r = got[i];
-      return { workspace, channels: r.status === "fulfilled" ? r.value : String(r.reason) };
+      if (r.status === "fulfilled") return { workspace, channels: r.value };
+      showFailure("mail-slack", `${workspace.team}: ${r.reason}`);
+      return { workspace, channels: null };
     });
     redraw();
   } catch (e) {
-    if (seq === listSeq && pop.isConnected) list.replaceChildren(tag("div", "menu-group fail", String(e)));
+    if (seq !== listSeq || !pop.isConnected) return;
+    showFailure("mail-slack", e);
+    closeMenu();
   }
 }
 
@@ -172,10 +169,7 @@ export function initMailSlack() {
   $("mail-slack-close").onclick = () => setOpen(false);
   $("mail-slack-channel").onclick = openList;
   $("mail-slack-send").onclick = post;
-  field().oninput = () => {
-    $("mail-slack-error").hidden = true;
-    draw();
-  };
+  field().oninput = draw;
   // Enter is a line break; Cmd+Enter (Ctrl+Enter off macOS) posts, unless it only confirms an IME conversion (S-21).
   field().onkeydown = (e) => {
     if (e.key !== "Enter" || !(isMac ? e.metaKey : e.ctrlKey) || composing(e)) return;

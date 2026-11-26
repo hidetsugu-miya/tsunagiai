@@ -1,4 +1,4 @@
-import { account, boot, callsOf, claudeKeyReady, claudeLoggedOut, claudeReady, connection, count, holds, inbox, mock, onceId, rejects, release, rowOf, textsOf, threadDetail, threadLoaded, waitForCalls, waitForCount, waitForText, CARDS, CARD, waitForLog } from "../support";
+import { account, boot, callsOf, claudeKeyReady, claudeLoggedOut, claudeReady, connection, count, holds, inbox, mock, onceId, rejects, release, rowOf, textsOf, threadDetail, threadLoaded, waitForCalls, waitForCount, CARDS, CARD, waitForCard, waitForLog } from "../support";
 import type { HeldThread } from "../../ts/bindings/HeldThread";
 import type { ThreadRefresh } from "../../ts/bindings/ThreadRefresh";
 
@@ -274,13 +274,14 @@ describe("thread loading", () => {
     for (const id of headerButtons) await expect($(id)).toBeEnabled();
   });
 
-  it("shows the error text in the body's place when the thread cannot be read, and keeps the buttons but the back one disabled", async () => {
+  it("shows the error in a card, with no note in the body's place, when the thread cannot be read, and keeps the buttons but the back one disabled", async () => {
     await mock("thread", rejects("Gmail に届きません"));
     await rowOf("unread-threads", "First unread").$(".subject").click();
-    await expect($("#messages .msg-fail")).toHaveText("Gmail に届きません");
+    await waitForCard("Gmail に届きません");
     await expect($("#thread-subject")).toHaveText("First unread");
     await threadLoaded();
     expect(await count("#messages .msg-loading")).toBe(0);
+    expect(await count("#messages article")).toBe(0);
     for (const id of headerButtons) await expect($(id)).toBeDisabled();
     await expect($("#back")).toBeEnabled();
     await $("#back").click();
@@ -311,7 +312,7 @@ describe("thread loading", () => {
     await browser.pause(300);
     await expect($("#thread-subject")).toHaveText("Second unread");
     await expect($("#messages .msg-loading")).toBeDisplayed();
-    expect(await count("#messages .msg-fail")).toBe(0);
+    expect(await count(CARDS)).toBe(0);
     await release(open, threadDetail("Second unread", "Second body", false));
     await expect($("#messages .plain")).toHaveText("Second body");
   });
@@ -436,7 +437,6 @@ describe("thread held from an earlier open", () => {
     await waitForLog("Gmail に届きません");
     await expect($(CARDS)).not.toExist();
     expect(await markedMessages()).toBe(1);
-    expect(await count("#messages .msg-fail")).toBe(0);
     for (const id of headerButtons) await expect($(id)).toBeEnabled();
   });
 
@@ -611,27 +611,40 @@ describe("thread AI summary", () => {
     expect(await count("#mail-summary b, #mail-summary a")).toBe(0);
   });
 
-  it("shows a failure with a retry button, and sends again on retry", async () => {
+  it("shows a failure in a card with a retry button, and sends again on retry", async () => {
     await open("First unread", quote("Quote"));
     await mock("claude_summarize_mail", rejects("Claude が時間内に終わりませんでした"));
     await summaryButton().click();
-    await waitForText("#mail-summary", "Claude が時間内に終わりませんでした");
-    expect(await textsOf("#mail-summary .summary-head")).toEqual(["要約できませんでした"]);
+    await waitForCard("要約できませんでした: Claude が時間内に終わりませんでした");
+    await expect(card()).not.toBeDisplayed();
+    expect(await textsOf(".error-card-action")).toEqual(["やり直す"]);
     const retry = await mock("claude_summarize_mail", summary);
-    await $("#mail-summary .text-btn").click();
+    await $(".error-card-action").click();
     expect(await waitForCalls(retry)).toHaveLength(1);
     await waitForCount("#mail-summary li", 2);
     expect(await textsOf("#mail-summary li")).toEqual(summary.points);
+    await waitForCount(CARDS, 0);
   });
 
-  it("forgets a failure with the close button", async () => {
+  it("takes the card of a failure off with its close button, and the icon sends again", async () => {
     await open("First unread", quote("Quote"));
     const call = await mock("claude_summarize_mail", rejects("Claude が時間内に終わりませんでした"));
     await summaryButton().click();
-    await waitForText("#mail-summary", "Claude が時間内に終わりませんでした");
-    await $("#mail-summary .icon-btn").click();
-    await expect(card()).not.toBeDisplayed();
+    await waitForCard("Claude が時間内に終わりませんでした");
+    await $(".error-card-close").click();
+    await waitForCount(CARDS, 0);
     expect(await callsOf(call)).toHaveLength(1);
+    await summaryButton().click();
+    expect(await waitForCalls(call, 2)).toHaveLength(2);
+  });
+
+  it("takes the card of a failure off when another thread is opened", async () => {
+    await open("First unread", quote("Quote"));
+    await mock("claude_summarize_mail", rejects("Claude が時間内に終わりませんでした"));
+    await summaryButton().click();
+    await waitForCard("Claude が時間内に終わりませんでした");
+    await $("#back").click();
+    await waitForCount(CARDS, 0);
   });
 
   it("shows a kept summary again with the icon, or when the thread is reopened, without sending it again", async () => {

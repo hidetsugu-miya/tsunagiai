@@ -10,7 +10,7 @@ import { invoke } from "./ipc.js";
 import { autoFit, fitAfterImages, frameObserver, linkTextUrls, plainBody, routeLinks, withBodyCsp } from "./mail-frame.js";
 import { externalImages, knownSenders, offerImages, resetImageBars, showCidImages, type ThreadCtx } from "./mail-images.js";
 import { resetMailSlack } from "./mail-slack.js";
-import { clearSummary, renderSummary, summaryPressed } from "./mail-summary.js";
+import { clearSummary, initSummary, renderSummary, summaryPressed } from "./mail-summary.js";
 import { linkify } from "./mail-text.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { bindReply, initReply, openReply, resetReply, type ReplyTarget } from "./mail-reply.js";
@@ -338,9 +338,9 @@ export async function openThread(
   } catch (e) {
     if (seq !== openCount) return;
     $("thread").removeAttribute("aria-busy");
-    // The loading body is gone once the messages replaced it: the failure then shows as a card.
-    if (body.isConnected) body.replaceChildren(span("msg-fail", String(e)));
-    else showFailure("thread", e);
+    // The loading note goes, and the failure shows as a card.
+    if (body.isConnected) $("messages").replaceChildren();
+    showFailure("thread", e);
   }
 }
 
@@ -370,6 +370,7 @@ function removeCurrent(command: "archive" | "trash") {
 }
 
 export function initThread() {
+  initSummary();
   initReply(reloadSent);
   initSplit($("mail-screen"), $("mail-split"), { initial: 0.4 });
   $("back").onclick = goBack;

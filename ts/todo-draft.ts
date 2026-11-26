@@ -8,6 +8,7 @@
 import type { Summary } from "./bindings/Summary";
 import { claudeCodeStarted, closeClaudeCode, hideClaudeCode, isClaudeCodeShowing, showClaudeCode } from "./claude-code.js";
 import { $, composing, isMac, tag } from "./dom.js";
+import { showFailure } from "./error-card.js";
 import { hostOf } from "./format.js";
 import { CLAUDE_SVG, PLUS_SVG, SLACK_SVG } from "./icons.js";
 import { type Fields, registerDraftTarget } from "./screen-bridge.js";
@@ -222,10 +223,8 @@ export function openDraft(job: ReviewJob, summary: Summary, hooks: DraftHooks) {
   const omitted = summary.omitted > 0 ? [tag("div", "draft-omitted", `${summary.omitted} 件のメッセージは要約に含まれていません`)] : [];
   // Only when the linked message was long enough to be cut before it was summarised.
   const targetCut = summary.targetCut ? [tag("div", "draft-target-cut", "対象のメッセージは長いため、先頭だけを要約しました")] : [];
-  const error = tag("div", "pending fail draft-err");
-  error.hidden = true;
   const main = tag("div", "draft-main");
-  main.append(name, description, link, ...omitted, ...targetCut, error);
+  main.append(name, description, link, ...omitted, ...targetCut);
   const side = tag("aside", "detail-side");
   side.append(field("プロジェクト", projectButton), field("日付", dueButton), labels);
 
@@ -269,15 +268,13 @@ export function openDraft(job: ReviewJob, summary: Summary, hooks: DraftHooks) {
     drop.disabled = add.disabled = back.disabled = true;
     add.replaceChildren(tag("span", "spin"));
     add.setAttribute("aria-label", "追加中");
-    error.hidden = true;
     try {
       const added = await addSlackTodo(job, name.value, description.value, dueText);
       close();
       hooks.added(added);
     } catch (e) {
       // The draft stays as the user left it.
-      error.textContent = `追加できませんでした: ${e}`;
-      error.hidden = false;
+      showFailure("todo-draft", `追加できませんでした: ${e}`);
       live!.saving = false;
       refreshUndo();
       drop.disabled = add.disabled = back.disabled = false;

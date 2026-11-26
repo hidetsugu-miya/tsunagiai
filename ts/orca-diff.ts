@@ -5,6 +5,7 @@
 import type { OrcaDiffRow } from "./bindings/OrcaDiffRow";
 import type { OrcaFileDiff } from "./bindings/OrcaFileDiff";
 import { tag } from "./dom.js";
+import { setNotice } from "./error-card.js";
 import { COLUMNS_SVG, DOWN_SVG, LINES_SVG, RELOAD_SVG, UP_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { highlightReady, loadHighlight } from "./vendor-load.js";
@@ -46,7 +47,6 @@ interface DiffTab {
   out: boolean;
   cancelColor: (() => void) | null;
   el: HTMLElement;
-  note: HTMLElement;
   count: HTMLElement;
   rows: HTMLElement;
   previous: HTMLButtonElement;
@@ -189,7 +189,7 @@ function adopt(d: DiffTab, diff: OrcaFileDiff, first: boolean) {
   d.diff = diff;
   paint(d, diff);
   d.read = "ready";
-  d.note.hidden = true;
+  setNotice(noticeKey(d), null);
   d.rows.hidden = false;
   const top = d.rows.scrollTop;
   render(d);
@@ -243,8 +243,7 @@ async function load(d: DiffTab) {
     d.diff = null;
     d.read = "failed";
     d.current = -1;
-    d.note.textContent = String(e);
-    d.note.hidden = false;
+    setNotice(noticeKey(d), { text: String(e) });
     d.rows.hidden = true;
     d.rows.replaceChildren();
     syncHead(d);
@@ -271,12 +270,10 @@ function create(id: string, target: string | null, project: string, path: string
   head.append(tag("span", "orca-edit-path", relative));
   if (commit !== null) head.append(tag("span", "orca-diff-commit", commit.shortId));
   head.append(count, previous, next, view, reload);
-  const note = tag("p", "orca-empty feed-empty");
-  note.hidden = true;
   const rows = tag("div", "orca-diff-rows");
   rows.hidden = true;
-  el.append(head, note, rows);
-  const d: DiffTab = { id, target, project, path, relative, commit, read: "loading", diff: null, oldHtml: [], newHtml: [], current: -1, scroll: 0, stale: false, pending: false, seq: 0, rereading: false, again: false, placed: false, out: false, cancelColor: null, el, note, count, rows, previous, next, view, reload };
+  el.append(head, rows);
+  const d: DiffTab = { id, target, project, path, relative, commit, read: "loading", diff: null, oldHtml: [], newHtml: [], current: -1, scroll: 0, stale: false, pending: false, seq: 0, rereading: false, again: false, placed: false, out: false, cancelColor: null, el, count, rows, previous, next, view, reload };
   previous.onclick = () => goTo(d, d.current - 1);
   next.onclick = () => goTo(d, d.current + 1);
   reload.onclick = () => void load(d);
@@ -315,11 +312,15 @@ export const hasDiffIn = (target: string | null, path: string) => [...diffs.valu
 // The open diffs of the project, in the order they were opened.
 export const diffsOf = (target: string | null, project: string) => [...diffs.values()].filter((d) => d.target === target && d.project === project);
 
+// The reason a diff cannot be read is a card (A-28), made while the tab holds it, and gone when it is read well or its tab is closed.
+const noticeKey = (d: DiffTab) => `orca-diff:${d.id}`;
+
 export function closeDiff(id: string) {
   const d = diffs.get(id);
   if (!d) return;
   cancelColor(d);
   d.seq++;
+  setNotice(noticeKey(d), null);
   d.el.remove();
   diffs.delete(id);
 }

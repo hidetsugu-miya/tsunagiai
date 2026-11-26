@@ -262,6 +262,7 @@ async function readDir(dir: string, quiet = false, clock = false, pending?: List
     next = { dir: held?.dir ?? null, error: String(e), busy: false };
   }
   if (mine !== generation) return;
+  if (next.error !== null) showFailure("orca-files", next.error);
   // A read that finds what is held (the same entries in the same order, and as many in the folder) keeps it, marks and all, and draws nothing.
   const was = held?.dir;
   const now = next.dir;
@@ -1108,8 +1109,8 @@ function kindIcon(name: string) {
   return node;
 }
 
-function note(text: string, depth: number, fail = false) {
-  const line = tag("p", `orca-file-note${fail ? " fail" : ""}`, text);
+function note(text: string, depth: number) {
+  const line = tag("p", "orca-file-note", text);
   line.style.setProperty("--depth", String(depth));
   return line;
 }
@@ -1119,7 +1120,6 @@ function rows(dir: string, depth: number): HTMLElement[] {
   const listing = listings.get(dir);
   if (!listing) return [];
   const nodes: HTMLElement[] = [];
-  if (listing.error !== null) nodes.push(note(listing.error, depth, true));
   if (creating?.dir === dir) nodes.push(createRow(depth, creating));
   if (listing.dir === null) {
     if (listing.busy) {

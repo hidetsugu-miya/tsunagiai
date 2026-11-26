@@ -10,9 +10,10 @@ import type { JiraIssue } from "./bindings/JiraIssue";
 import type { JiraSettings } from "./bindings/JiraSettings";
 import type { JiraSprint } from "./bindings/JiraSprint";
 import { $, span, tag } from "./dom.js";
-import { logError, showFailure } from "./error-card.js";
+import { logError, type Notice, setNotice, showFailure } from "./error-card.js";
 import { PLUS_SVG, RELOAD_SVG, SETTINGS_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
+import { currentScreen } from "./nav.js";
 import { listedProjectName, THIS_MACHINE } from "./orca.js";
 
 // What the part shows: nothing yet, the first read, no connection, a read of the connection or of the boards that failed, or the board with its sections.
@@ -125,18 +126,36 @@ function drawBar() {
   if (ready) fill($<HTMLSelectElement>("orca-jira-status"), [["", "すべてのステータス"], ...statuses().map((s): [string, string] => [s, s])], statusPick);
 }
 
-// A row that waits for a read, or that says it failed with the button that tries again.
-function pending(text: string, retry?: () => void) {
-  const row = tag("div", retry ? "pending fail" : "pending");
-  if (!retry) row.append(tag("span", "spin"));
-  row.append(tag("span", "sp", text));
-  if (retry) {
-    const again = tag("button", "text-btn", "再読み込み");
-    again.type = "button";
-    again.onclick = retry;
-    row.append(again);
-  }
+// A row that waits for a read.
+function pending(text: string) {
+  const row = tag("div", "pending");
+  row.append(tag("span", "spin"), tag("span", "sp", text));
   return row;
+}
+
+// The cards of what a read says (A-28, J-2): the first read that failed, the sprints of a board that Jira refuses, and each section whose read failed (its key is "orca-jira:section:" and the section's). Each card has the button that reads again.
+const NOTICE_READ = "orca-jira:read";
+const NOTICE_SPRINTS = "orca-jira:sprints";
+const NOTICE_SECTION = "orca-jira:section:";
+// The keys of the cards drawn now: the card of a section whose read went well, or that is not wanted any more, is taken off.
+let noticed = new Set<string>();
+
+// Also called when another screen is shown (`watchFiles` of orca.ts), which takes the cards off: the part keeps `on` while its screen is left.
+export function drawNotices() {
+  const want = new Map<string, Notice>();
+  if (on && currentScreen() === "orca") {
+    if (stage === "failed") want.set(NOTICE_READ, { text: failure, actions: [{ label: "再読み込み", run: () => void read() }] });
+    if (stage === "ready" && sprintNote !== null) want.set(NOTICE_SPRINTS, { text: sprintNote });
+    if (stage === "ready") {
+      for (const key of wantedKeys()) {
+        const section = sections.get(key);
+        if (section?.state === "failed") want.set(NOTICE_SECTION + key, { text: section.error ?? "", actions: [{ label: "再読み込み", run: () => void readSection(seq, key) }] });
+      }
+    }
+  }
+  for (const key of noticed) if (!want.has(key)) setNotice(key, null);
+  for (const [key, notice] of want) setNotice(key, notice);
+  noticed = new Set(want.keys());
 }
 
 function issueRow(issue: JiraIssue) {
@@ -165,8 +184,7 @@ function sectionNode(key: string) {
   if (section?.state === "done") head.append(span("orca-jira-count", `${rows.length} 件`));
   node.append(head);
   if (section === undefined || section.state === "loading") node.append(pending("読み込んでいます…"));
-  else if (section.state === "failed") node.append(pending(section.error ?? "", () => void readSection(seq, key)));
-  else {
+  else if (section.state === "done") {
     node.append(...rows.map(issueRow));
     if (section.truncated) node.append(tag("p", "orca-file-note", `${section.issues.length} 件で打ち切りました`));
   }
@@ -177,10 +195,9 @@ function drawList() {
   const list = $("orca-jira-list");
   if (stage === "idle") return list.replaceChildren();
   if (stage === "loading") return list.replaceChildren(pending("読み込んでいます…"));
-  if (stage === "failed") return list.replaceChildren(pending(failure, () => void read()));
-  if (stage === "none") return list.replaceChildren();
+  if (stage === "failed" || stage === "none") return list.replaceChildren();
   if (boardId === null) return list.replaceChildren(tag("div", "orca-jira-none", "スクラムボードがありません"));
-  list.replaceChildren(...(sprintNote === null ? [] : [tag("p", "orca-file-note fail orca-jira-sprint-note", sprintNote)]), ...wantedKeys().map(sectionNode));
+  list.replaceChildren(...wantedKeys().map(sectionNode));
 }
 
 // The form of the connection: shown or not, the buttons that only a saved connection has, and the state that the last read or test left.
@@ -229,6 +246,7 @@ const draw = () => {
   drawForm();
   drawList();
   drawCopies();
+  drawNotices();
 };
 
 // Puts what is saved into the form (the token is never given, so its field is empty) and the state that goes with it.
@@ -376,7 +394,6 @@ async function readSection(run: number, key: string) {
     sections.set(key, { state: "done", issues: read.issues, truncated: read.truncated, error: null });
   } catch (e) {
     if (run !== seq) return;
-    logError("orca-jira", e);
     sections.set(key, { state: "failed", issues: [], truncated: false, error: String(e) });
   }
   draw();
@@ -407,7 +424,6 @@ async function readBoard(run: number) {
     // A team-managed board with its sprints off is Jira's refusal: its words stand in the place of the sprints, and the backlog is still read.
     if (boards.find((b) => b.id === boardId)?.type === "simple") sprintNote = String(e);
     else {
-      logError("orca-jira", e);
       failure = String(e);
       stage = "failed";
       return draw();
@@ -435,7 +451,6 @@ async function load(run: number, here: JiraPlace, settings: JiraSettings) {
     if (!boards.some((b) => b.id === boardId)) boardId = boards.find((b) => b.id === settings.boardId)?.id ?? boards[0]?.id ?? null;
   } catch (e) {
     if (run !== seq) return;
-    logError("orca-jira", e);
     failure = String(e);
     stage = "failed";
     return draw();
@@ -459,7 +474,6 @@ async function read() {
     settings = await invoke("jira_settings", here);
   } catch (e) {
     if (run !== seq) return;
-    logError("orca-jira", e);
     failure = String(e);
     stage = "failed";
     return draw();
@@ -492,6 +506,7 @@ export function syncOrcaJira(shown: boolean, next: JiraPlace | null) {
   }
   if (shown && (!on || moved)) void read();
   on = shown;
+  drawNotices();
 }
 
 // A ticket was changed in its tab (#872): its rows take the new values.

@@ -5,7 +5,8 @@ import { closeClaudeCode, formationPaneId, hideClaudeCode, isClaudeCodeShowing, 
 import { $ } from "./dom.js";
 import { ensureConsent } from "./formation-consent.js";
 import { hideSession, isLeaderTab, onTabChange, showChild, startFlow, startList, stopFlow, switchFormation } from "./formation-flow.js";
-import { currentFormation, formationEnvironment, initFormationList } from "./formation-list.js";
+import { currentFormation, drawNotices, formationEnvironment, initFormationList } from "./formation-list.js";
+import { setNotice } from "./error-card.js";
 import { invoke } from "./ipc.js";
 import { redrawOrca, streamsEnvironment } from "./orca.js";
 import { isShowing, releaseTerminal, showTerminals } from "./orca-terminal.js";
@@ -27,6 +28,9 @@ const starting = new Set<string>();
 const ended = new Set<string>();
 const failures = new Map<string, string>();
 
+// The card of a failure of the leader's terminal of a saved environment (A-28): it is there while the leader's tab of that formation is shown, and goes when the formation is pressed again (which tries again), when another tab or formation is shown and when the screen is left.
+const NOTICE_TERM = "formation:terminal";
+
 // Whether the development screen is shown (set by `showFormation` and `hideFormation`).
 let onScreen = false;
 
@@ -36,7 +40,10 @@ let onScreen = false;
 function showPane() {
   if (!onScreen) return;
   const id = pane();
-  if (id === null) return hideClaudeCode(OWNER);
+  if (id === null) {
+    setNotice(NOTICE_TERM, null);
+    return hideClaudeCode(OWNER);
+  }
   const name = currentFormation()!;
   const host = $("formation-term");
   const remote = formationEnvironment(name) !== LOCAL;
@@ -44,8 +51,7 @@ function showPane() {
   // The leader's terminal and its words are shown only while the leader's tab is the selected one; a child's tab shows the child's terminal under the strip (formation-flow.ts), and the leader's process goes on.
   const leader = isLeaderTab();
   host.hidden = !leader;
-  $("formation-term-error").hidden = said === null || !leader;
-  $("formation-term-error").textContent = said ?? "";
+  setNotice(NOTICE_TERM, said !== null && leader ? { text: said } : null);
   if (!leader) return hideClaudeCode(OWNER);
   if (remote) return showRemote(name, host, said);
   if (!isClaudeCodeShowing(host, id, OWNER)) showClaudeCode(host, { id, kind: "formation" }, OWNER);
@@ -146,6 +152,8 @@ export function initFormation() {
 // The screen is left: the terminals are hidden (the orchestrator's process goes on, the children's mirrors stop), and nothing is read.
 export function hideFormation() {
   onScreen = false;
+  setNotice(NOTICE_TERM, null);
+  drawNotices();
   stopFlow();
   hidePanes();
 }

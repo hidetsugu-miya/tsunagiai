@@ -7,7 +7,7 @@ import { CHEVRON_SVG, CLIP_SVG, CLOSE_SVG, FILE_SVG, SEND_SVG } from "./icons.js
 import { invoke, invokeRaw, type Upload } from "./ipc.js";
 import { dueLabel, markdownHtml, todoState } from "./todo-data.js";
 import { loadTodo } from "./todo.js";
-import { showFailure } from "./error-card.js";
+import { setNotice, showFailure } from "./error-card.js";
 
 const MAX_FILE_BYTES = 100 * 1024 * 1024;
 // The header that carries the file's name to `todoist_upload`, percent-encoded (the body is the file's bytes alone).
@@ -82,9 +82,19 @@ function commentRow(c: Comment) {
   return row;
 }
 
+// The card of a fetch that failed (A-28, `setNotice`, one key for each task): only the open task's is drawn, and `todoMode` takes it off when the detail is left.
+const noticeKey = (taskId: string) => `todo-comments:${taskId}`;
+
+function drawFailureCard(openTaskId: string | null) {
+  for (const [id, failure] of failures) setNotice(noticeKey(id), id === openTaskId ? { text: `コメントを読み込めませんでした: ${failure}` } : null);
+}
+
+export const clearCommentNotices = () => drawFailureCard(null);
+
 function drawList(v: View) {
   const comments = held.get(v.taskId);
   const failure = failures.get(v.taskId);
+  drawFailureCard(v.taskId);
   const open = !folded.has(v.taskId);
   v.head.setAttribute("aria-expanded", String(open));
   v.count.textContent = comments?.length ? String(comments.length) : "";
@@ -96,7 +106,6 @@ function drawList(v: View) {
     nodes.push(note);
   }
   if (comments?.length === 0 && !failure) nodes.push(tag("div", "c-note", "コメントはまだありません"));
-  if (failure) nodes.push(tag("div", "c-note fail", `コメントを読み込めませんでした: ${failure}`));
   v.list.replaceChildren(...nodes);
 }
 
@@ -171,6 +180,7 @@ async function load(taskId: string, projectId: string) {
   if (loading.has(taskId)) return;
   loading.add(taskId);
   failures.delete(taskId);
+  setNotice(noticeKey(taskId), null);
   const before = new Set((held.get(taskId) ?? []).map((c) => c.id));
   redraw(taskId);
   let tokenNeeded = false;

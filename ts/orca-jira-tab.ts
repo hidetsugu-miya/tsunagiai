@@ -9,7 +9,7 @@ import type { JiraIssueType } from "./bindings/JiraIssueType";
 import type { JiraProject } from "./bindings/JiraProject";
 import type { JiraSprint } from "./bindings/JiraSprint";
 import { span, tag } from "./dom.js";
-import { logError, showFailure } from "./error-card.js";
+import { setNotice, showFailure } from "./error-card.js";
 import { EDIT_SVG, RELOAD_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { openMenu } from "./menu.js";
@@ -22,9 +22,8 @@ interface NewTicket {
   projects: JiraProject[];
   types: JiraIssueType[];
   sprints: JiraSprint[];
-  // Jira's refusal of the sprints of the board (a team-managed board with its sprints off), drawn under the select of the sprints; null when they were read.
+  // Jira's refusal of the sprints of the board (a team-managed board with its sprints off), a warning card (A-28); null when they were read.
   sprintNote: string | null;
-  note: HTMLElement;
   typing: boolean;
   projectId: string;
   typeId: string;
@@ -389,18 +388,24 @@ function mainNode(t: JiraTab, issue: JiraIssueDetail) {
   return main;
 }
 
-// Draws the heading, and the body: the ticket, the reason it could not be read, or a row that waits for the first read.
+// The cards of a tab (A-28): the failure of a read, a warning for the sprints of a new ticket. Each is made while the tab holds it, and goes when the tab holds none or is closed.
+const noticeKey = (t: JiraTab) => `orca-jira:tab-${t.id}`;
+const drawFailure = (t: JiraTab) => setNotice(noticeKey(t), t.phase === "failed" && t.error !== null ? { text: t.error, actions: [{ label: "再読み込み", run: () => void read(t) }] } : null);
+
+// Draws the heading, and the body: the ticket, or a row that waits for the first read; the reason it could not be read is a card.
 function draw(t: JiraTab) {
   if (t.fresh !== null) return drawNew(t, t.fresh);
+  setNotice(`${noticeKey(t)}:sprints`, null);
   t.head.replaceChildren(span("orca-edit-path", t.key), t.reload);
   t.reload.disabled = t.phase === "loading" || t.writing || t.editing;
-  if (t.phase === "failed" && t.error !== null) return t.body.replaceChildren(tag("p", "orca-file-note fail", t.error));
+  drawFailure(t);
+  if (t.phase === "failed" && t.error !== null) return t.body.replaceChildren();
   if (t.issue === null) return t.body.replaceChildren(pending());
   t.body.replaceChildren(mainNode(t, t.issue), sideNode(t, t.issue));
   t.body.scrollTop = t.scroll;
 }
 
-// Reads the ticket of the tab. The ticket that was shown stays while the new one is read; a failure drops it and shows its reason, and writes it to the log (A-28), with no card.
+// Reads the ticket of the tab. The ticket that was shown stays while the new one is read; a failure drops it and shows its reason as a card (A-28).
 async function read(t: JiraTab) {
   // A change that is on its way holds the values of the tab; a read after it shows what Jira has by then.
   if (t.writing) return;
@@ -416,7 +421,6 @@ async function read(t: JiraTab) {
     t.error = null;
   } catch (e) {
     if (seq !== t.seq) return;
-    logError("orca-jira", e);
     t.issue = null;
     t.phase = "failed";
     t.error = String(e);
@@ -501,7 +505,6 @@ function newTicket(t: JiraTab): NewTicket {
     types: [],
     sprints: [],
     sprintNote: null,
-    note: tag("p", "orca-file-note fail orca-jira-new-sprint-note"),
     typing: false,
     projectId: "",
     typeId: "",
@@ -525,9 +528,7 @@ function newTicket(t: JiraTab): NewTicket {
   const bar = tag("div", "orca-jira-edit-bar");
   bar.append(submit);
   const picks = tag("div", "orca-jira-new-picks");
-  const sprintField = field("スプリント", f.sprint);
-  sprintField.append(f.note);
-  picks.append(field("プロジェクト", f.project), field("種類", f.kind), sprintField);
+  picks.append(field("プロジェクト", f.project), field("種類", f.kind), field("スプリント", f.sprint));
   form.append(picks, field("件名", summary), field("説明", describe.el), bar);
   // Milkdown is read the first time an editor is made; the button waits for it.
   describe
@@ -548,7 +549,9 @@ function syncNew(t: JiraTab) {
 function drawNew(t: JiraTab, f: NewTicket) {
   t.head.replaceChildren(span("orca-edit-path", jiraTitleOf(t)), t.reload);
   t.reload.disabled = t.phase === "loading" || t.writing;
-  if (t.phase === "failed" && t.error !== null) return t.body.replaceChildren(tag("p", "orca-file-note fail", t.error));
+  drawFailure(t);
+  setNotice(`${noticeKey(t)}:sprints`, f.sprintNote === null ? null : { text: f.sprintNote, warn: true });
+  if (t.phase === "failed" && t.error !== null) return t.body.replaceChildren();
   if (f.projects.length === 0) return t.body.replaceChildren(t.phase === "loading" ? pending() : tag("p", "orca-file-note", "作れるプロジェクトがありません"));
   fillSelect(f.project, f.projects.map((p): [string, string] => [p.id, `${p.name} (${p.key})`]), f.projectId);
   fillSelect(f.kind, f.types.map((x): [string, string] => [x.id, x.name]), f.typeId);
@@ -556,8 +559,6 @@ function drawNew(t: JiraTab, f: NewTicket) {
   f.project.disabled = t.writing || t.phase === "loading";
   f.kind.disabled = t.writing || f.typing;
   f.sprint.disabled = t.writing || f.sprintNote !== null;
-  f.note.hidden = f.sprintNote === null;
-  f.note.textContent = f.sprintNote ?? "";
   f.summary.disabled = t.writing;
   syncNew(t);
   t.body.replaceChildren(f.form);
@@ -578,7 +579,6 @@ async function readTypes(t: JiraTab, f: NewTicket) {
     f.typeId = types.some((x) => x.id === f.typeId) ? f.typeId : (types[0]?.id ?? "");
   } catch (e) {
     if (seq !== t.seq) return;
-    logError("orca-jira", e);
     f.typeId = "";
     t.phase = "failed";
     t.error = String(e);
@@ -605,7 +605,6 @@ async function readOptions(t: JiraTab, f: NewTicket) {
     t.phase = "ready";
   } catch (e) {
     if (seq !== t.seq) return;
-    logError("orca-jira", e);
     f.projects = [];
     t.phase = "failed";
     t.error = String(e);
@@ -675,6 +674,8 @@ export function closeJiraTab(id: string) {
   const t = tabs.get(id);
   if (!t) return;
   t.seq++;
+  setNotice(noticeKey(t), null);
+  setNotice(`${noticeKey(t)}:sprints`, null);
   t.el.remove();
   tabs.delete(id);
 }

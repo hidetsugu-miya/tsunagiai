@@ -1,7 +1,7 @@
 import type { HandoffSummary } from "../../ts/bindings/HandoffSummary";
 import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import { streamList as streamedList } from "../orca-support";
-import { boot, callsOf, claudeReady, claudeSettings, composerLayout, count, fire, formationEntry, formationList, handoffSummary, heightOf, holds, huge, image, inbox, listedChild, mock, note, onceId, orcaOverview, orcaRow, orcaWorktree, PNG, rejects, release, slackLoad, sendStream, slackThread, slackTs, streamList, textsOf, threadMessage, timeline, timelineMessage, todoData, waitForCalls, waitForCount, CARDS } from "../support";
+import { boot, callsOf, claudeReady, claudeSettings, composerLayout, count, fire, formationEntry, formationList, handoffSummary, heightOf, holds, huge, image, inbox, listedChild, mock, note, onceId, orcaOverview, orcaRow, orcaWorktree, PNG, rejects, release, slackLoad, sendStream, slackThread, slackTs, streamList, textsOf, threadMessage, timeline, timelineMessage, todoData, waitForCalls, waitForCard, waitForCount, CARDS, WARN_CARDS } from "../support";
 
 // A finished agent has one stop time that every read of it repeats, as Orca's `updatedAt` does (A-6: a stopped row with a newer time is a new notice).
 const DONE_AT = Date.now() - 18 * 60_000 - 5_000;
@@ -753,7 +753,7 @@ describe("orca handoff", () => {
     await field(SLACK).setValue("原因を調べて");
     await sendButton(SLACK).click();
     await waitForCalls(ask);
-    await expect($(`${SLACK.pane} .ho-form .pending.fail`)).toHaveText("Claude が要約を返しませんでした");
+    await waitForCard("Claude が要約を返しませんでした");
     await expect(field(SLACK)).toHaveValue("原因を調べて");
     expect(await callsOf(create)).toHaveLength(0);
     expect(await callsOf(handoff)).toHaveLength(0);
@@ -861,7 +861,7 @@ describe("orca handoff", () => {
     await write(SLACK, "やって");
     await sendButton(SLACK).click();
     await waitForCalls(create);
-    await expect($(`${SLACK.pane} .ho-form .pending.fail`)).toHaveText("worktree の名前を入力してください");
+    await waitForCard("worktree の名前を入力してください");
     expect(await callsOf(handoff)).toHaveLength(0);
     // Still the form with the card and the instruction, and the button ready to try again.
     expect(await count(`${SLACK.pane} .ho-card`)).toBe(1);
@@ -885,7 +885,7 @@ describe("orca handoff", () => {
     await $(`${SLACK.pane} .ho-name`).setValue("fix");
     await sendButton(SLACK).click();
     await waitForCalls(handoff);
-    await expect($(`${SLACK.pane} .ho-form .pending.fail`)).toHaveText("Orca が指示を受け付けませんでした");
+    await waitForCard("Orca が指示を受け付けませんでした");
     const again = await mock("orca_handoff", started);
     await sendButton(SLACK).click();
     const [call] = (await waitForCalls(again)) as { destination: unknown; summary: string[] }[];
@@ -954,7 +954,7 @@ describe("orca handoff", () => {
     await write(SLACK, "やって");
     await sendButton(SLACK).click();
     await waitForCalls(handoff);
-    await expect($(`${SLACK.pane} .ho-form .pending.fail`)).toHaveText("Orca が指示を受け付けませんでした");
+    await waitForCard("Orca が指示を受け付けませんでした");
     // Still the form: no session, the instruction and the card are there to try again.
     expect(await count(`${SLACK.pane} .ho-card`)).toBe(1);
     await expect(field(SLACK)).toHaveValue("やって");
@@ -962,17 +962,19 @@ describe("orca handoff", () => {
     expect(await callsOf(handoff)).toHaveLength(1);
   });
 
-  it("shows the notice of the Orca screen in the pane when the command is missing or the read failed", async () => {
+  it("shows the notice of the Orca screen on a card when the command is missing (a warning) or the read failed", async () => {
     await openSlack({ orca_overview: orcaOverview([], [], { state: "missing" }) });
     await $(SLACK.button).click();
-    await expect($(`${SLACK.pane} .ho-notice`)).toHaveText(expect.stringContaining("orca コマンドが見つかりません"));
+    await waitForCard("orca コマンドが見つかりません");
+    expect(await count(WARN_CARDS)).toBe(1);
     await write(SLACK, "やって");
     await expect(sendButton(SLACK)).toBeDisabled();
     await mock("orca_overview", orcaOverview([], [], { state: "failed", message: "接続できません" }));
     // Another tab and back: the pane reads the list again.
     await $("#reply-tab-claude").click();
     await $(SLACK.button).click();
-    await browser.waitUntil(async () => (await textsOf(`${SLACK.pane} .ho-notice`))[0]?.includes("読み込めませんでした: 接続できません"), { timeoutMsg: "the failed read was not told" });
+    await waitForCard("読み込めませんでした: 接続できません");
+    expect(await count(WARN_CARDS)).toBe(0);
   });
 
   it("shows the session after the send as a card: its header, its state, the button of the development screen and the close icon, with no terminal and no field", async () => {
@@ -1321,20 +1323,20 @@ describe("orca handoff", () => {
     await browser.waitUntil(async () => (await textsOf(`${SLACK.pane} .ho-destination`))[0] === "このマシン", { timeoutMsg: "the destination was not shown" });
   });
 
-  it("shows the notice of the Orca screen in the pane when the destination cannot be read, and sends nothing to it", async () => {
+  it("shows the notice of the Orca screen on a card when the destination cannot be read, and sends nothing to it", async () => {
     await openSlack({ orca_overview: orcaOverview(sample(), worktrees(), { environments: ["Studio"] }) });
     await mock("orca_destination", orcaOverview([], [], { state: "failed", message: "接続できません", target: "Studio", environments: ["Studio"], known: false }));
     await openPane(SLACK);
     await $(`${SLACK.pane} .ho-destination`).click();
     await $('//div[@role="menu"]//button[normalize-space(.)="Studio"]').click();
-    await browser.waitUntil(async () => (await textsOf(`${SLACK.pane} .ho-notice`))[0]?.includes("読み込めませんでした: 接続できません"), { timeoutMsg: "the failed read was not told" });
+    await waitForCard("読み込めませんでした: 接続できません");
     expect(await textsOf(`${SLACK.pane} .ho-project`)).toEqual(["プロジェクトがありません"]);
     await expect($(`${SLACK.pane} .ho-project`)).toBeDisabled();
     await write(SLACK, "やって");
     await expect(sendButton(SLACK)).toBeDisabled();
   });
 
-  it("puts the instruction of a hand-over that failed at the summary and its message back in its own item when the failure came on another", async () => {
+  it("puts the instruction of a hand-over that failed at the summary back in its own item when the failure came on another, and its message is a card", async () => {
     await openSlack();
     const ask = await mock("claude_summarize_handoff", holds);
     await openPane(SLACK);
@@ -1347,19 +1349,17 @@ describe("orca handoff", () => {
     await listRead(SLACK);
     await expect(field(SLACK)).toBeEnabled();
     await release(ask, rejects("失敗しました"));
-    await browser.pause(300);
-    // The message is not shown on the other thread.
-    expect(await count(`${SLACK.pane} .ho-form .pending.fail:not([hidden])`)).toBe(0);
+    // The message is a card, whichever thread is shown; the other thread's field stays empty.
+    await waitForCard("失敗しました");
     await expect(field(SLACK)).toHaveValue("");
-    // Its own item has the text and the message again.
+    // Its own item has the text again.
     await openThread(1);
     await listRead(SLACK);
     await expect(field(SLACK)).toHaveValue("守る指示");
-    await expect($(`${SLACK.pane} .ho-form .pending.fail`)).toHaveText("失敗しました");
     await expect(field(SLACK)).toBeEnabled();
   });
 
-  it("keeps the message of a hand-over that failed on another item with its own item", async () => {
+  it("puts the instruction of a hand-over that failed on another item back in its own item, and its message is a card", async () => {
     await openSlack();
     await openPane(SLACK);
     await chooseProject(SLACK, "example-app");
@@ -1369,12 +1369,9 @@ describe("orca handoff", () => {
     await waitForCalls(handoff);
     await openThread(0);
     await release(handoff, rejects("失敗しました"));
-    await browser.pause(300);
-    await listRead(SLACK);
-    expect(await count(`${SLACK.pane} .ho-form .pending.fail:not([hidden])`)).toBe(0);
+    await waitForCard("失敗しました");
     await openThread(1);
     await listRead(SLACK);
-    await expect($(`${SLACK.pane} .ho-form .pending.fail`)).toHaveText("失敗しました");
     await expect(field(SLACK)).toHaveValue("守る指示");
     await expect(sendButton(SLACK)).toBeEnabled();
   });
@@ -1511,7 +1508,7 @@ describe("orca handoff: attached files (A-10)", () => {
     await chooseProject(SLACK, "example-app");
     await field(SLACK).setValue("見て");
     await paste(huge);
-    await expect($(`${SLACK.pane} .ho-form .pending.fail`)).toHaveText("ファイルは 20 MiB までです");
+    await waitForCard("ファイルは 20 MiB までです");
     await expect(field(SLACK)).toHaveValue("見て");
     expect(await thumbs()).toBe(0);
     expect(await callsOf(attach)).toEqual([]);
@@ -1611,7 +1608,7 @@ describe("orca handoff: attached files (A-10)", () => {
     await waitForCount(`${SLACK.pane} .attachment`, 1);
     await sendButton(SLACK).click();
     await waitForCalls(attach);
-    await expect($(`${SLACK.pane} .ho-form .pending.fail`)).toHaveText("Orca がエラーを返しました（forbidden）");
+    await waitForCard("Orca がエラーを返しました（forbidden）");
     await expect(field(SLACK)).toHaveValue("見て");
     expect(await thumbs()).toBe(1);
     expect(await callsOf(handoff)).toEqual([]);
@@ -1619,7 +1616,7 @@ describe("orca handoff: attached files (A-10)", () => {
     await mock("orca_attach_file", attached("example-app"));
     await mock("orca_handoff", rejects("Orca が指示を受け付けませんでした"));
     await sendButton(SLACK).click();
-    await expect($(`${SLACK.pane} .ho-form .pending.fail`)).toHaveText("Orca が指示を受け付けませんでした");
+    await waitForCard("Orca が指示を受け付けませんでした");
     expect(await callsOf("orca_attach_file")).toHaveLength(1);
     const again = await mock("orca_handoff", started);
     await sendButton(SLACK).click();

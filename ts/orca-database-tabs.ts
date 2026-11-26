@@ -1,6 +1,6 @@
 // The database tabs of the work pane of the Orca screen (A-43): a table of the tree of the database part opens as a tab with the tabs of D-4 to D-6 (records, structure, SQL), and the menu of a database opens the SQL of that database as a tab of its own. Drawing is `drawTableTab` of database-work.ts, which the database screen's work pane shares; this module holds what each tab shows and reads it (`database_records`, `database_structure`, `database_sql`), as the database screen does for its tabs (D-4 to D-6).
 // The tabs are kept in memory only, by target and project, as the tabs of the files are (their ids are `database:{n}`). A tab that is not shown keeps its box and what it read; a read that ends after its tab was closed is dropped. Nothing is read by the clock.
-import { csvFailed, drawTableTab, focusSqlField, lastResultTab, type RecordsState, type SqlState, type StructureState, type TabActions, writeCsv } from "./database-work.js";
+import { csvFailed, drawTableTab, dropBodyError, focusSqlField, lastResultTab, type RecordsState, type SqlState, type StructureState, type TabActions, writeCsv } from "./database-work.js";
 import { tag } from "./dom.js";
 import { invoke } from "./ipc.js";
 
@@ -214,6 +214,7 @@ export const databaseTabsOf = (target: string | null, project: string) => [...ta
 export function closeDatabaseTab(id: string) {
   const t = tabs.get(id);
   if (!t) return;
+  dropBodyError(t.el);
   t.el.remove();
   tabs.delete(id);
 }

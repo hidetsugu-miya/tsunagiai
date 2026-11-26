@@ -14,6 +14,7 @@ import type { PageVerdict } from "./bindings/PageVerdict";
 import type { Sample } from "./bindings/Sample";
 import type { SettledDecision } from "./bindings/SettledDecision";
 import { tag } from "./dom.js";
+import { showFailure } from "./error-card.js";
 import { drawBars } from "./formation-page-bars.js";
 import { drawBlocks, drawEvidence, drawFactContent, drawImage, drawTable, evidenceButton, fold, termed, useImages, useTerms } from "./formation-page-blocks.js";
 import { createDrawer, foldButton, foldOpener, linkRefs, ownedBy, registerFold, useDrawer } from "./formation-page-drawer.js";
@@ -237,12 +238,9 @@ function verdictBox(root: HTMLElement, page: DecisionPage): Verdict {
   };
 }
 
-// 「リーダーに送る」 and the reason a send failed, in the bottom bar. The button waits while the send is on its way, so that a second press sends nothing, and while a page that asks for a verdict has none chosen; after a send that went through the page is closed by its owner (and what was kept in the browser is forgotten, `sent`), and after one that failed the answers stay and the button can be pressed again.
+// 「リーダーに送る」 in the bottom bar; the reason a send failed is a failure card (A-28). The button waits while the send is on its way, so that a second press sends nothing, and while a page that asks for a verdict has none chosen; after a send that went through the page is closed by its owner (and what was kept in the browser is forgotten, `sent`), and after one that failed the answers stay and the button can be pressed again.
 function sender(root: HTMLElement, send: Send, verdict: Verdict | null, sent: () => void): HTMLElement {
   const row = tag("div", "fp-send");
-  const error = tag("p", "fp-error pending fail");
-  error.setAttribute("role", "alert");
-  error.hidden = true;
   const button = tag("button", "text-btn primary fp-send-btn", "リーダーに送る");
   button.type = "button";
   let busy = false;
@@ -256,20 +254,18 @@ function sender(root: HTMLElement, send: Send, verdict: Verdict | null, sent: ()
     busy = true;
     sync();
     button.setAttribute("aria-busy", "true");
-    error.hidden = true;
     try {
       const chosen = verdict?.read() ?? { verdict: null, revision: "" };
       await send(answersOf(root), chosen.verdict, chosen.revision);
       sent();
     } catch (e) {
-      error.textContent = String(e);
-      error.hidden = false;
+      showFailure("formation-page", e);
       busy = false;
       sync();
       button.removeAttribute("aria-busy");
     }
   };
-  row.append(error, button);
+  row.append(button);
   return row;
 }
 

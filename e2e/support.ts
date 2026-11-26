@@ -201,6 +201,12 @@ export const waitForText = (selector: string, text: string) =>
 export const CARD = "#error-cards .error-card-text";
 export const CARDS = "#error-cards .error-card";
 
+// Waits until a card holds `text` (its whole text, or a part of it), and returns when it does. The cards that go on (`setNotice`) are drawn by the read of the screen, so a spec waits for them.
+export const waitForCard = (text: string) => waitForText(CARD, text);
+
+// The cards with the orange line at the left (a warning, as the login to do again is), which the others lack.
+export const WARN_CARDS = `${CARDS}.warn-card`;
+
 // What the app wrote to its log (the arguments of `log_write`: `{ level, source, message }`), in the order written. A failure of a sync or a read is only here; a failure of something the user did is a card and a line here.
 export const logged = async () => (await callsOf("log_write")) as { level: string; source: string; message: string }[];
 

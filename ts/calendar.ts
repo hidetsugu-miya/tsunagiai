@@ -15,7 +15,7 @@ import { $, el } from "./dom.js";
 import { addDays, avatarColor, hhmm, isoDate, pad2, WEEKDAYS } from "./format.js";
 import { invoke } from "./ipc.js";
 import { currentScreen, setScreen } from "./nav.js";
-import { logError, setRelogin } from "./error-card.js";
+import { logError, setNotice, setRelogin } from "./error-card.js";
 import { onScreenChanged } from "./screen-bridge.js";
 import { show } from "./view.js";
 
@@ -169,6 +169,23 @@ function drawNow() {
   $("cal-body").firstElementChild!.append(label);
 }
 
+// The keys of the cards that the shown week has now.
+let weekNotices = new Set<string>();
+
+// The cards of the shown week's failures (A-28): one for each account whose events could not be read, and one for each message about the list of calendars.
+// They belong to the screen: they are taken off, with their ×, while it is not shown, and made again when it is.
+function drawWeekNotices() {
+  const texts = new Map<string, string>();
+  const week = $("calendar").hidden ? null : calShown;
+  if (week) {
+    for (const [a, message] of Object.entries(week.failed)) texts.set(`calendar:failed:${a}`, `${a} の予定の読み込みに失敗しました: ${message}`);
+    for (const [i, message] of week.calendarFailed.entries()) texts.set(`calendar:list:${i}`, message);
+  }
+  for (const key of weekNotices) if (!texts.has(key)) setNotice(key, null);
+  for (const [key, text] of texts) setNotice(key, { text });
+  weekNotices = new Set(texts.keys());
+}
+
 function renderWeek(w: Week) {
   calShown = w;
   startEvents();
@@ -216,30 +233,11 @@ function renderWeek(w: Week) {
     }),
   );
   drawNow();
-  $("cal-notice").replaceChildren(
-    ...w.needsLogin.map((a) => {
-      const div = document.createElement("div");
-      const button = document.createElement("button");
-      button.textContent = "再ログイン";
-      button.onclick = () => addAccount(a, button);
-      div.append(`${a} はカレンダーを読むため再ログインが必要です`, button);
-      return div;
-    }),
-    ...Object.entries(w.failed).map(([a, message]) => {
-      const div = document.createElement("div");
-      div.textContent = `${a} の予定の読み込みに失敗しました: ${message}`;
-      return div;
-    }),
-    ...w.calendarFailed.map((message) => {
-      const div = document.createElement("div");
-      div.textContent = message;
-      return div;
-    }),
-  );
-  // An account that must log in again is also told by a card, once, until it has logged in.
+  // An account that must log in again is told by a card, once, until it has logged in.
   setRelogin("calendar", w.needsLogin, (a) => `${a} はカレンダーを読むため再ログインが必要です`, addAccount);
   // A detail open on an event of the old draw follows it into this one.
   endEvents();
+  drawWeekNotices();
   // The same for a form of C-5 that is open, and for the candidates of free time (C-6).
   redrawDraft(w.weekStart);
   drawSlots(w.weekStart);
@@ -375,6 +373,7 @@ const moveWeek = (date: string) => {
 };
 
 export function initCalendar() {
+  new MutationObserver(drawWeekNotices).observe($("calendar"), { attributes: true, attributeFilter: ["hidden"] });
   initCalendarSide(choiceChanged);
   initCalendarMonth(moveWeek);
   initCalendarClaude();

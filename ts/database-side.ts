@@ -1,7 +1,9 @@
 // The tree of the connections (D-1, D-3), which the side menu of the database screen (database.ts) and the database part of the file pane of the Orca screen (A-43, orca-database.ts) draw into a box each: the connections by name, each with a menu that a right press opens (edit, disconnect, delete), and under an open connection its databases, each with a menu of its own (new query, close the database), and under an open database its tables. An item of a menu whose action the screen does not give is not in the menu, and a menu with no item does not open.
 // Drawing only: what is held and what each press does belong to the screen. A box is drawn again only when what it shows changes, and the focus stays.
+// The error of a connection or of a database is not drawn in the tree: it is a card (A-28, `setNotice`), one for each, which goes when the error is gone from the state or the row is closed. A card closed with its × stays closed until then, and the next press of the row reads again.
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import { tag } from "./dom.js";
+import { setNotice } from "./error-card.js";
 import { CHEVRON_SVG, CLOSE_SVG, CODE_SVG, DATABASE_SVG, DELETE_SVG, EDIT_SVG } from "./icons.js";
 import { openMenu } from "./menu.js";
 
@@ -48,8 +50,6 @@ export interface SideActions {
   closeDatabase: (profile: DatabaseProfileView, database: string) => void;
   edit?: (profile: DatabaseProfileView) => void;
   disconnect: (profile: DatabaseProfileView) => void;
-  // Takes the error under the row away (the database's, or the connection's when `database` is null) and closes the row, so that the next press reads again. It calls nothing and leaves the connection as it is.
-  clearError: (profile: DatabaseProfileView, database: string | null) => void;
   // `anchor` is the name of the row, which the confirmation opens under.
   remove?: (profile: DatabaseProfileView, anchor: Element) => void;
 }
@@ -83,19 +83,11 @@ function dotNode(node: ConnectionNode) {
   return dot;
 }
 
-// A failure that gives `clear` has the button at its right end that takes the text away.
-function note(text: string, depth: number, failed: boolean, clear?: () => void) {
-  const line = tag("p", `database-note${failed ? " danger" : ""}${clear ? " clearable" : ""}`, clear ? "" : text);
+// A line under a row that says what is going on (the load, the last line of a script).
+function note(text: string, depth: number) {
+  const line = tag("p", "database-note", text);
   line.style.setProperty("--depth", String(depth));
-  line.setAttribute("role", failed ? "alert" : "status");
-  if (clear) {
-    const button = tag("button", "icon-btn database-note-clear");
-    button.type = "button";
-    button.innerHTML = CLOSE_SVG;
-    button.setAttribute("aria-label", "エラーを消す");
-    button.onclick = clear;
-    line.append(tag("span", "database-note-text", text), button);
-  }
+  line.setAttribute("role", "status");
   return line;
 }
 
@@ -120,8 +112,7 @@ function databaseNodes(node: ConnectionNode, selected: Selected | null, actions:
     };
     const out: Node[] = [button];
     if (db.expanded) {
-      if (db.loading) out.push(note("読み込み中…", 2, false));
-      if (db.error !== null) out.push(note(db.error, 2, true, () => actions.clearError(node.profile, db.name)));
+      if (db.loading) out.push(note("読み込み中…", 2));
       for (const table of db.tables) out.push(row(`${id}/d/${db.name}/t/${table}`, 2, here && selected?.table === table, null, null, table, () => actions.pressTable(node.profile, db.name, table)));
     }
     return out;
@@ -149,11 +140,10 @@ function itemNode(node: ConnectionNode, selected: Selected | null, actions: Side
   if (node.expanded) {
     const children = tag("div", "database-children");
     if (node.loading) {
-      const line = note(node.output ?? (node.connected ? "読み込み中…" : "接続中…"), 1, false);
+      const line = note(node.output ?? (node.connected ? "読み込み中…" : "接続中…"), 1);
       line.dataset.scriptNote = "";
       children.append(line);
     }
-    if (node.error !== null) children.append(note(node.error, 1, true, () => actions.clearError(node.profile, null)));
     children.append(...databaseNodes(node, selected, actions));
     item.append(children);
   }
@@ -168,10 +158,28 @@ export function showScriptOutput(box: HTMLElement, id: string, line: string): bo
   return true;
 }
 
+// The keys of the errors that each box has a card for, "{connection id}" and "{connection id}/{database}".
+const cards = new WeakMap<HTMLElement, Set<string>>();
+
+// Makes the card of each error that a row shows (the rows of a closed tree show none) and takes off the card of one that is gone. The key holds the box, because the database screen and the Orca file pane each have a tree.
+function drawErrors(box: HTMLElement, state: SideState) {
+  const errors = new Map<string, string>();
+  for (const c of state.connections) {
+    if (!c.expanded) continue;
+    if (c.error !== null) errors.set(c.profile.id, c.error);
+    for (const d of c.databases) if (d.expanded && d.error !== null) errors.set(`${c.profile.id}/${d.name}`, d.error);
+  }
+  const noticeKey = (key: string) => `database-side:${box.id}/${key}`;
+  for (const key of cards.get(box) ?? []) if (!errors.has(key)) setNotice(noticeKey(key), null);
+  for (const [key, text] of errors) setNotice(noticeKey(key), { text });
+  cards.set(box, new Set(errors.keys()));
+}
+
 export function drawDatabaseSide(box: HTMLElement, state: SideState, actions: SideActions) {
   const key = JSON.stringify(state);
   if (key === drawn.get(box)) return;
   drawn.set(box, key);
+  drawErrors(box, state);
   const top = box.scrollTop;
   const focused = (document.activeElement as HTMLElement | null)?.dataset?.key;
   box.replaceChildren(...state.connections.map((c) => itemNode(c, state.selected, actions)));

@@ -718,14 +718,6 @@ const treeActions: SideActions = {
     if (selected?.id === profile.id && selected.database === database) selected = { id: profile.id, database: null, table: null };
     draw();
   },
-  clearError: (profile, database) => {
-    const c = connections.get(profile.id);
-    const d = database === null ? c : c?.byName.get(database);
-    if (!d) return;
-    d.error = null;
-    d.expanded = false;
-    draw();
-  },
   edit: (profile) => openDatabaseForm(profile, saveAsking, test),
   disconnect: async (profile) => {
     connections.delete(profile.id);

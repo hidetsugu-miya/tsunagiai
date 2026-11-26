@@ -4,7 +4,7 @@ import type { OrcaSaved } from "../../ts/bindings/OrcaSaved";
 import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import type { PaneLayout } from "../../ts/bindings/PaneLayout";
 import type { PaneNode } from "../../ts/bindings/PaneNode";
-import { askScreen, boot, callsOf, claudeReady, chooseAppearance, chooseOption, chooseTheme, copiedTexts, count, fire, fontSettings, ghosttyImport, holds, huge, image, inbox, isoDate, logged, mock, note, onceId, orcaRow, orcaTerminal, orcaWorktree, PNG, popoutTab, rejects, release, sendPopout, sendStream, sendTerm, setClock, slackLoad, setDark, stubClipboard, terminalThemes, textsOf, timers, todoData, waitForCalls, waitForCount, CARD, CARDS } from "../support";
+import { askScreen, boot, callsOf, claudeReady, chooseAppearance, chooseOption, chooseTheme, copiedTexts, count, fire, fontSettings, ghosttyImport, holds, huge, image, inbox, isoDate, logged, mock, note, onceId, orcaRow, orcaTerminal, orcaWorktree, PNG, popoutTab, rejects, release, sendPopout, sendStream, sendTerm, setClock, slackLoad, setDark, stubClipboard, terminalThemes, textsOf, timers, todoData, waitForCalls, waitForCard, waitForCount, WARN_CARDS, CARD, CARDS } from "../support";
 import { beside, claudeTab, CONTENT, filesToggle, onThisMachine, openOrca, orcaOverview, pickItem, project, sample, selectedTab, showAgain, streamList, studio, tabOf, tabTitles, typeIn, waitForText, worktrees } from "../orca-support";
 
 // example-app with a second worktree, so that the plus asks which one (A-16); example-api keeps its one.
@@ -166,11 +166,11 @@ describe("orca", () => {
     expect(await absent()).toEqual({ gone: [], last: "orca-stopped" });
     await mock("orca_overview", orcaOverview([], [], { state: "failed", message: "Orca is not running", ...studio }));
     await showAgain();
-    await expect($("#orca-notice")).toHaveText("Studio を読み込めませんでした: Orca is not running");
+    await expect($(CARD)).toHaveText("Studio を読み込めませんでした: Orca is not running");
     expect(await absent()).toEqual({ gone: [], last: "orca-stopped" });
     await mock("orca_overview", orcaOverview([], [], { state: "missing" }));
     await showAgain();
-    await expect($("#orca-notice")).toHaveText(expect.stringContaining("orca コマンドが見つかりません"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("orca コマンドが見つかりません"));
     expect(await absent()).toEqual({ gone: [], last: "orca-stopped" });
   });
 
@@ -215,7 +215,7 @@ describe("orca", () => {
     expect(await marked()).toBe(true);
     await mock("orca_overview", orcaOverview([], [], { state: "failed", message: "Orca is not running", environments: [] }));
     await showAgain();
-    await expect($("#orca-notice")).toHaveText("読み込めませんでした: Orca is not running");
+    await expect($(CARD)).toHaveText("読み込めませんでした: Orca is not running");
     expect(await marked()).toBe(false);
     await expect($("#nav-orca")).toHaveAttribute("aria-label", "開発");
     await mock("orca_overview", orcaOverview([working("example-app")], worktrees()));
@@ -223,7 +223,7 @@ describe("orca", () => {
     await browser.waitUntil(marked, { timeoutMsg: "the mark never came back" });
     await mock("orca_overview", orcaOverview([], [], { state: "missing" }));
     await showAgain();
-    await expect($("#orca-notice")).toHaveText(expect.stringContaining("orca コマンドが見つかりません"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("orca コマンドが見つかりません"));
     expect(await marked()).toBe(false);
     await expect($("#nav-orca")).toHaveAttribute("aria-label", "開発");
   });
@@ -374,11 +374,11 @@ describe("orca", () => {
     await expectCount(1);
     await mock("orca_overview", orcaOverview([], [], { state: "failed", message: "Orca is not running", environments: [] }));
     await showAgain();
-    await expect($("#orca-notice")).toHaveText("読み込めませんでした: Orca is not running");
+    await expect($(CARD)).toHaveText("読み込めませんでした: Orca is not running");
     await expectCount(1);
     await mock("orca_overview", orcaOverview([], [], { state: "missing" }));
     await showAgain();
-    await expect($("#orca-notice")).toHaveText(expect.stringContaining("orca コマンドが見つかりません"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("orca コマンドが見つかりません"));
     await expectCount(0);
   });
 
@@ -696,14 +696,14 @@ describe("orca", () => {
     expect(await waitForCalls(launch)).toEqual([{ path: "/work/example-app", agent: "antigravity", environment: null }]);
   });
 
-  it("says in one line that the AI CLIs could not be read, with the reason on a card, and keeps the two icons and no row of an AI CLI", async () => {
+  it("says on a card only that the AI CLIs could not be read, and keeps the two icons, with no row of an AI CLI and no line in the menu", async () => {
     await openOrca(orcaOverview(sample(), worktrees()), { orca_agents_installed: rejects("orca agent installed: 読めません") });
     await expect($(CARD)).toHaveText("orca agent installed: 読めません");
     await pickProject("example-api");
     await pressPlus();
     expect(await menuItems()).toEqual([TERMINAL, SCRATCHPAD]);
-    await expect($(".menu .menu-empty")).toHaveText("AI CLI を読み込めませんでした");
-    expect(await count('.menu[role="menu"] > .menu-icons + [role="separator"] + .menu-empty')).toBe(1);
+    expect(await count(".menu .menu-empty")).toBe(0);
+    expect(await count(".menu .menu-icons")).toBe(1);
     // The icons work as always.
     const create = await mock("orca_terminal_create", noPane);
     await pickItem(TERMINAL);
@@ -1069,7 +1069,7 @@ describe("orca", () => {
     // The base answer is the one with no orca command.
     await boot({ inbox: inbox(), ...timers({ orcaClock: 1000 }) });
     await $("#nav-orca").click();
-    await expect($("#orca-notice")).toHaveText(expect.stringContaining("orca コマンドが見つかりません"));
+    await expect($(CARD)).toHaveText(expect.stringContaining("orca コマンドが見つかりません"));
     await expect($(".orca-plus")).toBeDisabled();
     // The start and showing the screen read; the clock (every 10 seconds on this screen, 1 second here) reads no more.
     const before = (await callsOf("orca_overview")).length;
@@ -1085,8 +1085,43 @@ describe("orca", () => {
     expect(await count("#orca-feed .orca-project")).toBe(4);
     await mock("orca_overview", orcaOverview([], [], { state: "failed", message: "Orca is not running", environments: [] }));
     await showAgain();
-    await expect($("#orca-notice")).toHaveText("読み込めませんでした: Orca is not running");
+    await expect($(CARD)).toHaveText("読み込めませんでした: Orca is not running");
     expect(await count("#orca-feed .orca-project")).toBe(4);
+  });
+
+  it("draws the failed read as one card of the failure color with the way to the log, writes it once while the screen stays, and does not draw it again after its close button", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()), timers({ orcaClock: 1000 }));
+    const text = "読み込めませんでした: Orca is not running";
+    const failed = () => mock("orca_overview", orcaOverview([], [], { state: "failed", message: "Orca is not running", environments: [] }));
+    await failed();
+    await showAgain();
+    await expect($(CARD)).toHaveText(text);
+    expect(await count(CARDS)).toBe(1);
+    expect(await count(WARN_CARDS)).toBe(0);
+    await expect($(`${CARDS} .error-card-log`)).toHaveText("ログを見る");
+    // The clock reads again and fails with the same text: one card, one line of the log.
+    const again = await failed();
+    await waitForCalls(again);
+    expect(await count(CARDS)).toBe(1);
+    expect((await logged()).filter((l) => l.message === text)).toEqual([{ level: "error", source: "orca", message: text }]);
+    // A card that was closed is not drawn again by the next failed read.
+    await $(`${CARDS} .error-card-close`).click();
+    const closed = await failed();
+    await waitForCalls(closed);
+    await browser.pause(1300);
+    expect(await count(CARDS)).toBe(0);
+  });
+
+  it("draws the missing command as a card of the warning color, once for both places, and takes it off with the screen", async () => {
+    await boot({ inbox: inbox() });
+    await $("#nav-orca").click();
+    await waitForCard("orca コマンドが見つかりません");
+    expect(await count(CARDS)).toBe(1);
+    expect(await count(WARN_CARDS)).toBe(1);
+    expect(await browser.execute(() => getComputedStyle(document.querySelector("#error-cards .error-card")!).borderLeftColor)).toBe("rgb(224, 122, 31)");
+    expect((await logged()).filter((l) => l.message.includes("orca コマンドが見つかりません"))).toHaveLength(1);
+    await $("#nav-mail").click();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("draws the terminal with the WebGL renderer without an error, and goes back to the DOM renderer when the context is lost", async () => {
@@ -1163,13 +1198,13 @@ describe("orca", () => {
     await openOrca(orcaOverview(sample(), worktrees(), studio));
     await mock("orca_overview", orcaOverview([], [], { state: "failed", message: "Orca is busy", known: false }));
     await showAgain();
-    await expect($("#orca-notice")).toHaveText("Studio を読み込めませんでした: Orca is busy");
+    await expect($(CARD)).toHaveText("Studio を読み込めませんでした: Orca is busy");
     expect(await count("#orca-feed .orca-project")).toBe(4);
   });
 
   it("does not pick another target for a saved one that is gone", async () => {
     await openOrca(orcaOverview([], [], { state: "failed", message: "保存した接続先が見つかりません", target: "Gone", environments: ["Studio"] }));
-    await expect($("#orca-notice")).toHaveText("Gone を読み込めませんでした: 保存した接続先が見つかりません");
+    await expect($(CARD)).toHaveText("Gone を読み込めませんでした: 保存した接続先が見つかりません");
     // A target that is not listed is not streamed.
     expect(await callsOf("orca_stream_open")).toEqual([]);
   });
@@ -2388,10 +2423,10 @@ describe("orca: a saved environment's stream", () => {
   it("says a lost connection, keeps the rows, and is live again with the next list", async () => {
     await openStudio();
     await sendStream({ kind: "status", live: false, message: "Studio is unreachable" });
-    await expect($("#orca-notice")).toHaveText("Studio を読み込めませんでした: Studio is unreachable");
+    await expect($(CARD)).toHaveText("Studio を読み込めませんでした: Studio is unreachable");
     expect(await count("#orca-feed .orca-project")).toBe(4);
     await sendStream(streamList(sample(), worktrees()));
-    await browser.waitUntil(async () => (await textsOf("#orca-notice")).join() === "", { timeoutMsg: "the notice never went" });
+    await waitForCount(CARDS, 0);
   });
 
   it("streams the terminal of the selected tab at the pane's size, draws what it sends, and sends the keys typed", async () => {
@@ -2818,7 +2853,7 @@ describe("orca: this machine's stream once it is paired (A-12)", () => {
     await browser.pause(700);
     expect(await callsOf("orca_terminal_read")).toEqual([]);
     await expect($(CARD)).not.toExist();
-    await expect($("#orca-notice")).toHaveText("");
+    await expect($(CARDS)).not.toExist();
     expect(await callsOf("orca_stream_open")).toHaveLength(1);
   });
 
@@ -2832,7 +2867,7 @@ describe("orca: this machine's stream once it is paired (A-12)", () => {
     await waitForCalls(overview);
     await waitForCalls(read);
     await browser.waitUntil(async () => (await $(".orca-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("/work/example-app"), { timeoutMsg: "the mirror never showed" });
-    await expect($("#orca-notice")).toHaveText("");
+    await expect($(CARDS)).not.toExist();
     expect(await count("#orca-feed .orca-project")).toBe(4);
     await sendStream(streamList(sample(), worktrees(), [], null));
     await waitForCalls("orca_stream_terminal", 2);
@@ -2843,7 +2878,7 @@ describe("orca: this machine's stream once it is paired (A-12)", () => {
     await waitForCalls("orca_stream_open");
     const overview = await mock("orca_overview", orcaOverview(sample(), worktrees()));
     await waitForCalls(overview);
-    await expect($("#orca-notice")).toHaveText("");
+    await expect($(CARDS)).not.toExist();
     await project("example-app").click();
     const read = await mock("orca_terminal_read", ["$ ls"]);
     await waitForCalls(read);
@@ -5082,8 +5117,8 @@ describe("orca: this machine and a saved environment in one list (A-33)", () => 
       await waitForCalls(destination);
       await browser.pause(300);
       expect((await chips()).map(([name]) => name)).toEqual(["studio-1", "mac-1", "studio-2", "mac-2"]);
-      expect(await textsOf("#orca-notice > div")).toEqual(["このマシン を読み込めませんでした: Orca is busy"]);
-      expect(await count("#orca-notice > .pending.fail")).toBe(1);
+      expect(await textsOf(CARD)).toEqual(["このマシン を読み込めませんでした: Orca is busy"]);
+      expect(await count(CARDS)).toBe(1);
       // The target's list goes on: a list of the stream replaces Studio's rows and leaves this machine's.
       await sendStream(streamList([finished("studio-1")], [orcaWorktree("studio-1", "main")]));
       await waitForCount("#orca-feed .orca-project", 3);
@@ -5094,7 +5129,7 @@ describe("orca: this machine and a saved environment in one list (A-33)", () => 
       await openOrca(mixed());
       await waitForCalls("orca_stream_open");
       await sendStream({ kind: "status", live: false, message: "Studio is unreachable" });
-      await expect($("#orca-notice")).toHaveText("Studio を読み込めませんでした: Studio is unreachable");
+      await expect($(CARD)).toHaveText("Studio を読み込めませんでした: Studio is unreachable");
       expect(await count("#orca-feed .orca-project")).toBe(4);
       expect((await chips()).filter(([, chip]) => chip === "Studio")).toHaveLength(2);
     });
@@ -5107,7 +5142,7 @@ describe("orca: this machine and a saved environment in one list (A-33)", () => 
       ["mac-1", null],
       ["mac-2", null],
     ]);
-    await expect($("#orca-notice")).toHaveText("Studio を読み込めませんでした: Studio is unreachable");
+    await expect($(CARD)).toHaveText("Studio を読み込めませんでした: Studio is unreachable");
   });
 
   it("shows Studio's projects alone when the first read of this machine fails", async () => {
@@ -5117,34 +5152,38 @@ describe("orca: this machine and a saved environment in one list (A-33)", () => 
       ["studio-1", "Studio"],
       ["studio-2", "Studio"],
     ]);
-    expect(await textsOf("#orca-notice > div")).toEqual(["このマシン を読み込めませんでした: Orca is busy"]);
+    expect(await textsOf(CARD)).toEqual(["このマシン を読み込めませんでした: Orca is busy"]);
   });
 
-  it("says both reads in two lines, this machine's first, and keeps the rows that were read", async () => {
+  it("says both reads on two cards, the newest on top, and keeps the rows that were read", async () => {
     await openOrca(mixed({ local: { ...beside([], []), state: "failed", message: "Orca is busy" } }));
     await waitForCalls("orca_stream_open");
     await sendStream({ kind: "status", live: false, message: "Studio is unreachable" });
-    await browser.waitUntil(async () => (await textsOf("#orca-notice > div")).length === 2, { timeoutMsg: "the second line never came" });
-    expect(await textsOf("#orca-notice > div")).toEqual(["このマシン を読み込めませんでした: Orca is busy", "Studio を読み込めませんでした: Studio is unreachable"]);
-    expect(await count("#orca-notice > .pending.fail")).toBe(2);
+    await waitForCount(CARDS, 2);
+    expect(await textsOf(CARD)).toEqual(["Studio を読み込めませんでした: Studio is unreachable", "このマシン を読み込めませんでした: Orca is busy"]);
+    expect(await count(`${CARDS}.warn-card`)).toBe(0);
+    // Another text for the same place rewrites its card in place.
+    await sendStream({ kind: "status", live: false, message: "Studio is gone" });
+    await browser.waitUntil(async () => (await textsOf(CARD))[0] === "Studio を読み込めませんでした: Studio is gone", { timeoutMsg: "the card never changed its text" });
+    expect(await count(CARDS)).toBe(2);
     expect(await count("#orca-feed .orca-project")).toBe(2);
   });
 
-  it("drops the line of a place when it is read well again, and leaves the other's", async () => {
+  it("takes the card of a place off when it is read well again, and leaves the other's", async () => {
     await openOrca(mixed({ local: { ...beside([], []), state: "failed", message: "Orca is busy" } }), timers({ orcaClock: 1000 }));
     await waitForCalls("orca_stream_open");
     // The clock reads this machine, and its read keeps failing until the mock below.
     await mock("orca_destination", failedRead("Orca is busy"));
     await sendStream({ kind: "status", live: false, message: "Studio is unreachable" });
-    await browser.waitUntil(async () => (await textsOf("#orca-notice > div")).length === 2, { timeoutMsg: "the second line never came" });
+    await waitForCount(CARDS, 2);
     // This machine is read by the clock: the line of Studio stays.
     await mock("orca_destination", orcaOverview(macRows(), macTrees(), { known: false }));
-    await browser.waitUntil(async () => (await textsOf("#orca-notice > div")).length === 1, { timeoutMsg: "the line of this machine never went" });
-    expect(await textsOf("#orca-notice > div")).toEqual(["Studio を読み込めませんでした: Studio is unreachable"]);
+    await waitForCount(CARDS, 1);
+    expect(await textsOf(CARD)).toEqual(["Studio を読み込めませんでした: Studio is unreachable"]);
     await waitForCount("#orca-feed .orca-project", 4);
     // A list of the stream is Studio's read well: no line is left.
     await sendStream(streamList(studioRows(), studioTrees()));
-    await browser.waitUntil(async () => (await textsOf("#orca-notice > div")).length === 0, { timeoutMsg: "the line of Studio never went" });
+    await waitForCount(CARDS, 0);
   });
 
   // A-12, A-33: this machine's Orca is paired, so it has a stream of its own beside the target's.
@@ -5220,7 +5259,7 @@ describe("orca: this machine and a saved environment in one list (A-33)", () => 
       expect(await waitForCalls(read)).toMatchObject([{ handle: "term_mac-1" }]);
       expect(await lost()).toEqual(["このマシンの Orca のストリームが落ちました: 接続先につながっていません"]);
       // No notice and no card: the stream of this machine is no failure of the list, and Studio's list is not read by the clock.
-      await expect($("#orca-notice")).toHaveText("");
+      await expect($(CARDS)).not.toExist();
       expect(await callsOf(overview)).toEqual([]);
       expect(await callsOf("orca_stream_close")).toEqual([]);
       await sendStream(streamList(macRows(), macTrees(), [], null), await streamOf(null));
@@ -5500,7 +5539,9 @@ describe("orca: add a project (A-38)", () => {
     await openDialog();
     await filter().setValue("/nowhere");
     await browser.keys("Enter");
-    await expect($(".orca-browse-note")).toHaveText("Orca のフォルダの一覧を読めません");
+    await waitForCard("Orca のフォルダの一覧を読めません");
+    expect(await count(CARDS)).toBe(1);
+    expect(await count(".orca-browse-note")).toBe(0);
     expect((await callsOf(BROWSE)).at(-1)).toEqual({ environment: "Studio", path: "/nowhere" });
     // The folder shown stays in the trail, so the way back is there; nothing can be added until a folder is read.
     expect(await trail()).toEqual(["/", "home", "dev"]);
@@ -5510,7 +5551,7 @@ describe("orca: add a project (A-38)", () => {
     await expect($('.orca-browse [aria-label="上のフォルダ"]')).toBeEnabled();
     await crumbOf("home").click();
     await waitForRows(["dev"]);
-    expect(await count(".orca-browse-note")).toBe(0);
+    await expect($(CARDS)).not.toExist();
     await expect(pickFolder()).toBeEnabled();
     expect(await pathText()).toBe("/home");
   });
@@ -5522,7 +5563,8 @@ describe("orca: add a project (A-38)", () => {
     await choosePlace("Studio");
     await pick().click();
     await expect(dialog()).toBeDisplayed();
-    await expect($(".orca-browse-note")).toHaveText("Orca のフォルダの一覧を読めません");
+    await waitForCard("Orca のフォルダの一覧を読めません");
+    expect(await count(".orca-browse-note")).toBe(0);
     expect(await count(".orca-browse-row")).toBe(0);
     expect(await trail()).toEqual([]);
     expect(await pathText()).toBe("");

@@ -18,7 +18,7 @@ import { confirmDelete } from "./hint.js";
 import { CLAUDE_SVG, CLOSE_SVG, DELETE_SVG, EDIT_SVG, MORE_SVG, RELOAD_SVG, SERVER_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { openMenu } from "./menu.js";
-import { logError, showFailure } from "./error-card.js";
+import { logError, setNotice, showFailure } from "./error-card.js";
 
 // A worktree of a project, where it is (null: this machine).
 export interface LspPlace {
@@ -61,6 +61,8 @@ interface Read {
 // The worktree the pane shows (null: none, and the part is hidden), what was read for it, and what is on its way.
 let pane: LspPlace | null = null;
 let loaded = false;
+// Whether the part is shown (the pane shows the language server and a worktree): its messages are cards only while it is.
+let shown = false;
 let settings: LspRepoSettings | null = null;
 // How a language is drawn (read once): the title and the icon.
 let looks: Map<string, LspLanguageLook> | null = null;
@@ -114,18 +116,25 @@ function messageOf(language: string): string | null {
   return launches.get(language)?.error ?? null;
 }
 
-// The line of each card, and the line under the heading for a message that no card holds (a read of the settings that failed, a press of the heading).
+// The cards of the messages (A-28): one for each language card, "orca-lsp:{language}", and "orca-lsp:heading" for a message that no card holds (a read of the settings that failed, a press of the heading). They are made while the part is shown and taken off when it is not.
+const NOTICE_HEADING = "orca-lsp:heading";
+// The keys of the cards drawn now.
+let noticed = new Set<string>();
+
 function drawNote() {
-  const roots = [...$("orca-lsp-cards").querySelectorAll<HTMLElement>(".orca-lsp-card")];
-  for (const root of roots) {
-    const line = root.querySelector<HTMLElement>(".orca-lsp-note")!;
-    const text = messageOf(root.dataset.name ?? "");
-    line.hidden = text === null;
-    line.textContent = text ?? "";
+  const want = new Map<string, string>();
+  if (shown) {
+    const roots = [...$("orca-lsp-cards").querySelectorAll<HTMLElement>(".orca-lsp-card")];
+    for (const root of roots) {
+      const language = root.dataset.name ?? "";
+      const text = messageOf(language);
+      if (text !== null) want.set(`orca-lsp:${language}`, text);
+    }
+    if (note !== null && !roots.some((root) => root.dataset.name === note?.key)) want.set(NOTICE_HEADING, note.text);
   }
-  const loose = note !== null && !roots.some((root) => root.dataset.name === note?.key) ? note.text : null;
-  $("orca-lsp-error").hidden = loose === null;
-  $("orca-lsp-error").textContent = loose ?? "";
+  for (const key of noticed) if (!want.has(key)) setNotice(key, null);
+  for (const [key, text] of want) setNotice(key, { text });
+  noticed = new Set(want.keys());
 }
 
 // The state of every card of a server and the buttons that depend on it. A card is not drawn again: only its words change.
@@ -258,13 +267,6 @@ function containerButton(onclick: () => void): HTMLButtonElement {
   return container;
 }
 
-function noteLine(): HTMLElement {
-  const line = tag("p", "orca-file-note fail orca-lsp-note", "");
-  line.setAttribute("role", "alert");
-  line.hidden = true;
-  return line;
-}
-
 // The row with 「Claude に頼む」 of the card of a language that the worktree has and no server is found for.
 function askButton(language: string): HTMLElement {
   const ask = tag("button", "text-btn orca-lsp-ask", "Claude に頼む");
@@ -307,7 +309,7 @@ function card(server: LspServerSettings): HTMLElement {
       },
     ]);
   head.append(languageIcon(key), tag("span", "orca-lsp-name", lookOf(key).title), status, menu);
-  root.append(head, tag("div", "orca-lsp-summary"), noteLine(), containerButton(() => void startContainer(key)));
+  root.append(head, tag("div", "orca-lsp-summary"), containerButton(() => void startContainer(key)));
   if (editing === key) root.append(body(server));
   return root;
 }
@@ -321,7 +323,7 @@ function foundCard(f: LspFound): HTMLElement {
   const head = tag("div", "orca-lsp-card-head");
   head.append(languageIcon(f.language), tag("span", "orca-lsp-name", lookOf(f.language).title));
   const line = tag("div", "orca-lsp-summary", f.state === "found" ? `${f.name} ・ ${placeOf(f.place)}` : f.state === "missing" ? "サーバーがありません" : "コンテナが止まっています");
-  root.append(head, line, noteLine());
+  root.append(head, line);
   if (f.state === "found") {
     const skip = tag("button", "text-btn orca-lsp-skip", "使わない");
     skip.type = "button";
@@ -740,6 +742,8 @@ function stopWatch() {
 // The Orca screen is left (or the work pane is not shown): nothing is read by the clock until the file pane is drawn again.
 export function pauseLsp() {
   stopWatch();
+  shown = false;
+  drawNote();
 }
 
 // Whether a question of the Command key may be sent to the server `server` of the worktree: not when it is known to be indexing or stopped (it can only refuse), and when nothing is known of it yet Rust says.
@@ -750,6 +754,7 @@ export function mayAsk(target: string | null, path: string, server: string) {
 
 // Follows the file pane: the worktree it shows (null: none) and whether the language server is what it shows. The settings and the way of starting are read when the part is shown, for the worktree that is shown.
 export function syncLsp(next: LspPlace | null, visible: boolean) {
+  shown = visible && next !== null;
   const same = next?.path === pane?.path && next?.target === pane?.target && next?.project === pane?.project;
   if (!same) {
     generation++;
@@ -771,6 +776,7 @@ export function syncLsp(next: LspPlace | null, visible: boolean) {
     startWatch();
     if (!loaded) void load();
   } else stopWatch();
+  drawNote();
 }
 
 export function initLsp(on: { changed: (place: LspPlace) => void; started: (launched: OrcaStarted, target: string | null) => void }) {

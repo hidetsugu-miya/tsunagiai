@@ -2,6 +2,7 @@
 // The states live in memory only: a summary is never saved, and it is gone when the app quits.
 // The text is drawn with textContent only: it comes from an untrusted mail, so it never becomes HTML or a link.
 import { $, tag } from "./dom.js";
+import { setNotice } from "./error-card.js";
 import { CLOSE_SVG, SUMMARY_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { mailText } from "./mail-text.js";
@@ -16,6 +17,9 @@ const keyOf = (t: OpenThread) => `${t.account}/${t.id}/${t.messages.at(-1)!.id}`
 const MAX_STATES = 50;
 // What Rust sends to the model at most (INPUT_LIMIT in claude.rs): the text past it is never read, so it is not made.
 const TEXT_LIMIT = 10_000;
+
+// The card of a summary that failed (A-28): it follows the thread on the screen, and goes with the card.
+const FAILED_KEY = "mail-summary:failed";
 
 // The thread whose card is on the screen. A result for another thread is kept in `states` and drawn when that thread is opened again.
 let shown: string | null = null;
@@ -32,9 +36,17 @@ function head(title: string, t: OpenThread) {
   return row;
 }
 
+// The card of a failure goes, with its ×, when the detail view is left: it is made again when the thread is opened, which draws its failure.
+export function initSummary() {
+  new MutationObserver(() => {
+    if ($("thread").hidden) setNotice(FAILED_KEY, null);
+  }).observe($("thread"), { attributes: true, attributeFilter: ["hidden"] });
+}
+
 // Empties the card while a thread is loading, so that no result of the thread before it is drawn there.
 export function clearSummary() {
   shown = null;
+  setNotice(FAILED_KEY, null);
   $("mail-summary").hidden = true;
   $("mail-summary").replaceChildren();
 }
@@ -44,7 +56,11 @@ export function renderSummary(t: OpenThread) {
   shown = keyOf(t);
   const state = states.get(shown);
   const card = $("mail-summary");
-  card.hidden = !state || (state.phase === "done" && !state.open);
+  setNotice(
+    FAILED_KEY,
+    state?.phase === "failed" ? { text: `要約できませんでした: ${state.error}`, actions: [{ label: "やり直す", run: () => start(t) }] } : null,
+  );
+  card.hidden = !state || state.phase === "failed" || (state.phase === "done" && !state.open);
   if (!state || card.hidden) {
     // An emptied card holds no handler that still points at an earlier thread.
     card.replaceChildren();
@@ -61,20 +77,13 @@ export function renderSummary(t: OpenThread) {
       card.replaceChildren(head("AI 要約", t), list);
       break;
     }
-    case "failed": {
-      const retry = tag("button", "text-btn", "やり直す");
-      retry.onclick = () => start(t);
-      card.replaceChildren(head("要約できませんでした", t), tag("div", "", state.error), retry);
-    }
   }
 }
 
-// "×": a summary is folded away and kept (the icon shows it again); a failure is forgotten.
+// "×": a summary is folded away and kept (the icon shows it again).
 function closeCard(t: OpenThread) {
-  const key = keyOf(t);
-  const state = states.get(key);
+  const state = states.get(keyOf(t));
   if (state?.phase === "done") state.open = false;
-  else states.delete(key);
   renderSummary(t);
 }
 

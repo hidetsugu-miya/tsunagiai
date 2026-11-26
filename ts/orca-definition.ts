@@ -3,6 +3,7 @@
 import type { LspLocation } from "./bindings/LspLocation";
 import type { LspPlace } from "./bindings/LspPlace";
 import { tag } from "./dom.js";
+import { showFailure } from "./error-card.js";
 import { invoke } from "./ipc.js";
 
 // The question: the worktree and its file as the editor holds it now (`text`), the place in it (`line` from 0 and `character` in UTF-16 units, as the server counts), and the name that is there.
@@ -43,7 +44,6 @@ interface Preview {
   first: number;
   hit: number;
   lines: string[];
-  error: string | null;
 }
 
 interface Row {
@@ -59,7 +59,6 @@ export interface DefinitionTab {
   project: string;
   query: DefinitionQuery;
   phase: "loading" | "ready" | "failed";
-  error: string | null;
   rows: Row[];
   // Counts the questions, so that an answer of an earlier one than the last is dropped.
   seq: number;
@@ -74,8 +73,8 @@ const tabs = new Map<string, DefinitionTab>();
 let lastId = 0;
 let open: (place: DefinitionOpen) => void = () => {};
 
-function note(text: string, fail = false) {
-  return tag("p", `orca-file-note${fail ? " fail" : ""}`, text);
+function note(text: string) {
+  return tag("p", "orca-file-note", text);
 }
 
 function loading() {
@@ -93,7 +92,7 @@ function drawHead(d: DefinitionTab) {
 function drawPreview(row: Row) {
   const preview = row.preview;
   if (preview.read === "loading") return row.body.replaceChildren(loading());
-  if (preview.error !== null) return row.body.replaceChildren(note(preview.error, true));
+  if (preview.read === "failed") return row.body.replaceChildren();
   const code = tag("div", "orca-def-code");
   preview.lines.forEach((text, i) => {
     const line = tag("div", "orca-def-line");
@@ -130,7 +129,6 @@ function draw(d: DefinitionTab) {
   drawHead(d);
   const parts: HTMLElement[] = [];
   if (d.phase === "loading") parts.push(loading());
-  else if (d.phase === "failed" && d.error !== null) parts.push(note(d.error, true));
   else if (d.phase === "ready" && d.rows.length === 0) parts.push(note("定義はありません"));
   parts.push(...d.rows.map((row, i) => rowNode(d, row, i)));
   d.list.replaceChildren(...parts);
@@ -141,7 +139,7 @@ async function readPreview(d: DefinitionTab, rows: Row[], seq: number) {
   const q = d.query;
   const { location } = rows[0];
   let all: string[] | null = null;
-  let error = "";
+  let error: string | null = null;
   try {
     const text = location.outside
       ? (await invoke("lsp_read_outside", { environment: q.target, project: q.project, worktree: q.path, server: q.server, path: location.path })).text
@@ -151,10 +149,11 @@ async function readPreview(d: DefinitionTab, rows: Row[], seq: number) {
     error = String(e);
   }
   if (seq !== d.seq) return;
+  if (error !== null) showFailure("orca-definition", error);
   for (const row of rows) {
     const hit = row.location.line + 1;
     const from = Math.max(0, hit - 1 - AROUND);
-    row.preview = all === null ? { read: "failed", first: hit, hit, lines: [], error } : { read: "ready", first: from + 1, hit, lines: all.slice(from, Math.min(all.length, hit + AROUND)), error: null };
+    row.preview = all === null ? { read: "failed", first: hit, hit, lines: [] } : { read: "ready", first: from + 1, hit, lines: all.slice(from, Math.min(all.length, hit + AROUND)) };
     drawPreview(row);
   }
 }
@@ -173,12 +172,11 @@ async function readPreviews(d: DefinitionTab, seq: number) {
   await Promise.all(Array.from({ length: Math.min(READS, queue.length) }, worker));
 }
 
-// Asks the server for the definition of the name of the question and draws the places it gives. A refusal or a failure of the server is drawn as Rust words it.
+// Asks the server for the definition of the name of the question and draws the places it gives. A refusal or a failure of the server is a card, as Rust words it (A-28).
 async function ask(d: DefinitionTab) {
   const seq = ++d.seq;
   const q = d.query;
   d.phase = "loading";
-  d.error = null;
   d.rows = [];
   draw(d);
   try {
@@ -187,7 +185,7 @@ async function ask(d: DefinitionTab) {
     const places = locations.length === 0 ? [] : await invoke("lsp_places", { locations });
     if (seq !== d.seq) return;
     d.rows = locations.map((location, i) => {
-      const row: Row = { location, place: places[i], preview: { read: "loading", first: 1, hit: 1, lines: [], error: null }, body: tag("div", "orca-def-body") };
+      const row: Row = { location, place: places[i], preview: { read: "loading", first: 1, hit: 1, lines: [] }, body: tag("div", "orca-def-body") };
       drawPreview(row);
       return row;
     });
@@ -197,7 +195,7 @@ async function ask(d: DefinitionTab) {
   } catch (e) {
     if (seq !== d.seq) return;
     d.phase = "failed";
-    d.error = String(e);
+    showFailure("orca-definition", e);
     draw(d);
   }
 }
@@ -208,7 +206,7 @@ function create(id: string, q: DefinitionQuery): DefinitionTab {
   const head = tag("div", "orca-edit-head orca-definition-head");
   const list = tag("div", "orca-definition-list");
   el.append(head, list);
-  const d: DefinitionTab = { id, target: q.target, project: q.project, query: q, phase: "loading", error: null, rows: [], seq: 0, scroll: 0, el, head, list };
+  const d: DefinitionTab = { id, target: q.target, project: q.project, query: q, phase: "loading", rows: [], seq: 0, scroll: 0, el, head, list };
   list.onscroll = () => {
     d.scroll = list.scrollTop;
   };

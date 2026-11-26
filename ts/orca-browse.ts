@@ -3,7 +3,10 @@
 import { composing, partMatcher, tag } from "./dom.js";
 import { CHEVRON_SVG, CLOSE_SVG, FOLDER_SVG, HOME_SVG, UP_FOLDER_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
-import { showFailure } from "./error-card.js";
+import { setNotice, showFailure } from "./error-card.js";
+
+// The card of a folder read that failed (A-28): one dialog at a time, so one key.
+const NOTICE_LIST = "orca-browse:list";
 
 
 const segmentsOf = (path: string) => path.split("/").filter((s) => s !== "");
@@ -108,10 +111,7 @@ export function openBrowseDialog(environment: string, anchor: Element, added: ()
 
   const drawList = () => {
     list.replaceChildren();
-    if (failure !== null) {
-      list.append(tag("p", "orca-browse-note err", failure));
-      return;
-    }
+    if (failure !== null) return;
     const names = shown();
     for (const name of names) {
       const row = tag("button", "orca-browse-row");
@@ -141,7 +141,7 @@ export function openBrowseDialog(environment: string, anchor: Element, added: ()
     drawState();
   };
 
-  // Reads the folders in `path` ("" is the home folder). On an answer the folder shown is the one Orca opened and the field is emptied; a failure keeps the folder shown, and says why in the list.
+  // Reads the folders in `path` ("" is the home folder). On an answer the folder shown is the one Orca opened and the field is emptied; a failure keeps the folder shown, and says why on a card (it goes with the next answer and with the dialog).
   async function load(path: string) {
     const mine = ++reads;
     try {
@@ -150,6 +150,7 @@ export function openBrowseDialog(environment: string, anchor: Element, added: ()
       dir = read.resolvedPath;
       folders = read.folders;
       failure = null;
+      setNotice(NOTICE_LIST, null);
       cursor = null;
       filter.value = "";
       draw();
@@ -157,6 +158,7 @@ export function openBrowseDialog(environment: string, anchor: Element, added: ()
     } catch (e) {
       if (mine !== reads || closed) return;
       failure = String(e);
+      setNotice(NOTICE_LIST, { text: failure });
       cursor = null;
       draw();
     }
@@ -183,6 +185,7 @@ export function openBrowseDialog(environment: string, anchor: Element, added: ()
   const close = () => {
     if (closed) return;
     closed = true;
+    setNotice(NOTICE_LIST, null);
     scrim.remove();
     for (const el of behind) el.inert = false;
     document.removeEventListener("keydown", onKey);

@@ -65,8 +65,6 @@ export interface IconItem {
 export interface MenuOptions {
   // A row of icon buttons at the top of the menu, a line under it when rows follow (A-16).
   icons?: IconItem[];
-  // A line of text under the row of icons, where the rows would be (A-16: the AI CLIs could not be read).
-  note?: string;
   // A field at the top of the menu that narrows the rows to those whose label holds the text (A-9): its `aria-label`, and the line shown when no row matches.
   search?: { label: string; empty: string };
   // Where the menu opens when it is not under its anchor (the pointer of a right press).
@@ -92,12 +90,11 @@ export function openMenu(anchor: Element, items: MenuItem[], options: MenuOption
       row.append(b);
     }
     list.append(row);
-    if (items.length > 0 || options.note !== undefined) {
+    if (items.length > 0) {
       const line = tag("div", "menu-sep");
       line.setAttribute("role", "separator");
       list.append(line);
     }
-    if (options.note !== undefined) list.append(tag("div", "menu-empty", options.note));
   }
   const rows = items.map((item) => {
     if (item.divider) {

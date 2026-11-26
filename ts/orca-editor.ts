@@ -10,6 +10,7 @@
 // A Markdown file (the language Rust names `markdown`) has two buttons in its heading, the source (`<>`) and the rich view (the pencil), and opens in the rich view (A-26): Milkdown draws the text, without its front matter. The rich view is edited (the edit is put into the text of the editor by Rust, `markdown_patch`, and saved as any typing is) unless the file does not load and export the same twice or Rust cannot put an edit into it; then it is read only and the file opens in the source. The choice is kept for the file while it is open, in memory only.
 // An HTML file (its name ends with `.html`, whatever the case) has the source and the preview (the eye) in its heading, and opens in the preview (A-42): a frame that shows the address `orca_file_preview_url` gives (A-31), after the typing that waits is saved. While the preview is shown a button of the heading makes the frame again, which reads the file again; nothing else does.
 import { tag } from "./dom.js";
+import { showFailure } from "./error-card.js";
 import { CHEVRON_SVG, CODE_SVG, EDIT_SVG, EYE_SVG, LOCK_SVG, RELOAD_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import type { DefinitionQuery } from "./orca-definition.js";
@@ -112,7 +113,6 @@ interface EditorFile {
   state: HTMLElement;
   // The path of the heading.
   where: HTMLElement;
-  note: HTMLElement;
 }
 
 // After a change of the rich view, how long it waits for more changes before the edit is put into the editor.
@@ -455,7 +455,7 @@ async function load(f: EditorFile) {
       changed();
       return;
     }
-    // CodeMirror is read the first time a file is opened, beside the read of the file; one that cannot be read fails the file as a file that cannot be read does (the note says so, and opening the file again tries again).
+    // CodeMirror is read the first time a file is opened, beside the read of the file; one that cannot be read fails the file as a file that cannot be read does (a card says so, and opening the file again tries again).
     const [text] = await Promise.all([f.outside ? readOutside(f) : invoke("orca_file_read", { path: f.path, relative: f.relative, environment: f.target }), loadCodeMirror()]);
     // A file closed while it was read has no editor made for it: nothing would destroy it.
     if (files.get(f.id) !== f) return;
@@ -484,8 +484,7 @@ async function load(f: EditorFile) {
     if (!f.outside) lookServer(f);
   } catch (e) {
     f.read = "failed";
-    f.note.textContent = e instanceof Error ? e.message : String(e);
-    f.note.hidden = false;
+    showFailure("orca-editor", e instanceof Error ? e.message : String(e));
     f.body.hidden = true;
   }
   changed();
@@ -698,8 +697,6 @@ function create(id: string, target: string | null, project: string, path: string
     state.dataset.state = "outside";
   }
   head.append(where, state, modes);
-  const note = tag("p", "orca-empty feed-empty");
-  note.hidden = true;
   const link = tag("div", "orca-edit-link");
   link.hidden = true;
   const body = tag("div", "orca-edit-body");
@@ -713,11 +710,11 @@ function create(id: string, target: string | null, project: string, path: string
   preview.hidden = true;
   const picture = tag("div", "orca-edit-picture");
   picture.hidden = true;
-  el.append(head, note, body, rich, preview, picture);
+  el.append(head, body, rich, preview, picture);
   const html = !outside && /\.html$/i.test(nameOf(relative));
   const image = !outside && IMAGE_NAME.test(nameOf(relative));
   body.hidden = image;
-  const f: EditorFile = { id, target, project, path, relative, outside, language: "", server, jump: null, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, rereading: false, again: false, placed: false, out: false, wantFocus: true, richBand, richFrame: null, markdown: false, mode: html ? "preview" : "rich", modes, sourceButton, richButton, html, image, picture, previewButton, reloadButton, preview, previewTurn: 0, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, cm: null, edits: 0, state, where, note, link, hover: null, linkTimer: null, linkSeq: 0, linkBox: null, known: new Map(), knownEdits: 0 };
+  const f: EditorFile = { id, target, project, path, relative, outside, language: "", server, jump: null, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, blocked: false, timer: null, writing: null, held: false, rereading: false, again: false, placed: false, out: false, wantFocus: true, richBand, richFrame: null, markdown: false, mode: html ? "preview" : "rich", modes, sourceButton, richButton, html, image, picture, previewButton, reloadButton, preview, previewTurn: 0, body, rich, view: null, richTurn: 0, richBase: "", richBefore: "", richPending: false, richTimer: null, richSync: null, richFirst: true, el, cm: null, edits: 0, state, where, link, hover: null, linkTimer: null, linkSeq: 0, linkBox: null, known: new Map(), knownEdits: 0 };
   rich.addEventListener("focusin", () => placeRichBand(f));
   rich.addEventListener("focusout", () => placeRichBand(f));
   sourceButton.onclick = async () => {

@@ -53,7 +53,6 @@ export function show(view: View) {
   $("mail-tools").hidden = $("mail-claude").hidden = view !== "new-mail";
   $("mail-slack").hidden = !slackPane;
   $("login").hidden = view !== "login";
-  $("relogin").hidden = view !== "list" || !$("relogin").hasChildNodes();
   $("inbox-state").hidden = view !== "list";
   $("threads").hidden = view !== "list";
   $("thread").hidden = view !== "thread";

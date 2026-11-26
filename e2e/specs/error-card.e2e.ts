@@ -1,4 +1,4 @@
-import { account, boot, CARD, CARDS, checked, claudeMissing, count, inbox, logged, mock, onceId, rejects, rowOf, slackLoad, textsOf, waitForCalls, waitForCount, waitForLog, weekOfToday } from "../support";
+import { account, boot, CARD, CARDS, checked, claudeMissing, count, inbox, logged, mock, onceId, rejects, rowOf, slackLoad, textsOf, WARN_CARDS, waitForCalls, waitForCount, waitForLog, weekOfToday } from "../support";
 
 // A-28: a failure of something the user did is written to the log and shown on a card at the bottom right. The reads and syncs that fail are in the specs of their screens (the log only).
 
@@ -22,6 +22,7 @@ describe("the failure cards", () => {
     expect(await logged()).toEqual([{ level: "error", source: "inbox", message: "Gmail が断りました" }]);
     await expect($(CARD)).toHaveText("Gmail が断りました");
     expect(await count(CARDS)).toBe(1);
+    expect(await count(WARN_CARDS)).toBe(0);
     await expect($(`${CARDS} .error-card-log`)).toHaveText("ログを見る");
     await expect($(`${CARDS} .error-card-close`)).toHaveAttribute("aria-label", "閉じる");
     // The card is at the bottom right of the window, above the footer.
@@ -111,6 +112,8 @@ describe("the cards of a login that must be done again", () => {
     await boot({ inbox: needing() });
     await expect($(CARD)).toHaveText(`${account} は再ログインが必要です`);
     await expect($(`${CARDS} .error-card-login`)).toHaveText("再ログイン");
+    // A login to do again is a warning: the line at the left is orange, not the red of a failure.
+    expect(await count(WARN_CARDS)).toBe(1);
     await expect($(`${CARDS} .error-card-log`)).not.toExist();
     expect(await logged()).toEqual([]);
     const login = await mock("login", null);

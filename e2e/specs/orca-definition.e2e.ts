@@ -10,7 +10,7 @@ import type { OrcaFileText } from "../../ts/bindings/OrcaFileText";
 import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import type { PaneLayout } from "../../ts/bindings/PaneLayout";
 import type { PaneNode } from "../../ts/bindings/PaneNode";
-import { callsOf, count, emitEvent, holds, mock, onceId, orcaRow, orcaWorktree, popoutTab, rejects, release, sendPopout, textsOf, timers, waitForCalls, waitForCount } from "../support";
+import { CARD, CARDS, callsOf, count, emitEvent, holds, mock, onceId, orcaRow, orcaWorktree, popoutTab, rejects, release, sendPopout, textsOf, timers, waitForCalls, waitForCard, waitForCount } from "../support";
 import { caretOffset, charBoxes, claimFocus, claudeTab, CONTENT, filesToggle, openOrca, orcaOverview, pickItem, project, sample, selectedTab, setCaret, showAgain, studio, tabOf, tabTitles, typeIn, waitForText, worktrees } from "../orca-support";
 
 // A-34: the definition tab under the pane of the editor, and the editor's Command and right button. Rust asks the language server, reads the name under the mouse and decides how each place is drawn (unit tests); here the screen is checked: what it asks of Rust for a press, how it splits the work pane, and how it draws the answers and opens them. The language server in the file pane is checked below too: its state and settings, and when it is started and stopped.
@@ -244,15 +244,17 @@ describe("orca: definition (A-34)", () => {
     expect(await textsOf(".orca-definition-head > span")).toEqual(["Rails", "1 件"]);
   });
 
-  it("says why the lines of a row cannot be shown, in the row, and the other rows stay (A-34)", async () => {
+  it("says why the lines of a row cannot be shown, on one card, and the other rows stay (A-34)", async () => {
     await openFiles();
     await openFileWith("a.rb", text(source));
     await answer();
     await mock("lsp_read_outside", rejects("ファイルを読めません"));
     await mock("orca_panes", below([claude, "file:1"], "file:1"));
     await contextAt(onRails());
-    await expect(defRow(1).$(".orca-file-note.fail")).toHaveText("ファイルを読めません");
-    await expect(defRow(2).$(".orca-file-note.fail")).toHaveText("ファイルを読めません");
+    await waitForCard("ファイルを読めません");
+    expect(await count(CARDS)).toBe(1);
+    await expect(defRow(1).$(".orca-def-line")).not.toExist();
+    await expect(defRow(2).$(".orca-def-line")).not.toExist();
     await waitForCount(".orca-definition .orca-def-line", 7);
     expect(await count(".orca-definition .orca-def")).toBe(3);
   });
@@ -373,14 +375,16 @@ describe("orca: definition (A-34)", () => {
     await expect($('.orca-tab[data-outside="true"]')).not.toExist();
   });
 
-  it("shows the words Rust gives when the server cannot answer, with the name and no count (A-34)", async () => {
+  it("shows the words Rust gives when the server cannot answer, on a card, with the name and no count (A-34)", async () => {
     await openFiles();
     await openFileWith("a.rb", text(source));
     await answer();
     await mock("lsp_definition", rejects("言語サーバーがまだ準備できていません"));
     await mock("orca_panes", below([claude, "file:1"], "file:1"));
     await contextAt(onRails());
-    await expect($(".orca-definition .orca-file-note.fail")).toHaveText("言語サーバーがまだ準備できていません");
+    await waitForCard("言語サーバーがまだ準備できていません");
+    expect(await count(CARDS)).toBe(1);
+    expect(await count(".orca-definition .orca-file-note")).toBe(0);
     expect(await textsOf(".orca-definition-head > span")).toEqual(["Rails"]);
     expect(await count(".orca-definition .orca-def")).toBe(0);
     expect(await callsOf("lsp_places")).toEqual([]);
@@ -504,7 +508,6 @@ describe("orca: definition (A-34)", () => {
   const card = (language: string) => $(`.orca-lsp-card[data-name="${language}"]`);
   const stateText = (language = "ruby") => card(language).$(".orca-lsp-state");
   const dot = (language = "ruby") => card(language).$(".orca-lsp-dot");
-  const noteOf = (language = "ruby") => card(language).$(".orca-lsp-note");
   const containerOf = (language = "ruby") => card(language).$(".orca-lsp-container");
   // The menu of a card, and one of its rows.
   const pick = async (language: string, label: string) => {
@@ -543,7 +546,7 @@ describe("orca: definition (A-34)", () => {
     await expect(stateText()).toHaveText("動作中");
     await expect(dot()).toHaveAttribute("data-state", "running");
     await expect(card("ruby").$(".orca-lsp-summary")).toHaveText("ruby-lsp ・ compose の app");
-    await expect(noteOf()).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
     await expect(containerOf()).not.toBeDisplayed();
     // No field, no name of the server, no chip of the language and no plus.
     await expect($("#orca-lsp-command")).not.toExist();
@@ -617,13 +620,13 @@ describe("orca: definition (A-34)", () => {
     await tell(status("stopped", { reason: "failed", message: "ruby-lsp が終了しました: bundler: command not found: ruby-lsp" }));
     await expect(stateText()).toHaveText("停止中");
     await expect(dot()).toHaveAttribute("data-reason", "failed");
-    await expect(noteOf()).toHaveText("ruby-lsp が終了しました: bundler: command not found: ruby-lsp");
+    await waitForCard("ruby-lsp が終了しました: bundler: command not found: ruby-lsp");
     await expect(containerOf()).not.toBeDisplayed();
     await tell(status("running"), "/work/other");
     await browser.pause(200);
     await expect(stateText()).toHaveText("停止中");
     await tell(notStarted);
-    await expect(noteOf()).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
     // The reason is the one Rust told (it was `failed` just before), so the dot is no longer red.
     await expect(dot()).toHaveAttribute("data-reason", "notStarted");
     await expect(stateText()).toHaveText("停止中");
@@ -666,7 +669,7 @@ describe("orca: definition (A-34)", () => {
 
   it("says why the way cannot be read, with the fields left empty (A-34)", async () => {
     await showServer(rejects("docker compose の設定を読めません"));
-    await expect(noteOf()).toHaveText("docker compose の設定を読めません");
+    await waitForCard("docker compose の設定を読めません");
     await expect(card("ruby").$(".orca-lsp-summary")).toHaveText("ruby-lsp");
     await fix();
     await expect($("#orca-lsp-command")).toHaveValue("");
@@ -754,7 +757,7 @@ describe("orca: definition (A-34)", () => {
     await fix();
     await mock("lsp_settings_set", rejects("パスの対応が正しくありません"));
     await change("orca-lsp-mount", "relative");
-    await expect(noteOf()).toHaveText("パスの対応が正しくありません");
+    await waitForCard("パスの対応が正しくありません");
     await expect($("#orca-lsp-mount")).toHaveValue("/application");
   });
 
@@ -784,7 +787,7 @@ describe("orca: definition (A-34)", () => {
     await showServer();
     await mock("lsp_stop", rejects("止められません"));
     await pick("ruby", "止める");
-    await expect(noteOf()).toHaveText("止められません");
+    await waitForCard("止められません");
   });
 
   it("draws a language that the worktree has and the repository has no server of as a dotted card with what the table gives, and none for a language it has (A-34)", async () => {
@@ -827,7 +830,7 @@ describe("orca: definition (A-34)", () => {
     await showServer(composeLaunch(), rubyOnly(), status("running"), 600000, [foundOf("typescript")]);
     await mock("lsp_settings_set", rejects("言語「typescript」のサーバーが重なっています"));
     await card("typescript").$(".orca-lsp-use").click();
-    await expect(noteOf("typescript")).toHaveText("言語「typescript」のサーバーが重なっています");
+    await waitForCard("言語「typescript」のサーバーが重なっています");
     await expect(card("typescript")).toHaveAttribute("data-kind", "found");
   });
 
@@ -853,9 +856,10 @@ describe("orca: definition (A-34)", () => {
     await expect(card("go")).toHaveAttribute("data-kind", "found");
   });
 
-  it("says why the languages could not be found, in the line under the heading (A-34)", async () => {
+  it("says why the languages could not be found, on the card of the heading (A-34)", async () => {
     await showServer(composeLaunch(), rubyOnly(), status("running"), 600000, rejects("docker compose の設定を読めません"));
-    await expect($("#orca-lsp-error")).toHaveText("docker compose の設定を読めません");
+    await waitForCard("docker compose の設定を読めません");
+    expect(await count(CARDS)).toBe(1);
     await expect(card("ruby")).toBeDisplayed();
   });
 
@@ -918,14 +922,16 @@ describe("orca: definition (A-34)", () => {
     expect(await count(".orca-tabs [data-tab^='claude:']")).toBe(1);
   });
 
-  it("shows why Rust refused, in the line of the card or under the heading, and starts and selects no tab (A-34)", async () => {
+  it("shows why Rust refused, on a card of the language or of the heading, and starts and selects no tab (A-34)", async () => {
     await showServer(composeLaunch(), rubyOnly(), status("running"), 600000, [foundOf("rust", { name: "rust-analyzer", command: null, state: "missing" })]);
     const before = await selectedId();
     await mock("lsp_claude_start", rejects("この環境の Claude Code には、まだ接続していません"));
     await card("rust").$(".orca-lsp-ask").click();
-    await expect(noteOf("rust")).toHaveText("この環境の Claude Code には、まだ接続していません");
+    await waitForCard("この環境の Claude Code には、まだ接続していません");
+    expect(await count(CARDS)).toBe(1);
     await $("#orca-lsp-ask").click();
-    await expect($("#orca-lsp-error")).toHaveText("この環境の Claude Code には、まだ接続していません");
+    await browser.waitUntil(async () => (await textsOf(CARD)).length === 1, { timeoutMsg: "the card of the heading never replaced the card of the language" });
+    await waitForCard("この環境の Claude Code には、まだ接続していません");
     await expect(selectedTab()).toBeDisplayed();
     expect(await selectedId()).toBe(before);
     expect(await callsOf("claude_code_start")).toEqual([]);
@@ -1035,7 +1041,7 @@ describe("orca: definition (A-34)", () => {
   it("offers to start the container when it is down, and starts the server again after it (A-34)", async () => {
     await showServer(composeLaunch(), rubyOnly(), down);
     await expect(stateText()).toHaveText("停止中");
-    await expect(noteOf()).toHaveText("サービスのコンテナが動いていません");
+    await waitForCard("サービスのコンテナが動いていません");
     await expect(containerOf()).toBeDisplayed();
     await expect(containerOf()).toHaveText("コンテナを起動");
     const up = await mock("lsp_container_start", holds);
@@ -1055,7 +1061,7 @@ describe("orca: definition (A-34)", () => {
     const start = await mock("lsp_start", status("indexing"));
     await mock("lsp_container_start", rejects("コンテナを起動できません: no such service: app"));
     await containerOf().click();
-    await expect(noteOf()).toHaveText("コンテナを起動できません: no such service: app");
+    await waitForCard("コンテナを起動できません: no such service: app");
     expect(await callsOf(start)).toEqual([]);
     await expect(containerOf()).toBeEnabled();
   });

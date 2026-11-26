@@ -5,6 +5,7 @@ import type { OrcaCommitFile } from "./bindings/OrcaCommitFile";
 import type { OrcaCommitFiles } from "./bindings/OrcaCommitFiles";
 import type { OrcaCommitList } from "./bindings/OrcaCommitList";
 import { $, tag } from "./dom.js";
+import { showFailure } from "./error-card.js";
 import { formatDate } from "./format.js";
 import { invoke } from "./ipc.js";
 import type { DiffCommit } from "./orca-diff.js";
@@ -66,8 +67,8 @@ function reset() {
   picked = null;
 }
 
-function note(text: string, fail = false) {
-  return tag("p", `orca-file-note${fail ? " fail" : ""}`, text);
+function note(text: string) {
+  return tag("p", "orca-file-note", text);
 }
 
 function loading() {
@@ -130,7 +131,6 @@ function renderStatus() {
   for (const node of status) node.remove();
   status = [];
   if (context !== null) {
-    if (error !== null) status.push(note(error, true));
     if (busy) status.push(loading());
     else if (error === null && started && commits.length === 0) status.push(note("コミットがありません"));
   }
@@ -166,7 +166,6 @@ function drawFiles() {
   const parts: HTMLElement[] = [];
   if (commit !== undefined && changed !== null && changed.id === commit.id) {
     if (changed.read === "loading") parts.push(loading());
-    else if (changed.error !== null) parts.push(note(changed.error, true));
     else if (changed.data !== null) {
       const data = changed.data;
       parts.push(...data.files.map((f) => fileRow(f, commit, data.parentId)));
@@ -214,6 +213,7 @@ async function readPage() {
   } catch (e) {
     if (mine !== generation) return;
     error = String(e);
+    showFailure("orca-history", e);
   }
   busy = false;
   renderStatus();
@@ -237,6 +237,7 @@ async function select(id: string) {
   // An answer for a list that is gone, or for a commit that is not the chosen one any more, is dropped.
   if (mine !== generation || selected !== id) return;
   changed = next;
+  if (next.error !== null) showFailure("orca-history", next.error);
   drawFiles();
 }
 

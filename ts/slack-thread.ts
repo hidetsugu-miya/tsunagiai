@@ -22,6 +22,7 @@ import { applyReactionChange, decorateAvatar, loadIcons, onReactionChange, react
 import { type Fields, registerDraftTarget } from "./screen-bridge.js";
 import { initSplit } from "./split.js";
 import { toast } from "./toast.js";
+import { setNotice, showFailure } from "./error-card.js";
 import { HandoffPane } from "./orca-handoff.js";
 import { slackCard } from "./orca-handoff-cards.js";
 import { projectOf } from "./todo-data.js";
@@ -109,7 +110,6 @@ const editor = createRichEditor({
   onChange: () => {
     if (!draft()) return;
     dirty = true;
-    $("st-error").hidden = true;
     editor.setSendDisabled(posting || editor.blank());
     clearTimeout(staleTimer);
     staleTimer = window.setTimeout(refreshSlackThread, STALE_DELAY);
@@ -138,22 +138,24 @@ export function refreshSlackThread() {
   $<HTMLButtonElement>("st-todo").disabled = summarizing;
 }
 
-// A line above the reply field: the result of an action (`fail` for a failed one). Nothing: it goes.
-function note(text: string | null, fail = false) {
+// A line above the reply field: the result of an action (a failed one is a card). Nothing: it goes.
+function note(text: string | null) {
   const node = $("st-note");
   node.hidden = text === null;
-  node.className = fail ? "pending fail" : "st-note";
+  node.className = "st-note";
   node.textContent = text;
+}
+
+// The card of a thread that could not be read (A-28), while the thread is shown: with a button to read it again. It goes when the thread is read well, or is left (the list, a channel, another screen), and its × is forgotten with it.
+function drawReadNotice() {
+  const on = current !== null && readError !== null && !$("slack-thread").hidden;
+  // With nothing drawn yet this is still the opening of the thread.
+  setNotice("slack-thread:read", on ? { text: `読み込めませんでした: ${readError}`, actions: [{ label: "再読み込み", run: () => readThread(thread ? "keep" : "end") }] } : null);
 }
 
 function closeCard() {
   closeMenu();
   $("st-card").replaceChildren();
-}
-
-function showReplyError(e: unknown) {
-  $("st-error").textContent = `返信できませんでした: ${e}`;
-  $("st-error").hidden = false;
 }
 
 const secure = (url: string | null) => (url?.startsWith("https://") ? url : null);
@@ -300,19 +302,12 @@ function follow() {
   lastTop = box.scrollTop;
 }
 
-// Draws the messages (and the error of the last read above them). `where`: keep the scroll position, or go to the end (another thread, and after a reply).
+// Draws the messages (and the card of the error of the last read). `where`: keep the scroll position, or go to the end (another thread, and after a reply).
 function drawMessages(where: "keep" | "end") {
   const box = $("st-msgs");
   const top = box.scrollTop;
   const nodes: Node[] = [];
-  if (readError !== null) {
-    const row = tag("div", "pending fail");
-    const retry = tag("button", "text-btn", "再読み込み");
-    // With nothing drawn yet this is still the opening of the thread.
-    retry.onclick = () => readThread(thread ? "keep" : "end");
-    row.append(tag("span", "sp", `読み込めませんでした: ${readError}`), retry);
-    nodes.push(row);
-  }
+  drawReadNotice();
   if (thread) {
     thread.messages.forEach((m, i) => {
       nodes.push(messageNode(m));
@@ -385,7 +380,6 @@ export function openSlackThread(m: TimelineMessage) {
     drawThreadClaude();
   }
   note(null);
-  $("st-error").hidden = true;
   $("st-channel").textContent = `#${m.channelName}`;
   $("st-team").textContent = m.team;
   const link = $("st-open");
@@ -396,10 +390,7 @@ export function openSlackThread(m: TimelineMessage) {
   show("slack-thread");
   syncThreadClaude();
   // Reads the rich field the first time a thread is shown, and draws the text of the thread in it when it is there.
-  editor.ensure().then(refreshSlackThread, (e) => {
-    $("st-error").textContent = `エディターを読み込めませんでした: ${e}`;
-    $("st-error").hidden = false;
-  });
+  editor.ensure().then(refreshSlackThread, (e) => showFailure("slack-thread", `エディターを読み込めませんでした: ${e}`));
   const open = current;
   invoke("todoist_connected").then(
     (connected) => {
@@ -419,7 +410,6 @@ async function reply() {
   syncDraft();
   const d = draft();
   if (!open || !d || posting || !d.text.trim()) return;
-  $("st-error").hidden = true;
   note(null);
   posting = true;
   refreshSlackThread();
@@ -428,8 +418,8 @@ async function reply() {
   } catch (e) {
     posting = false;
     refreshSlackThread();
-    // The error line is on the thread; when another thread (or the list) is shown, a toast tells instead. The text is kept.
-    if (isOpen(open) && !$("slack-thread").hidden) return showReplyError(e);
+    // The error is a card when the thread is shown; when another thread (or the list) is shown, a toast tells instead. The text is kept.
+    if (isOpen(open) && !$("slack-thread").hidden) return showFailure("slack-thread", `返信できませんでした: ${e}`);
     return toast(`スレッドに返信できませんでした: ${e}`);
   }
   posting = false;
@@ -464,7 +454,7 @@ async function makeTodo() {
     if (!isOpen(open)) return;
     if (summary === null || !ready) {
       todoConnected = false;
-      return note("Todoist のトークンが無いか無効です。Todo 画面でトークンを保存してください", true);
+      return showFailure("slack-thread", "Todoist のトークンが無いか無効です。Todo 画面でトークンを保存してください");
     }
     // Claude's project starts the card, when the list has it.
     const projectId = summary.projectId !== null && projectOf(summary.projectId) ? summary.projectId : null;
@@ -475,14 +465,14 @@ async function makeTodo() {
         if (name !== null) note("Todo に追加しました");
         else {
           todoConnected = false;
-          note("Todoist のトークンが無いか無効です。Todo 画面でトークンを保存してください", true);
+          showFailure("slack-thread", "Todoist のトークンが無いか無効です。Todo 画面でトークンを保存してください");
           refreshSlackThread();
         }
       },
     };
     $("st-card").replaceChildren(reviewCard({ url: open.permalink, host: hostOf(open.permalink), projectId, recommended: projectId, today: false }, summary, hooks));
   } catch (e) {
-    if (isOpen(open)) note(`要約できませんでした: ${e}`, true);
+    if (isOpen(open)) showFailure("slack-thread", `要約できませんでした: ${e}`);
   } finally {
     summarizing = false;
     button.classList.remove("busy");
@@ -549,7 +539,6 @@ function writeFields(fields: Fields) {
   editor.set(text);
   dirty = false;
   if (text !== before) d.undos.push({ before, after: text });
-  $("st-error").hidden = true;
   refreshSlackThread();
 }
 
@@ -587,6 +576,8 @@ export function initSlackThread() {
     revealSlackList();
   };
   $("st-todo").onclick = makeTodo;
+  // The card of a read that failed goes at once when the thread is left for the list, a channel or another screen (nothing draws it then).
+  new MutationObserver(drawReadNotice).observe($("slack-thread"), { attributes: true, attributeFilter: ["hidden"] });
   $("st-reply").append(editor.el);
   // A reaction changed on a copy of the message that a read has replaced meanwhile, or in the history: the thread held now takes it too (S-25).
   onReactionChange((target, ts, change, done) => {

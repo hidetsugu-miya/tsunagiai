@@ -5,6 +5,7 @@
 // The cells of a workspace are made once with its list and kept with it, so that opening the picker again makes none.
 import type { EmojiCatalog } from "./bindings/EmojiCatalog";
 import { composing, tag } from "./dom.js";
+import { showFailure } from "./error-card.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, showMenu } from "./menu.js";
 
@@ -200,8 +201,8 @@ export function openEmojiPicker(anchor: Element, teamId: string, options: Picker
     },
     (error) => {
       if (!pop.isConnected) return;
-      status.textContent = `読み込めませんでした: ${error}`;
-      status.classList.add("err");
+      status.hidden = true;
+      showFailure("slack-emoji-picker", `読み込めませんでした: ${error}`);
     },
   );
 }

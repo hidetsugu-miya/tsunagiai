@@ -1,4 +1,4 @@
-import { attachment, boot, callsOf, claudeReady, count, emitEvent, emojiCatalog, holds, inbox, mock, onceId, para, permalinkOf, plain, pngUri, quote, reaction, rejects, release, sideChannel, sideWorkspace, slackLoad, slackThread, slackTs, socketStatus, span, textsOf, threadMessage, timeline, timelineMessage, timelineReply, unreadChannelsOf, unreadRepliesOf, waitForCalls, waitForCount, waitForText, watchedMessage, workspace, TOOLS, CARD } from "../support";
+import { attachment, boot, callsOf, claudeReady, count, emitEvent, emojiCatalog, holds, inbox, logged, mock, onceId, para, permalinkOf, plain, pngUri, quote, reaction, rejects, release, sideChannel, sideWorkspace, slackLoad, slackThread, slackTs, socketStatus, span, textsOf, threadMessage, timeline, timelineMessage, timelineReply, unreadChannelsOf, unreadRepliesOf, waitForCalls, waitForCard, waitForCount, waitForText, watchedMessage, workspace, TOOLS, CARD, CARDS, WARN_CARDS } from "../support";
 
 const iconUrl = "https://avatars.slack-edge.com/T1-U1/a_72.png";
 
@@ -342,7 +342,7 @@ describe("slack list", () => {
     await expect($("#settings-tab-slack")).toHaveAttribute("aria-selected", "true");
   });
 
-  it("says in a notice which workspace could not be read and which token lacks scopes, keeps the rows that were read, and opens the settings from it", async () => {
+  it("says on cards which workspace could not be read and which token lacks scopes (a warning), keeps the rows that were read, and opens the settings from a card", async () => {
     await openList(
       timeline(sample(), {
         failed: [{ teamId: "T2", team: "Other Team", error: "接続できません" }],
@@ -350,11 +350,12 @@ describe("slack list", () => {
       }),
     );
     await waitForCount("#slack-feed .feed-row", 2);
-    expect(await textsOf("#slack-notice > div")).toEqual([
-      "Other Team を読み込めませんでした: 接続できません設定を開く",
-      "Example Team: users:read、files:read の権限がありません設定を開く",
-    ]);
-    await $("#slack-notice").$("div*=Other Team").$(".text-btn").click();
+    await waitForCard("Other Team を読み込めませんでした: 接続できません");
+    expect((await textsOf(CARD)).sort()).toEqual(["Example Team: users:read、files:read の権限がありません", "Other Team を読み込めませんでした: 接続できません"]);
+    // The lacking scopes are a warning; the failed workspace is a failure. The band above the list is gone.
+    expect(await count(WARN_CARDS)).toBe(1);
+    // The newest card is the first: the warning of the scopes, then the failure of the workspace.
+    await $$(CARDS)[1].$("button=設定を開く").click();
     await expect($("#settings-tab-slack")).toHaveAttribute("aria-selected", "true");
   });
 
@@ -371,23 +372,47 @@ describe("slack list", () => {
     expect(await count("#slack-feed .spin")).toBe(0);
   });
 
-  it("says that the read failed when there is nothing to show, and reads again from 再読み込み", async () => {
+  it("says on a card that the read failed when there is nothing to show, draws nothing in the list, and reads again from 再読み込み of the card, which goes when the read works", async () => {
     await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: rejects("接続できません"), claude_status: claudeReady });
     await $("#nav-slack").click();
-    await expect($("#slack-feed .pending.fail")).toHaveText(expect.stringContaining("読み込めませんでした: 接続できません"));
+    await waitForCard("読み込めませんでした: 接続できません");
+    expect(await count(CARDS)).toBe(1);
+    expect(await count(WARN_CARDS)).toBe(0);
+    expect(await count("#slack-feed .feed-empty")).toBe(0);
     await mock("slack_timeline", timeline(sample()));
-    await $("#slack-feed .pending.fail .text-btn").click();
+    await $("#error-cards").$("button=再読み込み").click();
     await waitForCount("#slack-feed .feed-row", 2);
+    await waitForCount(CARDS, 0);
   });
 
-  it("offers 再読み込み when the read fails while a list with no message is held", async () => {
+  it("offers 再読み込み on the card when the read fails while a list with no message is held", async () => {
     await openList(timeline([], { refreshSecs: 1 }));
     await expect($("#slack-feed .feed-empty")).toHaveText("メッセージはありません");
     await mock("slack_timeline", rejects("接続できません"));
-    await expect($("#slack-feed .pending.fail")).toHaveText(expect.stringContaining("読み込めませんでした: 接続できません"));
+    await waitForCard("読み込めませんでした: 接続できません");
     await mock("slack_timeline", timeline(sample()));
-    await $("#slack-feed .pending.fail .text-btn").click();
+    await $("#error-cards").$("button=再読み込み").click();
     await waitForCount("#slack-feed .feed-row", 2);
+  });
+
+  it("draws the failed read as one card while it goes on, writes it once to the log, does not draw it again after its close button, and takes it off with the screen", async () => {
+    await openList(timeline(sample(), { refreshSecs: 1 }));
+    await waitForCount("#slack-feed .feed-row", 2);
+    const failing = await mock("slack_timeline", rejects("接続できません"));
+    await waitForCard("読み込めませんでした: 接続できません");
+    await waitForCalls(failing, 2);
+    expect(await count(CARDS)).toBe(1);
+    expect((await logged()).filter((l) => l.source === "slack-list" && l.message === "読み込めませんでした: 接続できません")).toHaveLength(1);
+    await $(`${CARDS} .error-card-close`).click();
+    await waitForCalls(failing, 4);
+    expect(await count(CARDS)).toBe(0);
+    // A read that works forgets the close button: the next failure is drawn again.
+    await mock("slack_timeline", timeline(sample(), { refreshSecs: 1 }));
+    await waitForCalls("slack_timeline");
+    await mock("slack_timeline", rejects("接続できません"));
+    await waitForCard("読み込めませんでした: 接続できません");
+    await $("#nav-mail").click();
+    await waitForCount(CARDS, 0);
   });
 
   it("drops the rows and the failure of the last workspace when it was removed", async () => {
@@ -406,7 +431,7 @@ describe("slack list", () => {
     await mock("slack_load", rejects("読めません"));
     await $("#nav-todo").click();
     await $("#nav-slack").click();
-    await waitForText("#slack-notice > div", "読み込めませんでした: 読めません");
+    await waitForCard("読み込めませんでした: 読めません");
     expect(await count("#slack-feed .feed-row")).toBe(2);
     await waitForCalls("slack_timeline", 2);
   });
@@ -508,13 +533,13 @@ describe("slack list", () => {
   it("draws only the answer of the latest read", async () => {
     await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: rejects("接続できません"), claude_status: claudeReady });
     await $("#nav-slack").click();
-    await expect($("#slack-feed .pending.fail")).toBeDisplayed();
+    await waitForCard("読み込めませんでした: 接続できません");
     // The first 再読み込み waits; the second one answers at once. The first answer to arrive is the older one, and it must not be drawn.
     const read = await mock("slack_timeline", holds);
-    await $("#slack-feed .pending.fail .text-btn").click();
+    await $("#error-cards").$("button=再読み込み").click();
     await waitForCalls(read);
     await mock("slack_timeline", timeline([timelineMessage(slackTs(1), "Newer Person", "dev", "The newer answer")]));
-    await $("#slack-feed .pending.fail .text-btn").click();
+    await $("#error-cards").$("button=再読み込み").click();
     await waitForText("#slack-feed .feed-meta b", "Newer Person");
     await release(read, timeline([timelineMessage(slackTs(2), "Older Person", "dev", "The older answer")]));
     await browser.pause(300);
@@ -548,39 +573,34 @@ describe("slack list", () => {
     await waitForCount("#slack-feed .feed-row", 2);
   });
 
-  it("says above the notice how many channels no read has reached yet, until none is left", async () => {
+  it("says how many channels no read has reached yet, until none is left", async () => {
     await openList(timeline(sample(), { pendingChannels: 3, refreshSecs: 1 }));
     await waitForCount("#slack-feed .feed-row", 2);
     await expect($("#slack-pending")).toBeDisplayed();
     await expect($("#slack-pending")).toHaveText("残り 3 チャンネルを読み込み中");
-    const place = await browser.execute(() => {
-      const pending = document.getElementById("slack-pending")!;
-      return {
-        before: !!(pending.compareDocumentPosition(document.getElementById("slack-notice")!) & Node.DOCUMENT_POSITION_FOLLOWING),
-        left: getComputedStyle(pending).paddingLeft,
-      };
-    });
-    expect(place).toEqual({ before: true, left: "32px" });
+    expect(await browser.execute(() => getComputedStyle(document.getElementById("slack-pending")!).paddingLeft)).toBe("32px");
     await mock("slack_timeline", timeline(sample(), { pendingChannels: 0, refreshSecs: 1 }));
     await browser.waitUntil(async () => !(await $("#slack-pending").isDisplayed()));
   });
 
-  it("shows the failure with 再読み込み when a read answers with a failed workspace and no message, and reads again from it", async () => {
+  it("says the failure on a card with 再読み込み when a read answers with a failed workspace and no message, and reads again from it", async () => {
     await openList(timeline([], { failed: [{ teamId: "T1", team: "Example Team", error: "接続できません" }] }));
-    await expect($("#slack-feed .pending.fail")).toHaveText(expect.stringContaining("読み込めませんでした: Example Team: 接続できません"));
+    await waitForCard("Example Team を読み込めませんでした: 接続できません");
+    expect(await count(CARDS)).toBe(1);
     expect(await count("#slack-feed .feed-empty")).toBe(0);
     await mock("slack_timeline", timeline(sample()));
-    await $("#slack-feed .pending.fail .text-btn").click();
+    await $("#error-cards").$("button=再読み込み").click();
     await waitForCount("#slack-feed .feed-row", 2);
+    await waitForCount(CARDS, 0);
   });
 
-  it("keeps the rows that were read when a later read fails, and says so in the notice", async () => {
+  it("keeps the rows that were read when a later read fails, and says so on a card", async () => {
     await openList(timeline(sample(), { refreshSecs: 1 }));
     await waitForCount("#slack-feed .feed-row", 2);
     await mock("slack_timeline", rejects("接続できません"));
-    await waitForText("#slack-notice > div", "読み込めませんでした: 接続できません");
+    await waitForCard("読み込めませんでした: 接続できません");
     expect(await rowTexts(".feed-meta b")).toEqual(["Alice Example", "Bob Example"]);
-    expect(await count("#slack-feed .pending.fail")).toBe(0);
+    expect(await count(CARDS)).toBe(1);
   });
 
   it("lists the unread rows under a 未読 heading, in groups by channel, in bold, and no 既読 heading", async () => {
@@ -1358,16 +1378,19 @@ describe("slack list", () => {
     await release("slack_watch", true);
   });
 
-  it("lists nothing but the notice when only some workspaces failed, and offers 再読み込み only when every workspace failed", async () => {
+  it("lists nothing but the card when only some workspaces failed, and offers 再読み込み on the cards only when every workspace failed", async () => {
     const other = { ...workspace, teamId: "T2", team: "Other Team" };
     const failure = { teamId: "T2", team: "Other Team", error: "接続できません" };
     await boot({ inbox: inbox(), slack_load: { workspaces: [workspace, other] }, slack_timeline: timeline([], { failed: [failure], refreshSecs: 1 }), claude_status: claudeReady });
     await $("#nav-slack").click();
     await expect($("#slack-feed .feed-empty")).toHaveText("メッセージはありません");
-    expect(await count("#slack-feed .pending.fail")).toBe(0);
-    expect(await textsOf("#slack-notice > div")).toEqual(["Other Team を読み込めませんでした: 接続できません設定を開く"]);
+    await waitForCard("Other Team を読み込めませんでした: 接続できません");
+    expect(await textsOf(CARD)).toEqual(["Other Team を読み込めませんでした: 接続できません"]);
+    expect(await textsOf(".error-card-action")).toEqual(["設定を開く"]);
     await mock("slack_timeline", timeline([], { failed: [failure, { ...failure, teamId: "T1", team: "Example Team" }], refreshSecs: 1 }));
-    await expect($("#slack-feed .pending.fail")).toHaveText(expect.stringContaining("読み込めませんでした"));
+    await waitForCard("Example Team を読み込めませんでした: 接続できません");
+    expect(await count("#slack-feed .feed-empty")).toBe(0);
+    expect(await textsOf(".error-card-action")).toEqual(["再読み込み", "設定を開く", "再読み込み", "設定を開く"]);
   });
 
   // Reading a channel without opening a thread (S-15).
@@ -2365,18 +2388,25 @@ describe("slack list: the history of a channel (S-20)", () => {
     expect(await textsOf("#sc-feed .reaction-count")).toEqual(["12", "4"]);
   });
 
-  it("shows the error with 再読み込み when the history cannot be read, and reads it again with the button", async () => {
+  it("says the error on a card with 再読み込み when the history cannot be read, reads it again with the button, and takes the card off when the history is left", async () => {
     await openHistory();
     const failing = await mock("slack_channel_history", rejects("権限がありません"));
     await pressChannel();
     await waitForCalls(failing);
-    await expect($("#sc-feed .pending.fail")).toHaveText(expect.stringContaining("読み込めませんでした: 権限がありません"));
+    await waitForCard("読み込めませんでした: 権限がありません");
+    expect(await count(CARDS)).toBe(1);
     expect(await count("#sc-feed .feed-row")).toBe(0);
     const history = await mock("slack_channel_history", historySample());
-    await $("#sc-feed .pending.fail .text-btn").click();
+    await $("#error-cards").$("button=再読み込み").click();
     expect(await waitForCalls(history)).toEqual([{ teamId: workspace.teamId, channel: "C0123ABCD" }]);
     await waitForCount("#sc-feed .feed-row", 3);
     expect(await count("#sc-feed .pending")).toBe(0);
+    await waitForCount(CARDS, 0);
+    await mock("slack_channel_history", rejects("権限がありません"));
+    await pressChannel();
+    await waitForCard("読み込めませんでした: 権限がありません");
+    await $("#nav-mail").click();
+    await waitForCount(CARDS, 0);
   });
 
   it("leaves the history for the list when a section is pressed, and the channel is no longer the pressed one", async () => {
@@ -2539,7 +2569,7 @@ describe("slack list: posting to a channel (S-21)", () => {
     await browser.waitUntil(async () => (await fieldText()) === "");
     await expect(sendButton()).toBeDisabled();
     await waitForCalls(history, 2);
-    await expect($("#sc-error")).not.toBeDisplayed();
+    expect(await count(CARDS)).toBe(0);
   });
 
   it("posts a text made bold with the toolbar as Markdown", async () => {
@@ -2595,18 +2625,18 @@ describe("slack list: posting to a channel (S-21)", () => {
     await browser.waitUntil(async () => (await channelEnd()).left < 2);
   });
 
-  it("shows a failed post above the field and keeps the text", async () => {
+  it("shows a failed post on a card and keeps the text, and the card stays while the text is changed", async () => {
     const history = await openPost();
     await mock("slack_channel_post", rejects("投稿できません"));
     await write("Keep me");
     await sendButton().click();
-    await expect($("#sc-error")).toHaveText(expect.stringContaining("投稿できませんでした: 投稿できません"));
+    await waitForCard("投稿できませんでした: 投稿できません");
     expect(await fieldText()).toBe("Keep me");
     await expect(sendButton()).toBeEnabled();
     expect(await editable()).toBe("true");
     expect(await callsOf(history)).toHaveLength(1);
     await write("!");
-    await expect($("#sc-error")).not.toBeDisplayed();
+    expect(await count(CARDS)).toBe(1);
   });
 
   it("locks the field, the toolbar and the arrow while the post is on its way, and posts nothing twice", async () => {

@@ -8,7 +8,7 @@ import { $, composing, tag } from "./dom.js";
 import { CHECK_SVG, CLOSE_SVG, COPY_SVG, EDIT_SVG, LINES_SVG, MEET_SVG, PEOPLE_SVG, PIN_SVG, TRASH_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { htmlText, linkify } from "./mail-text.js";
-import { closeCreate, eventChanged, openEdit, reloginLine } from "./calendar-create.js";
+import { closeCreate, eventChanged, openEdit, writeRelogin } from "./calendar-create.js";
 import { showFailure } from "./error-card.js";
 
 const GAP = 8;
@@ -145,7 +145,7 @@ function descriptionBlock(description: string) {
 }
 
 // The confirmation of the delete (C-7), in the popover in place of the rows: the title, a line for the guests who are told, and "キャンセル" and "削除".
-// "キャンセル" puts the rows back. A failure is written in it, and "削除" can be pressed again.
+// "キャンセル" puts the rows back. A failure is a card, and "削除" can be pressed again.
 function confirmDelete(pop: HTMLElement, i: Info) {
   // The trash is still in the head while the confirmation is shown: pressing it again changes nothing.
   if (pop.querySelector(".cal-pop-confirm")) return;
@@ -153,8 +153,6 @@ function confirmDelete(pop: HTMLElement, i: Info) {
   const box = tag("div", "cal-pop-confirm");
   box.append(tag("p", "", `「${i.summary || "(件名なし)"}」を削除します。元に戻せません。`));
   if (i.guests.length > 0) box.append(tag("p", "", "ゲストに取り消しが届きます。"));
-  const error = tag("div", "cal-create-error");
-  error.setAttribute("role", "alert");
   const yes = tag("button", "text-btn danger", "削除");
   const no = tag("button", "text-btn", "キャンセル");
   yes.type = no.type = "button";
@@ -165,28 +163,24 @@ function confirmDelete(pop: HTMLElement, i: Info) {
   };
   yes.onclick = async () => {
     yes.disabled = no.disabled = true;
-    error.replaceChildren();
     try {
       const gone = await invoke("calendar_delete_event", { account: i.account, calendarId: i.calendarId, eventId: i.eventId });
       if (gone === null) {
-        // The account has not granted the permission to change events yet: log in again. A detail closed meanwhile has no place for it, so it goes to a card.
-        const text = `${i.account} は予定を削除するため再ログインが必要です`;
-        if (pop.isConnected) error.replaceChildren(reloginLine(i.account, text));
-        else showFailure("calendar-delete", text);
+        // The account has not granted the permission to change events yet: log in again.
+        writeRelogin(i.account, `${i.account} は予定を削除するため再ログインが必要です`);
         return;
       }
       // Another event's detail may be open by now: only this one is closed.
       if (pop.isConnected) closeDetail();
       eventChanged();
     } catch (e) {
-      if (pop.isConnected) error.replaceChildren(String(e));
-      else showFailure("calendar-delete", e);
+      showFailure("calendar-delete", e);
     } finally {
       yes.disabled = no.disabled = false;
     }
   };
   const foot = tag("div", "cal-pop-foot");
-  foot.append(error, no, yes);
+  foot.append(no, yes);
   box.append(foot);
   for (const r of rows) r.remove();
   pop.append(box);

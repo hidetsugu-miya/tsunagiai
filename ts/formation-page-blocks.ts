@@ -6,6 +6,7 @@ import type { FactContent } from "./bindings/FactContent";
 import type { ImageRef } from "./bindings/ImageRef";
 import type { Term } from "./bindings/Term";
 import { tag } from "./dom.js";
+import { showFailure } from "./error-card.js";
 import { foldOpener, holdLines, holdWhole, paintPending, pending } from "./formation-page-drawer.js";
 import { drawNode, markdownBlock } from "./formation-page-node.js";
 import { loadPele } from "./vendor-load.js";
@@ -125,7 +126,7 @@ export function useImages(load: ImageLoader) {
   imageLoader = load;
 }
 
-// An image of the page (an `image` block, and later the images of the cards and their options): the file is read when the image is drawn, or, inside a fold that is closed, when the fold is first opened. It is shown 400px wide at most, with its caption and a button that widens it to the width of the body and back. A file that cannot be read or shown leaves the reason in its place.
+// An image of the page (an `image` block, and later the images of the cards and their options): the file is read when the image is drawn, or, inside a fold that is closed, when the fold is first opened. It is shown 400px wide at most, with its caption and a button that widens it to the width of the body and back. A file that cannot be read or shown leaves its box empty, and the reason is a card (A-28).
 export function drawImage(image: ImageRef, lazy: boolean): HTMLElement {
   const load = imageLoader;
   const figure = tag("figure", "fp-image");
@@ -141,7 +142,8 @@ export function drawImage(image: ImageRef, lazy: boolean): HTMLElement {
   figure.append(box, tag("figcaption", "", image.caption), zoom);
   const fail = (reason: string) => {
     zoom.hidden = true;
-    box.replaceChildren(tag("p", "fp-image-error", `画像を読めません（${image.root}/${image.path}）: ${reason}`));
+    box.replaceChildren();
+    showFailure("formation-page", `画像を読めません（${image.root}/${image.path}）: ${reason}`);
   };
   const paint = async () => {
     try {
