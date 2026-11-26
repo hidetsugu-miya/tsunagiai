@@ -506,14 +506,14 @@ describe("footer: the resources (A-48)", () => {
     expect(place.beforeBell).toBe(true);
   });
 
-  it("puts the AI of a machine inside its group, names it by aria-label with no text of its name, and stands one separator between two machines", async () => {
+  it("puts the AI of a machine inside its group, names it by the aria-label of its dot with no text of its name and none on the number's group, and stands one separator between two machines", async () => {
     await start({ machine_resources: [machine("この Mac"), saved("PC 1")], machine_usage: [usageOf(null, ai("ok", 30, 74), idle), usageOf("PC 1", ai("ok", null, 12), ai("ok", 46, 93))], ...quiet });
     await waitForAis(4);
     const shape = await browser.execute(() => {
       const kids = [...document.getElementById("footer-stats")!.children];
       return {
         order: kids.map((k) => (k.classList.contains("stat-sep") ? "sep" : k.classList.contains("stat-machine") ? "machine" : "other")),
-        groups: kids.filter((k) => k.classList.contains("stat-machine")).map((k) => [...k.querySelectorAll(".stat-ai")].map((a) => ({ label: a.getAttribute("aria-label"), ai: a.querySelector(".stat-dot")?.getAttribute("data-ai"), text: a.textContent }))),
+        groups: kids.filter((k) => k.classList.contains("stat-machine")).map((k) => [...k.querySelectorAll(".stat-ai")].map((a) => ({ group: a.getAttribute("aria-label") ?? a.getAttribute("role"), role: a.querySelector(".stat-dot")?.getAttribute("role"), label: a.querySelector(".stat-dot")?.getAttribute("aria-label"), ai: a.querySelector(".stat-dot")?.getAttribute("data-ai"), text: a.textContent }))),
         outside: document.querySelectorAll("#footer-stats > .stat-ai").length,
       };
     });
@@ -521,12 +521,12 @@ describe("footer: the resources (A-48)", () => {
     expect(shape.outside).toBe(0);
     expect(shape.groups).toEqual([
       [
-        { label: "Claude", ai: "claude", text: "74%" },
-        { label: "Antigravity", ai: "antigravity", text: "—" },
+        { group: null, role: "img", label: "Claude", ai: "claude", text: "74%" },
+        { group: null, role: "img", label: "Antigravity", ai: "antigravity", text: "—" },
       ],
       [
-        { label: "Claude", ai: "claude", text: "12%" },
-        { label: "Antigravity", ai: "antigravity", text: "93%" },
+        { group: null, role: "img", label: "Claude", ai: "claude", text: "12%" },
+        { group: null, role: "img", label: "Antigravity", ai: "antigravity", text: "93%" },
       ],
     ]);
     expect((await textsOf("#footer-stats"))[0]).not.toMatch(/Claude|AG/);
