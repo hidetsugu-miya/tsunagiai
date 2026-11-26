@@ -79,7 +79,7 @@ function item(account: string, c: CalendarChoice) {
   return label;
 }
 
-// The account's row, which folds its calendars away or shows them again: its avatar as the sidebar draws it (the initials and the color), the address and a chevron.
+// The account's row, which folds its calendars away or shows them again: its avatar (the initials and the color, as the Google card of the settings draws it), the address and a chevron.
 function accountRow(account: string, body: HTMLElement) {
   const row = tag("button", "cal-side-account");
   row.type = "button";

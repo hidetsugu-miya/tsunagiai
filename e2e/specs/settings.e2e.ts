@@ -22,20 +22,43 @@ const unlinkButton = () => $('button[aria-label="Example Team の接続を解除
 describe("settings: Google", () => {
   const meta = () => $("#google-accounts .item-meta");
 
-  it("lists each account like the sidebar avatar, with its state and unread count", async () => {
+  it("lists each account with its avatar, state and unread count, and the button to unlink it", async () => {
     await openSettings([]);
     await expect($("#google-accounts .item-name")).toHaveText(account);
     await waitForText("#google-accounts .item-meta", "未読 2");
     await expect($("#google-accounts .status.ok")).toHaveText("ログイン中");
     await expect(meta()).not.toHaveElementClass("warn");
-    const [side, card] = await browser.execute(() =>
-      ["#account-list .avatar", "#google-accounts .avatar"].map((s) => {
-        const e = document.querySelector<HTMLElement>(s)!;
-        return [e.textContent, e.style.background];
-      }),
-    );
-    expect(card).toEqual(side);
-    await expect($("#google-accounts button")).not.toExist();
+    await expect($("#google-accounts .avatar")).toHaveText("M");
+    await expect($("#google-accounts .icon-btn")).toHaveAttribute("aria-label", `${account} の接続を解除`);
+    await expect($("#google-accounts .text-btn")).not.toExist();
+  });
+
+  it("removes the account after the confirmation, and the login screen shows when it was the last one", async () => {
+    await openSettings([]);
+    const remove = await mock("remove_account", null);
+    await $(`button[aria-label="${account} の接続を解除"]`).click();
+    const dialog = $('[role="alertdialog"]');
+    await expect(dialog).toHaveText(expect.stringContaining(`${account} をつなぎAIから削除します。Gmail のメールは消えません。`));
+    await dialog.$("button=キャンセル").click();
+    await expect(dialog).not.toBeDisplayed();
+    expect(await callsOf("remove_account")).toEqual([]);
+    await mock("inbox", { ...inbox(), accounts: [], threads: [], historyIds: {} });
+    await $(`button[aria-label="${account} の接続を解除"]`).click();
+    await $('[role="alertdialog"]').$("button=解除").click();
+    expect(await waitForCalls(remove)).toEqual([{ account }]);
+    // No account is left, so the inbox's load shows the login screen, as it does on any screen.
+    await expect($("#login")).toBeDisplayed();
+    expect(await count("#google-accounts .item")).toBe(0);
+  });
+
+  it("shows a card and keeps the row when the removal fails", async () => {
+    await openSettings([]);
+    await mock("remove_account", rejects("取り消せません"));
+    await $(`button[aria-label="${account} の接続を解除"]`).click();
+    await $('[role="alertdialog"]').$("button=解除").click();
+    await expect($(CARD)).toHaveText(expect.stringContaining("取り消せません"));
+    await expect($("#google-accounts .item-name")).toHaveText(account);
+    await expect($(`button[aria-label="${account} の接続を解除"]`)).toBeEnabled();
   });
 
   it("makes the heading and the tabs a place to drag the window by, and the tabs stay pressable", async () => {

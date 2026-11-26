@@ -1,7 +1,9 @@
 import type { AiUsage } from "../../ts/bindings/AiUsage";
 import type { MachineResources } from "../../ts/bindings/MachineResources";
 import type { MachineUsage } from "../../ts/bindings/MachineUsage";
-import { account, boot, callsOf, claudeReady, holds, inbox, mock, onceId, rejects, release, slackLoad, slackThread, slackTs, textsOf, thread, threadDetail, threadLoaded, threadMessage, timeline, timelineMessage, timers, waitForCalls, waitForCount, waitForText, weekOfToday, workspace, CARD } from "../support";
+import type { EventNotice } from "../../ts/bindings/EventNotice";
+import type { Week } from "../../ts/bindings/Week";
+import { account, boot, callsOf, claudeReady, count, holds, inbox, isoDate, mock, onceId, rejects, release, rfc, slackLoad, slackThread, slackTs, textsOf, thread, threadDetail, threadLoaded, threadMessage, timeline, timelineMessage, timers, todoData, waitForCalls, waitForCount, waitForText, weekOfToday, workspace, CARD } from "../support";
 
 // `unread` unread messages of the Slack list, each in a channel of its own.
 const heap = (unread: number) => Array.from({ length: unread }, (_, i) => timelineMessage(slackTs(i + 1, i), `Person ${i}`, "dev", `unread ${i}`, { unread: true, channel: `C${i}` }));
@@ -22,7 +24,7 @@ describe("footer", () => {
     await start();
     await waitForText("#footer-bell .footer-count", "5");
     await expect($("#footer-bell .footer-count")).toBeDisplayed();
-    expect(await label()).toBe("通知（未読 5 件）");
+    expect(await label()).toBe("通知（5 件）");
     // The sidebar's own counts are the two that it sums.
     await expect($("#nav-mail .nav-count")).toHaveText("2");
     await expect($("#nav-slack .nav-count")).toHaveText("3");
@@ -71,7 +73,7 @@ describe("footer", () => {
     await waitForText("#footer-bell .footer-count", "5");
     await mock("slack_timeline", timeline(heap(1), { refreshSecs: 1 }));
     await waitForText("#footer-bell .footer-count", "3");
-    expect(await label()).toBe("通知（未読 3 件）");
+    expect(await label()).toBe("通知（3 件）");
     await mock("slack_timeline", timeline([], { refreshSecs: 1 }));
     await waitForText("#footer-bell .footer-count", "2");
     expect(await textsOf("#footer-bell .footer-count")).toEqual(["2"]);
@@ -80,7 +82,7 @@ describe("footer", () => {
   it("shows 99+ from 100, with the real sum in the label, and the Slack count above 20 at its real number", async () => {
     await start(timeline(heap(3), { unreadTotal: 120 }));
     await waitForText("#footer-bell .footer-count", "99+");
-    expect(await label()).toBe("通知（未読 122 件）");
+    expect(await label()).toBe("通知（122 件）");
     await expect($("#nav-slack .nav-count")).toHaveText("20+");
   });
 
@@ -99,11 +101,11 @@ describe("footer", () => {
       await expect($("#unread-pane")).toBeDisplayed();
     };
 
-    it("opens from the bell over the screen, above the footer and at the right, with the heading 未読 and the count", async () => {
+    it("opens from the bell over the screen, above the footer and at the right, with the heading 通知 and the count", async () => {
       await panes();
       await expect($("#unread-pane")).not.toBeDisplayed();
       await open();
-      await expect($("#unread-pane-title")).toHaveText("未読 4");
+      await expect($("#unread-pane-title")).toHaveText("通知 4");
       await expect($("#footer-bell")).toHaveAttribute("aria-expanded", "true");
       const place = await browser.execute(() => {
         const p = document.getElementById("unread-pane")!.getBoundingClientRect();
@@ -252,7 +254,7 @@ describe("footer", () => {
         await waitForCount("#unread-pane-list li", 0);
         await release(watch, true);
         await waitForCalls("slack_timeline");
-        await expect($("#unread-pane-title")).toHaveText("未読 1");
+        await expect($("#unread-pane-title")).toHaveText("通知 1");
         await expect($("#unread-pane")).toBeDisplayed();
       });
 
@@ -261,7 +263,7 @@ describe("footer", () => {
         await waitForCount("#read-threads li", 1);
         await $("#footer-bell").click();
         await expect($("#unread-pane")).toBeDisplayed();
-        await expect($("#unread-pane-title")).toHaveText("未読 0");
+        await expect($("#unread-pane-title")).toHaveText("通知 0");
         await browser.pause(300);
         await expect($("#unread-pane")).toBeDisplayed();
       });
@@ -302,18 +304,18 @@ describe("footer", () => {
       await mock("slack_timeline", timeline([slackAt(1, "Slack Fresh", "fresh text"), slackAt(4, "Slack Second", "second text"), slackAt(8, "Slack Oldest", "oldest text")], { refreshSecs: 1 }));
       await waitForCount("#unread-pane-list li", 5);
       expect((await lines())[0]).toBe("fresh text");
-      await expect($("#unread-pane-title")).toHaveText("未読 5");
+      await expect($("#unread-pane-title")).toHaveText("通知 5");
       // The Slack list is read in Slack: the messages go.
       await mock("slack_timeline", timeline([], { refreshSecs: 1 }));
       await waitForCount("#unread-pane-list li", 2);
       expect(await lines()).toEqual([mailLine("Mail newest"), mailLine("Mail third")]);
-      await expect($("#unread-pane-title")).toHaveText("未読 2");
+      await expect($("#unread-pane-title")).toHaveText("通知 2");
       // A mail is made read in the inbox.
       await mock("set_read", true);
       await browser.execute(() => document.querySelector<HTMLInputElement>("#unread-threads .read-box")!.click());
       await waitForCount("#unread-pane-list li", 1);
       expect(await lines()).toEqual([mailLine("Mail third")]);
-      await expect($("#unread-pane-title")).toHaveText("未読 1");
+      await expect($("#unread-pane-title")).toHaveText("通知 1");
       expect(await textsOf("#unread-pane-list li b")).toEqual(["Alice"]);
     });
 
@@ -368,7 +370,7 @@ describe("footer", () => {
         expect(await waitForCalls(trash)).toEqual([{ account, id: "t1" }]);
         await waitForCount("#unread-pane-list li", 3);
         expect(await lines()).toEqual(["text A", mailLine("Mail third"), "text B"]);
-        await expect($("#unread-pane-title")).toHaveText("未読 3");
+        await expect($("#unread-pane-title")).toHaveText("通知 3");
         await waitForText("#footer-bell .footer-count", "3");
         await expect($("#unread-pane")).toBeDisplayed();
         await expect($("#thread")).not.toBeDisplayed();
@@ -381,7 +383,7 @@ describe("footer", () => {
         expect(await waitForCalls(untrash)).toEqual([{ account, id: "t1" }]);
         await waitForCount("#unread-pane-list li", 4);
         expect((await lines())[0]).toBe(mailLine("Mail newest"));
-        await expect($("#unread-pane-title")).toHaveText("未読 4");
+        await expect($("#unread-pane-title")).toHaveText("通知 4");
       });
 
       it("archives a mail with the list's command, and offers 元に戻す", async () => {
@@ -391,7 +393,7 @@ describe("footer", () => {
         expect(await waitForCalls(archive)).toEqual([{ account, id: "t2" }]);
         await waitForCount("#unread-pane-list li", 3);
         expect(await lines()).toEqual([mailLine("Mail newest"), "text A", "text B"]);
-        await expect($("#unread-pane-title")).toHaveText("未読 3");
+        await expect($("#unread-pane-title")).toHaveText("通知 3");
         await waitForText("#footer-bell .footer-count", "3");
         await expect($(".toast")).toHaveText(expect.stringContaining("アーカイブしました"));
         await expect($(".toast button")).toHaveText("元に戻す");
@@ -405,7 +407,7 @@ describe("footer", () => {
         await expect($(CARD)).toHaveText(expect.stringContaining("失敗しました"));
         await waitForCount("#unread-pane-list li", 4);
         expect((await lines())[0]).toBe(mailLine("Mail newest"));
-        await expect($("#unread-pane-title")).toHaveText("未読 4");
+        await expect($("#unread-pane-title")).toHaveText("通知 4");
         await waitForText("#footer-bell .footer-count", "4");
       });
 
@@ -417,7 +419,7 @@ describe("footer", () => {
         expect(await waitForCalls(mark)).toEqual([{ teamId: workspace.teamId, channel: "C1", ts: slackTs(4) }]);
         await waitForCount("#unread-pane-list li", 3);
         expect(await lines()).toEqual([mailLine("Mail newest"), mailLine("Mail third"), "text B"]);
-        await expect($("#unread-pane-title")).toHaveText("未読 3");
+        await expect($("#unread-pane-title")).toHaveText("通知 3");
         await waitForText("#footer-bell .footer-count", "3");
         await expect($("#unread-pane")).toBeDisplayed();
         await expect($("#slack-thread")).not.toBeDisplayed();
@@ -431,7 +433,7 @@ describe("footer", () => {
         await expect($(CARD)).toHaveText(expect.stringContaining("既読を Slack に送れませんでした"));
         expect(await waitForCalls(fresh)).toEqual([{ cached: true }]);
         await waitForCount("#unread-pane-list li", 4);
-        await expect($("#unread-pane-title")).toHaveText("未読 4");
+        await expect($("#unread-pane-title")).toHaveText("通知 4");
       });
 
       it("watches the thread of a Slack message with ウォッチ as the popup does: slack_watch is called with the thread's ts, and the row goes at once and the count stays, without opening a thread", async () => {
@@ -443,12 +445,12 @@ describe("footer", () => {
         expect(await waitForCalls(watch)).toEqual([{ teamId: workspace.teamId, channel: "C1", ts: slackTs(4) }]);
         await waitForCount("#unread-pane-list li", 3);
         expect(await lines()).toEqual([mailLine("Mail newest"), mailLine("Mail third"), "text B"]);
-        await expect($("#unread-pane-title")).toHaveText("未読 4");
+        await expect($("#unread-pane-title")).toHaveText("通知 4");
         await expect($("#slack-thread")).not.toBeDisplayed();
         expect(await callsOf(mark)).toEqual([]);
         await release(watch, true);
         await waitForCalls("slack_timeline");
-        await expect($("#unread-pane-title")).toHaveText("未読 4");
+        await expect($("#unread-pane-title")).toHaveText("通知 4");
         await waitForText("#footer-bell .footer-count", "4");
       });
     });
@@ -653,5 +655,153 @@ describe("footer: the resources (A-48)", () => {
     await browser.waitUntil(async () => (await names()).length === 1);
     expect(await names()).toEqual(["この Mac"]);
     expect((await pane()).map((s) => s[0])).toEqual(["この Mac"]);
+  });
+});
+
+// A-35: the bell adds up the mail, Slack, the events C-8 tells of and the tasks that are due; the tabs of the pane choose the kind of the rows.
+describe("footer: the tabs of the pane of the notices", () => {
+  const TICK = 500;
+  const TABS = "#unread-pane-tabs .unread-tab";
+  const ROWS = "#unread-pane-list li";
+  // The week of today where "Team sync" (10:00-11:00, with Meet) and "Maybe lunch" have IDs and starts.
+  const week = (): Week => {
+    const w = weekOfToday();
+    const today = isoDate(new Date());
+    w.timed = w.timed.map((t, i) => ({ ...t, eventId: `e${i}`, calendarId: "c1", start: rfc(today, "10:00"), end: rfc(today, "11:00") }));
+    return w;
+  };
+  const notice = (summary: string, over: Partial<EventNotice> = {}): EventNotice => ({ event: week().timed.find((t) => t.summary === summary)!, minutes: 5, started: false, ...over });
+  // Two unread mails (the default inbox), the event "Team sync" being told of and the task "Write report" that is due: 4 in all.
+  const start = (over: Record<string, unknown> = {}) =>
+    boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline([]), claude_status: claudeReady, calendar_week: week(), calendar_notices: [notice("Team sync")], todoist_load: todoData(), ...timers({ calendarNotice: TICK }), ...over });
+  const open = async () => {
+    await waitForText("#footer-bell .footer-count", "4");
+    await $("#footer-bell").click();
+    await expect($("#unread-pane")).toBeDisplayed();
+  };
+  const kinds = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#unread-pane-list li")].map((li) => li.dataset.kind));
+
+  it("adds the events being told of and the tasks that are due to the mail and Slack, on the bell and in its label", async () => {
+    await start();
+    await waitForText("#footer-bell .footer-count", "4");
+    expect(await label()).toBe("通知（4 件）");
+    await expect($("#nav-mail .nav-count")).toHaveText("2");
+    await expect($("#nav-calendar .nav-count")).toHaveText("1");
+    await expect($("#nav-todo .nav-count")).toHaveText("1");
+  });
+
+  it("draws the sum again when the events being told of change", async () => {
+    await start();
+    await waitForText("#footer-bell .footer-count", "4");
+    await mock("calendar_notices", []);
+    await waitForText("#footer-bell .footer-count", "3");
+    await mock("calendar_notices", [notice("Team sync"), notice("Maybe lunch")]);
+    await waitForText("#footer-bell .footer-count", "5");
+  });
+
+  it("puts the tabs over the list: all, mail, Slack, calendar and Todo, each with its count, a tab with none too, and all chosen at first", async () => {
+    await start();
+    await open();
+    expect(await textsOf(TABS)).toEqual(["すべて 4", "メール 2", "Slack 0", "予定 1", "Todo 1"]);
+    expect(await browser.execute(() => [...document.querySelectorAll("#unread-pane-tabs .unread-tab")].map((b) => b.getAttribute("aria-selected")))).toEqual(["true", "false", "false", "false", "false"]);
+    await expect($("#unread-pane-title")).toHaveText("通知 4");
+    const place = await browser.execute(() => {
+      const tabs = document.getElementById("unread-pane-tabs")!.getBoundingClientRect();
+      return { overList: tabs.bottom <= document.getElementById("unread-pane-list")!.getBoundingClientRect().top, underHeader: tabs.top >= document.querySelector("#unread-pane header")!.getBoundingClientRect().bottom };
+    });
+    expect(place).toEqual({ overList: true, underHeader: true });
+  });
+
+  it("shows the rows of every kind under all, and only the rows of the kind of the tab chosen", async () => {
+    await start();
+    await open();
+    await waitForCount(ROWS, 4);
+    expect((await kinds()).sort()).toEqual(["calendar", "mail", "mail", "todo"]);
+    await $(`${TABS}[data-tab="calendar"]`).click();
+    await waitForCount(ROWS, 1);
+    expect(await kinds()).toEqual(["calendar"]);
+    await expect($(`${TABS}[data-tab="calendar"]`)).toHaveAttribute("aria-selected", "true");
+    await $(`${TABS}[data-tab="todo"]`).click();
+    await waitForCount(ROWS, 1);
+    expect(await kinds()).toEqual(["todo"]);
+    await $(`${TABS}[data-tab="mail"]`).click();
+    await waitForCount(ROWS, 2);
+    expect(await kinds()).toEqual(["mail", "mail"]);
+    await $(`${TABS}[data-tab="slack"]`).click();
+    await waitForCount(ROWS, 0);
+    // The heading and the counts of the tabs are the same on every tab.
+    await expect($("#unread-pane-title")).toHaveText("通知 4");
+    expect(await textsOf(TABS)).toEqual(["すべて 4", "メール 2", "Slack 0", "予定 1", "Todo 1"]);
+    await $(`${TABS}[data-tab="all"]`).click();
+    await waitForCount(ROWS, 4);
+  });
+
+  it("draws a row of an event with its title, its time and how long to its start, and one of a task with its name and its due", async () => {
+    await start({ calendar_notices: [notice("Team sync", { minutes: 3, started: true })] });
+    await open();
+    await $(`${TABS}[data-tab="calendar"]`).click();
+    await waitForCount(ROWS, 1);
+    const row = $$(ROWS)[0];
+    await expect(row.$(".unread-kind svg")).toBeDisplayed();
+    await expect(row.$("b")).toHaveText("Team sync");
+    await expect(row.$(".unread-time")).toHaveText("10:00–11:00");
+    await expect(row.$(".unread-line")).toHaveText("開始から 3 分");
+    await expect(row.$(".text-btn")).toHaveText("予定を開く");
+    await expect(row.$(".avatar")).not.toExist();
+    await $(`${TABS}[data-tab="todo"]`).click();
+    await waitForCount(ROWS, 1);
+    const todo = $$(ROWS)[0];
+    await expect(todo.$("b")).toHaveText("Write report");
+    await expect(todo.$(".unread-time")).toHaveText("今日");
+    await expect(todo.$(".text-btn")).toHaveText("詳細を開く");
+  });
+
+  it("opens the detail of the event on the calendar from its row, closes the pane and takes the card and the counts off, as the card's button does", async () => {
+    await start();
+    await open();
+    await $(`${TABS}[data-tab="calendar"]`).click();
+    await waitForCount(ROWS, 1);
+    await $$(ROWS)[0].$("button=予定を開く").click();
+    await expect($("#calendar")).toBeDisplayed();
+    await expect($(".cal-pop h2")).toHaveText("Team sync");
+    await expect($("#unread-pane")).not.toBeDisplayed();
+    await expect($("#nav-calendar .nav-count")).not.toBeDisplayed();
+    await waitForText("#footer-bell .footer-count", "3");
+    expect(await count("#error-cards .event-card")).toBe(0);
+    await browser.pause(TICK * 2);
+    expect(await count("#error-cards .event-card")).toBe(0);
+    await expect($("#footer-bell .footer-count")).toHaveText("3");
+  });
+
+  it("opens the task on the Todo screen from its row, and closes the pane", async () => {
+    await start();
+    await open();
+    await $(`${TABS}[data-tab="todo"]`).click();
+    await waitForCount(ROWS, 1);
+    await $$(ROWS)[0].$("button=詳細を開く").click();
+    await expect($("#todo")).toBeDisplayed();
+    await expect($("#todo-detail")).toBeDisplayed();
+    await expect($('#todo-detail [data-field="name"]')).toHaveValue("Write report");
+    await expect($("#unread-pane")).not.toBeDisplayed();
+  });
+
+  it("starts at all each time the pane opens", async () => {
+    await start();
+    await open();
+    await $(`${TABS}[data-tab="todo"]`).click();
+    await waitForCount(ROWS, 1);
+    await $("#unread-pane-close").click();
+    await $("#footer-bell").click();
+    await expect($(`${TABS}[data-tab="all"]`)).toHaveAttribute("aria-selected", "true");
+    await waitForCount(ROWS, 4);
+  });
+
+  it("takes an event off the pane when its card goes, and a task when it is done", async () => {
+    await start();
+    await open();
+    await waitForCount(ROWS, 4);
+    await mock("calendar_notices", []);
+    await waitForCount(ROWS, 3);
+    expect(await textsOf(TABS)).toEqual(["すべて 3", "メール 2", "Slack 0", "予定 0", "Todo 1"]);
   });
 });

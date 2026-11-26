@@ -12,7 +12,7 @@ interface Window {
     };
   };
   // E2E build only (e2e/fixtures.js): the periods of the timers that a spec shortens (ts/e2e-timers.ts).
-  __e2e_timers__?: Partial<Record<"orcaClock" | "orcaMirror" | "databaseProfiles" | "formationFlow" | "lspSettings" | "machineResources" | "machineUsage", number>>;
+  __e2e_timers__?: Partial<Record<"orcaClock" | "orcaMirror" | "databaseProfiles" | "formationFlow" | "lspSettings" | "machineResources" | "machineUsage" | "calendarNotice", number>>;
   // E2E build only: a spec sets it before it shows a terminal to have the WebGL renderer, which the build leaves off (ts/orca-terminal.ts).
   __e2e_webgl__?: boolean;
 }

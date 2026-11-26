@@ -5,7 +5,7 @@ import type { ProjectItem } from "./bindings/ProjectItem";
 import type { TaskItem } from "./bindings/TaskItem";
 import type { TaskHit } from "./bindings/TaskHit";
 import type { Todo } from "./bindings/Todo";
-import { accountButtons } from "./accounts.js";
+import { accountList } from "./accounts.js";
 import { $ } from "./dom.js";
 import { isoDate } from "./format.js";
 import { setNavCount } from "./view.js";
@@ -93,6 +93,12 @@ export function recountTodo() {
   setNavCount("nav-todo", passed, "Todo", "期限到来", upcoming);
 }
 
+// The open tasks whose due moment has come: the ones the count above is made of, for the rows of the pane of the notices (A-35).
+export function dueTasks() {
+  const now = Date.now();
+  return counted.filter((t) => t.dueAt !== null && t.dueAt <= now);
+}
+
 // Remembers `tasks` (the open tasks, subtasks included) as what the count is made of, and counts them. An empty list clears the count.
 export function setTodoCount(tasks: TaskItem[]) {
   counted = tasks;
@@ -126,7 +132,7 @@ export function dueLabel(due: { date: string; time: string | null }) {
 
 // The thread a task links to, only when it is of an account tsunagiai has: a description can name any address.
 export const linkedMail = (t: TaskItem, accounts: Set<string | undefined>) => (t.mail && accounts.has(t.mail.account) ? t.mail : null);
-export const accountSet = () => new Set(accountButtons().map((b) => b.dataset.account));
+export const accountSet = () => new Set(accountList());
 
 // Whether a text field holds what the user is typing (a field of the open task, or a name being edited in the list); a redraw would replace it with Todoist's older value.
 // The subtask field and the comment field count only while they have text: the first is emptied on Enter, and the redraw must show the subtask just added; the second is emptied once its comment is sent.

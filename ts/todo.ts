@@ -7,7 +7,7 @@ import { pad2 } from "./format.js";
 import { COPY_SVG, DELETE_SVG, LINK_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, showMenu } from "./menu.js";
-import { currentScreen } from "./nav.js";
+import { currentScreen, setScreen } from "./nav.js";
 import { HandoffPane } from "./orca-handoff.js";
 import { todoCard } from "./orca-handoff-cards.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
@@ -144,6 +144,13 @@ export function showTokenForm(note = "") {
   $("todo-token-note").textContent = note;
   // Not from the settings screen: the form is hidden there.
   if (currentScreen() === "todo") $("todo-token-input").focus();
+}
+
+// Shows the detail of task `id` on the Todo screen (the row of a task in the pane of the notices, A-35). Until the screen's own load has drawn, the task is the one it opens on.
+export function openTodoTask(id: string) {
+  todoState.open = id;
+  setScreen("todo");
+  if (todoState.todo) renderTodo();
 }
 
 export function renderTodo() {

@@ -41,20 +41,11 @@ function markNav(name: Screen) {
   }
 }
 
-// The accounts of a function sit under its icon in the sidebar, and only while that function is shown: the Google accounts under the calendar icon while the screen is mail
-// (list, thread) or calendar, the Slack workspaces under the Slack icon while the Slack screen is shown. Todo and settings (and the prompt screen reached from them) show neither.
-// A popup of one of them closes with the screen.
-function syncTrays() {
-  closePopup();
-  $("account-list").hidden = !(screen === "mail" || screen === "new-mail" || screen === "calendar");
-  $("slack-workspace-list").hidden = screen !== "slack";
-}
-
 // The Todo prompt screen. The sidebar stays on the settings, and so does `currentScreen()`, so background work does not draw another screen under it.
 export function showPromptScreen() {
   screen = "settings";
   markNav("settings");
-  syncTrays();
+  closePopup(); // the popup of the Claude avatar closes with the screen
   closeHint();
   show("prompt");
 }
@@ -63,7 +54,7 @@ export function showPromptScreen() {
 export function showNewMailScreen() {
   screen = "new-mail";
   markNav("mail");
-  syncTrays();
+  closePopup();
   closeHint();
   show("new-mail");
 }
@@ -105,7 +96,7 @@ export function setScreen(name: Screen, tab?: SettingsTab) {
     watchFiles();
   }
   markNav(name);
-  syncTrays();
+  closePopup();
   if (name === "calendar") {
     showCalendar();
     syncCalendarClaude();
@@ -135,14 +126,14 @@ export function setScreen(name: Screen, tab?: SettingsTab) {
   }
 }
 
-// The elements of the sidebar that belong to each screen the menu moves (A-5): its button, and the tray under it (the Google accounts under the calendar, the Slack workspaces under Slack).
-const MENU_PARTS: Record<MenuScreen, string[]> = {
-  mail: ["nav-mail"],
-  calendar: ["nav-calendar", "account-list"],
-  todo: ["nav-todo"],
-  slack: ["nav-slack", "slack-workspace-list"],
-  orca: ["nav-orca"],
-  database: ["nav-database"],
+// The button of the sidebar that belongs to each screen the menu moves (A-5).
+const MENU_BUTTONS: Record<MenuScreen, string> = {
+  mail: "nav-mail",
+  calendar: "nav-calendar",
+  todo: "nav-todo",
+  slack: "nav-slack",
+  orca: "nav-orca",
+  database: "nav-database",
 };
 
 // The screens the sidebar shows, from top to bottom: ⌘1 is the first. The order the sidebar was written in until the saved one is read.
@@ -152,11 +143,9 @@ let shown: MenuScreen[] = ["mail", "calendar", "todo", "slack", "orca", "databas
 function drawMenu(items: MenuEntry[]) {
   shown = items.filter((entry) => entry.enabled).map((entry) => entry.screen);
   for (const { screen, enabled } of items) {
-    const [button, ...rest] = MENU_PARTS[screen].map($);
-    for (const part of [button, ...rest]) {
-      $("sidebar-bottom").before(part);
-      part.classList.toggle("menu-off", !enabled);
-    }
+    const button = $(MENU_BUTTONS[screen]);
+    $("sidebar-bottom").before(button);
+    button.classList.toggle("menu-off", !enabled);
     if (enabled) button.dataset.shortcut = `${isMac ? "⌘" : "Ctrl+"}${shown.indexOf(screen) + 1}`;
     else delete button.dataset.shortcut;
   }
@@ -172,7 +161,7 @@ function initMenuKeys() {
       if (!target) return;
       e.preventDefault();
       e.stopPropagation();
-      $(MENU_PARTS[target][0]).click();
+      $(MENU_BUTTONS[target]).click();
     },
     true,
   );
@@ -185,7 +174,7 @@ export function initNav() {
   $("nav-slack").onclick = () => setScreen("slack");
   $("nav-orca").onclick = () => setScreen("orca");
   $("nav-database").onclick = () => setScreen("database");
-  syncTrays();
+  closePopup();
   $("nav-settings").onclick = () => setScreen("settings");
   initMenuKeys();
   invoke("side_menu_settings").then((settings) => drawMenu(settings.items), (e) => logError("side-menu", e));

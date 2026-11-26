@@ -1,78 +1,47 @@
-// The accounts: the sidebar avatars, the popup of an account (or of Claude, or of a Slack workspace), the Google card of the settings, logging in and removing an account.
+// The accounts: the popup of the Claude avatar, the Google card of the settings, logging in and removing an account.
 import type { Claude } from "./bindings/Claude";
 import { calendarNeedsLogin, loadCalendar, resetCalendar } from "./calendar.js";
+import { syncCalendarNotice } from "./calendar-notice.js";
 import { getClaude } from "./claude.js";
 import { $, el, tag } from "./dom.js";
 import { avatarColor, initials } from "./format.js";
-import { hintPopup, toggleHint } from "./hint.js";
-import { CLAUDE_SVG } from "./icons.js";
+import { confirmUnlink, hintPopup, toggleHint } from "./hint.js";
+import { CLAUDE_SVG, LINK_SVG } from "./icons.js";
 import { forgetRemoved, historyIds, load } from "./inbox.js";
 import { rows, updateBadge } from "./inbox-rows.js";
 import { invoke } from "./ipc.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { itemRow } from "./settings.js";
-import { decorateAvatar } from "./slack-view.js";
-import { goBack, loading, opened } from "./thread.js";
+import { forgetThread, loading, opened } from "./thread.js";
 import { clearRelogin, setRelogin, showFailure } from "./error-card.js";
 import { show } from "./view.js";
 
-// Per account, what the last load could not do; the account popup reads it.
+// Per account, what the last load could not do; the Google card reads it.
 let inboxIssues: { needsLogin: string[]; failed: Record<string, string> } = { needsLogin: [], failed: {} };
-// The account whose popup is open, or null.
-let popupAccount: string | null = null;
-// Whether the Claude avatar's popup is open (it is drawn in the same #account-popup).
+// The Google accounts, as the inbox last answered.
+let accounts: string[] = [];
+// Whether the Claude avatar's popup is open (it is drawn in #account-popup).
 let claudePopup = false;
-// The workspace whose popup is open (the Slack tray's avatar; drawn in the same #account-popup), or null.
-let popupWorkspace: string | null = null;
-// The workspaces of the Slack tray, as the Slack screen last drew them.
-let tray: WorkspaceEntry[] = [];
-// What the tray's avatars were drawn from.
-let trayKey = "";
 
-// A workspace of the Slack tray: its own icon (the https URL on Slack's image host, fetched by slack-view.ts, or null for the initial on the workspace's color), and what the last read of its messages found.
-export interface WorkspaceEntry {
-  teamId: string;
-  team: string;
-  user: string;
-  iconUrl: string | null;
-  status: [string, string];
-  lines: string[];
-}
-// The account whose removal the popup is asking to confirm, or null.
-let confirmingRemoval: string | null = null;
-// What the popup shows now; it is redrawn only when this changes, so a sync does not drop a text selection.
-let popupKey = "";
-
-export const accountButtons = () => [...$("account-list").children] as HTMLElement[];
+export const accountList = () => accounts;
 
 // Closes the popup if it is Claude's (Claude can no longer be used).
 export function closeClaudePopup() {
   if (claudePopup) closePopup();
 }
 
-// Whether the popup of an account or of Claude is open.
-export const popupOpen = () => popupAccount !== null || claudePopup || popupWorkspace !== null;
+// Whether the popup of Claude is open.
+export const popupOpen = () => claudePopup;
 
-// Sidebar avatars of every account, a re-login row for each account that needs it, and an error row for each that failed to load.
-export function renderAccounts({ accounts, needsLogin, failed }: { accounts: string[]; needsLogin: string[]; failed: Record<string, string> }) {
+// Every account's row in the settings' Google card, a re-login row for each account that needs it, and an error row for each that failed to load.
+export function renderAccounts({ accounts: list, needsLogin, failed }: { accounts: string[]; needsLogin: string[]; failed: Record<string, string> }) {
   inboxIssues = { needsLogin, failed };
-  $<HTMLButtonElement>("nav-calendar").disabled = accounts.length === 0;
-  $("account-list").replaceChildren(
-    ...accounts.map((a) => {
-      const avatar = document.createElement("button");
-      avatar.className = "avatar account-btn";
-      avatar.dataset.account = a;
-      avatar.textContent = initials(a);
-      avatar.style.background = avatarColor(a);
-      avatar.setAttribute("aria-label", a);
-      avatar.setAttribute("aria-haspopup", "dialog");
-      avatar.setAttribute("aria-controls", "account-popup");
-      avatar.setAttribute("aria-expanded", String(a === popupAccount));
-      avatar.onclick = () => togglePopup(a);
-      return avatar;
-    }),
-  );
-  refreshPopup();
+  const changed = list.join("\n") !== accounts.join("\n");
+  accounts = list;
+  $<HTMLButtonElement>("nav-calendar").disabled = list.length === 0;
+  // The minutes of the cards go with the clock of C-8; only a change of the accounts asks for a read and a draw at once.
+  if (changed) syncCalendarNotice();
+  renderGoogleCard();
   $("relogin").replaceChildren(
     ...needsLogin.map((a) => {
       const div = document.createElement("div");
@@ -93,103 +62,22 @@ export function renderAccounts({ accounts, needsLogin, failed }: { accounts: str
 }
 
 export function closePopup() {
-  popupAccount = null;
   claudePopup = false;
-  popupWorkspace = null;
-  confirmingRemoval = null;
   $("account-popup").hidden = true;
-  for (const b of [...accountButtons(), ...trayButtons()]) b.setAttribute("aria-expanded", "false");
   $("claude-btn").setAttribute("aria-expanded", "false");
 }
 
-function togglePopup(account: string) {
-  if (popupAccount === account) return closePopup();
-  popupAccount = account;
-  claudePopup = false;
-  popupWorkspace = null;
-  confirmingRemoval = null;
-  popupKey = "";
-  $("account-popup").hidden = false;
-  for (const b of accountButtons()) b.setAttribute("aria-expanded", String(b.dataset.account === account));
-  for (const b of trayButtons()) b.setAttribute("aria-expanded", "false");
-  $("claude-btn").setAttribute("aria-expanded", "false");
-  refreshPopup();
-}
-
-const trayButtons = () => [...$("slack-workspace-list").children] as HTMLElement[];
-
-// The Slack tray: one avatar per workspace, with its own icon when it has one. Drawn by the Slack screen; an open popup follows the new state.
-// The avatars are rebuilt only when a workspace, its name or its icon address changed, so that a fetched icon stays on its avatar.
-export function renderWorkspaceTray(items: WorkspaceEntry[]) {
-  tray = items;
-  const key = JSON.stringify(items.map((w) => [w.teamId, w.team, w.iconUrl]));
-  if (key === trayKey) return refreshPopup();
-  trayKey = key;
-  $("slack-workspace-list").replaceChildren(
-    ...items.map((w) => {
-      const button = document.createElement("button");
-      button.className = "avatar account-btn";
-      button.dataset.team = w.teamId;
-      decorateAvatar(button, w.team, w.iconUrl);
-      button.setAttribute("aria-label", w.team);
-      button.setAttribute("aria-haspopup", "dialog");
-      button.setAttribute("aria-controls", "account-popup");
-      button.setAttribute("aria-expanded", String(w.teamId === popupWorkspace));
-      button.onclick = () => toggleWorkspacePopup(w.teamId);
-      return button;
-    }),
-  );
-  refreshPopup();
-}
-
-function toggleWorkspacePopup(teamId: string) {
-  if (popupWorkspace === teamId) return closePopup();
-  closePopup();
-  popupWorkspace = teamId;
-  popupKey = "";
-  $("account-popup").hidden = false;
-  for (const b of trayButtons()) b.setAttribute("aria-expanded", String(b.dataset.team === teamId));
-  refreshPopup();
-}
-
-// A workspace's popup: its name, the user, the state of the last read, and the way to the Slack settings.
-function drawWorkspacePopup() {
-  const w = tray.find((x) => x.teamId === popupWorkspace);
-  const button = trayButtons().find((b) => b.dataset.team === popupWorkspace);
-  if (!w || !button) return closePopup();
-  const popup = $("account-popup");
-  const key = JSON.stringify(["workspace", w]);
-  if (key !== popupKey) {
-    popupKey = key;
-    const hadFocus = popup.contains(document.activeElement);
-    const avatar = el("avatar");
-    decorateAvatar(avatar, w.team, w.iconUrl);
-    const open = tag("button", "text-btn", "設定を開く");
-    open.onclick = () => {
-      closePopup();
-      setScreen("settings", "slack");
-    };
-    popup.replaceChildren(avatar, el("popup-email", w.team), el("popup-plan", w.user), tag("span", `status ${w.status[0]}`, w.status[1]), ...w.lines.map((l) => el("popup-status", l)), open);
-    if (hadFocus) button.focus();
-  }
-  placePopup(button);
-}
-
-// Puts the popup right of the sidebar at its avatar's height, inside the window.
-function placePopup(button: HTMLElement) {
+// Puts the popup right of the sidebar at the Claude avatar's height, inside the window.
+function placePopup() {
   const popup = $("account-popup");
   popup.style.left = `${$("sidebar").getBoundingClientRect().right + 8}px`;
-  popup.style.top = `${Math.max(8, Math.min(button.getBoundingClientRect().top, innerHeight - popup.offsetHeight - 8))}px`;
+  popup.style.top = `${Math.max(8, Math.min($("claude-btn").getBoundingClientRect().top, innerHeight - popup.offsetHeight - 8))}px`;
 }
 
 // Claude's popup: who is logged in and the plan (or "API キー" when a key is in use). Nothing to change here; the settings hold the rest.
 function toggleClaudePopup() {
   if (claudePopup) return closePopup();
-  popupAccount = null;
-  popupWorkspace = null;
-  confirmingRemoval = null;
   claudePopup = true;
-  for (const b of [...accountButtons(), ...trayButtons()]) b.setAttribute("aria-expanded", "false");
   $("claude-btn").setAttribute("aria-expanded", "true");
   // The button is only shown while Claude can be used.
   const claude = getClaude() as Extract<Claude, { state: "ready" }>;
@@ -208,10 +96,10 @@ function toggleClaudePopup() {
     open,
   );
   $("account-popup").hidden = false;
-  placePopup($("claude-btn"));
+  placePopup();
 }
 
-// What the popup and the settings card say about an account: what is wrong with it, whether it needs a login, and its unread count.
+// What the settings card says about an account: what is wrong with it, whether it needs a login, and its unread count.
 function accountState(a: string) {
   const lines: string[] = [];
   if (a in inboxIssues.failed) lines.push(`受信トレイの読み込みに失敗しました: ${inboxIssues.failed[a]}`);
@@ -222,11 +110,11 @@ function accountState(a: string) {
   return { lines, relogin, unread };
 }
 
-// The settings' Google card: one row per sidebar avatar. It is drawn only while the settings screen is shown, and redrawn only when a row changes.
+// The settings' Google card: one row per account. It is drawn only while the settings screen is shown, and redrawn only when a row changes.
 let googleKey = "";
 export function renderGoogleCard() {
   if (currentScreen() !== "settings") return;
-  const states = accountButtons().map((b) => [b.dataset.account!, accountState(b.dataset.account!)] as const);
+  const states = accounts.map((a) => [a, accountState(a)] as const);
   const key = JSON.stringify(states);
   if (key === googleKey) return;
   googleKey = key;
@@ -242,61 +130,16 @@ export function renderGoogleCard() {
             b.onclick = () => addAccount(a, b);
             actions.push(b);
           }
+          const unlink = tag("button", "icon-btn") as HTMLButtonElement;
+          unlink.innerHTML = LINK_SVG;
+          unlink.setAttribute("aria-label", `${a} の接続を解除`);
+          unlink.setAttribute("data-hint", "");
+          unlink.onclick = () => confirmUnlink(unlink, a, `${a} をつなぎAIから削除します。Gmail のメールは消えません。`, () => removeAccount(a, unlink));
+          actions.push(unlink);
           return itemRow({ avatar, name: a, meta: [...lines, `未読 ${unread}`].join(" · "), warn: lines.length > 0, status, actions });
         })
       : [tag("div", "card-empty", "アカウントはまだありません")]),
   );
-}
-
-// Redraws the open popup from the latest state and puts it right of the sidebar at its avatar's height, inside the window.
-// The avatars are rebuilt on every render, so the popup finds its avatar again by the account.
-export function refreshPopup() {
-  renderGoogleCard();
-  if (claudePopup) return placePopup($("claude-btn"));
-  if (popupWorkspace !== null) return drawWorkspacePopup();
-  if (popupAccount === null) return;
-  const a = popupAccount;
-  const button = accountButtons().find((b) => b.dataset.account === a);
-  if (!button) return closePopup();
-  const popup = $("account-popup");
-  const { lines, relogin, unread } = accountState(a);
-  const confirming = confirmingRemoval === a;
-  const key = JSON.stringify([a, lines, relogin, unread, confirming]);
-  if (key !== popupKey) {
-    popupKey = key;
-    const hadFocus = popup.contains(document.activeElement);
-    const avatar = el("avatar", initials(a));
-    avatar.style.background = avatarColor(a);
-    const textButton = (text: string, onclick: (b: HTMLButtonElement) => void) => {
-      const b = document.createElement("button");
-      b.textContent = text;
-      b.onclick = () => onclick(b);
-      return b;
-    };
-    if (confirming) {
-      const cancel = textButton("キャンセル", () => {
-        confirmingRemoval = null;
-        refreshPopup();
-      });
-      const remove = textButton("削除", (b) => removeAccount(a, b));
-      remove.className = "danger";
-      const actions = el("popup-actions");
-      actions.append(remove, cancel);
-      popup.replaceChildren(avatar, el("popup-email", a), el("popup-status", `${a} をつなぎAIから削除します。Gmail のメールは消えません。`), actions);
-      cancel.focus();
-    } else {
-      popup.replaceChildren(avatar, el("popup-email", a), ...lines.map((l) => el("popup-status", l)), el("popup-unread", `未読 ${unread} 件`));
-      if (relogin) popup.append(textButton("再ログイン", (b) => addAccount(a, b)));
-      popup.append(
-        textButton("このアカウントを削除", () => {
-          confirmingRemoval = a;
-          refreshPopup();
-        }),
-      );
-      if (hadFocus) button.focus();
-    }
-  }
-  placePopup(button);
 }
 
 // Logs in (the account chosen in the browser, or `hint` preselected) and reloads the list.
@@ -305,7 +148,7 @@ export async function addAccount(hint: string | null, button: HTMLButtonElement)
   try {
     await invoke("login", { loginHint: hint });
     // The accounts changed: weeks kept so far and the calendar lists behind them are stale.
-    // The login may have fixed the calendar too; the popup must not keep the old state until the calendar is opened.
+    // The login may have fixed the calendar too; the card must not keep the old state until the calendar is opened.
     resetCalendar(false);
     clearRelogin("calendar");
     await load();
@@ -323,12 +166,9 @@ async function removeAccount(account: string, button: HTMLButtonElement) {
   try {
     await invoke("remove_account", { account });
   } catch (e) {
-    confirmingRemoval = null;
-    popupKey = "";
-    refreshPopup();
+    button.disabled = false;
     return showFailure("accounts", e);
   }
-  closePopup();
   for (const [key, r] of rows) {
     if (r.t.account !== account) continue;
     r.li.remove();
@@ -336,15 +176,15 @@ async function removeAccount(account: string, button: HTMLButtonElement) {
   }
   historyIds.delete(account);
   forgetRemoved(account);
-  // An open thread of this account, or one still loading, cannot be acted on any more.
-  if (!$("thread").hidden && (opened.current ?? loading.current)?.account === account) goBack();
+  // An open thread of this account, or one still loading, cannot be acted on any more; the settings are on screen, so only the thread is let go.
+  if ((opened.current ?? loading.current)?.account === account) forgetThread();
   resetCalendar(true);
   clearRelogin("calendar", account);
   updateBadge();
   await load();
   if (currentScreen() !== "calendar") return;
   // With no account left there is no calendar to show: back to the mail screen, which shows the login.
-  if (accountButtons().length === 0) {
+  if (accounts.length === 0) {
     setScreen("mail");
     show("login");
   } else {
@@ -354,24 +194,18 @@ async function removeAccount(account: string, button: HTMLButtonElement) {
 
 export function initAccounts() {
   $("claude-btn").onclick = toggleClaudePopup;
-  // Another avatar or the popup handles its own click.
   document.addEventListener("pointerdown", (e) => {
-    if (popupOpen() && !(e.target as Element).closest("#account-popup, .account-btn")) closePopup();
+    if (claudePopup && !(e.target as Element).closest("#account-popup, .account-btn")) closePopup();
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key !== "Escape" || !popupOpen()) return;
+    if (e.key !== "Escape" || !claudePopup) return;
     const inside = $("account-popup").contains(document.activeElement);
-    const button = claudePopup
-      ? $("claude-btn")
-      : popupWorkspace !== null
-        ? trayButtons().find((b) => b.dataset.team === popupWorkspace)
-        : accountButtons().find((b) => b.dataset.account === popupAccount);
     closePopup();
-    if (inside) button?.focus();
+    if (inside) $("claude-btn").focus();
   });
-  window.addEventListener("resize", refreshPopup);
+  window.addEventListener("resize", () => claudePopup && placePopup());
   // The unread count follows every change of the list: load, sync, read toggle, removal.
-  new MutationObserver(refreshPopup).observe($("threads"), { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
+  new MutationObserver(renderGoogleCard).observe($("threads"), { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
   $("login-button").onclick = () => addAccount(null, $<HTMLButtonElement>("login-button"));
   $("google-add").onclick = () => addAccount(null, $<HTMLButtonElement>("google-add"));
   $("google-help").onclick = (e) =>
@@ -384,7 +218,7 @@ export function initAccounts() {
           ["Google でログインし、Gmail とカレンダーへのアクセスを許可します"],
           ["受信トレイとカレンダーに、そのアカウントの分が加わります"],
         ],
-        "ログインの情報はキーチェーンに保存します。削除と再ログインは、サイドメニューのアバターからもできます",
+        "ログインの情報はキーチェーンに保存します",
       ),
     );
 }

@@ -1,4 +1,4 @@
-import { attachment, boot, callsOf, claudeReady, count, emitEvent, emojiCatalog, holds, inbox, mock, onceId, ownIcon, para, permalinkOf, plain, pngUri, quote, reaction, rejects, release, sideChannel, sideWorkspace, slackLoad, slackThread, slackTs, socketStatus, span, textsOf, threadMessage, timeline, timelineMessage, timelineReply, unreadChannelsOf, unreadRepliesOf, waitForCalls, waitForCount, waitForText, watchedMessage, workspace, TOOLS, CARD } from "../support";
+import { attachment, boot, callsOf, claudeReady, count, emitEvent, emojiCatalog, holds, inbox, mock, onceId, para, permalinkOf, plain, pngUri, quote, reaction, rejects, release, sideChannel, sideWorkspace, slackLoad, slackThread, slackTs, socketStatus, span, textsOf, threadMessage, timeline, timelineMessage, timelineReply, unreadChannelsOf, unreadRepliesOf, waitForCalls, waitForCount, waitForText, watchedMessage, workspace, TOOLS, CARD } from "../support";
 
 const iconUrl = "https://avatars.slack-edge.com/T1-U1/a_72.png";
 
@@ -311,16 +311,14 @@ describe("slack list", () => {
     expect(hit).toBe(true);
   });
 
-  it("marks the heading of a group with the workspace's color, the same as the workspace's avatar in the sidebar", async () => {
+  it("marks the heading of a group with the workspace's color", async () => {
     await openList();
     await waitForCount("#slack-feed .feed-row", 2);
-    const [dot, tray, initial] = await browser.execute(() => [
+    const [dot, initial] = await browser.execute(() => [
       document.querySelector<HTMLElement>("#slack-feed .feed-ws")!.style.background,
-      document.querySelector<HTMLElement>("#slack-workspace-list .avatar")!.style.background,
       document.querySelector<HTMLElement>("#slack-feed .feed-avatar .av-text")!.textContent,
     ]);
     expect(dot).not.toBe("");
-    expect(dot).toBe(tray);
     expect(initial).toBe("AE");
   });
 
@@ -400,7 +398,6 @@ describe("slack list", () => {
     await $("#nav-slack").click();
     await expect($("#slack-feed .feed-empty")).toHaveText(expect.stringContaining("ワークスペースが接続されていません"));
     expect(await count("#slack-feed .feed-row")).toBe(0);
-    expect(await count("#slack-workspace-list button")).toBe(0);
   });
 
   it("keeps the workspaces, the rows and the refresh when slack_load fails", async () => {
@@ -410,7 +407,6 @@ describe("slack list", () => {
     await $("#nav-todo").click();
     await $("#nav-slack").click();
     await waitForText("#slack-notice > div", "読み込めませんでした: 読めません");
-    expect(await count("#slack-workspace-list button")).toBe(1);
     expect(await count("#slack-feed .feed-row")).toBe(2);
     await waitForCalls("slack_timeline", 2);
   });
@@ -569,22 +565,6 @@ describe("slack list", () => {
     await browser.waitUntil(async () => !(await $("#slack-pending").isDisplayed()));
   });
 
-  it("keeps the user's own icon on the tray's avatar and in its popup after a read that changes nothing and after leaving the screen", async () => {
-    await boot({ inbox: inbox(), slack_load: slackLoad, claude_status: claudeReady, slack_timeline: timeline(sample(), { refreshSecs: 1 }), slack_icons: ownIcon(iconUrl) });
-    await mock("fetch_images", { [iconUrl]: pngUri });
-    await $("#nav-slack").click();
-    await browser.waitUntil(async () => (await count("#slack-workspace-list img.av-img")) === 1);
-    await waitForCalls("slack_timeline", 2);
-    await browser.pause(300);
-    expect(await count("#slack-workspace-list img.av-img")).toBe(1);
-    await $("#slack-workspace-list button").click();
-    expect(await count("#account-popup .avatar img.av-img")).toBe(1);
-    await $("#nav-todo").click();
-    await $("#nav-slack").click();
-    await expect($("#slack-list")).toBeDisplayed();
-    expect(await count("#slack-workspace-list img.av-img")).toBe(1);
-  });
-
   it("shows the failure with 再読み込み when a read answers with a failed workspace and no message, and reads again from it", async () => {
     await openList(timeline([], { failed: [{ teamId: "T1", team: "Example Team", error: "接続できません" }] }));
     await expect($("#slack-feed .pending.fail")).toHaveText(expect.stringContaining("読み込めませんでした: Example Team: 接続できません"));
@@ -601,15 +581,6 @@ describe("slack list", () => {
     await waitForText("#slack-notice > div", "読み込めませんでした: 接続できません");
     expect(await rowTexts(".feed-meta b")).toEqual(["Alice Example", "Bob Example"]);
     expect(await count("#slack-feed .pending.fail")).toBe(0);
-  });
-
-  it("draws the user's own icon of each workspace in the sidebar's tray", async () => {
-    await boot({ inbox: inbox(), slack_load: slackLoad, claude_status: claudeReady, slack_timeline: timeline(sample()), slack_icons: ownIcon(iconUrl) });
-    const fetch = await mock("fetch_images", { [iconUrl]: pngUri });
-    await $("#nav-slack").click();
-    await waitForCalls("slack_icons");
-    expect(await waitForCalls(fetch)).toContainEqual({ urls: [iconUrl] });
-    await browser.waitUntil(async () => (await count("#slack-workspace-list img.av-img")) === 1);
   });
 
   it("lists the unread rows under a 未読 heading, in groups by channel, in bold, and no 既読 heading", async () => {
