@@ -4,6 +4,7 @@ import type { Info } from "./bindings/Info";
 import type { TimedItem } from "./bindings/TimedItem";
 import type { Week } from "./bindings/Week";
 import { addAccount, renderGoogleCard } from "./accounts.js";
+import { weekDrawn } from "./calendar-notice.js";
 import { closeCreate, forgetOwnedCalendars, initCalendarCreate, openCreate, redrawDraft } from "./calendar-create.js";
 import { initCalendarClaude } from "./calendar-claude.js";
 import { drawSlots } from "./calendar-slots.js";
@@ -55,11 +56,22 @@ let calScrolled = false;
 // The event whose detail the card of C-8 asked for: it opens when a week that holds the event is drawn, and the wish ends when the load that was started for it ends.
 let pendingOpen: Info | null = null;
 
+// Opens the detail of the event the card of C-8 asked for, when the week drawn now holds it.
+function openPendingEvent() {
+  const node = pendingOpen && eventNode(pendingOpen);
+  if (!node) return;
+  pendingOpen = null;
+  node.scrollIntoView({ block: "nearest" });
+  node.click();
+}
+
 // Shows the week of today and opens the detail of `info` (the button 「予定を開く」 of the card of C-8).
+// A week of today that is drawn already is not drawn again by the load that the screen starts, so the detail opens at once; otherwise it opens when the week is drawn.
 export function openCalendarEvent(info: Info) {
   pendingOpen = info;
   calDate = isoDate(new Date());
   setScreen("calendar");
+  if (calShown) openPendingEvent();
 }
 
 // The accounts changed (a login, a removal): the weeks kept so far and the calendar lists behind them are stale.
@@ -237,12 +249,9 @@ function renderWeek(w: Week) {
     $("cal-scroll").scrollTop = Math.max(0, (new Date().getHours() - 2) * HOUR_PX - 12);
     calScrolled = true;
   }
-  const node = pendingOpen && eventNode(pendingOpen);
-  if (node) {
-    pendingOpen = null;
-    node.scrollIntoView({ block: "nearest" });
-    node.click();
-  }
+  openPendingEvent();
+  // The week of today is the week of the notices of C-8 too, so they do not read it again.
+  if (todayIndex >= 0) weekDrawn(w);
 }
 
 // The date of the first day of the week, which starts on the weekday `first`, holding the "YYYY-MM-DD" date.

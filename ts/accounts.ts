@@ -36,9 +36,11 @@ export const popupOpen = () => claudePopup;
 // Every account's row in the settings' Google card, a re-login row for each account that needs it, and an error row for each that failed to load.
 export function renderAccounts({ accounts: list, needsLogin, failed }: { accounts: string[]; needsLogin: string[]; failed: Record<string, string> }) {
   inboxIssues = { needsLogin, failed };
+  const changed = list.join("\n") !== accounts.join("\n");
   accounts = list;
   $<HTMLButtonElement>("nav-calendar").disabled = list.length === 0;
-  syncCalendarNotice();
+  // The minutes of the cards go with the clock of C-8; only a change of the accounts asks for a read and a draw at once.
+  if (changed) syncCalendarNotice();
   renderGoogleCard();
   $("relogin").replaceChildren(
     ...needsLogin.map((a) => {

@@ -8,13 +8,15 @@ import { calendarFirstDay, openCalendarEvent } from "./calendar.js";
 import { tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
 import { card, logError } from "./error-card.js";
-import { hhmm, isoDate } from "./format.js";
+import { addDays, hhmm, isoDate } from "./format.js";
 import { invoke } from "./ipc.js";
 import { setNavCount } from "./view.js";
 
 const TICK_MS = 60_000;
 // The week is read once in this many ticks.
 const READ_TICKS = 5;
+// How long before its start an event is told of: keep in step with NOTICE_MIN in calendar.rs.
+const AHEAD_MS = 5 * 60_000;
 
 // The week of today as last read, when it was read, the day it was read on, and the accounts it was read for (joined); `reading` while a read is on its way.
 let week: Week | null = null;
@@ -22,6 +24,9 @@ let readAt = 0;
 let readDay = "";
 let readFor = "";
 let reading = false;
+// The week after `week`, and the date it was read for ("" for none): it is read only while 5 minutes ahead is in it.
+let nextWeek: Week | null = null;
+let nextFor = "";
 // Bumped by every draw, so that an answer that comes late is not drawn over a newer one.
 let drawSeq = 0;
 // The events whose card was pressed (参加, 予定を開く or ×), by `keyOf`.
@@ -76,11 +81,30 @@ function makeCard(key: string, n: EventNotice) {
   return { root, when, n };
 }
 
+// The timed events of the week after the one read, when 5 minutes ahead is in it: those of its first minutes are told of at the end of the day before.
+async function nextTimed() {
+  if (!week) return [];
+  const first = isoDate(addDays(week.weekStart, 7));
+  if (isoDate(new Date(Date.now() + AHEAD_MS)) < first) return [];
+  if (nextFor !== first) {
+    nextFor = first;
+    try {
+      nextWeek = await invoke("calendar_week", { date: first, firstDay: await calendarFirstDay(), refresh: false });
+    } catch (e) {
+      nextFor = "";
+      logError("calendar-notice", e);
+      return [];
+    }
+  }
+  return nextWeek?.timed ?? [];
+}
+
 // Draws the cards and the number from what Rust says is to be told of now.
 async function draw() {
   const seq = ++drawSeq;
   const accounts = accountList();
-  const events = (week?.timed ?? []).filter((e) => accounts.includes(e.account));
+  const events = [...(week?.timed ?? []), ...(await nextTimed())].filter((e) => accounts.includes(e.account));
+  if (seq !== drawSeq) return;
   let found: EventNotice[] = [];
   if (events.length > 0) {
     try {
@@ -114,6 +138,7 @@ async function read(accounts: string) {
   readFor = accounts;
   readAt = Date.now();
   readDay = isoDate(new Date());
+  nextFor = "";
   try {
     week = await invoke("calendar_week", { date: readDay, firstDay: await calendarFirstDay(), refresh: false });
   } catch (e) {
@@ -124,13 +149,23 @@ async function read(accounts: string) {
   await draw();
 }
 
+// The calendar screen drew a week that holds today (`calendar_week` of the screen): it is the week of today as read now, so the clock of the next read starts from it.
+export function weekDrawn(w: Week) {
+  week = w;
+  readAt = Date.now();
+  readDay = isoDate(new Date());
+  readFor = accountList().join("\n");
+  nextFor = "";
+}
+
 // Reads the week when it has not been read for these accounts, today or in the last 5 ticks, and draws. With no account there is nothing to read: what was drawn goes.
+// While the window is hidden nothing is read, and the cards go on being drawn from the week held; `visibilitychange` brings the read that is due.
 export function syncCalendarNotice() {
   const accounts = accountList();
   if (accounts.length === 0) {
     week = null;
     readFor = "";
-  } else if (!reading) {
+  } else if (!reading && !document.hidden) {
     const joined = accounts.join("\n");
     if (joined !== readFor || readDay !== isoDate(new Date()) || Date.now() - readAt >= READ_TICKS * tickMs()) {
       void read(joined);
@@ -142,4 +177,5 @@ export function syncCalendarNotice() {
 
 export function initCalendarNotice() {
   setInterval(syncCalendarNotice, tickMs());
+  document.addEventListener("visibilitychange", () => !document.hidden && syncCalendarNotice());
 }
