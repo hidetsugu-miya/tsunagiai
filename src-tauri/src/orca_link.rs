@@ -166,6 +166,33 @@ fn host_of_url(url: &str) -> Result<String, String> {
     Ok(host.to_owned())
 }
 
+/// The names of the saved environments of `orca-environments.json`, by the label that `environment_pairing` matches (a name, else an id), once each and in the order of the file. A string entry has no pairing and is left out.
+fn environment_labels(doc: &Value) -> Vec<String> {
+    let mut labels: Vec<String> = Vec::new();
+    for entry in doc["environments"].as_array().into_iter().flatten() {
+        let label = text_of(entry, "name").or_else(|| text_of(entry, "id"));
+        if let Some(label) = label.filter(|l| entry.is_object() && !labels.iter().any(|x| x == l)) {
+            labels.push(label.to_owned());
+        }
+    }
+    labels
+}
+
+/// The saved environments, read from Orca's file now: none when the file is not there (this Mac has none paired).
+pub(crate) fn environment_names() -> Result<Vec<String>, String> {
+    let path = orca_dir()
+        .ok_or("設定フォルダが見つかりません")?
+        .join(ENVIRONMENTS_FILE);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    read_json(
+        &path,
+        "接続先の登録（orca-environments.json）が見つかりません",
+    )
+    .map(|doc| environment_labels(&doc))
+}
+
 /// The host of the saved environment `environment`, read from Orca's file now.
 pub fn environment_host(environment: &str) -> Result<String, String> {
     let dir = orca_dir().ok_or("設定フォルダが見つかりません")?;
@@ -685,6 +712,22 @@ mod tests {
         assert!(environment_pairing(&doc, "env-1").is_err());
         assert!(environment_pairing(&doc, "plain").is_err());
         assert!(environment_pairing(&doc, "studio").is_err());
+    }
+
+    #[test]
+    fn the_saved_environments_are_listed_by_the_label_of_their_pairing_once_each() {
+        let mut doc = environments();
+        doc["environments"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"name": "Studio", "endpoints": []}));
+        // "plain" is a string and has no pairing; a name hides the id; a name given twice is one.
+        assert_eq!(
+            environment_labels(&doc),
+            ["Studio", "env-2", "Tls", "NoToken", "NoEndpoint"]
+        );
+        assert!(environment_labels(&Value::Null).is_empty());
+        assert!(environment_labels(&json!({"environments": null})).is_empty());
     }
 
     #[test]

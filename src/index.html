@@ -872,6 +872,7 @@
       </div>
     </section>
     <footer id="footer">
+      <button id="footer-stats" class="footer-btn" type="button" aria-expanded="false" hidden></button>
       <button id="footer-bell" class="footer-btn" type="button" aria-label="通知" aria-expanded="false">
         <svg data-svg="bell"></svg>
         <span class="footer-count" aria-hidden="true" hidden></span>
@@ -883,6 +884,13 @@
         <button id="unread-pane-close" class="icon-btn" type="button" aria-label="閉じる"><svg data-svg="close"></svg></button>
       </header>
       <ul id="unread-pane-list"></ul>
+    </aside>
+    <aside id="resource-pane" aria-label="リソース" hidden>
+      <header>
+        <h2>リソース</h2>
+        <button id="resource-pane-close" class="icon-btn" type="button" aria-label="閉じる"><svg data-svg="close"></svg></button>
+      </header>
+      <div id="resource-pane-list"></div>
     </aside>
   </div>
   <div id="update-pop" class="pop" role="status" hidden>

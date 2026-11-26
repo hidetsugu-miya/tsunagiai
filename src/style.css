@@ -69,14 +69,33 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 
 #content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 /* A-35: a low footer under every screen, the bell at its right end; the count is the unread of the inbox and of the Slack list added up. */
-#footer { flex: none; box-sizing: border-box; height: var(--footer-h); display: flex; align-items: center; justify-content: flex-end; padding: 0 12px; border-top: 1px solid var(--line); background: var(--bar); }
+#footer { flex: none; box-sizing: border-box; height: var(--footer-h); display: flex; align-items: center; gap: 6px; padding: 0 12px; border-top: 1px solid var(--line); background: var(--bar); }
 .footer-btn { position: relative; display: inline-flex; align-items: center; height: 30px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-soft); cursor: pointer; }
 .footer-btn:hover { background: var(--soft); }
 .footer-btn svg { width: 20px; height: 20px; }
+#footer-bell { margin-left: auto; }
+/* A-48: the numbers of the machines and of the AI at the left of the footer; one button, which opens the pane of the resources. */
+#footer-stats { min-width: 0; overflow: hidden; gap: 14px; font-size: calc(12px * var(--fs)); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.stat-machine { display: inline-flex; gap: 8px; }
+.stat-num { font-weight: bold; }
+.stat-num.hot { color: var(--warn); }
+.stat-sep { width: 1px; height: 16px; background: var(--chip-line); }
+.stat-dot { display: inline-block; width: 8px; height: 8px; margin-right: 5px; border-radius: 50%; }
+.stat-dot[data-ai="claude"] { background: var(--claude); }
+.stat-dot[data-ai="antigravity"] { background: var(--google); }
 /* A-35: the pane of the unread opens from the right over the screen, down to the footer. */
-#unread-pane { position: fixed; z-index: 11; top: 0; right: 0; bottom: var(--footer-h); box-sizing: border-box; width: 380px; max-width: 100%; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--surface); box-shadow: -8px 0 24px rgba(0, 0, 0, .12); }
-#unread-pane header { box-sizing: border-box; min-height: var(--header-h); padding: 0 12px 0 20px; background: var(--bar); border-bottom: 1px solid var(--line); }
+#unread-pane, #resource-pane { position: fixed; z-index: 11; top: 0; right: 0; bottom: var(--footer-h); box-sizing: border-box; width: 380px; max-width: 100%; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--surface); box-shadow: -8px 0 24px rgba(0, 0, 0, .12); }
+#unread-pane header, #resource-pane header { box-sizing: border-box; min-height: var(--header-h); padding: 0 12px 0 20px; background: var(--bar); border-bottom: 1px solid var(--line); }
 #unread-pane-list { flex: 1; min-height: 0; margin: 0; padding: 8px; list-style: none; overflow-y: auto; }
+/* A-48: the pane of the resources has the form and the width of the pane of the unread. */
+#resource-pane-list { flex: 1; min-height: 0; overflow-y: auto; }
+.res-machine { display: flex; flex-direction: column; gap: 8px; padding: 12px 20px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.res-machine h3 { margin: 0; font-size: calc(14px * var(--fs)); }
+.res-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; align-items: baseline; font-size: calc(13px * var(--fs)); }
+.res-key { color: var(--ink-soft); }
+.res-sub { grid-column: 1 / 3; font-size: calc(11px * var(--fs)); color: var(--muted); }
+.res-group { display: flex; flex-direction: column; gap: 8px; }
+.res-group-name { display: flex; align-items: center; font-size: calc(12px * var(--fs)); color: var(--muted); }
 .unread-item { display: grid; grid-template-columns: 16px 32px minmax(0, 1fr); column-gap: 10px; align-items: start; padding: 10px 8px; border-radius: 12px; cursor: pointer; }
 .unread-item:hover { background: var(--hover); }
 .unread-kind { padding-top: 7px; color: var(--muted); }

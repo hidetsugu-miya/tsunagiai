@@ -5,7 +5,7 @@
 import type { ThreadItem } from "./bindings/ThreadItem";
 import type { TimelineMessage } from "./bindings/TimelineMessage";
 import { $, el, span, tag } from "./dom.js";
-import { watchFooterCount } from "./footer.js";
+import { closeOtherPanes, registerPane, watchFooterCount } from "./footer.js";
 import { avatarColor, formatDate, initials, unescapeHtml } from "./format.js";
 import { BOOKMARK_SVG, CHECK_SVG, MAIL_SVG, SLACK_SVG, TRASH_SVG } from "./icons.js";
 import { removeRow } from "./inbox.js";
@@ -29,6 +29,7 @@ function close() {
 
 function toggle() {
   if (isOpen()) return close();
+  closeOtherPanes("unread");
   $("unread-pane").hidden = false;
   $("footer-bell").setAttribute("aria-expanded", "true");
   drawnKey = "";
@@ -168,6 +169,7 @@ export function initUnreadPane() {
     if (before > 0 && n === 0) close();
     drawUnreadPane();
   });
+  registerPane("unread", close);
   $("footer-bell").onclick = toggle;
   $("unread-pane-close").onclick = close;
   // A press outside the pane (the bell excepted, which toggles it, and the notice of a trash or an archive from a row, whose 元に戻す is pressed with the pane open) closes it.
