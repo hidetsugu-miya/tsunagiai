@@ -1,12 +1,13 @@
 // The history of a channel (S-20, S-21): the body of the Slack screen while a channel of the side menu is chosen.
 // A header with the channel (# or a lock, and its name) and the workspace (muted) only, then the newest messages (`slack_channel_history`) oldest first under the day they were sent, each drawn as a row of the unread list is (slack-list.ts) with "スレッドに返信済み: …" above the text of a reply also sent to the channel, its reactions (S-22), its "N 件の返信" and its bookmark.
 // Pressing a message or its replies opens the thread (slack-thread.ts), whose back button returns here at the same scroll position. Nothing here reads a channel: the read position is set from the unread list only.
-// The history is read when the channel is pressed, and again when it is pressed once more; a read that fails shows the error and "再読み込み". Everything is held in memory only.
+// The history is read when the channel is pressed, and again when it is pressed once more; a read that fails shows the error and "再読み込み" on a card. Everything is held in memory only.
 // Under the history is a field to post to the channel (S-21, `slack_channel_post`): what is written is kept per channel in memory, and a post that works empties it and reads the history again.
 import type { TimelineMessage } from "./bindings/TimelineMessage";
 import { $, tag } from "./dom.js";
 import { formatDay } from "./format.js";
 import { HASH_SVG, LOCK_SVG } from "./icons.js";
+import { setNotice, showFailure } from "./error-card.js";
 import { invoke } from "./ipc.js";
 import { createRichEditor } from "./rich-editor.js";
 import { historyItem, watchedKeys } from "./slack-list.js";
@@ -58,7 +59,6 @@ const editor = createRichEditor({
     const key = selectedChannel();
     if (!key) return;
     dirty = true;
-    $("sc-error").hidden = true;
     editor.setSendDisabled(posting !== null || editor.blank());
   },
   onSubmit: () => post(),
@@ -73,6 +73,13 @@ export function closeSlackChannel() {
   error = null;
   readSeq++;
   drawn = "";
+  drawNotice();
+}
+
+// The card of a history that could not be read (A-28), while the history is shown: with a button to read it again. It goes when the history is read well, or is left (another screen, a section, a thread), and its × is forgotten with it.
+function drawNotice() {
+  const on = chosen !== null && error !== null && !$("slack-channel").hidden;
+  setNotice("slack-channel:history", on ? { text: `読み込めませんでした: ${error}`, actions: [{ label: "再読み込み", run: () => read() }] } : null);
 }
 
 // Draws the field and the arrow for the chosen channel: its own text, off while its post is on its way, and the arrow off while any post is (a post is never sent twice) or the text is blank.
@@ -91,13 +98,10 @@ function drawReply() {
 
 // Reads the rich field the first time the channel screen is shown, and draws the text of the channel in it when it is there.
 function loadReply() {
-  editor.ensure().then(drawReply, (e) => {
-    $("sc-error").textContent = `エディターを読み込めませんでした: ${e}`;
-    $("sc-error").hidden = false;
-  });
+  editor.ensure().then(drawReply, (e) => showFailure("slack-channel", `エディターを読み込めませんでした: ${e}`));
 }
 
-// Posts the chosen channel's text. A failure shows the error (a toast when the channel is no longer on screen) and keeps the text; a success empties the field and reads the history again, at its newest message.
+// Posts the chosen channel's text. A failure shows the error as a card (a toast when the channel is no longer on screen) and keeps the text; a success empties the field and reads the history again, at its newest message.
 async function post() {
   if (!chosen || posting !== null) return;
   const { teamId, channel, name } = chosen;
@@ -105,7 +109,6 @@ async function post() {
   syncDraft();
   const text = drafts.get(key) ?? "";
   if (!text.trim()) return;
-  $("sc-error").hidden = true;
   posting = key;
   drawReply();
   const shown = () => selectedChannel() === key && !$("slack-channel").hidden;
@@ -114,10 +117,8 @@ async function post() {
   } catch (e) {
     posting = null;
     drawReply();
-    if (shown()) {
-      $("sc-error").textContent = `投稿できませんでした: ${e}`;
-      $("sc-error").hidden = false;
-    } else toast(`#${name} に投稿できませんでした: ${e}`);
+    if (shown()) showFailure("slack-channel", `投稿できませんでした: ${e}`);
+    else toast(`#${name} に投稿できませんでした: ${e}`);
     return;
   }
   posting = null;
@@ -158,13 +159,6 @@ function messageNodes(rows: TimelineMessage[]) {
 
 function stateNodes() {
   const nodes: Node[] = [];
-  if (error !== null) {
-    const row = tag("div", "pending fail");
-    const retry = tag("button", "text-btn", "再読み込み");
-    retry.onclick = () => read();
-    row.append(tag("span", "sp", `読み込めませんでした: ${error}`), retry);
-    nodes.push(row);
-  }
   if (messages === null && error === null) {
     const row = tag("div", "pending");
     row.append(tag("span", "spin"), tag("span", "sp", "読み込んでいます…"));
@@ -175,6 +169,7 @@ function stateNodes() {
 
 // Draws the header and the messages when the history is on screen and something changed (the bookmarks follow the watched threads). `end`: go to the newest message (the first time a channel's messages are drawn).
 function draw(end = false) {
+  drawNotice();
   if (!chosen || $("slack-channel").hidden) return;
   const key = JSON.stringify([chosen, messages, error, watchedKeys(), new Date().toDateString()]);
   if (key === drawn && !end) return;
@@ -223,8 +218,8 @@ async function read(toEnd = false) {
 export function openSlackChannel(teamId: string, team: string, c: { id: string; name: string; private: boolean }) {
   if (selectedChannel() !== `${teamId}/${c.id}`) {
     messages = null;
+    error = null;
     scroll = 0;
-    $("sc-error").hidden = true;
   }
   chosen = { teamId, team, channel: c.id, name: c.name, private: c.private };
   show("slack-channel");
@@ -252,6 +247,8 @@ export function redrawSlackChannel() {
 
 export function initSlackChannel() {
   $("sc-reply").append(editor.el);
+  // The card goes at once when the history is left for a thread or another screen (nothing draws it then).
+  new MutationObserver(drawNotice).observe($("slack-channel"), { attributes: true, attributeFilter: ["hidden"] });
   // A reaction changed on the message in a thread opened from here: the history shown when the thread is left holds it too (S-25).
   onReactionChange((target, ts, change, done) => {
     if (chosen?.teamId === target.teamId && chosen.channel === target.channel) applyReactionChange(messages ?? [], ts, change, done);

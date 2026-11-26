@@ -1,5 +1,5 @@
 import type { ThreadBlock } from "../../ts/bindings/ThreadBlock";
-import { askScreen, attachment, boot, callsOf, emojiCatalog, claudeLoggedOut, claudeMissing, claudeReady, count, holds, inbox, mock, onceId, permalinkOf, pngUri, reaction, rejects, release, slackFile, slackSummary, slackThread, slackLoad, slackTs, textsOf, thumbUrlOf, linkSpan, para, plain, quote, span, threadMessage, timeline, timelineMessage, todoData, waitForCalls, waitForCount, workspace, heightOf, TOOLS } from "../support";
+import { askScreen, attachment, boot, callsOf, emojiCatalog, claudeLoggedOut, claudeMissing, claudeReady, count, holds, inbox, mock, onceId, permalinkOf, pngUri, reaction, rejects, release, slackFile, slackSummary, slackThread, slackLoad, slackTs, textsOf, thumbUrlOf, linkSpan, para, plain, quote, span, threadMessage, timeline, timelineMessage, todoData, waitForCalls, waitForCard, waitForCount, workspace, heightOf, TOOLS, CARDS } from "../support";
 
 const iconUrl = "https://avatars.slack-edge.com/T1-U1/a_72.png";
 const root = slackTs(60, 1);
@@ -186,16 +186,25 @@ describe("slack thread", () => {
     await expect($("#slack-thread")).toBeDisplayed();
   });
 
-  it("shows the error in the pane when the thread cannot be read, and reads again from 再読み込み", async () => {
+  it("shows the error on a card when the thread cannot be read, and reads again from 再読み込み of the card, which goes when the thread is read and when the thread is left", async () => {
     await boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline([listMessage()]), claude_status: claudeReady });
     await mock("slack_thread", rejects("読めません"));
     await $("#nav-slack").click();
     await waitForCount("#slack-feed .feed-row", 1);
     await $("#slack-feed .feed-open").click();
-    await expect($("#st-msgs .pending.fail")).toHaveText(expect.stringContaining("読み込めませんでした: 読めません"));
+    await waitForCard("読み込めませんでした: 読めません");
+    expect(await count(CARDS)).toBe(1);
+    expect(await count("#st-msgs .pending.fail")).toBe(0);
     await mock("slack_thread", base());
-    await $("#st-msgs .pending.fail .text-btn").click();
+    await $("#error-cards").$("button=再読み込み").click();
     await waitForCount("#st-msgs .st-msg", 2);
+    await waitForCount(CARDS, 0);
+    await mock("slack_thread", rejects("読めません"));
+    await $("#st-back").click();
+    await $("#slack-feed .feed-open").click();
+    await waitForCard("読み込めませんでした: 読めません");
+    await $("#st-back").click();
+    await waitForCount(CARDS, 0);
   });
 
   it("shows a spinner while the thread is read", async () => {
@@ -411,13 +420,12 @@ describe("slack thread: where it opens", () => {
 
   it("keeps the scroll position when the thread is read again from 再読み込み", async () => {
     await leaveScrolled(rejects("読めません"));
-    await $("#st-msgs .pending.fail").waitForExist();
+    await waitForCard("読み込めませんでした: 読めません");
     expect((await box()).top).toBe(50);
     const read = await mock("slack_thread", slackThread(long()));
-    // The error is above the messages and out of view at 50: press it without scrolling to it.
-    await browser.execute(() => document.querySelector<HTMLElement>("#st-msgs .pending.fail .text-btn")!.click());
+    await $("#error-cards").$("button=再読み込み").click();
     await waitForCalls(read);
-    await browser.waitUntil(async () => (await count("#st-msgs .pending.fail")) === 0);
+    await waitForCount(CARDS, 0);
     expect((await box()).top).toBe(50);
   });
 
@@ -427,9 +435,9 @@ describe("slack thread: where it opens", () => {
     await $("#nav-slack").click();
     await waitForCount("#slack-feed .feed-row", 1);
     await $("#slack-feed .feed-open").click();
-    await $("#st-msgs .pending.fail").waitForExist();
+    await waitForCard("読み込めませんでした: 読めません");
     await mock("slack_thread", slackThread(long()));
-    await $("#st-msgs .pending.fail .text-btn").click();
+    await $("#error-cards").$("button=再読み込み").click();
     await waitForCount("#st-msgs .st-msg", 12);
     await browser.waitUntil(atBottom);
   });
@@ -1351,11 +1359,12 @@ describe("slack thread: the emoji picker (S-25)", () => {
     expect(await callsOf(list)).toHaveLength(2);
   });
 
-  it("shows the error in the picker when the list cannot be read, and asks again the next time", async () => {
+  it("shows the error on a card when the list cannot be read, leaves the picker with no text, and asks again the next time", async () => {
     await openDetail({}, thread());
     await mock("slack_emoji_catalog", rejects("Slack に接続できません"));
     await addButton(0);
-    await expect($(".emoji-pop .emoji-status")).toHaveText(expect.stringContaining("読み込めませんでした: Slack に接続できません"));
+    await waitForCard("読み込めませんでした: Slack に接続できません");
+    await expect($(".emoji-pop .emoji-status")).not.toBeDisplayed();
     await browser.keys("Escape");
     const list = await mock("slack_emoji_catalog", catalog());
     await addButton(0);
@@ -1470,12 +1479,13 @@ describe("slack thread: reply", () => {
     }));
   });
 
-  it("shows a failed reply on the thread and keeps the text", async () => {
+  it("shows a failed reply on a card and keeps the text", async () => {
     await openDetail();
     await mock("slack_reply", rejects("投稿できません"));
     await write("Keep me");
     await send().click();
-    await expect($("#st-error")).toHaveText(expect.stringContaining("返信できませんでした: 投稿できません"));
+    await waitForCard("返信できませんでした: 投稿できません");
+    expect(await count("#st-error")).toBe(0);
     expect(await fieldText()).toBe("Keep me");
     await expect(send()).toBeEnabled();
     expect(await editable()).toBe("true");
@@ -1623,11 +1633,12 @@ describe("slack thread: Todo", () => {
     expect(await callsOf(add)).toEqual([]);
   });
 
-  it("shows why the summary failed", async () => {
+  it("shows why the summary failed on a card", async () => {
     await openDetail(todo);
     await mock("todoist_summarize_slack", rejects("Claude が応答しません"));
     await $("#st-todo").click();
-    await expect($("#st-note")).toHaveText("要約できませんでした: Claude が応答しません");
+    await waitForCard("要約できませんでした: Claude が応答しません");
+    await expect($("#st-note")).not.toBeDisplayed();
     expect(await count("#st-card .review")).toBe(0);
   });
 });
@@ -1788,7 +1799,7 @@ describe("slack thread: Claude Code", () => {
     await $("#nav-slack").click();
     await waitForCount("#slack-feed .feed-row", 1);
     await $("#slack-feed .feed-open").click();
-    await expect($("#st-msgs .pending.fail")).toBeDisplayed();
+    await waitForCard("読み込めませんでした: 読めません");
     expect(await read()).toEqual({ ok: true, fields: { thread: "スレッドはまだ読めていません", reply: "" } });
     expect(await callsOf(data)).toEqual([]);
   });

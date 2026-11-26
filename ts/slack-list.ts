@@ -27,7 +27,7 @@ import { openSlackThread } from "./slack-thread.js";
 import { decorateAvatar, loadIcons, slackMs, workspaceColor } from "./slack-view.js";
 import { toast } from "./toast.js";
 import { drawUnreadPane } from "./unread-pane.js";
-import { showFailure } from "./error-card.js";
+import { type Notice, setNotice, showFailure } from "./error-card.js";
 import { setNavCount, show } from "./view.js";
 
 // The workspaces (`slack_load`), or null until read.
@@ -57,8 +57,8 @@ let seenVersion = 0;
 // The unread messages among all the ones held (`unreadTotal` of the last answer, lowered at once by what the screen moves to read or hides): the Slack button's badge, which shows 20+ above this.
 let unreadCount = 0;
 const BADGE_CAP = 20;
-// What the notice shows now; it is drawn again only when this changes.
-let noticeKey = "";
+// The keys of the cards the list holds now (A-28), so that one that is no longer needed is taken off.
+let noticeKeys = new Set<string>();
 // The elements the list drew, by the key of the row, the heading, the group or the separator, each with the key of what it was drawn from. Only an element whose key changed is made again.
 const drawn = new Map<string, { sig: string; node: HTMLElement }>();
 // The keys drawn by the pass that is on its way.
@@ -78,25 +78,26 @@ const feed = () => $("slack-feed");
 
 const openSettings = () => setScreen("settings", "slack");
 
-// The notice above the list: a workspace that could not be read, and a token that lacks scopes. Rows that could be read still show.
+// Every connected workspace failed to be read: there is no row to show, and the cards say why.
+const everyFailed = () => timeline !== null && workspaces !== null && timeline.failed.length > 0 && timeline.failed.length >= workspaces.length;
+
+// A read that failed as a whole, or in every workspace.
+const readFailed = () => loadError !== null || everyFailed();
+
+// The cards of the list (A-28), while the Slack screen is shown (the list, a channel's history or a thread) and taken off, with their ×, when another screen is: a read that failed as a whole (with a button to read again),
+// a workspace that could not be read, and a token that lacks scopes (a warning). Rows that could be read still show. A card goes when what it says is gone, and one key is one card (`{module}:{what}`, the workspace's ID after a slash).
 function drawNotice() {
-  const lines: string[] = [];
-  for (const f of timeline?.failed ?? []) lines.push(`${f.team} を読み込めませんでした: ${f.error}`);
-  for (const m of timeline?.missing ?? []) lines.push(`${m.team}: ${m.scopes.join("、")} の権限がありません`);
-  // A read that failed while rows are held: the rows stay, and the failure shows here.
-  if (timeline && loadError !== null) lines.unshift(`読み込めませんでした: ${loadError}`);
-  const key = JSON.stringify(lines);
-  if (key === noticeKey) return;
-  noticeKey = key;
-  $("slack-notice").replaceChildren(
-    ...lines.map((text) => {
-      const row = tag("div", "", text);
-      const open = tag("button", "text-btn", "設定を開く");
-      open.onclick = openSettings;
-      row.append(open);
-      return row;
-    }),
-  );
+  const notices = new Map<string, Notice>();
+  if (!$("slack-screen").hidden) {
+    const settings = { label: "設定を開く", run: openSettings };
+    const retry = { label: "再読み込み", run: () => load() };
+    if (loadError !== null) notices.set("slack-list:load", { text: `読み込めませんでした: ${loadError}`, actions: [retry, settings] });
+    for (const f of timeline?.failed ?? []) notices.set(`slack-list:failed/${f.teamId}`, { text: `${f.team} を読み込めませんでした: ${f.error}`, actions: everyFailed() ? [retry, settings] : [settings] });
+    for (const m of timeline?.missing ?? []) notices.set(`slack-list:missing/${m.teamId}`, { text: `${m.team}: ${m.scopes.join("、")} の権限がありません`, warn: true, actions: [settings] });
+  }
+  for (const key of noticeKeys) if (!notices.has(key)) setNotice(key, null);
+  for (const [key, notice] of notices) setNotice(key, notice);
+  noticeKeys = new Set(notices.keys());
 }
 
 // A row with the bookmark beside it, which watches its thread or lets it go. It is a sibling of the row: a button is not put in a button.
@@ -646,7 +647,7 @@ function sectionHeading(label: string, svg: string) {
   return heading;
 }
 
-// The state of the list when there are no rows: loading, no workspace, a failed read, or nothing to show.
+// The state of the list when there are no rows: loading, no workspace, or nothing to show (a failed read is said by a card, `drawNotice`).
 function emptyNode() {
   const loadingRow = () => {
     const row = tag("div", "pending");
@@ -663,17 +664,6 @@ function emptyNode() {
     return box;
   }
   if (timeline === null && loadError === null) return loadingRow();
-  // A read that failed with nothing to show: the error of the call, or of every workspace that could not be read.
-  // Only when every connected workspace failed; a failure of some is in the notice above the list, and the rest has no message.
-  const everyFailed = timeline !== null && timeline.failed.length > 0 && timeline.failed.length >= workspaces.length;
-  const failure = loadError ?? (timeline && everyFailed ? timeline.failed.map((f) => `${f.team}: ${f.error}`).join("、") : null);
-  if (failure !== null) {
-    const row = tag("div", "pending fail");
-    const retry = tag("button", "text-btn", "再読み込み");
-    retry.onclick = () => load();
-    row.append(tag("span", "sp", `読み込めませんでした: ${failure}`), retry);
-    return row;
-  }
   return tag("div", "feed-empty", "メッセージはありません");
 }
 
@@ -800,7 +790,9 @@ function drawFeed() {
     box,
     messages.length || watched.length
       ? [...(messages.length ? [heading("未読", DOT_SVG), ...unreadNodes(messages, privates, day)] : []), ...(watch.length ? [heading("ウォッチ", BOOKMARK_SVG), ...watch] : [])]
-      : [kept("empty", emptySig, emptyNode)],
+      : readFailed()
+        ? []
+        : [kept("empty", emptySig, emptyNode)],
   );
   for (const key of drawn.keys()) if (!used.has(key)) drawn.delete(key);
   box.scrollTop = top;
@@ -836,9 +828,9 @@ function draw() {
   drawUnreadPane();
   drawSide();
   redrawSlackChannel();
+  drawNotice();
   if ($("slack-list").hidden) return;
   drawPending();
-  drawNotice();
   drawFeed();
 }
 
@@ -971,6 +963,8 @@ export function initSlackList() {
   feed().addEventListener("scroll", () => {
     if (!$("slack-list").hidden) listScroll = feed().scrollTop;
   });
+  // The cards belong to the Slack screen: another screen takes them off at once, and showing it again draws them.
+  new MutationObserver(drawNotice).observe($("slack-screen"), { attributes: true, attributeFilter: ["hidden"] });
   $("slack-hidden-open").innerHTML = MINUS_CIRCLE_SVG;
   $("slack-hidden-open").onclick = openSettings;
 }
