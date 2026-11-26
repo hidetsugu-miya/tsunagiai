@@ -10,7 +10,7 @@ import { currentScreen } from "./nav.js";
 import { opened } from "./thread.js";
 import { hideToast, toast } from "./toast.js";
 import { initUnreadPane } from "./unread-pane.js";
-import { logError, showFailure } from "./error-card.js";
+import { logError, setNotice, showFailure } from "./error-card.js";
 import { show } from "./view.js";
 
 // What the last archive / trash did, for "元に戻す" and Cmd+Z (Ctrl+Z off macOS): the command that reverses it and the thread data to put back.
@@ -101,33 +101,41 @@ function scheduleReload(failed: boolean) {
   }
 }
 
-// Why the last load failed, drawn in `#inbox-state` (above the rows, which stay) until a load works; null when it worked.
-// It belongs to the list, so it stays when another screen is shown.
+// Why the last load failed, told by the card of `inbox:load` (A-28) until a load works; null when it worked.
 let loadFailure: string | null = null;
 
-// What `#inbox-state` shows now, so that a redraw with nothing changed leaves the button (and its focus) alone.
+// What `#inbox-state` shows now, so that a redraw with nothing changed leaves it alone.
 let stateKey = "";
 
-// The state of the list: loading before the first answer, the failure of the last load with its button, or the note that there is nothing to show.
+// The state of the list: loading before the first answer, or the note that there is nothing to show. The failure of the last load is a card, with the button that loads again.
 function drawInboxState() {
+  setNotice(
+    "inbox:load",
+    loadFailure === null
+      ? null
+      : {
+          text: `読み込めませんでした: ${loadFailure}。自動でも読み直します`,
+          actions: [
+            {
+              label: "再読み込み",
+              run: (button) => {
+                button.disabled = true;
+                load().finally(() => {
+                  button.disabled = false;
+                });
+              },
+            },
+          ],
+        },
+  );
   const hasRows = $("threads").querySelector("li") !== null;
-  const key = JSON.stringify([loadFailure, hasRows, inboxLoaded]);
-  const box = $("inbox-state");
-  if (key === stateKey) {
-    // A load that starts or ends only enables or disables the button of the failure: it is not made again, so it keeps the focus.
-    const button = box.querySelector("button");
-    if (button) button.disabled = loading > 0;
-    return;
-  }
+  const key = JSON.stringify([loadFailure !== null, hasRows, inboxLoaded]);
+  if (key === stateKey) return;
   stateKey = key;
+  const box = $("inbox-state");
   if (loadFailure !== null) {
-    const row = tag("div", "pending fail");
-    const retry = tag("button", "text-btn", "再読み込み");
-    retry.type = "button";
-    retry.disabled = loading > 0;
-    retry.onclick = () => load();
-    row.append(tag("span", "sp", `読み込めませんでした: ${loadFailure}。自動でも読み直します`), retry);
-    box.replaceChildren(row);
+    // The list is not said to be empty while the load failed.
+    box.replaceChildren();
   } else if (hasRows) {
     box.replaceChildren();
   } else if (!inboxLoaded) {
@@ -179,7 +187,6 @@ export async function load() {
     if (seq !== loadSeq) return;
     failed = Object.keys(inbox.failed).length > 0;
     loadFailure = failed ? Object.entries(inbox.failed).map(([a, m]) => `${a}: ${m}`).join("、") : null;
-    if (loadFailure !== null) logError("inbox", loadFailure);
     inboxLoaded = true;
     renderAccounts(inbox);
     if (inbox.accounts.length === 0) return show("login");
@@ -190,7 +197,6 @@ export async function load() {
     if (seq === loadSeq) {
       failed = true;
       loadFailure = String(e);
-      logError("inbox", e);
     }
   } finally {
     loading--;

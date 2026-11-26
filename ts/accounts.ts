@@ -33,7 +33,7 @@ export function closeClaudePopup() {
 // Whether the popup of Claude is open.
 export const popupOpen = () => claudePopup;
 
-// Every account's row in the settings' Google card, a re-login row for each account that needs it, and an error row for each that failed to load.
+// Every account's row in the settings' Google card, and a card for each account that must log in again. An account that failed to load is told by the card of the list (`inbox:load`, inbox.ts).
 export function renderAccounts({ accounts: list, needsLogin, failed }: { accounts: string[]; needsLogin: string[]; failed: Record<string, string> }) {
   inboxIssues = { needsLogin, failed };
   const changed = list.join("\n") !== accounts.join("\n");
@@ -42,22 +42,7 @@ export function renderAccounts({ accounts: list, needsLogin, failed }: { account
   // The minutes of the cards go with the clock of C-8; only a change of the accounts asks for a read and a draw at once.
   if (changed) syncCalendarNotice();
   renderGoogleCard();
-  $("relogin").replaceChildren(
-    ...needsLogin.map((a) => {
-      const div = document.createElement("div");
-      const button = document.createElement("button");
-      button.textContent = "再ログイン";
-      button.onclick = () => addAccount(a, button);
-      div.append(`${a} は再ログインが必要です`, button);
-      return div;
-    }),
-    ...Object.entries(failed).map(([a, message]) => {
-      const div = document.createElement("div");
-      div.textContent = `${a} の読み込みに失敗しました: ${message}`;
-      return div;
-    }),
-  );
-  // An account that must log in again is also told by a card, once, until it has logged in.
+  // An account that must log in again is told by a card, once, until it has logged in.
   setRelogin("mail", needsLogin, (a) => `${a} は再ログインが必要です`, addAccount);
 }
 

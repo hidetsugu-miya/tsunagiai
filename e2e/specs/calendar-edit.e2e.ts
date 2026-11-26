@@ -1,5 +1,5 @@
 import type { Week } from "../../ts/bindings/Week";
-import { account, askScreen, boot, callsOf, CARD, count, holds, inbox, isoDate, mock, ownedCalendars, rejects, release, rfc, textsOf, waitForCalls, waitForCount, waitForText, weekOfToday } from "../support";
+import { account, askScreen, boot, callsOf, CARD, CARDS, count, holds, inbox, isoDate, mock, ownedCalendars, rejects, release, rfc, textsOf, waitForCalls, waitForCard, waitForCount, waitForText, WARN_CARDS, weekOfToday } from "../support";
 
 // Edit and delete an event from its detail (C-7).
 const today = isoDate(new Date());
@@ -171,7 +171,7 @@ describe("calendar: edit an event", () => {
     expect(await callsOf(update)).toHaveLength(1);
   });
 
-  it("shows the error in the form when the save fails, and keeps what was written", async () => {
+  it("shows the error in a card when the save fails, and keeps what was written", async () => {
     await openCalendar();
     await openEdit();
     await $('.cal-create [aria-label="タイトル"]').setValue("Changed");
@@ -179,23 +179,25 @@ describe("calendar: edit an event", () => {
     const week = await mock("calendar_week", editableWeek());
     await saveButton().click();
     await waitForCalls(update);
-    await expect($(".cal-create-error")).toHaveText("この予定は変更できません。自分が主催した予定だけです");
+    await waitForCard("この予定は変更できません。自分が主催した予定だけです");
     await expect($('.cal-create [aria-label="タイトル"]')).toHaveValue("Changed");
     expect(await textsOf(".cal-create .mail-reply-chip > span")).toEqual(["ann@example.com", "bob@example.com"]);
     await expect(saveButton()).toBeEnabled();
     expect(await callsOf(week)).toEqual([]);
   });
 
-  it("asks to log in again in the form when the account has not granted the permission", async () => {
+  it("asks to log in again in a warning card when the account has not granted the permission", async () => {
     await openCalendar();
     await openEdit();
     const update = await mock("calendar_update_event", null);
     await saveButton().click();
     await waitForCalls(update);
-    await expect($(".cal-create-error")).toHaveText(expect.stringContaining(`${account} は予定を書き換えるため再ログインが必要です`));
+    await waitForCard(`${account} は予定を書き換えるため再ログインが必要です`);
+    expect(await count(WARN_CARDS)).toBe(1);
     const login = await mock("login", account);
-    await $(".cal-create-error .text-btn").click();
+    await $(".error-card-action").click();
     expect(await waitForCalls(login)).toEqual([{ loginHint: account }]);
+    await waitForCount(CARDS, 0);
   });
 
   it("opens the form beside the event of the week drawn now when the week was drawn again behind the detail", async () => {
@@ -291,14 +293,14 @@ describe("calendar: delete an event", () => {
     expect(await callsOf(del)).toEqual([{ account, calendarId: "holidays", eventId: "ev2" }]);
   });
 
-  it("writes the error in the popover when the delete fails, and lets it be pressed again", async () => {
+  it("shows the error in a card when the delete fails, and lets it be pressed again", async () => {
     await openCalendar();
     const del = await mock("calendar_delete_event", rejects("予定を削除できませんでした"));
     const week = await mock("calendar_week", editableWeek());
     await openDelete();
     await $(".cal-pop-confirm .text-btn.danger").click();
     await waitForCalls(del);
-    await expect($(".cal-pop-confirm .cal-create-error")).toHaveText("予定を削除できませんでした");
+    await waitForCard("予定を削除できませんでした");
     await expect($(".cal-pop-confirm .text-btn.danger")).toBeEnabled();
     expect(await callsOf(week)).toEqual([]);
   });
@@ -326,15 +328,17 @@ describe("calendar: delete an event", () => {
     await expect($(CARD)).toHaveText("予定を削除できませんでした");
   });
 
-  it("asks to log in again in the popover when the account has not granted the permission", async () => {
+  it("asks to log in again in a warning card when the account has not granted the permission to delete", async () => {
     await openCalendar();
     const del = await mock("calendar_delete_event", null);
     await openDelete();
     await $(".cal-pop-confirm .text-btn.danger").click();
     await waitForCalls(del);
-    await expect($(".cal-pop-confirm .cal-create-error")).toHaveText(expect.stringContaining(`${account} は予定を削除するため再ログインが必要です`));
+    await waitForCard(`${account} は予定を削除するため再ログインが必要です`);
+    expect(await count(WARN_CARDS)).toBe(1);
+    await expect($(".cal-pop-confirm .text-btn.danger")).toBeEnabled();
     const login = await mock("login", account);
-    await $(".cal-pop-confirm .cal-create-error .text-btn").click();
+    await $(".error-card-action").click();
     expect(await waitForCalls(login)).toEqual([{ loginHint: account }]);
   });
 });
@@ -467,7 +471,7 @@ describe("calendar: the form that Claude Code fills in", () => {
     await openCalendar();
     await openPane();
     expect(await fillForm(wanted({ calendarId: "other" }))).toEqual({ ok: true });
-    await expect($(".cal-create-error")).toHaveText("指定されたカレンダーには予定を作れません");
+    await waitForCard("指定されたカレンダーには予定を作れません");
     await expect(saveButton()).toBeDisabled();
   });
 

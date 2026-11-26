@@ -1,5 +1,5 @@
 import type { Week } from "../../ts/bindings/Week";
-import { account, boot, calendarChoices, callsOf, copiedTexts, count, holds, inbox, isoDate, meetUrl, mock, ownedCalendars, rejects, release, rfc, stubClipboard, textsOf, waitForCalls, waitForCount, waitForText, weekOfToday, CARD } from "../support";
+import { account, boot, calendarChoices, callsOf, copiedTexts, count, holds, inbox, isoDate, meetUrl, mock, ownedCalendars, rejects, release, rfc, stubClipboard, textsOf, waitForCalls, waitForCard, waitForCount, waitForText, weekOfToday, CARD, CARDS, WARN_CARDS } from "../support";
 
 // The button of the event (a timed box or an all-day chip) with `title`.
 const eventButton = (title: string) => $(`//button[contains(@class, "cal-event") or contains(@class, "cal-chip")][contains(., "${title}")]`);
@@ -44,6 +44,38 @@ describe("calendar", () => {
     expect(calls.every((c) => c.firstDay === 1)).toBe(true);
     await expect($("#cal-head .cal-day:nth-child(2)")).toHaveText(expect.stringContaining("月"));
     await expect($("#cal-head .cal-day:nth-child(8)")).toHaveText(expect.stringContaining("日"));
+  });
+
+  const failedWeek = (): Week => ({ ...weekOfToday(), failed: { [account]: "boom" }, calendarFailed: ["カレンダーの一覧を読めませんでした"] });
+
+  it("tells the failures of the week's read in a card for each, as failures, with no band in the screen", async () => {
+    await boot({ inbox: inbox(), calendar_week: failedWeek() });
+    await $("#nav-calendar").click();
+    await waitForText("#cal-body .cal-name", "Team sync");
+    await waitForCard(`${account} の予定の読み込みに失敗しました: boom`);
+    await waitForCard("カレンダーの一覧を読めませんでした");
+    expect(await count(CARDS)).toBe(2);
+    expect(await count(WARN_CARDS)).toBe(0);
+    expect(await count(".error-card-log")).toBe(2);
+  });
+
+  it("takes the cards of the failures off while another screen is shown, and draws them again when the calendar is", async () => {
+    await boot({ inbox: inbox(), calendar_week: failedWeek() });
+    await $("#nav-calendar").click();
+    await waitForCard("カレンダーの一覧を読めませんでした");
+    await $("#nav-mail").click();
+    await waitForCount(CARDS, 0);
+    await $("#nav-calendar").click();
+    await waitForCount(CARDS, 2);
+  });
+
+  it("takes the cards of the failures off when a read of the week works", async () => {
+    await boot({ inbox: inbox(), calendar_week: failedWeek() });
+    await $("#nav-calendar").click();
+    await waitForCard("カレンダーの一覧を読めませんでした");
+    await mock("calendar_week", weekOfToday());
+    await $("#cal-today").click();
+    await waitForCount(CARDS, 0);
   });
 });
 
@@ -824,7 +856,7 @@ describe("calendar: create an event", () => {
     expect(await callsOf(create)).toHaveLength(1);
   });
 
-  it("shows the error in the form when the save fails, and keeps what was written", async () => {
+  it("shows the error in a card when the save fails, and keeps what was written", async () => {
     await openCreateCalendar();
     await pressSlot(slotDay, 10);
     await $('.cal-create [aria-label="タイトル"]').setValue("Kickoff");
@@ -837,7 +869,7 @@ describe("calendar: create an event", () => {
     const week = await mock("calendar_week", weekOfToday());
     await $(".cal-create .text-btn.primary").click();
     await waitForCalls(create);
-    await expect($(".cal-create-error")).toHaveText("ゲストのメールアドレスの形が正しくありません: ann@example.com");
+    await waitForCard("ゲストのメールアドレスの形が正しくありません: ann@example.com");
     await expect($('.cal-create [aria-label="タイトル"]')).toHaveValue("Kickoff");
     expect(await textsOf(".cal-create .mail-reply-chip > span")).toEqual(["ann@example.com"]);
     await expect($(".cal-create-card")).toBeDisplayed();
@@ -847,17 +879,19 @@ describe("calendar: create an event", () => {
     expect(await callsOf(week)).toEqual([]);
   });
 
-  it("asks to log in again in the form when the account has not granted the permission", async () => {
+  it("asks to log in again in a warning card when the account has not granted the permission, and the card goes once it has logged in", async () => {
     await openCreateCalendar();
     await pressSlot(slotDay, 10);
     await browser.waitUntil(async () => !(await $(".cal-create .text-btn.primary").getAttribute("disabled")), { timeoutMsg: "save stays disabled" });
     const create = await mock("calendar_create_event", null);
     await $(".cal-create .text-btn.primary").click();
     await waitForCalls(create);
-    await expect($(".cal-create-error")).toHaveText(expect.stringContaining(`${account} は予定を作るため再ログインが必要です`));
+    await waitForCard(`${account} は予定を作るため再ログインが必要です`);
+    expect(await count(WARN_CARDS)).toBe(1);
     const login = await mock("login", account);
-    await $(".cal-create-error .text-btn").click();
+    await $(".error-card-action").click();
     expect(await waitForCalls(login)).toEqual([{ loginHint: account }]);
+    await waitForCount(CARDS, 0);
   });
 
   it("says in a card that the account must log in again when the form was closed during the save", async () => {
@@ -873,28 +907,28 @@ describe("calendar: create an event", () => {
     await waitForText(CARD, `${account} は予定を作るため再ログインが必要です`);
   });
 
-  it("says why in the form when no calendar can be listed, and keeps the save button disabled", async () => {
+  it("says why in cards when no calendar can be listed, and keeps the save button disabled", async () => {
     await openCreateCalendar({ accounts: [], needsLogin: [account], failed: { "you@example.com": "boom" } });
     await pressSlot(slotDay, 10);
-    await expect($(".cal-create-error")).toHaveText(expect.stringContaining(`${account} はカレンダーを読むため再ログインが必要です`));
-    await expect($(".cal-create-error")).toHaveText(expect.stringContaining("you@example.com のカレンダーの読み込みに失敗しました: boom"));
+    await waitForCard(`${account} はカレンダーを読むため再ログインが必要です`);
+    await waitForCard("you@example.com のカレンダーの読み込みに失敗しました: boom");
+    expect(await count(WARN_CARDS)).toBe(1);
     await expect($(".cal-create .text-btn.primary")).toBeDisabled();
     const login = await mock("login", account);
-    await $(".cal-create-error .text-btn").click();
+    await $(".error-card-action").click();
     expect(await waitForCalls(login)).toEqual([{ loginHint: account }]);
   });
 
   it("reads the owned calendars again at the next form when the last answer had none", async () => {
     await openCreateCalendar({ accounts: [], needsLogin: [], failed: { [account]: "boom" } });
     await pressSlot(slotDay, 10);
-    await expect($(".cal-create-error")).toHaveText(expect.stringContaining("boom"));
+    await waitForCard("boom");
     await browser.keys("Escape");
     await waitForCount(".cal-create", 0);
     const owned = await mock("calendar_owned", ownedCalendars());
     await pressSlot(slotDay, 10);
     await waitForCalls(owned);
     await browser.waitUntil(async () => (await count(".cal-create select option")) === 2, { timeoutMsg: "no calendars" });
-    await expect($(".cal-create-error")).toHaveText("");
   });
 
   it("moves the form with the draft when the week is scrolled, and does not draw the draft again", async () => {

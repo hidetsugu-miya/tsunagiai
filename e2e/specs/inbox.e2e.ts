@@ -1,4 +1,4 @@
-import { account, boot, callsOf, holds, inbox, isoDate, mock, onceId, pressUndo, rejects, release, rowOf, setClock, textsOf, thread, threadDetail, waitForCalls, waitForCount, CARD, CARDS, count, logged, waitForLog } from "../support";
+import { account, boot, callsOf, holds, inbox, isoDate, mock, onceId, pressUndo, rejects, release, rowOf, setClock, textsOf, thread, threadDetail, waitForCalls, waitForCount, CARD, CARDS, WARN_CARDS, count, logged, waitForCard, waitForLog } from "../support";
 
 // Fires the event the app's sync round listens for (the window is shown again), which runs one round at once.
 const syncRound = () =>
@@ -286,15 +286,12 @@ describe("inbox", () => {
     expect(await waitForCalls("inbox")).toHaveLength(1);
     await expect($("#thread")).toBeDisplayed();
     await $("#back").click();
-    await expect($("#relogin")).toHaveText(expect.stringContaining("再ログインが必要です"));
+    await waitForCard("再ログインが必要です");
+    expect(await count(WARN_CARDS)).toBe(1);
   });
 
-  // The list's state line (M-1) as it is on screen.
-  const stateLine = () =>
-    browser.execute(() => {
-      const e = document.getElementById("inbox-state")!;
-      return { text: e.textContent, hidden: e.hidden };
-    });
+  // The text of the failure card of the list (M-1, A-28), "" when no card is drawn.
+  const failureText = async () => (await textsOf(CARD)).join(" ");
 
   describe("a retry of a load that failed, in the background", () => {
     // Runs the due retry with `answer`, and returns once its load has ended.
@@ -319,11 +316,11 @@ describe("inbox", () => {
       await waitForCalls("inbox");
       await browser.pause(300);
       await expect($("#thread")).toBeDisplayed();
-      expect((await stateLine()).text).toContain("boom");
+      expect(await failureText()).toContain("boom");
       await retry(rejects("boom"), 70_000);
       await expect($("#thread")).toBeDisplayed();
       expect(await callsOf("inbox")).toHaveLength(1);
-      expect((await stateLine()).text).toContain("boom");
+      expect(await failureText()).toContain("boom");
     });
 
     it("keeps the focus on the same button of the same row when the rows are drawn again", async () => {
@@ -342,33 +339,33 @@ describe("inbox", () => {
       await expect(rowOf("unread-threads", "Second unread").$(".read-box")).toBeFocused();
     });
 
-    it("keeps the failure for the list, with no card, while another screen is shown", async () => {
+    it("keeps one card for the failure while another screen is shown, rewrites it in place and writes the log once for a text", async () => {
       const failing = { ...inbox(), failed: { [account]: "quota" } };
       await mock("inbox", failing);
       await loadByNeedsLogin();
-      await browser.pause(300);
-      expect(await count(CARDS)).toBe(0);
-      expect((await stateLine()).text).toContain("quota");
+      await waitForCard("quota");
+      expect(await count(CARDS)).toBe(1);
       await $("#nav-settings").click();
-      // It fails: the failure goes to the list and to the log, not to a card.
+      // It fails with another text: the card is rewritten, not drawn again, and the log gets a line.
       await retry(rejects("boom"), 70_000);
-      expect(await count(CARDS)).toBe(0);
-      expect((await stateLine()).text).toContain("boom");
-      expect((await logged()).some((l) => l.message.includes("boom"))).toBe(true);
+      expect(await count(CARDS)).toBe(1);
+      expect(await failureText()).toContain("boom");
+      await waitForLog("boom");
+      // The same text again: no new card and no new line.
       await retry(rejects("boom"), 200_000);
-      expect(await count(CARDS)).toBe(0);
-      // It works: the failure of the list goes.
+      expect(await count(CARDS)).toBe(1);
+      expect((await logged()).filter((l) => l.message.includes("boom"))).toHaveLength(1);
+      // It works: the card goes.
       await retry(inbox(), 500_000);
       expect(await count(CARDS)).toBe(0);
-      expect((await stateLine()).text).toBe("");
     });
 
     it("clears the failure of the last load when it works", async () => {
       await mock("inbox", rejects("boom"));
       await loadByNeedsLogin();
-      expect((await stateLine()).text).toContain("boom");
+      await waitForCard("boom");
       await retry(inbox(), 70_000);
-      expect((await stateLine()).text).toBe("");
+      expect(await count(CARDS)).toBe(0);
     });
   });
 
@@ -378,7 +375,7 @@ describe("inbox", () => {
     async function failWithRows(message: string) {
       await mock("inbox", rejects(message));
       await loadByNeedsLogin();
-      await expect($("#inbox-state")).toHaveText(expect.stringContaining(message));
+      await waitForCard(message);
     }
 
     it("shows the loading note with a spinner, and no button, until the first load answers", async () => {
@@ -412,105 +409,105 @@ describe("inbox", () => {
       await expect($("#inbox-state")).toHaveText("受信トレイにスレッドはありません");
     });
 
-    it("says the load failed, with the error, that it is read again by itself, and a button, when the call failed and no row is drawn", async () => {
+    it("tells in a card that the load failed, with the error, that it is read again by itself, and a button, when the call failed and no row is drawn", async () => {
       await boot({ inbox: rejects("boom") });
-      await expect($("#inbox-state")).toHaveText(expect.stringContaining("読み込めませんでした: boom"));
-      await expect($("#inbox-state")).toHaveText(expect.stringContaining("自動でも読み直します"));
-      await expect($("#inbox-state button")).toHaveText("再読み込み");
+      await waitForCard("読み込めませんでした: boom");
+      await waitForCard("自動でも読み直します");
+      expect(await textsOf(".error-card-action")).toEqual(["再読み込み"]);
+      expect(await count(CARDS)).toBe(1);
+      expect(await count(WARN_CARDS)).toBe(0);
       await expect($("#inbox-state")).not.toHaveText(expect.stringContaining("受信トレイにスレッドはありません"));
+      await expect($("#inbox-state .pending")).not.toExist();
       await expect($("#threads li")).not.toExist();
-      await expect($(CARDS)).not.toExist();
       await waitForLog("boom");
     });
 
-    it("loads the list at once with the button, and the failure and the button go when it works", async () => {
+    it("loads the list at once with the button of the card, and the card goes when it works", async () => {
       await boot({ inbox: rejects("boom") });
-      await expect($("#inbox-state button")).toBeDisplayed();
+      await expect($(".error-card-action")).toBeDisplayed();
       await mock("inbox", inbox());
-      await $("#inbox-state button").click();
+      await $(".error-card-action").click();
       expect(await waitForCalls("inbox")).toHaveLength(1);
       await waitForCount("#unread-threads li", 2);
+      await waitForCount(CARDS, 0);
       await expect($("#inbox-state .pending")).not.toExist();
-      await expect($("#inbox-state button")).not.toExist();
     });
 
-    it("keeps the failure line, and the button can be pressed again, when the button's load fails again", async () => {
+    it("keeps the card, and the button can be pressed again, when the button's load fails again", async () => {
       await boot({ inbox: rejects("boom") });
-      await expect($("#inbox-state button")).toBeDisplayed();
+      await expect($(".error-card-action")).toBeDisplayed();
       await mock("inbox", rejects("again"));
-      await $("#inbox-state button").click();
+      await $(".error-card-action").click();
       expect(await waitForCalls("inbox")).toHaveLength(1);
-      await expect($("#inbox-state")).toHaveText(expect.stringContaining("読み込めませんでした: again"));
-      await expect($("#inbox-state button")).toBeEnabled();
+      await waitForCard("読み込めませんでした: again");
+      expect(await count(CARDS)).toBe(1);
+      await expect($(".error-card-action")).toBeEnabled();
     });
 
     it("keeps the focus on the same button while the button's load runs and fails with the same error", async () => {
       await boot({ inbox: rejects("boom") });
-      await expect($("#inbox-state button")).toBeDisplayed();
+      await expect($(".error-card-action")).toBeDisplayed();
       await browser.execute(() => {
-        const b = document.querySelector<HTMLElement>("#inbox-state button")!;
+        const b = document.querySelector<HTMLElement>(".error-card-action")!;
         b.setAttribute("data-old", "");
         b.focus();
       });
       await browser.keys("Enter");
       expect(await waitForCalls("inbox")).toHaveLength(1);
       await browser.pause(300);
-      await expect($("#inbox-state button[data-old]")).toBeFocused();
-      await expect($("#inbox-state button")).toBeEnabled();
+      await expect($(".error-card-action[data-old]")).toBeFocused();
+      await expect($(".error-card-action")).toBeEnabled();
     });
 
-    it("keeps the rows and puts the failure line and the button above them when a load fails", async () => {
+    it("keeps the rows and tells the failure in a card with the button when a load fails", async () => {
       await failWithRows("boom");
-      await expect($("#inbox-state")).toHaveText(expect.stringContaining("自動でも読み直します"));
-      await expect($("#inbox-state button")).toHaveText("再読み込み");
+      await waitForCard("自動でも読み直します");
+      expect(await textsOf(".error-card-action")).toEqual(["再読み込み"]);
       await waitForCount("#unread-threads li", 2);
       await waitForCount("#read-threads li", 1);
-      const above = await browser.execute(
-        () => document.getElementById("inbox-state")!.getBoundingClientRect().bottom <= document.getElementById("threads")!.getBoundingClientRect().top,
-      );
-      expect(above).toBe(true);
+      await expect($("#inbox-state .pending")).not.toExist();
     });
 
     it("names each account that failed in its answer, and keeps the rows of the others", async () => {
       await mock("inbox", failing);
       await loadByNeedsLogin();
-      await expect($("#inbox-state")).toHaveText(expect.stringContaining(`読み込めませんでした: ${account}: quota`));
-      await expect($("#inbox-state button")).toBeDisplayed();
+      await waitForCard(`読み込めませんでした: ${account}: quota`);
+      await expect($(".error-card-action")).toBeDisplayed();
       await waitForCount("#unread-threads li", 2);
     });
 
-    it("loads again with the button above the rows, and clears the failure when it works", async () => {
+    it("loads again with the button of the card, and the card goes when it works", async () => {
       await failWithRows("boom");
       await mock("inbox", inbox());
-      await $("#inbox-state button").click();
+      await $(".error-card-action").click();
       expect(await waitForCalls("inbox")).toHaveLength(1);
-      await expect($("#inbox-state .pending")).not.toExist();
+      await waitForCount(CARDS, 0);
       await waitForCount("#unread-threads li", 2);
     });
 
-    it("stays when another screen is shown and the list comes back, and goes when a load works", async () => {
+    it("stays as a card when another screen is shown and the list comes back, and goes when a load works", async () => {
       await failWithRows("boom");
       await $("#nav-settings").click();
       await expect($("#inbox-state")).not.toBeDisplayed();
-      await expect($(CARDS)).not.toExist();
+      expect(await count(CARDS)).toBe(1);
       await $("#nav-mail").click();
-      await expect($("#inbox-state")).toHaveText(expect.stringContaining("読み込めませんでした: boom"));
-      await expect($("#inbox-state button")).toBeDisplayed();
+      expect(await count(CARDS)).toBe(1);
       await mock("inbox", inbox());
-      await $("#inbox-state button").click();
+      await $(".error-card-action").click();
       await waitForCalls("inbox");
-      await expect($("#inbox-state .pending")).not.toExist();
+      await waitForCount(CARDS, 0);
       await $("#nav-settings").click();
       await $("#nav-mail").click();
-      await expect($("#inbox-state .pending")).not.toExist();
+      expect(await count(CARDS)).toBe(0);
     });
 
-    it("is not shown in an open thread", async () => {
+    it("stays as a card in an open thread, where the list's own state is not shown", async () => {
       await failWithRows("boom");
       await mock("thread", threadDetail("Already read", "Old news", false));
       await rowOf("read-threads", "Already read").$(".subject").click();
       await expect($("#thread")).toBeDisplayed();
       await expect($("#inbox-state")).not.toBeDisplayed();
+      expect(await count(CARDS)).toBe(1);
     });
   });
 
@@ -557,7 +554,7 @@ describe("inbox", () => {
     it("is repeated by the sync round after 60 seconds, then after 120 seconds, and no more once it worked", async () => {
       await mock("inbox", rejects("boom"));
       await loadByNeedsLogin();
-      await expect($("#inbox-state")).toHaveText(expect.stringContaining("boom"));
+      await waitForCard("boom");
       await mock("inbox", rejects("boom"));
       await syncRound();
       expect(await loads()).toEqual([]);
@@ -567,7 +564,7 @@ describe("inbox", () => {
       await clockAfter(70_000);
       await syncRound();
       expect(await waitForCalls("inbox")).toHaveLength(1);
-      await expect($("#inbox-state")).toHaveText(expect.stringContaining("boom"));
+      await waitForCard("boom");
       // It failed again: the wait doubled to 120 seconds from that load, so 70 seconds later is too early.
       await clockAfter(140_000);
       await syncRound();
@@ -576,7 +573,7 @@ describe("inbox", () => {
       await clockAfter(200_000);
       await syncRound();
       expect(await waitForCalls("inbox")).toHaveLength(1);
-      await expect($("#inbox-state .pending")).not.toExist();
+      await waitForCount(CARDS, 0);
       // It worked: nothing is repeated any more.
       await clockAfter(500_000);
       await syncRound();

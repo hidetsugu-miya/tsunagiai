@@ -1,6 +1,6 @@
 import type { Channel } from "../../ts/bindings/Channel";
 import type { SlackLoad } from "../../ts/bindings/SlackLoad";
-import { boot, callsOf, holds, inbox, mock, rejects, release, rowOf, textsOf, threadDetail, threadLoaded, waitForCalls, waitForCount, workspace } from "../support";
+import { boot, callsOf, holds, inbox, mock, rejects, release, rowOf, textsOf, threadDetail, threadLoaded, waitForCalls, waitForCard, waitForCount, workspace, CARD } from "../support";
 
 // S-28 (#1224): the # of the row of operations of an open mail opens and closes a post pane on the right: the channel button in its header (a list of the channels of every workspace, grouped by workspace, with a search field),
 // and the text field and the send button in its foot. The send is `slack_channel_post` (S-21).
@@ -158,7 +158,7 @@ describe("mail: the Slack post pane on the right", () => {
     expect(await waitForCalls(post)).toEqual([{ teamId: "T1", channel: "C1", text: "一行目\n二行目" }]);
   });
 
-  it("shows the error above the field and keeps the text when the post fails, and hides it when the text is typed", async () => {
+  it("shows the error in a card and keeps the text when the post fails, and the card stays while the text is typed", async () => {
     await openPane();
     await openList();
     await pick(0);
@@ -166,15 +166,30 @@ describe("mail: the Slack post pane on the right", () => {
     await field().setValue("送れない文");
     await send().click();
     await waitForCalls(post);
-    await expect($("#mail-slack-error")).toHaveText("投稿できませんでした: channel_not_found");
+    await expect($(CARD)).toHaveText("投稿できませんでした: channel_not_found");
     await expect(field()).toHaveValue("送れない文");
     await expect(send()).toBeEnabled();
     await expect(channelButton()).toHaveText("#general");
     await field().addValue("！");
-    await expect($("#mail-slack-error")).not.toBeDisplayed();
+    await expect($(CARD)).toHaveText("投稿できませんでした: channel_not_found");
   });
 
-  it("empties the field and its error when another mail is opened, and the pane stays open", async () => {
+  it("names the channel in the card when the pane was closed before the post failed, and keeps the text", async () => {
+    await openPane();
+    await openList();
+    await pick(0);
+    const post = await mock("slack_channel_post", holds);
+    await field().setValue("閉じても残る文");
+    await send().click();
+    await waitForCalls(post);
+    await $("#thread-slack").click();
+    await expect($("#mail-slack")).not.toBeDisplayed();
+    await release(post, rejects("channel_not_found"));
+    await waitForCard("#general に投稿できませんでした: channel_not_found");
+    await expect(field()).toHaveValue("閉じても残る文");
+  });
+
+  it("empties the field when another mail is opened, and the pane stays open", async () => {
     await openPane();
     await openList();
     await pick(0);
@@ -182,7 +197,7 @@ describe("mail: the Slack post pane on the right", () => {
     await field().setValue("前のメールの文");
     await send().click();
     await waitForCalls(post);
-    await expect($("#mail-slack-error")).toBeDisplayed();
+    await waitForCard("投稿できませんでした: channel_not_found");
     await $("#back").click();
     await waitForCount("#unread-threads li", 2);
     await mock("thread", threadDetail("Second unread", "Hello from Bob", false));
@@ -191,7 +206,6 @@ describe("mail: the Slack post pane on the right", () => {
     await threadLoaded();
     await expect($("#mail-slack")).toBeDisplayed();
     await expect(field()).toHaveValue("");
-    await expect($("#mail-slack-error")).not.toBeDisplayed();
     await expect(channelButton()).toHaveText("#general");
   });
 

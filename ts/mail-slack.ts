@@ -8,6 +8,7 @@ import { $, composing, isMac, partMatcher, tag } from "./dom.js";
 import { DOWN_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, showMenu } from "./menu.js";
+import { showFailure } from "./error-card.js";
 import { setScreen } from "./nav.js";
 import { toast } from "./toast.js";
 
@@ -28,11 +29,10 @@ const field = () => $<HTMLTextAreaElement>("mail-slack-text");
 
 export const mailSlackOpen = () => open;
 
-// A mail is opened (S-28): the text written for the mail before is not the new one's, so the field and its error are emptied; a text whose post is still on its way stays.
+// A mail is opened (S-28): the text written for the mail before is not the new one's, so the field is emptied; a text whose post is still on its way stays.
 export function resetMailSlack() {
   if (posting) return;
   field().value = "";
-  $("mail-slack-error").hidden = true;
   draw();
 }
 
@@ -57,17 +57,15 @@ function setOpen(on: boolean) {
   if (!on) return;
   // The field opens empty; a text whose post is still on its way stays.
   if (!posting) field().value = "";
-  $("mail-slack-error").hidden = true;
   draw();
   field().focus();
 }
 
-// Posts the field's text to the chosen channel. A failure shows the error and keeps the text (a toast when the pane is no longer shown); a success empties the field and says so.
+// Posts the field's text to the chosen channel. A failure shows a card and keeps the text; a success empties the field and says so.
 async function post() {
   const to = chosen;
   const text = field().value;
   if (posting || !to || !text.trim()) return;
-  $("mail-slack-error").hidden = true;
   posting = true;
   draw();
   try {
@@ -75,11 +73,8 @@ async function post() {
   } catch (e) {
     posting = false;
     draw();
-    if ($("mail-slack").hidden) toast(`#${to.name} に投稿できませんでした: ${e}`);
-    else {
-      $("mail-slack-error").textContent = `投稿できませんでした: ${e}`;
-      $("mail-slack-error").hidden = false;
-    }
+    // A pane that is no longer shown does not tell which channel it was, so the card does.
+    showFailure("mail-slack", `${$("mail-slack").hidden ? `#${to.name} に` : ""}投稿できませんでした: ${e}`);
     return;
   }
   posting = false;
@@ -135,7 +130,6 @@ async function openList() {
   let groups: { workspace: Workspace; channels: Channel[] | string }[] = [];
   const pick = (c: Chosen) => {
     chosen = c;
-    $("mail-slack-error").hidden = true;
     closeMenu();
     draw();
     field().focus();
@@ -172,10 +166,7 @@ export function initMailSlack() {
   $("mail-slack-close").onclick = () => setOpen(false);
   $("mail-slack-channel").onclick = openList;
   $("mail-slack-send").onclick = post;
-  field().oninput = () => {
-    $("mail-slack-error").hidden = true;
-    draw();
-  };
+  field().oninput = draw;
   // Enter is a line break; Cmd+Enter (Ctrl+Enter off macOS) posts, unless it only confirms an IME conversion (S-21).
   field().onkeydown = (e) => {
     if (e.key !== "Enter" || !(isMac ? e.metaKey : e.ctrlKey) || composing(e)) return;

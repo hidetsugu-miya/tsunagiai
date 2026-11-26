@@ -8,7 +8,7 @@ import type { NewEvent } from "./bindings/NewEvent";
 import { addAccount } from "./accounts.js";
 import { closeDetail, eventNode, eventTarget, place, row } from "./calendar-detail.js";
 import { $, composing, tag } from "./dom.js";
-import { showFailure } from "./error-card.js";
+import { setNotice, showFailure } from "./error-card.js";
 import { addDays, avatarColor, hhmm, isoDate, pad2 } from "./format.js";
 import { CLOCK_SVG, CLOSE_SVG, DATE_SVG, LINES_SVG, MEET_SVG, PEOPLE_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
@@ -45,9 +45,11 @@ interface Owned {
 
 // The calendars that an event can be created in, read once the first time a form opens and kept; a failed read, or one with no calendar, is made again at the next one.
 let owned: Promise<Owned> | null = null;
-// A login or a removal of an account makes the kept list stale.
+// A login or a removal of an account makes the kept list stale, and the cards that ask for a login to write (`writeRelogin`) no longer hold.
 export function forgetOwnedCalendars() {
   owned = null;
+  for (const key of writeLogins) setNotice(key, null);
+  writeLogins.clear();
 }
 function readOwned() {
   owned ??= invoke("calendar_owned")
@@ -86,14 +88,14 @@ function defaultChoice(list: Choice[]) {
   return pool.find((c) => c.account === pool[0].account && c.id === c.account) ?? pool[0];
 }
 
-// A line of the form's error that asks `account` to log in again, with the button that does it.
-export function reloginLine(account: string, text: string) {
-  const login = tag("button", "text-btn", "再ログイン");
-  login.type = "button";
-  login.onclick = () => addAccount(account, login);
-  const line = tag("div", "");
-  line.append(text, login);
-  return line;
+// The keys of the cards that ask for a login to read or write the calendar (A-28).
+const writeLogins = new Set<string>();
+
+// The card (a warning) that asks `account` to log in again, with the button that does it: one for each account, its text rewritten by the next call. A login or a removal takes it off (`forgetOwnedCalendars`).
+export function writeRelogin(account: string, text: string) {
+  const key = `calendar-write:relogin:${account}`;
+  writeLogins.add(key);
+  setNotice(key, { text, warn: true, actions: [{ label: "再ログイン", run: (button) => addAccount(account, button) }] });
 }
 
 const colorOf = (c: Choice) => c.color || avatarColor(c.account);
@@ -428,13 +430,11 @@ function openForm(init: Initial, edit: Editing | null, calendar: { account: stri
     drawDraft();
   };
 
-  const error = tag("div", "cal-create-error");
-  error.setAttribute("role", "alert");
   const save = tag("button", "text-btn primary", "保存");
   save.type = "button";
   save.disabled = true;
   const foot = tag("div", "cal-pop-foot");
-  foot.append(error, save);
+  foot.append(save);
 
   pop.append(
     head,
@@ -492,7 +492,6 @@ function openForm(init: Initial, edit: Editing | null, calendar: { account: stri
 
   let saving = false;
   const source = edit ? "calendar-edit" : "calendar-create";
-  const showError = (text: string) => error.replaceChildren(text);
   save.onclick = async () => {
     commitGuest();
     // The calendar of an edit is the event's own.
@@ -512,25 +511,20 @@ function openForm(init: Initial, edit: Editing | null, calendar: { account: stri
     };
     saving = true;
     save.disabled = true;
-    error.replaceChildren();
     try {
       const saved = edit
         ? await invoke("calendar_update_event", { event: { ...event, eventId: edit.info.eventId } })
         : await invoke("calendar_create_event", { event });
       if (saved === null) {
         // The account has not granted the permission to create or change events yet: log in again, as the week asks for it.
-        const text = `${c.account} は予定を${edit ? "書き換える" : "作る"}ため再ログインが必要です`;
-        // A form closed meanwhile has no place for it, so it goes to a card.
-        if (open === here) error.replaceChildren(reloginLine(c.account, text));
-        else showFailure(source, text);
+        writeRelogin(c.account, `${c.account} は予定を${edit ? "書き換える" : "作る"}ため再ログインが必要です`);
         return;
       }
       if (open === here) closeCreate();
       onChanged();
     } catch (e) {
-      // What was written stays. A form closed meanwhile has no place for the error, so it goes to a card.
-      if (open === here) showError(String(e));
-      else showFailure(source, e);
+      // What was written stays.
+      showFailure(source, e);
     } finally {
       saving = false;
       save.disabled = !edit && chosen() === undefined;
@@ -557,17 +551,15 @@ function openForm(init: Initial, edit: Editing | null, calendar: { account: stri
     ({ list, needsLogin, failed }) => {
       if (open !== here) return;
       if (list.length === 0) {
-        // No calendar to save in: say why, as the week does for its accounts.
-        error.replaceChildren(
-          ...needsLogin.map((a) => reloginLine(a, `${a} はカレンダーを読むため再ログインが必要です`)),
-          ...Object.entries(failed).map(([a, message]) => tag("div", "", `${a} のカレンダーの読み込みに失敗しました: ${message}`)),
-        );
+        // No calendar to save in: say why in cards, as the week does for its accounts.
+        for (const a of needsLogin) writeRelogin(a, `${a} はカレンダーを読むため再ログインが必要です`);
+        for (const [a, message] of Object.entries(failed)) showFailure(source, `${a} のカレンダーの読み込みに失敗しました: ${message}`);
         return;
       }
       // The calendar that Claude named; one that is not in the list leaves the form with no place to save.
       const named = calendar ? list.find((c) => c.account === calendar.account && c.id === calendar.id) : undefined;
       if (calendar && !named) {
-        showError("指定されたカレンダーには予定を作れません");
+        showFailure(source, "指定されたカレンダーには予定を作れません");
         return;
       }
       choices = list;
@@ -579,7 +571,7 @@ function openForm(init: Initial, edit: Editing | null, calendar: { account: stri
       paint();
     },
     (e) => {
-      if (open === here) showError(String(e));
+      if (open === here) showFailure(source, e);
     },
   );
 }
