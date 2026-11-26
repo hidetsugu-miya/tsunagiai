@@ -54,9 +54,9 @@ function machineChip(m: MachineResources) {
   const chip = span("stat-machine", "");
   const ok = m.error === null;
   chip.append(tag("b", "stat-name", m.name), stat("CPU", ok ? m.cpuPercent : null), stat("メモリ", ok ? m.memoryPercent : null));
-  // The AI of this machine: the row of the usage with the same environment, drawn once the first reading is back.
+  // The AI of this machine: the row of the usage with the same environment, drawn once the first reading is back. A machine that gave nothing has only dashes, the AI's too.
   if (usage) {
-    const mine = usage.find((u) => u.environment === m.environment);
+    const mine = ok ? usage.find((u) => u.environment === m.environment) : undefined;
     chip.append(aiStat("Claude", "claude", mine?.claude), aiStat("Antigravity", "antigravity", mine?.antigravity));
   }
   return chip;

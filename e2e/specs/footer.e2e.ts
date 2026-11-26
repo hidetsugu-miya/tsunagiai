@@ -595,7 +595,8 @@ describe("footer: the resources (A-48)", () => {
 
   it("draws the AI of a machine that gave nothing as dashes in the pane, though its usage was read", async () => {
     await start({ machine_resources: [machine("この Mac"), saved("PC 1", { cpuPercent: null, loadAverage: null, cores: null, memoryPercent: null, usedBytes: null, totalBytes: null, error: "unavailable" })], machine_usage: [usageOf(null, ai("ok", null, 74), idle), usageOf("PC 1", ai("ok", 46, 93), ai("ok", null, 20))], ...quiet });
-    await waitForText("#footer-stats", "AG");
+    await waitForAis(4);
+    expect(await ais()).toEqual(["74%", "—", "—", "—"]);
     await open();
     expect(await pane()).toEqual([
       ["この Mac", "CPU 38% 4.52 / 12 コア", "メモリ 10% 6.4 / 64 GB", "Claude", "weekly 74% 金 11:00 にリセット", "Antigravity", "weekly —"],
