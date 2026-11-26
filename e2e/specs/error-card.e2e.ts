@@ -136,11 +136,10 @@ describe("the cards of a login that must be done again", () => {
     await boot({ inbox: inbox(), calendar_week: { ...weekOfToday(), needsLogin: [account] } });
     await $("#nav-calendar").click();
     await expect($(CARD)).toHaveText(`${account} はカレンダーを読むため再ログインが必要です`);
-    await $("#nav-mail").click();
+    await $("#nav-settings").click();
     await mock("remove_account", null);
-    await $(`#account-list button[aria-label="${account}"]`).click();
-    await $("button=このアカウントを削除").click();
-    await $("#account-popup").$("button=削除").click();
+    await $(`button[aria-label="${account} の接続を解除"]`).click();
+    await $('[role="alertdialog"]').$("button=解除").click();
     await expect($(CARDS)).not.toExist();
   });
 

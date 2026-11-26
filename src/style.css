@@ -1,4 +1,4 @@
-:root { --accent-text: #14573a; --ink-soft: #444; --surface: #fff; --on-accent: #fff; --dot: #d93025; --danger: #b00020; --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --agent-working: #edb200; --agent-question: #f05100; --agent-done: #00bb7f; --agent-idle: rgba(115, 115, 115, .4); --agent-failed: #e7000b; --agent-muted: #737373; --term-bg: #101714; --term-fg: #d8e6de; --slack: #4a154b; --todoist: #db4c3f; --google: #1a73e8; --notion: #191919; --sentry: #362d59; --muted: #5a6b62; --accent-dim: #7fb89e; --del-bg: #fdecea; --del: #8c1d18; --ins: #14573a; --effort-low: #5f6368; --effort-low-bg: #f1f1f1; --effort-medium: #1e7b52; --effort-medium-bg: #e3f4ea; --effort-high: #7a5c00; --effort-high-bg: #fff6cc; --effort-xhigh: #a04d00; --effort-xhigh-bg: #ffe8d1; --effort-max: #8c1d18; --effort-max-bg: #fdecea; --hl-comment: #5a6b62; --hl-keyword: #cf222e; --hl-string: #0a3069; --hl-number: #0550ae; --hl-title: #8250df; --hl-type: #953800; --hl-attr: #116329; --hl-meta: #6639ba; --hl-select: rgba(30, 123, 82, .25); --diff-del-bg: #ffebe9; --diff-del-mark: #cf222e; --diff-ins-bg: #dafbe1; --diff-ins-mark: #1a7f37; --diff-blank-bg: #f6f8fa; --priority-1: #d1453b; --priority-2: #eb8909; --priority-3: #246fe0; --priority-4: #b4b9c2; --cursor-band: rgba(90, 107, 98, .1); }
+:root { --accent-text: #14573a; --ink-soft: #444; --surface: #fff; --on-accent: #fff; --dot: #d93025; --danger: #b00020; --accent: #1e7b52; --soft: #e3f4ea; --hover: #f1f9f4; --code: #f4f6f5; --code-line: #dfe6e2; --side: #17362a; --side-fg: #a9c9b8; --side-hover: #24493a; --line: #e6eee9; --chip-line: #cfdcd5; --bar: #f3f8f5; --warn-bg: #fff4e5; --warn: #9a5b00; --claude: #d97757; --agent-working: #edb200; --agent-question: #f05100; --agent-done: #00bb7f; --agent-idle: rgba(115, 115, 115, .4); --agent-failed: #e7000b; --agent-muted: #737373; --term-bg: #101714; --term-fg: #d8e6de; --slack: #4a154b; --todoist: #db4c3f; --google: #1a73e8; --event-notice: #1a73e8; --notion: #191919; --sentry: #362d59; --muted: #5a6b62; --accent-dim: #7fb89e; --del-bg: #fdecea; --del: #8c1d18; --ins: #14573a; --effort-low: #5f6368; --effort-low-bg: #f1f1f1; --effort-medium: #1e7b52; --effort-medium-bg: #e3f4ea; --effort-high: #7a5c00; --effort-high-bg: #fff6cc; --effort-xhigh: #a04d00; --effort-xhigh-bg: #ffe8d1; --effort-max: #8c1d18; --effort-max-bg: #fdecea; --hl-comment: #5a6b62; --hl-keyword: #cf222e; --hl-string: #0a3069; --hl-number: #0550ae; --hl-title: #8250df; --hl-type: #953800; --hl-attr: #116329; --hl-meta: #6639ba; --hl-select: rgba(30, 123, 82, .25); --diff-del-bg: #ffebe9; --diff-del-mark: #cf222e; --diff-ins-bg: #dafbe1; --diff-ins-mark: #1a7f37; --diff-blank-bg: #f6f8fa; --priority-1: #d1453b; --priority-2: #eb8909; --priority-3: #246fe0; --priority-4: #b4b9c2; --cursor-band: rgba(90, 107, 98, .1); }
 [hidden] { display: none !important; }
 html, body { height: 100%; }
 /* A-20: the font of a place is chosen in the settings (`ts/font-settings.ts` sets --ff-* and --fs-* on :root). --fs is the size of the text in this place as a multiple of 14px, and every font-size below is its px times it. The place "app" is the root's: it is what a part outside the places below draws with, and --ff-base, which the places fall back to, follows its family. --ff-mono is the family chosen for the monospace text, with a comma after it, so that each monospace stack below starts with it. */
@@ -36,12 +36,8 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 #sidebar-bottom { margin-top: auto; padding-bottom: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
 /* A-5: the running version under settings, small and quiet; it is empty until app_info answers (ts/update.ts), and keeps its height so that the group does not move. */
 #app-version { min-height: calc(14px * var(--fs)); font-size: calc(11px * var(--fs)); line-height: calc(14px * var(--fs)); color: var(--side-fg); opacity: .7; }
-/* The accounts of a function sit under its icon in a tray (the Google accounts under the calendar, the Slack workspaces under Slack); nav.ts shows the one that fits the screen. */
-.tray { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 6px; border-radius: 12px; background: var(--side-hover); }
-.tray:empty { display: none; }
-/* A-5: a screen that the side menu has turned off takes its button and its tray out of the sidebar (ts/nav.ts). */
+/* A-5: a screen that the side menu has turned off takes its button out of the sidebar (ts/nav.ts). */
 .menu-off { display: none !important; }
-.tray .avatar { width: 28px; height: 28px; font-size: calc(11px * var(--fs)); }
 .av-img { display: block; width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
 .account-btn { padding: 0; border: 0; font-family: inherit; cursor: pointer; }
 .account-btn[aria-expanded="true"] { box-shadow: 0 0 0 2px var(--side-fg); }
@@ -51,7 +47,6 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 #account-popup .avatar { width: 48px; height: 48px; font-size: calc(16px * var(--fs)); }
 #account-popup .avatar svg { width: 24px; height: 24px; }
 .popup-email { font-weight: bold; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
-.popup-status { padding: 8px 12px; border-radius: 8px; background: var(--warn-bg); }
 .popup-actions { display: flex; gap: 8px; }
 .danger, .text-btn.danger { color: var(--danger); }
 .pop-confirm { max-width: 320px; overflow-wrap: anywhere; }
@@ -61,7 +56,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .pop-lost { margin: 0 0 12px; padding-left: 18px; max-height: 6.4em; overflow-y: auto; font-family: ui-monospace, Menlo, monospace; font-size: calc(11.5px * var(--fs)); }
 .pop .pop-lost li { margin: 0; white-space: pre-wrap; }
 .pop-lost-place { margin: 0 0 6px; font-family: ui-monospace, Menlo, monospace; font-size: calc(11.5px * var(--fs)); word-break: break-all; }
-.popup-unread, .popup-plan { color: #666; }
+.popup-plan { color: #666; }
 .nav-item[aria-current="page"] { background: var(--accent); color: var(--on-accent); }
 
 /* pointer-events: none so the tooltip never takes a click from the control under it. */
@@ -97,7 +92,13 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .res-group { display: flex; flex-direction: column; gap: 8px; }
 .res-group-name { display: flex; align-items: center; font-size: calc(12px * var(--fs)); color: var(--muted); }
 .unread-item { display: grid; grid-template-columns: 16px 32px minmax(0, 1fr); column-gap: 10px; align-items: start; padding: 10px 8px; border-radius: 12px; cursor: pointer; }
+.unread-item.bare { grid-template-columns: 16px minmax(0, 1fr); }
+.unread-item.bare .unread-actions { grid-column: 2; }
 .unread-item:hover { background: var(--hover); }
+#unread-pane-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 8px 0; }
+.unread-tab { height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); color: var(--ink-soft); font: inherit; font-size: calc(12px * var(--fs)); font-variant-numeric: tabular-nums; cursor: pointer; }
+.unread-tab:hover { background: var(--hover); }
+.unread-tab[aria-selected="true"] { border-color: var(--accent); background: var(--soft); color: var(--accent-text); font-weight: 600; }
 .unread-kind { padding-top: 7px; color: var(--muted); }
 .unread-kind svg { width: 16px; height: 16px; }
 .unread-body { min-width: 0; display: flex; flex-direction: column; }
@@ -127,6 +128,16 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .error-card-text { max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
 .error-card .text-btn { height: 26px; font-size: calc(12px * var(--fs)); }
 .error-card-close { flex: none; width: 28px; height: 28px; }
+/* C-8: the notice of an event before it starts (ts/calendar-notice.ts) is the card of A-28 with its own color at the left. */
+.error-card.event-card { border-left-color: var(--event-notice); }
+.event-card-when { color: var(--event-notice); font-weight: 600; }
+.event-card-title { max-width: 100%; font-weight: 600; overflow-wrap: anywhere; }
+.event-card-actions { display: flex; gap: 6px; }
+.error-card .text-btn.event-card-join { display: inline-flex; align-items: center; text-decoration: none; }
+/* C-8: the number on the calendar button pulses (the owner's mock of #1457), and stands still where the system asks for less motion. */
+#nav-calendar .nav-count { box-shadow: 0 0 0 2px var(--side); animation: nav-count-pulse 1.6s ease-in-out infinite; }
+@keyframes nav-count-pulse { 50% { transform: scale(1.15); } }
+@media (prefers-reduced-motion: reduce) { #nav-calendar .nav-count { animation: none; } }
 
 /* Only the main area scrolls; the scrollbar is styled explicitly because macOS WebView hides the overlay one. */
 #main { flex: 1; overflow-y: auto; padding: 8px 24px 32px 32px; }

@@ -14,8 +14,8 @@
     </button>
     <button id="nav-calendar" class="nav-item" aria-label="カレンダー" disabled>
       <svg data-svg="calendar"></svg>
+      <span class="nav-count" aria-hidden="true" hidden></span>
     </button>
-    <div id="account-list" class="tray" aria-label="連携中の Google アカウント"></div>
     <button id="nav-todo" class="nav-item" aria-label="Todo">
       <svg data-svg="task"></svg>
       <span class="nav-count" aria-hidden="true" hidden></span>
@@ -24,7 +24,6 @@
       <svg data-svg="slack"></svg>
       <span class="nav-count" aria-hidden="true" hidden></span>
     </button>
-    <div id="slack-workspace-list" class="tray" aria-label="連携中のワークスペース" hidden></div>
     <button id="nav-orca" class="nav-item" aria-label="開発">
       <svg data-svg="develop"></svg>
       <span class="nav-count" aria-hidden="true" hidden></span>
@@ -878,11 +877,12 @@
         <span class="footer-count" aria-hidden="true" hidden></span>
       </button>
     </footer>
-    <aside id="unread-pane" aria-label="未読" hidden>
+    <aside id="unread-pane" aria-label="通知" hidden>
       <header>
         <h2 id="unread-pane-title"></h2>
         <button id="unread-pane-close" class="icon-btn" type="button" aria-label="閉じる"><svg data-svg="close"></svg></button>
       </header>
+      <div id="unread-pane-tabs" role="tablist"></div>
       <ul id="unread-pane-list"></ul>
     </aside>
     <aside id="resource-pane" aria-label="リソース" hidden>

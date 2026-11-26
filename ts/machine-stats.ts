@@ -115,7 +115,8 @@ function machineSection(m: MachineResources) {
   const bytes = ok && m.usedBytes !== null && m.totalBytes !== null ? `${gb(m.usedBytes)} / ${gb(m.totalBytes)} GB` : "";
   section.append(row("CPU", ok ? m.cpuPercent : null, load), row("メモリ", ok ? m.memoryPercent : null, bytes));
   if (usage) {
-    const mine = usage.find((u) => u.environment === m.environment);
+    // A machine that gave nothing has only dashes, the AI's too.
+    const mine = ok ? usage.find((u) => u.environment === m.environment) : undefined;
     section.append(aiGroup("Claude", "claude", mine?.claude), aiGroup("Antigravity", "antigravity", mine?.antigravity));
   }
   return section;

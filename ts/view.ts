@@ -81,10 +81,12 @@ export async function copyText(text: string, done: string) {
   return true;
 }
 
-// The counts of the sidebar buttons (inbox, Todo, Slack, Orca) by id (the footer's bell shows the sum of the inbox's and Slack's, A-35), the due moments (epoch milliseconds) of the open tasks still ahead, and what was last sent to the Dock badge.
+// The counts of the sidebar buttons (inbox, calendar, Todo, Slack, Orca) by id (the footer's bell shows the sum of all but Orca's, A-35), the due moments (epoch milliseconds) of the open tasks still ahead, and what was last sent to the Dock badge.
 const navCounts: Record<string, number> = {};
 let upcoming: number[] = [];
 let sentToDock = "0:";
+// The buttons whose counts the footer's bell adds up.
+const FOOTER_IDS = ["nav-mail", "nav-slack", "nav-calendar", "nav-todo"];
 
 // The count on a sidebar button (99+ from 100, or `cap`+ above `cap`; none for 0). The label carries it too: the tooltip shows the label, e.g. "受信トレイ（未読 3 件）".
 // The Dock badge shows the sum of the buttons' counts (the numbers themselves, not what a button shows above its cap), and Rust adds the `upcoming` moments as the clock passes them (they are the Todo button's; the mail button leaves them as they are).
@@ -103,5 +105,5 @@ export function setNavCount(id: string, count: number, name: string, kind: strin
   badge.hidden = count === 0;
   badge.textContent = count > cap ? `${cap}+` : String(count);
   b.setAttribute("aria-label", count === 0 ? name : `${name}（${kind} ${count} 件）`);
-  if (id === "nav-mail" || id === "nav-slack") setFooterCount((navCounts["nav-mail"] ?? 0) + (navCounts["nav-slack"] ?? 0));
+  if (FOOTER_IDS.includes(id)) setFooterCount({ mail: navCounts["nav-mail"] ?? 0, slack: navCounts["nav-slack"] ?? 0, calendar: navCounts["nav-calendar"] ?? 0, todo: navCounts["nav-todo"] ?? 0 });
 }

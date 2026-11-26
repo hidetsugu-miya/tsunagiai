@@ -87,7 +87,6 @@ import type { Todo } from "../ts/bindings/Todo";
 import type { TodoPrompt } from "../ts/bindings/TodoPrompt";
 import type { Week } from "../ts/bindings/Week";
 import type { Workspace } from "../ts/bindings/Workspace";
-import type { WorkspaceIcon } from "../ts/bindings/WorkspaceIcon";
 
 declare global {
   interface Window {
@@ -104,9 +103,9 @@ declare global {
 let onceCount = 0;
 export const onceId = () => `once-${++onceCount}`;
 
-// The fixture that shortens the timers a spec waits for (ts/e2e-timers.ts, e2e/fixtures.js), in milliseconds: `orcaClock` is the Orca list's read while the screen is shown (10 s in the app), `orcaMirror` the read of a terminal's screen (1 s) `databaseProfiles` the read of the connections that the database screen does while it is shown, and its edit pane (2 s) `formationFlow` the read of the children by the flow pane of the orchestration mode (3 s) `lspSettings` the read of the language servers' settings while the language server part of the file pane is shown (2 s), `machineResources` the read of the load of the machines for the footer (5 s) and `machineUsage` the read of the rate limits of the AI (60 s).
+// The fixture that shortens the timers a spec waits for (ts/e2e-timers.ts, e2e/fixtures.js), in milliseconds: `orcaClock` is the Orca list's read while the screen is shown (10 s in the app), `orcaMirror` the read of a terminal's screen (1 s) `databaseProfiles` the read of the connections that the database screen does while it is shown, and its edit pane (2 s) `formationFlow` the read of the children by the flow pane of the orchestration mode (3 s) `lspSettings` the read of the language servers' settings while the language server part of the file pane is shown (2 s), `machineResources` the read of the load of the machines for the footer (5 s) and `machineUsage` the read of the rate limits of the AI (60 s), `calendarNotice` the clock of the notice of an event (C-8, 60 s, and its read of the week is 5 times as long).
 // A wait for a period to pass is that period times 1.2. Put it in the fixtures of `boot`: `boot({ ...timers({ orcaMirror: 250 }) })`.
-export const timers = (periods: { orcaClock?: number; orcaMirror?: number; databaseProfiles?: number; formationFlow?: number; lspSettings?: number; machineResources?: number; machineUsage?: number }) => ({ e2e_timers: periods });
+export const timers = (periods: { orcaClock?: number; orcaMirror?: number; databaseProfiles?: number; formationFlow?: number; lspSettings?: number; machineResources?: number; machineUsage?: number; calendarNotice?: number }) => ({ e2e_timers: periods });
 
 // The app asks for its data while loading, before a spec can mock anything: hand it over through the fixture layer (e2e/fixtures.js) and reload.
 // Mocks and recorded calls are page state, so a reload also clears them; call `mock` after `boot`.
@@ -772,8 +771,6 @@ export const thumbUrlOf = (id: string) => `https://files.slack.com/files-tmb/T1-
 // What `slack_thread` answers: the thread that starts at the first message.
 export const slackThread = (messages: ThreadMessage[]): SlackThread => ({ teamId: workspace.teamId, channel: "C0123ABCD", ts: messages[0].ts, messages, truncated: false });
 
-// What `slack_icons` answers: the user's own icon in `workspace`.
-export const ownIcon = (iconUrl: string | null): WorkspaceIcon[] => [{ teamId: workspace.teamId, name: workspace.user, iconUrl }];
 
 // A 1x1 transparent PNG as a data: URI, what `fetch_images` and `slack_file_images` answer for an image.
 export const pngUri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";

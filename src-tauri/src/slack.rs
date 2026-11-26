@@ -1627,17 +1627,6 @@ pub struct SlackThread {
     truncated: bool,
 }
 
-/// The user's own icon in a workspace; `name` is the user's name there.
-#[derive(Serialize, Debug, PartialEq)]
-#[cfg_attr(test, derive(TS))]
-#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
-#[serde(rename_all = "camelCase")]
-pub struct WorkspaceIcon {
-    team_id: String,
-    name: String,
-    icon_url: Option<String>,
-}
-
 /// A user as the screen shows them: a name, and an icon address when Slack gave an https one.
 #[derive(Debug, PartialEq, Clone)]
 struct SlackUser {
@@ -6143,54 +6132,6 @@ pub async fn slack_file_images(
         .map_err(|e| log_failure(command, &team_id, e))?;
     let urls = urls.into_iter().take(FILE_IMAGES_MAX).collect();
     Ok(fetch_slack_files(&state.images, &team_id, &token, urls).await)
-}
-
-/// The user's own icon in each workspace (`auth.test` says who the token is, `users.info` what their icon is). A workspace that cannot say has no icon.
-#[tauri::command]
-pub async fn slack_icons(
-    app: AppHandle,
-    auth: State<'_, Auth>,
-    state: State<'_, SlackState>,
-) -> Result<Vec<WorkspaceIcon>, String> {
-    let command = "slack_icons";
-    let workspaces = load_workspaces(&config_dir(&app)?)
-        .await
-        .map_err(|e| log_failure(command, "-", e))?;
-    let http = auth.http().clone();
-    let team_ids: Vec<String> = workspaces.iter().map(|w| w.team_id.clone()).collect();
-    let jobs = team_ids.into_iter().map(|team_id| {
-        let (http, cache) = (http.clone(), Arc::clone(&state.timeline));
-        async move {
-            let who = async {
-                let token = token_of(&team_id).await.ok()?;
-                let user = own_user_id(&http, &cache, &team_id, &token).await?;
-                Some((team_id.clone(), token, user))
-            }
-            .await;
-            (team_id, who)
-        }
-    });
-    let own: HashMap<String, (String, String, String)> = run_limited(jobs, workspaces.len().max(1))
-        .await
-        .into_iter()
-        .filter_map(|(team_id, who)| Some((team_id, who?)))
-        .collect();
-    lookup_users(&http, &state.timeline, own.values().cloned().collect()).await;
-    Ok(workspaces
-        .iter()
-        .map(|w| {
-            let user = own
-                .get(&w.team_id)
-                .and_then(|(_, _, user)| state.timeline.user(&w.team_id, user));
-            WorkspaceIcon {
-                team_id: w.team_id.clone(),
-                name: user
-                    .as_ref()
-                    .map_or_else(|| w.user.clone(), |u| u.name.clone()),
-                icon_url: user.and_then(|u| u.icon_url),
-            }
-        })
-        .collect())
 }
 
 #[cfg(test)]

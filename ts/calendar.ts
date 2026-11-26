@@ -1,18 +1,20 @@
 // The calendar screen: a week of the selected calendars' events, kept in memory and fetched in the background.
 import type { AllDayItem } from "./bindings/AllDayItem";
+import type { Info } from "./bindings/Info";
 import type { TimedItem } from "./bindings/TimedItem";
 import type { Week } from "./bindings/Week";
-import { addAccount, refreshPopup } from "./accounts.js";
+import { addAccount, renderGoogleCard } from "./accounts.js";
+import { weekDrawn } from "./calendar-notice.js";
 import { closeCreate, forgetOwnedCalendars, initCalendarCreate, openCreate, redrawDraft } from "./calendar-create.js";
 import { initCalendarClaude } from "./calendar-claude.js";
 import { drawSlots } from "./calendar-slots.js";
-import { bindEvent, closeDetail, endEvents, startEvents } from "./calendar-detail.js";
+import { bindEvent, closeDetail, endEvents, eventNode, startEvents } from "./calendar-detail.js";
 import { closeMonthPop, followCalendarWeek, initCalendarMonth, refreshCalendarDay, showCalendarMonth } from "./calendar-month.js";
 import { forgetCalendarChoices, initCalendarSide, loadCalendarChoices } from "./calendar-side.js";
 import { $, el } from "./dom.js";
 import { addDays, avatarColor, hhmm, isoDate, pad2, WEEKDAYS } from "./format.js";
 import { invoke } from "./ipc.js";
-import { currentScreen } from "./nav.js";
+import { currentScreen, setScreen } from "./nav.js";
 import { logError, setRelogin } from "./error-card.js";
 import { onScreenChanged } from "./screen-bridge.js";
 import { show } from "./view.js";
@@ -51,6 +53,26 @@ let calRefresh = false;
 const calAhead = new Set<string>();
 // The first render after opening the calendar scrolls to the morning; later ones keep the position.
 let calScrolled = false;
+// The event whose detail the card of C-8 asked for: it opens when a week that holds the event is drawn, and the wish ends when the load that was started for it ends.
+let pendingOpen: Info | null = null;
+
+// Opens the detail of the event the card of C-8 asked for, when the week drawn now holds it.
+function openPendingEvent() {
+  const node = pendingOpen && eventNode(pendingOpen);
+  if (!node) return;
+  pendingOpen = null;
+  node.scrollIntoView({ block: "nearest" });
+  node.click();
+}
+
+// Shows the week of today and opens the detail of `info` (the button 「予定を開く」 of the card of C-8).
+// A week of today that is drawn already is not drawn again by the load that the screen starts, so the detail opens at once; otherwise it opens when the week is drawn.
+export function openCalendarEvent(info: Info) {
+  pendingOpen = info;
+  calDate = isoDate(new Date());
+  setScreen("calendar");
+  if (calShown) openPendingEvent();
+}
 
 // The accounts changed (a login, a removal): the weeks kept so far and the calendar lists behind them are stale.
 // The popup must not keep the old state until the calendar is opened; `dropKept` also forgets the weeks of the last run.
@@ -221,12 +243,15 @@ function renderWeek(w: Week) {
   // The same for a form of C-5 that is open, and for the candidates of free time (C-6).
   redrawDraft(w.weekStart);
   drawSlots(w.weekStart);
-  refreshPopup();
+  renderGoogleCard();
   if (!calScrolled) {
     // Two hours before now at the top (11:00 shows from 9:00); a little less keeps the hour label whole.
     $("cal-scroll").scrollTop = Math.max(0, (new Date().getHours() - 2) * HOUR_PX - 12);
     calScrolled = true;
   }
+  openPendingEvent();
+  // The week of today is the week of the notices of C-8 too, so they do not read it again.
+  if (todayIndex >= 0) weekDrawn(w);
 }
 
 // The date of the first day of the week, which starts on the weekday `first`, holding the "YYYY-MM-DD" date.
@@ -299,7 +324,10 @@ export async function loadCalendar(refresh = false, follow = false, ahead = true
   } catch (e) {
     if (seq === calSeq) logError("calendar", e);
   } finally {
-    if (seq === calSeq) $("calendar").classList.remove("loading");
+    if (seq === calSeq) {
+      $("calendar").classList.remove("loading");
+      pendingOpen = null;
+    }
     // After the week, whose fetch lists the calendars again when they are stale, so this read finds them kept.
     loadCalendarChoices(refresh);
   }

@@ -344,12 +344,16 @@ export async function openThread(
   }
 }
 
-export function goBack() {
-  // A thread still loading is left: its answer is ignored.
+// The thread open, or still loading, is let go without changing the screen: an answer still awaited is ignored.
+export function forgetThread() {
   openCount++;
   loading.current = null;
   // A reply still going out does not read the thread again once it is over (`mail-reply.ts`).
   resetReply();
+}
+
+export function goBack() {
+  forgetThread();
   if (threadOrigin === "todo") setScreen("todo");
   else show("list");
 }

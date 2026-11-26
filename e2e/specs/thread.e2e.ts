@@ -348,20 +348,24 @@ describe("thread loading", () => {
     await expect($("#threads")).not.toBeDisplayed();
   });
 
-  it("goes back to the list when the account is removed while its thread loads, and does not draw the answer that arrives later", async () => {
+  it("does not draw the answer that arrives later when the account is removed in the settings while its thread loads", async () => {
     const open = await mock("thread", holds);
-    await mock("remove_account", null);
+    const remove = await mock("remove_account", null);
     await rowOf("unread-threads", "First unread").$(".subject").click();
     await waitForCalls(open);
-    await $(`#account-list button[aria-label="${account}"]`).click();
-    await $("button=このアカウントを削除").click();
-    await $("#account-popup").$("button=削除").click();
-    await expect($("#threads")).toBeDisplayed();
-    await expect($("#thread")).not.toBeDisplayed();
+    await $("#nav-settings").click();
+    await $(`button[aria-label="${account} の接続を解除"]`).click();
+    await $('[role="alertdialog"]').$("button=解除").click();
+    await waitForCalls(remove);
+    // The screen the user is on stays.
+    await expect($("#settings")).toBeDisplayed();
     await release(open, threadDetail("First unread", "Hello from Alice", false));
     await browser.pause(300);
-    await expect($("#threads")).toBeDisplayed();
+    await expect($("#settings")).toBeDisplayed();
     expect(await count("#messages .plain")).toBe(0);
+    await $("#nav-mail").click();
+    await expect($("#threads")).toBeDisplayed();
+    await expect($("#thread")).not.toBeDisplayed();
   });
 });
 

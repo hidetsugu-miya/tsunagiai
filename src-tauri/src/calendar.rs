@@ -704,6 +704,78 @@ pub fn calendar_month(year: i32, month: u32, first_day: u8) -> Result<MonthGrid,
     month_grid(year, month, first_day)
 }
 
+/// How long before its start an event is told of (C-8), in minutes.
+const NOTICE_LEAD_MIN: i64 = 5;
+
+/// An event that C-8 tells of: how many minutes are left to its start (`started` false, 1 to 5), or have passed since it (`started` true; 0 in the first minute).
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct EventNotice {
+    event: TimedItem,
+    minutes: u32,
+    started: bool,
+}
+
+/// The events that C-8 tells of at `now`, the one that starts first first. Only a timed event is given, so an all-day one is never told of.
+/// An event that is not declined is told of from 5 minutes before its start to its start. One with a Google Meet link is told of after its start too, on the day it starts in `tz`: it stays until the owner has pressed a button of its card.
+/// An event that runs past midnight has an item on each day, and is told of once.
+fn event_notices<Tz: TimeZone>(
+    tz: &Tz,
+    events: &[TimedItem],
+    now: DateTime<Utc>,
+) -> Vec<EventNotice> {
+    let mut seen = HashSet::new();
+    let mut found: Vec<(DateTime<FixedOffset>, EventNotice)> = Vec::new();
+    for item in events {
+        let info = &item.info;
+        let Ok(start) = DateTime::parse_from_rfc3339(&info.start) else {
+            continue;
+        };
+        let wait = start.signed_duration_since(now);
+        let (started, seconds) = if wait > Duration::zero() {
+            (false, wait.num_seconds())
+        } else {
+            (true, -wait.num_seconds())
+        };
+        let due = if started {
+            info.meet_url.is_some()
+                && start.with_timezone(tz).date_naive() == now.with_timezone(tz).date_naive()
+        } else {
+            wait <= Duration::minutes(NOTICE_LEAD_MIN)
+        };
+        let key = (&info.account, &info.calendar_id, &info.event_id, start);
+        if !due || info.response == ResponseStatus::Declined || !seen.insert(key) {
+            continue;
+        }
+        // Counted up while it is ahead, so that 5 minutes and 1 second of it is still "5 minutes".
+        let minutes = if started {
+            seconds / 60
+        } else {
+            (seconds + 59) / 60
+        };
+        found.push((
+            start,
+            EventNotice {
+                event: item.clone(),
+                minutes: minutes as u32,
+                started,
+            },
+        ));
+    }
+    found.sort_by_key(|(start, _)| *start);
+    found.into_iter().map(|(_, notice)| notice).collect()
+}
+
+/// The events of `events` (the timed events of the week of today) that C-8 tells of at `now_ms` (epoch milliseconds).
+#[tauri::command]
+pub fn calendar_notices(events: Vec<TimedItem>, now_ms: i64) -> Result<Vec<EventNotice>, String> {
+    let now = DateTime::from_timestamp_millis(now_ms)
+        .ok_or_else(|| format!("時刻が不正です: {now_ms}"))?;
+    Ok(event_notices(&Local, &events, now))
+}
+
 const SELECTION_FILE: &str = "calendar-selection.json";
 /// The longest calendar ID a choice may name, in bytes.
 const CALENDAR_ID_MAX: usize = 1024;
@@ -3237,6 +3309,120 @@ mod tests {
         for id in ["", ".", ".."] {
             assert_eq!(events_url(id), Err("カレンダー ID が不正です".into()));
         }
+    }
+
+    fn notice_items(events: Vec<RawEvent>) -> Vec<TimedItem> {
+        build_week(&jst(), date("2026-10-25"), events).1
+    }
+
+    fn at(s: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
+    }
+
+    fn meet(e: RawEvent) -> RawEvent {
+        RawEvent {
+            meet_url: Some("https://meet.google.com/abc-defg-hij".into()),
+            ..e
+        }
+    }
+
+    fn told(items: &[TimedItem], now: &str) -> Vec<(u32, bool)> {
+        event_notices(&jst(), items, at(now))
+            .iter()
+            .map(|n| (n.minutes, n.started))
+            .collect()
+    }
+
+    #[test]
+    fn an_event_is_told_of_from_five_minutes_before_its_start_to_its_start() {
+        // 10:00 JST on Thursday the 29th.
+        let items = notice_items(vec![timed(
+            "2026-10-29T10:00:00+09:00",
+            "2026-10-29T10:30:00+09:00",
+        )]);
+        assert_eq!(told(&items, "2026-10-29T00:54:59Z"), vec![]);
+        assert_eq!(told(&items, "2026-10-29T00:55:00Z"), vec![(5, false)]);
+        assert_eq!(told(&items, "2026-10-29T00:55:30Z"), vec![(5, false)]);
+        assert_eq!(told(&items, "2026-10-29T00:56:00Z"), vec![(4, false)]);
+        assert_eq!(told(&items, "2026-10-29T00:59:59Z"), vec![(1, false)]);
+        // At its start, and after it, an event with no Meet link is gone.
+        assert_eq!(told(&items, "2026-10-29T01:00:00Z"), vec![]);
+        assert_eq!(told(&items, "2026-10-29T01:10:00Z"), vec![]);
+    }
+
+    #[test]
+    fn an_event_with_meet_stays_after_its_start_on_the_day_it_starts() {
+        let items = notice_items(vec![meet(timed(
+            "2026-10-29T10:00:00+09:00",
+            "2026-10-29T10:30:00+09:00",
+        ))]);
+        assert_eq!(told(&items, "2026-10-29T00:55:00Z"), vec![(5, false)]);
+        assert_eq!(told(&items, "2026-10-29T01:00:00Z"), vec![(0, true)]);
+        assert_eq!(told(&items, "2026-10-29T01:00:59Z"), vec![(0, true)]);
+        assert_eq!(told(&items, "2026-10-29T01:03:10Z"), vec![(3, true)]);
+        // Past its end it stays, until the day ends in the zone of the owner (23:59 JST is 14:59Z).
+        assert_eq!(told(&items, "2026-10-29T14:59:00Z"), vec![(839, true)]);
+        assert_eq!(told(&items, "2026-10-29T15:00:00Z"), vec![]);
+    }
+
+    #[test]
+    fn a_declined_event_and_one_with_no_start_are_never_told_of() {
+        let declined = |e: RawEvent| RawEvent {
+            response: ResponseStatus::Declined,
+            ..e
+        };
+        let plain = timed("2026-10-29T10:00:00+09:00", "2026-10-29T10:30:00+09:00");
+        let mut items = notice_items(vec![declined(plain.clone()), declined(meet(plain.clone()))]);
+        assert_eq!(told(&items, "2026-10-29T00:57:00Z"), vec![]);
+        assert_eq!(told(&items, "2026-10-29T01:05:00Z"), vec![]);
+        // Tentative and not answered are told of as accepted ones are.
+        for response in [ResponseStatus::Tentative, ResponseStatus::NeedsAction] {
+            let items = notice_items(vec![RawEvent {
+                response,
+                ..plain.clone()
+            }]);
+            assert_eq!(told(&items, "2026-10-29T00:57:00Z"), vec![(3, false)]);
+        }
+        items = notice_items(vec![plain]);
+        items[0].info.start.clear();
+        assert_eq!(told(&items, "2026-10-29T00:57:00Z"), vec![]);
+    }
+
+    #[test]
+    fn the_events_told_of_come_in_the_order_of_their_start_and_an_event_across_midnight_once() {
+        let at_nine = RawEvent {
+            event_id: "nine".into(),
+            ..timed("2026-10-29T09:03:00+09:00", "2026-10-29T09:30:00+09:00")
+        };
+        let at_eight_fifty_nine = RawEvent {
+            event_id: "early".into(),
+            ..timed("2026-10-29T08:59:00+09:00", "2026-10-29T09:30:00+09:00")
+        };
+        let items = notice_items(vec![at_nine, at_eight_fifty_nine]);
+        let got: Vec<_> = event_notices(&jst(), &items, at("2026-10-28T23:58:00Z"))
+            .iter()
+            .map(|n| (n.event.info.event_id.clone(), n.minutes))
+            .collect();
+        assert_eq!(got, vec![("early".to_string(), 1), ("nine".to_string(), 5)]);
+        // 23:58 to 1:00: an item on each day, the same start, one notice. Told of at 23:55 JST on the first day.
+        let night = RawEvent {
+            event_id: "night".into(),
+            ..meet(timed(
+                "2026-10-29T23:58:00+09:00",
+                "2026-10-30T01:00:00+09:00",
+            ))
+        };
+        let items = notice_items(vec![night]);
+        assert_eq!(items.len(), 2);
+        assert_eq!(told(&items, "2026-10-29T14:55:00Z"), vec![(3, false)]);
+        // On the second day the event started the day before, so it is no longer told of.
+        assert_eq!(told(&items, "2026-10-29T15:30:00Z"), vec![]);
+    }
+
+    #[test]
+    fn the_command_refuses_a_time_it_cannot_read() {
+        assert!(calendar_notices(vec![], i64::MAX).is_err());
+        assert_eq!(calendar_notices(vec![], 0).unwrap(), vec![]);
     }
 
     #[test]
