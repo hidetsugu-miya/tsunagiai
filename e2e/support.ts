@@ -87,7 +87,6 @@ import type { Todo } from "../ts/bindings/Todo";
 import type { TodoPrompt } from "../ts/bindings/TodoPrompt";
 import type { Week } from "../ts/bindings/Week";
 import type { Workspace } from "../ts/bindings/Workspace";
-import type { WorkspaceIcon } from "../ts/bindings/WorkspaceIcon";
 
 declare global {
   interface Window {
@@ -772,8 +771,6 @@ export const thumbUrlOf = (id: string) => `https://files.slack.com/files-tmb/T1-
 // What `slack_thread` answers: the thread that starts at the first message.
 export const slackThread = (messages: ThreadMessage[]): SlackThread => ({ teamId: workspace.teamId, channel: "C0123ABCD", ts: messages[0].ts, messages, truncated: false });
 
-// What `slack_icons` answers: the user's own icon in `workspace`.
-export const ownIcon = (iconUrl: string | null): WorkspaceIcon[] => [{ teamId: workspace.teamId, name: workspace.user, iconUrl }];
 
 // A 1x1 transparent PNG as a data: URI, what `fetch_images` and `slack_file_images` answer for an image.
 export const pngUri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";

@@ -90,7 +90,6 @@ const answers = {
   slack_side_folded: [],
   slack_set_side_folded: true,
   slack_unhide_channel: true,
-  slack_icons: [],
   slack_socket_status: [],
   // S-29: no workspace has a Sentry token; a spec that saves or deletes one mocks `sentry_save` or `sentry_delete`.
   sentry_connections: [],

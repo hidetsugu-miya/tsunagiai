@@ -134,7 +134,6 @@ import type { UpdateInfo } from "./bindings/UpdateInfo";
 import type { UpdateMode } from "./bindings/UpdateMode";
 import type { Week } from "./bindings/Week";
 import type { Workspace } from "./bindings/Workspace";
-import type { WorkspaceIcon } from "./bindings/WorkspaceIcon";
 
 // Where a handoff to Orca goes (A-9): a new session in a worktree. Rust checks it against Orca's list.
 export type HandoffDestination = { kind: "new"; path: string };
@@ -361,7 +360,6 @@ export interface Commands {
   // The attached images (a thread file's `thumbUrl`) as data: URIs by URL; the token goes to files.slack.com only. What cannot be fetched is not in the map.
   slack_file_images: { args: { teamId: string; urls: string[] }; result: Record<string, string> };
   // The user's own icon in each workspace.
-  slack_icons: { args: undefined; result: WorkspaceIcon[] };
   // Whether Claude can be used with the method in use (the subscription logged in, or an API key that is not refused).
   claude_status: { args: undefined; result: Claude };
   // The settings card's view: the method in use, the subscription's and the API key's own states, and the usable state (`claude`) of the method in use.

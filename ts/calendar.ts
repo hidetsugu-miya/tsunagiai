@@ -2,7 +2,7 @@
 import type { AllDayItem } from "./bindings/AllDayItem";
 import type { TimedItem } from "./bindings/TimedItem";
 import type { Week } from "./bindings/Week";
-import { addAccount, refreshPopup } from "./accounts.js";
+import { addAccount, renderGoogleCard } from "./accounts.js";
 import { closeCreate, forgetOwnedCalendars, initCalendarCreate, openCreate, redrawDraft } from "./calendar-create.js";
 import { initCalendarClaude } from "./calendar-claude.js";
 import { drawSlots } from "./calendar-slots.js";
@@ -221,7 +221,7 @@ function renderWeek(w: Week) {
   // The same for a form of C-5 that is open, and for the candidates of free time (C-6).
   redrawDraft(w.weekStart);
   drawSlots(w.weekStart);
-  refreshPopup();
+  renderGoogleCard();
   if (!calScrolled) {
     // Two hours before now at the top (11:00 shows from 9:00); a little less keeps the hour label whole.
     $("cal-scroll").scrollTop = Math.max(0, (new Date().getHours() - 2) * HOUR_PX - 12);

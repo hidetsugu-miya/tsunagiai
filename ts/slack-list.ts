@@ -3,7 +3,7 @@
 // then the messages of the channel oldest first under the day they were sent, with the threads with unread replies among them (the watched threads follow in the watch section). A message that is read leaves the list unless its thread is watched or has unread replies.
 // A message draws what the thread draws of it (slack-blocks.ts, slack-rich.ts), with no image. It opens the thread (slack-thread.ts) and sets the channel's read position to it, as does its "N 件の返信"; "既読にする" reads the channel without opening anything (S-15), a thread is watched or let go with its bookmark (S-13), and the toggle folds its unread replies (S-14).
 // A channel is kept off the list from the side menu (S-9), and pressed there it shows its history instead of the list (S-20, slack-channel.ts). The watch section keeps the rows it always had.
-// The workspaces' own icons and statuses go to the sidebar's tray. Everything is held in memory only.
+// Everything is held in memory only.
 // The list is read at startup and again every `refreshSecs` while the window is visible, on whatever screen (the Slack button's badge follows it); showing the screen reads it only when no read is on its way and the one held is older than `refreshSecs`.
 // Socket Mode (S-16) makes it again from Rust's cache when an event was read, and reads it in full when a connection is made.
 // A read on another screen draws nothing of the list (it is drawn when the screen is shown) and never calls `show()`.
@@ -13,7 +13,6 @@ import type { TimelineMessage } from "./bindings/TimelineMessage";
 import type { TimelineReply } from "./bindings/TimelineReply";
 import type { UnreadChannel } from "./bindings/UnreadChannel";
 import type { Workspace } from "./bindings/Workspace";
-import { renderWorkspaceTray } from "./accounts.js";
 import { $, tag } from "./dom.js";
 import { formatDate, formatDay } from "./format.js";
 import { BOOKMARK_SVG, CHECK_ALL_SVG, CHEVRON_SVG, DOT_SVG, HASH_SVG, LOCK_SVG, MINUS_CIRCLE_SVG } from "./icons.js";
@@ -33,8 +32,6 @@ import { setNavCount, show } from "./view.js";
 
 // The workspaces (`slack_load`), or null until read.
 let workspaces: Workspace[] | null = null;
-// The user's own icon per workspace (`slack_icons`).
-const ownIcons = new Map<string, string | null>();
 // The last list that was read, and the error of the last read when it failed.
 let timeline: Timeline | null = null;
 let loadError: string | null = null;
@@ -80,22 +77,6 @@ const foldedTeams = new Set<string>();
 const feed = () => $("slack-feed");
 
 const openSettings = () => setScreen("settings", "slack");
-
-// What the last read found about a workspace, for its popup in the tray.
-function statusOf(w: Workspace): { status: [string, string]; lines: string[] } {
-  if (timeline === null) return { status: ["off", "確認中"], lines: loadError ? [loadError] : [] };
-  const failed = timeline.failed.find((f) => f.teamId === w.teamId);
-  if (failed) return { status: ["warn", "読み込み失敗"], lines: [failed.error] };
-  const missing = timeline.missing.find((m) => m.teamId === w.teamId);
-  if (missing) return { status: ["warn", "権限が不足"], lines: [`${missing.scopes.join("、")} の権限がありません`] };
-  return { status: ["ok", "接続済み"], lines: [] };
-}
-
-function drawTray() {
-  renderWorkspaceTray(
-    (workspaces ?? []).map((w) => ({ teamId: w.teamId, team: w.team, user: w.user, iconUrl: ownIcons.get(w.teamId) ?? null, ...statusOf(w) })),
-  );
-}
 
 // The notice above the list: a workspace that could not be read, and a token that lacks scopes. Rows that could be read still show.
 function drawNotice() {
@@ -897,7 +878,6 @@ async function load(cached = false) {
   } else {
     loadError = error;
   }
-  drawTray();
   draw();
   runPendingResync();
 }
@@ -924,28 +904,18 @@ export function revealSlackList() {
   feed().scrollTop = listScroll;
 }
 
-// The Slack screen is shown: the workspaces and the user's icons are read, then the messages. What was read before stays on screen meanwhile.
+// The Slack screen is shown: the workspaces are read, then the messages. What was read before stays on screen meanwhile.
 export async function showSlackList() {
   revealSlackList();
   try {
     adoptWorkspaces((await invoke("slack_load")).workspaces);
   } catch (e) {
-    // The workspaces known stay: the tray and the refresh go on with them.
+    // The workspaces known stay: the refresh goes on with them.
     workspaces ??= [];
     loadError = String(e);
   }
-  drawTray();
   draw();
   if (!workspaces?.length) return;
-  invoke("slack_icons").then(
-    (list) => {
-      ownIcons.clear();
-      for (const i of list) ownIcons.set(i.teamId, i.iconUrl);
-      drawTray();
-      loadIcons(list.map((i) => i.iconUrl));
-    },
-    () => {},
-  );
   // Showing the screen again does not read again while a read is on its way, or while the list held is younger than the answer asked for.
   staleIfChanged();
   if (isLoading() || changing > 0 || (timeline !== null && Date.now() - lastTry < timeline.refreshSecs * 1000)) return;
@@ -959,7 +929,6 @@ function refresh() {
   const shared = getSlackWorkspaces();
   if (shared && (workspaces === null || shared.map((w) => w.teamId).join() !== workspaces.map((w) => w.teamId).join())) {
     adoptWorkspaces(shared);
-    drawTray();
     draw();
   }
   if (!workspaces?.length) return;

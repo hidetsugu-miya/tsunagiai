@@ -1,4 +1,4 @@
-import { boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, dueToday, holds, inbox, mock, onceId, orcaOverview, orcaRow, ownIcon, pngUri, rejects, release, rowOf, setClock, slackLoad, slackTs, task, threadDetail, threadLoaded, timeline, timelineMessage, today, todoData, waitForCalls, waitForCount, weekOfToday, workspace, CARD } from "../support";
+import { boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, dueToday, holds, inbox, mock, onceId, orcaOverview, orcaRow, rejects, release, rowOf, setClock, slackLoad, slackTs, task, threadDetail, threadLoaded, timeline, timelineMessage, today, todoData, waitForCalls, waitForCount, weekOfToday, CARD } from "../support";
 
 // The ids of what the sidebar's bottom group shows, top to bottom.
 const bottomGroup = () =>
@@ -10,9 +10,8 @@ describe("sidebar", () => {
     const button = $("#claude-btn");
     await expect(button).toBeDisplayed();
     await expect(button).toHaveAttribute("aria-label", "Claude: claude@example.com");
-    // The bottom group is Claude, settings, then the version last; the account avatars sit under the calendar icon.
+    // The bottom group is Claude, settings, then the version last.
     expect(await bottomGroup()).toEqual(["claude-btn", "nav-settings", "app-version"]);
-    await expect($('#account-list button[aria-label="me@example.com"]')).toBeDisplayed();
     await expect($("#add-account")).not.toExist();
     await button.click();
     const popup = $("#account-popup");
@@ -249,11 +248,11 @@ describe("sidebar", () => {
     await waitForBadge({ count: 7, upcoming: [] });
   });
 
-  it("orders the sidebar as mail, calendar, the Google accounts, Todo, Slack, Orca, the database, then the bottom group", async () => {
+  it("orders the sidebar as mail, calendar, Todo, Slack, Orca, the database, then the bottom group", async () => {
     await boot({ inbox: inbox(), slack_load: slackLoad, claude_status: claudeReady });
     await waitForCalls("claude_status");
     const ids = await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#sidebar > *")].filter((e) => e.offsetParent !== null).map((e) => e.id));
-    expect(ids).toEqual(["nav-mail", "nav-calendar", "account-list", "nav-todo", "nav-slack", "nav-orca", "nav-database", "sidebar-bottom"]);
+    expect(ids).toEqual(["nav-mail", "nav-calendar", "nav-todo", "nav-slack", "nav-orca", "nav-database", "sidebar-bottom"]);
     await expect($("#nav-slack")).toHaveAttribute("aria-label", "Slack");
   });
 
@@ -292,22 +291,14 @@ describe("sidebar: the saved order and the number keys (A-5)", () => {
   };
   const reordered = menu(["slack", true], ["mail", true], ["database", true], ["calendar", false], ["todo", true], ["orca", false]);
 
-  it("draws the saved order, each tray with its icon, and leaves out the screens that are off with their trays", async () => {
+  it("draws the saved order, and leaves out the screens that are off", async () => {
     await boot({ inbox: inbox(), slack_load: slackLoad, claude_status: claudeReady, ...reordered });
     await browser.waitUntil(async () => (await shownIds()).join() === "nav-slack,nav-mail,nav-database,nav-todo");
     expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#sidebar > *")].map((e) => e.id).filter((id) => id !== "account-popup"))).toEqual([
-      "nav-slack", "slack-workspace-list", "nav-mail", "nav-database", "nav-calendar", "account-list", "nav-todo", "nav-orca", "sidebar-bottom",
+      "nav-slack", "nav-mail", "nav-database", "nav-calendar", "nav-todo", "nav-orca", "sidebar-bottom",
     ]);
     await expect($("#nav-calendar")).not.toBeDisplayed();
     await expect($("#nav-orca")).not.toBeDisplayed();
-    await expect($("#account-list")).not.toBeDisplayed();
-  });
-
-  it("moves the Google accounts under the calendar icon and the workspaces under the Slack icon", async () => {
-    await boot({ inbox: inbox(), slack_load: slackLoad, claude_status: claudeReady, ...menu(["todo", true], ["calendar", true], ["mail", true], ["database", true], ["orca", true], ["slack", true]) });
-    await browser.waitUntil(async () => (await shownIds()).join() === "nav-todo,nav-calendar,account-list,nav-mail,nav-database,nav-orca,nav-slack");
-    await $("#nav-slack").click();
-    await browser.waitUntil(async () => (await shownIds()).join() === "nav-todo,nav-calendar,nav-mail,nav-database,nav-orca,nav-slack,slack-workspace-list");
   });
 
   it("gives the tooltip of each shown icon its number, and the ones that are off none", async () => {
@@ -390,11 +381,10 @@ describe("sidebar: the button that closes a list (A-23)", () => {
   });
 });
 
-// The accounts of a function sit under its icon, and only while that function is shown.
-describe("sidebar: the account trays", () => {
-  const shown = (selector: string) => browser.execute((q) => document.querySelector<HTMLElement>(q)!.offsetParent !== null, selector);
-  // [the Google accounts, the Slack workspaces]
-  const trays = async () => [await shown("#account-list"), await shown("#slack-workspace-list")];
+// The sidebar draws no icon of an account (A-5): the Claude avatar is the only one, and its popup closes with the screen.
+describe("sidebar: no account icons", () => {
+  const exists = (selector: string) => browser.execute((q) => document.querySelector(q) !== null, selector);
+  const noTrays = async () => [await exists("#account-list"), await exists("#slack-workspace-list"), await exists("#sidebar .tray")];
   const messages = () => [timelineMessage(slackTs(5, 1), "Alice Example", "dev", "Please review the deploy notes.")];
 
   async function start(fixtures: Record<string, unknown> = {}) {
@@ -402,131 +392,41 @@ describe("sidebar: the account trays", () => {
     await waitForCount("#unread-threads li", 2);
   }
 
-  it("shows the Google accounts alone on the inbox and on an open mail", async () => {
+  it("has no tray on the inbox, the calendar, Todo, Slack and the settings", async () => {
     await start();
-    expect(await trays()).toEqual([true, false]);
-    await mock("thread", threadDetail("First unread", "Hello", false));
-    await rowOf("unread-threads", "First unread").$(".subject").click();
-    await expect($("#thread-subject")).toHaveText("First unread");
-    await threadLoaded();
-    expect(await trays()).toEqual([true, false]);
+    expect(await noTrays()).toEqual([false, false, false]);
+    for (const [button, screen] of [["#nav-calendar", "#calendar"], ["#nav-todo", "#todo"], ["#nav-slack", "#slack-screen"], ["#nav-settings", "#settings"]]) {
+      await $(button).click();
+      await expect($(screen)).toBeDisplayed();
+      expect(await noTrays()).toEqual([false, false, false]);
+    }
   });
 
-  it("keeps the Google accounts beside the Slack post pane of a mail", async () => {
+  it("keeps the sidebar beside the Slack post pane of a mail, with no tray", async () => {
     await start();
     await mock("thread", threadDetail("First unread", "Hello", false));
     await rowOf("unread-threads", "First unread").$(".subject").click();
     await threadLoaded();
     await $("#thread-slack").click();
     await expect($("#mail-slack")).toBeDisplayed();
-    expect(await trays()).toEqual([true, false]);
+    await expect($("#nav-mail")).toBeDisplayed();
+    expect(await noTrays()).toEqual([false, false, false]);
   });
 
-  it("shows the Google accounts alone on the calendar", async () => {
+  it("opens the Claude popup beside its avatar, and closes it when the screen changes", async () => {
     await start();
-    await $("#nav-calendar").click();
-    await expect($("#calendar")).toBeDisplayed();
-    expect(await trays()).toEqual([true, false]);
-  });
-
-  it("shows no tray on Todo", async () => {
-    await start();
-    await $("#nav-todo").click();
-    await expect($("#todo")).toBeDisplayed();
-    expect(await trays()).toEqual([false, false]);
-  });
-
-  it("shows the Slack workspaces alone on the Slack list and on a thread", async () => {
-    await start();
-    await $("#nav-slack").click();
-    await waitForCount("#slack-feed .feed-row", 1);
-    expect(await trays()).toEqual([false, true]);
-    expect(await browser.execute(() => document.querySelectorAll("#slack-workspace-list button").length)).toBe(1);
-    await mock("slack_thread", { teamId: workspace.teamId, channel: "C0123ABCD", ts: messages()[0].ts, messages: [], truncated: false });
-    await $("#slack-feed .feed-open").click();
-    await expect($("#slack-thread")).toBeDisplayed();
-    expect(await trays()).toEqual([false, true]);
-  });
-
-  it("shows no tray on the settings, nor on the prompt screen reached from them", async () => {
-    await start();
-    await $("#nav-settings").click();
-    await expect($("#settings")).toBeDisplayed();
-    expect(await trays()).toEqual([false, false]);
-    await $("#settings-tab-claude").click();
-    await $("#claude-prompt .text-btn").click();
-    await expect($("#prompt")).toBeDisplayed();
-    expect(await trays()).toEqual([false, false]);
-  });
-
-  it("draws the avatars of a tray 28px round on the tray's own background, with no tray at all when it is empty", async () => {
-    await start();
-    const box = await browser.execute(() => {
-      const tray = document.getElementById("account-list")!;
-      const avatar = tray.querySelector<HTMLElement>(".avatar")!.getBoundingClientRect();
-      const style = getComputedStyle(tray);
-      return { w: avatar.width, h: avatar.height, radius: style.borderRadius, bg: style.backgroundColor, side: getComputedStyle(document.getElementById("nav-mail")!.parentElement!).backgroundColor };
-    });
-    expect([box.w, box.h, box.radius]).toEqual([28, 28, "12px"]);
-    expect(box.bg).not.toBe(box.side);
-    await boot({ inbox: { ...inbox(), accounts: [], threads: [], historyIds: {} }, claude_status: claudeMissing });
-    await waitForCalls("claude_status");
-    expect(await shown("#account-list")).toBe(false);
-  });
-
-  it("opens the account popup beside its avatar, and closes it when the screen changes", async () => {
-    await start();
-    await $('#account-list button[aria-label="me@example.com"]').click();
+    await $("#claude-btn").click();
     const popup = $("#account-popup");
     await expect(popup).toBeDisplayed();
-    const [avatarTop, popupTop, sideRight, popupLeft] = await browser.execute(() => [
-      document.querySelector("#account-list .avatar")!.getBoundingClientRect().top,
-      document.getElementById("account-popup")!.getBoundingClientRect().top,
-      document.getElementById("sidebar")!.getBoundingClientRect().right,
-      document.getElementById("account-popup")!.getBoundingClientRect().left,
-    ]);
-    expect(Math.abs(popupTop - avatarTop)).toBeLessThan(2);
+    // The avatar is at the foot of the sidebar, so the popup is held inside the window, 8px from its bottom edge at the lowest.
+    const [popupTop, popupBottom, sideRight, popupLeft, height] = await browser.execute(() => {
+      const box = document.getElementById("account-popup")!.getBoundingClientRect();
+      return [box.top, box.bottom, document.getElementById("sidebar")!.getBoundingClientRect().right, box.left, innerHeight];
+    });
+    expect(popupTop).toBeGreaterThanOrEqual(8);
+    expect(popupBottom).toBeLessThanOrEqual(height - 8 + 1);
     expect(Math.round(popupLeft - sideRight)).toBe(8);
     await $("#nav-todo").click();
     await expect(popup).not.toBeDisplayed();
-  });
-
-  it("opens a workspace's popup from its avatar with the name, the user, the state and 設定を開く, and the avatar's tooltip is the name", async () => {
-    await start();
-    await $("#nav-slack").click();
-    await waitForCount("#slack-feed .feed-row", 1);
-    const avatar = $("#slack-workspace-list button");
-    await expect(avatar).toHaveAttribute("aria-label", workspace.team);
-    await avatar.click();
-    const popup = $("#account-popup");
-    await expect(popup).toBeDisplayed();
-    await expect(popup).toHaveText(expect.stringContaining(workspace.team));
-    await expect(popup).toHaveText(expect.stringContaining(workspace.user));
-    await expect(popup.$(".status")).toHaveText("接続済み");
-    await expect(popup.$(".status")).toHaveElementClass("ok");
-    await popup.$("button=設定を開く").click();
-    await expect($("#settings")).toBeDisplayed();
-    await expect($("#settings-tab-slack")).toHaveAttribute("aria-selected", "true");
-    await expect(popup).not.toBeDisplayed();
-  });
-
-  it("says in the workspace's popup that its messages could not be read", async () => {
-    await start({ slack_timeline: timeline(messages(), { failed: [{ teamId: workspace.teamId, team: workspace.team, error: "接続できません" }] }) });
-    await $("#nav-slack").click();
-    await waitForCount("#slack-feed .feed-row", 1);
-    await $("#slack-workspace-list button").click();
-    await expect($("#account-popup .status")).toHaveText("読み込み失敗");
-    await expect($("#account-popup .status")).toHaveElementClass("warn");
-    await expect($("#account-popup")).toHaveText(expect.stringContaining("接続できません"));
-  });
-
-  it("shows the user's own icon on the workspace's avatar, and the initial on the workspace's color until then", async () => {
-    const iconUrl = "https://avatars.slack-edge.com/T1-U1/a_72.png";
-    await start({ slack_icons: ownIcon(iconUrl) });
-    await mock("fetch_images", { [iconUrl]: pngUri });
-    await $("#nav-slack").click();
-    await waitForCount("#slack-feed .feed-row", 1);
-    await browser.waitUntil(async () => (await browser.execute(() => document.querySelectorAll("#slack-workspace-list img.av-img").length)) === 1);
-    expect(await browser.execute(() => document.querySelector<HTMLImageElement>("#slack-workspace-list img.av-img")!.src)).toBe(pngUri);
   });
 });

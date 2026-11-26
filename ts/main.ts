@@ -42,7 +42,7 @@ import { initUpdate } from "./update.js";
 
 fillIcons();
 initAccounts();
-initTooltip((target) => popupOpen() && !!target.closest("#account-list, #slack-workspace-list, #claude-btn"));
+initTooltip((target) => popupOpen() && !!target.closest("#claude-btn"));
 initInbox();
 initThread();
 initMailCompose();

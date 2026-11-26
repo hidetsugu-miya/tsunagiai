@@ -1,5 +1,5 @@
 // The screen that writes a new mail (M-11): the sender, the recipients as chips, the subject and the text, the files (M-12), "送信" in the band fixed at the bottom, and "戻る" and "破棄" that go back to the inbox.
-import { accountButtons } from "./accounts.js";
+import { accountList } from "./accounts.js";
 import { $, tag } from "./dom.js";
 import { applySync } from "./inbox.js";
 import { invoke } from "./ipc.js";
@@ -43,7 +43,7 @@ function drawFrom(accounts: string[]) {
 
 // Opens the screen with nothing written, from the first account.
 function openCompose() {
-  const accounts = accountButtons().map((b) => b.dataset.account!);
+  const accounts = accountList();
   if (accounts.length === 0) return;
   openCount++;
   clearUndo(side);

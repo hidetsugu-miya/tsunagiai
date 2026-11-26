@@ -412,7 +412,6 @@ pub fn run() {
             slack::slack_react,
             slack::slack_emoji_catalog,
             slack::slack_file_images,
-            slack::slack_icons,
             slack::socket::slack_app_token_set,
             slack::socket::slack_app_token_remove,
             slack::socket::slack_socket_status,

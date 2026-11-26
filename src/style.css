@@ -36,12 +36,8 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 #sidebar-bottom { margin-top: auto; padding-bottom: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
 /* A-5: the running version under settings, small and quiet; it is empty until app_info answers (ts/update.ts), and keeps its height so that the group does not move. */
 #app-version { min-height: calc(14px * var(--fs)); font-size: calc(11px * var(--fs)); line-height: calc(14px * var(--fs)); color: var(--side-fg); opacity: .7; }
-/* The accounts of a function sit under its icon in a tray (the Google accounts under the calendar, the Slack workspaces under Slack); nav.ts shows the one that fits the screen. */
-.tray { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 6px; border-radius: 12px; background: var(--side-hover); }
-.tray:empty { display: none; }
-/* A-5: a screen that the side menu has turned off takes its button and its tray out of the sidebar (ts/nav.ts). */
+/* A-5: a screen that the side menu has turned off takes its button out of the sidebar (ts/nav.ts). */
 .menu-off { display: none !important; }
-.tray .avatar { width: 28px; height: 28px; font-size: calc(11px * var(--fs)); }
 .av-img { display: block; width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
 .account-btn { padding: 0; border: 0; font-family: inherit; cursor: pointer; }
 .account-btn[aria-expanded="true"] { box-shadow: 0 0 0 2px var(--side-fg); }
@@ -51,7 +47,6 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 #account-popup .avatar { width: 48px; height: 48px; font-size: calc(16px * var(--fs)); }
 #account-popup .avatar svg { width: 24px; height: 24px; }
 .popup-email { font-weight: bold; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
-.popup-status { padding: 8px 12px; border-radius: 8px; background: var(--warn-bg); }
 .popup-actions { display: flex; gap: 8px; }
 .danger, .text-btn.danger { color: var(--danger); }
 .pop-confirm { max-width: 320px; overflow-wrap: anywhere; }
@@ -61,7 +56,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .pop-lost { margin: 0 0 12px; padding-left: 18px; max-height: 6.4em; overflow-y: auto; font-family: ui-monospace, Menlo, monospace; font-size: calc(11.5px * var(--fs)); }
 .pop .pop-lost li { margin: 0; white-space: pre-wrap; }
 .pop-lost-place { margin: 0 0 6px; font-family: ui-monospace, Menlo, monospace; font-size: calc(11.5px * var(--fs)); word-break: break-all; }
-.popup-unread, .popup-plan { color: #666; }
+.popup-plan { color: #666; }
 .nav-item[aria-current="page"] { background: var(--accent); color: var(--on-accent); }
 
 /* pointer-events: none so the tooltip never takes a click from the control under it. */

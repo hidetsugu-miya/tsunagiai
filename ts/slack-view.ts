@@ -13,7 +13,7 @@ import { toast } from "./toast.js";
 // A Slack timestamp ("1700000000.123456") as epoch milliseconds.
 export const slackMs = (ts: string) => Number(ts.split(".")[0]) * 1000;
 
-// The color of a workspace: the dot on a list row and its avatar in the sidebar's tray (an avatar with no icon).
+// The color of a workspace: the dot on a list row.
 export const workspaceColor = (team: string) => avatarColor(team);
 
 // The icons fetched so far, by URL; the least recently used go when there are more than `ICONS_MAX` (the avatars and the images of the custom emoji, S-26). Memory only.
