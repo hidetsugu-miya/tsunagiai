@@ -39,13 +39,13 @@ const stat = (label: string, value: number | null) => {
   return node;
 };
 
-// The weekly of an AI as a dot and a number; the dot says which AI, and the label gives its name to a reader that does not see the color.
+// The weekly of an AI as a dot and a number; the dot says which AI, and its image label gives the name to a reader that does not see the color, so the name and the number are read together.
 function aiStat(name: string, kind: string, value: AiUsage | undefined) {
   const node = span("stat-ai", "");
-  node.setAttribute("role", "group");
-  node.setAttribute("aria-label", name);
   const dot = tag("i", "stat-dot");
   dot.dataset.ai = kind;
+  dot.setAttribute("role", "img");
+  dot.setAttribute("aria-label", name);
   node.append(dot, num(usedOf(value, "weekly")));
   return node;
 }
