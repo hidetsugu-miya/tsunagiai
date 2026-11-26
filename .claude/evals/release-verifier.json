@@ -5,15 +5,30 @@
       "id": 1,
       "name": "pass-record-gets-the-whole-verdict-on-stdin",
       "prompt": "あなたは release-verifier です。`.claude/agents/release-verifier.md` を読み、`.claude/evals/files/release-verifier/pass-scene.md` の場面について、手順 8 の合格記録を書くコマンドと、渡す判定の全文を書き出してください。この場面が、あなたの持つ実行の文脈です。コマンドは実行せず、打つはずのコマンドをそのまま書いてください。記録のスクリプトの中身は読まなくて構いません。",
-      "expected_output": "記録のスクリプトを heredoc で呼び、stdin に判定の全文を渡す。1 行目は「判定: 合格」で、範囲、CI、E2E の行と、R-1 を `issue` に振り分けた止めない指摘の行が続く。stdin が空のコマンドは書かない。",
+      "expected_output": "判定の全文をまずファイルに書き、記録のスクリプトに `< {そのファイル}` で渡す。1 行目は「判定: 合格」で、範囲、CI、E2E の行と、R-1 を `issue` に振り分けた止めない指摘の行が続く。stdin が空のコマンドは書かない。",
       "files": [
         ".claude/evals/files/release-verifier/pass-scene.md"
       ],
       "assertions": [
-        "記録を書くコマンドは 1 つで、判定を stdin（heredoc か、パイプ）で渡している。stdin を渡さない呼び出しや、空の heredoc を出していない",
+        "記録を書くコマンドは 1 つで、判定をファイルから stdin に渡している。stdin を渡さない呼び出しや、空の判定を出していない",
         "渡す判定の 1 行目が「判定: 合格」で始まる",
         "渡す判定に、範囲、CI の行（`check-ci.sh` の出力）、E2E の行（`check-e2e.sh` の出力）と、R-1 を `issue` に振り分けた止めない指摘の行（`ts/orca-files.ts:210` と一行の理由つき）が入っている",
         "判定の全文を 1 回で渡し、先に空の記録を書いてから呼び直す形にしていない"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "pass-record-verdict-goes-through-a-file-not-a-heredoc",
+      "prompt": "あなたは release-verifier です。`.claude/agents/release-verifier.md` を読み、`.claude/evals/files/release-verifier/pass-scene.md` の場面について、手順 8 で合格記録を書くまでに打つ操作を順に書き出してください。各操作は、使う道具（Bash など）と、そのコマンドか書き込む内容で示してください。実行はせず、打つはずの操作をそのまま書いてください。記録のスクリプトの中身は読まなくて構いません。",
+      "expected_output": "判定の全文を、追跡の外のファイル（作業ツリーの `tmp/` かセッションの scratchpad）にまず書く。そのあと、記録のスクリプトを `< {そのファイル}` で 1 回だけ呼ぶ。ヒアドキュメントでスクリプトを呼ばない。",
+      "files": [
+        ".claude/evals/files/release-verifier/pass-scene.md"
+      ],
+      "assertions": [
+        "判定の全文を、記録のスクリプトを呼ぶ前にファイルへ書いている。ファイルの場所は追跡の外（`tmp/` かセッションの scratchpad）である",
+        "記録のスクリプトの呼び出しは 1 回で、`< {そのファイル}` の形で判定を stdin に渡している",
+        "記録のスクリプトの呼び出しにヒアドキュメント（`<<`）を使っていない。stdin を渡さない呼び出しも出していない",
+        "ファイルに書く判定の 1 行目が「判定: 合格」で始まり、CI の行と E2E の行が入っている"
       ]
     }
   ]
