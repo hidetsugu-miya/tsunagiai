@@ -285,6 +285,21 @@ describe("slack thread: where it opens", () => {
     const { top, height, view } = await box();
     return height > view && top + view >= height - 2;
   };
+  // The box has the same size on several reads in a row: the panes around it (the reply field is read after the thread) are laid out, so the position of its end is the final one.
+  const boxSettled = async () => {
+    let last = "";
+    let same = 0;
+    await browser.waitUntil(
+      async () => {
+        const { height, view } = await box();
+        const now = `${height}/${view}`;
+        same = now === last ? same + 1 : 0;
+        last = now;
+        return same >= 3;
+      },
+      { interval: 100, timeoutMsg: "the size of the box did not settle" },
+    );
+  };
   const scrollTo = (top: number) =>
     browser.execute((t) => {
       document.getElementById("st-msgs")!.scrollTop = t;
@@ -303,6 +318,7 @@ describe("slack thread: where it opens", () => {
     await $("#slack-feed .feed-open").click();
     await waitForCalls(images);
     await waitForCount("#st-msgs .st-msg", 12);
+    await boxSettled();
     await browser.waitUntil(atBottom);
     return images;
   }
