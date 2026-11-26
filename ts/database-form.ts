@@ -1,13 +1,14 @@
 // The edit pane that registers or edits a connection (D-1): while it is open it takes the place of the work pane (`#database-pane`), with the side menu and the terminal pane as they were.
 // Its header has the title and the icon of the terminal pane of the right (D-7); the bottom row has 接続をテスト at the left end and キャンセル and 保存 at the right end; between them are the fields: the host and the port of the database, and the script that opens the way to them (it may be empty).
-// Saving runs `save`; a refusal (the reason Rust gives, in Japanese) shows under the fields and the pane stays with what was typed. キャンセル and Escape close it.
-// "接続をテスト" runs `test` with the fields as typed (not as saved) and shows the version it answers, or the error (with the last lines of the script's standard error), under the fields.
+// Saving runs `save`; a refusal (the reason Rust gives, in Japanese) is a card (A-28) and the pane stays with what was typed. キャンセル and Escape close it.
+// "接続をテスト" runs `test` with the fields as typed (not as saved) and shows the version it answers under the fields, or the error (with the last lines of the script's standard error) as a card.
 // The icon at the right end of the header opens and closes the same pane at the right as the icon of the work pane's header (`ts/database-terminal.ts`), whose first tab is Claude Code (A-36; the built-in tools stay on, because the screen runs `aws`), where Claude Code may save this connection through tsunagiai-mcp (D-8).
 // Closing the edit pane (キャンセル, 保存, Escape, another edit pane, leaving the screen) leaves that pane and its process as they are. While the edit pane of a saved connection is open, the screen's own read of the list at an interval tells it each list that differs from the one drawn (`syncDatabaseForm`), and a field that was not changed by hand takes the value that was saved elsewhere, while a field that was changed by hand stays. The edit pane reads nothing itself, so it has no timer to stop; a connection that is gone from the list leaves its fields as they are.
 import type { DatabaseProfile } from "./bindings/DatabaseProfile";
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import { $, composing, tag } from "./dom.js";
 import { isDatabaseTerminalOpen, toggleDatabaseTerminal } from "./database-terminal.js";
+import { showFailure } from "./error-card.js";
 import { closeHint } from "./hint.js";
 import { TERMINAL_SVG } from "./icons.js";
 import { closeMenu } from "./menu.js";
@@ -98,15 +99,11 @@ export function openDatabaseForm(
     dbPort: portOf(dbPort.value),
   });
 
-  // The answer of "接続をテスト": the version as a status, or the error.
-  const result = tag("p", "database-test");
+  // The answer of "接続をテスト": the version as a status.
+  const result = tag("p", "database-test status ok");
   result.id = "database-test-result";
   result.setAttribute("role", "status");
   result.hidden = true;
-  const err = tag("p", "err danger");
-  err.id = "database-form-error";
-  err.setAttribute("role", "alert");
-  err.hidden = true;
   const submit = tag("button", "text-btn primary", "保存");
   submit.type = "submit";
   const probe = tag("button", "text-btn", "接続をテスト");
@@ -114,17 +111,18 @@ export function openDatabaseForm(
   probe.onclick = async () => {
     result.hidden = true;
     probe.disabled = true;
+    let version: string | null = null;
     try {
-      const version = await test(typed(), password.value);
-      result.className = "database-test status ok";
-      result.textContent = `MySQL ${version}`;
+      version = await test(typed(), password.value);
     } catch (x) {
-      result.className = "database-test err danger";
-      result.textContent = String(x);
+      showFailure("database", x);
     }
     // The pane may have been closed while the test was on its way.
     if (!form.isConnected) return;
-    result.hidden = false;
+    if (version !== null) {
+      result.textContent = `MySQL ${version}`;
+      result.hidden = false;
+    }
     probe.disabled = false;
   };
   const cancel = tag("button", "text-btn", "キャンセル");
@@ -147,7 +145,7 @@ export function openDatabaseForm(
   const foot = tag("div", "database-edit-foot");
   foot.append(probe, actions);
   const body = tag("div", "database-edit-body");
-  body.append(field("接続名", name), field("ユーザー名", username), field("パスワード", password, saved), field("DB のホスト", dbHost), field("ポート", dbPort), field("事前スクリプト", script), result, err);
+  body.append(field("接続名", name), field("ユーザー名", username), field("パスワード", password, saved), field("DB のホスト", dbHost), field("ポート", dbPort), field("事前スクリプト", script), result);
 
   const form = tag("form", "database-form");
   form.id = "database-form";
@@ -156,7 +154,6 @@ export function openDatabaseForm(
   form.append(head, body, foot);
   form.onsubmit = async (e) => {
     e.preventDefault();
-    err.hidden = true;
     submit.disabled = true;
     try {
       const saved = await save(typed(), password.value);
@@ -164,8 +161,7 @@ export function openDatabaseForm(
       // Another edit may have taken the pane while the save was on its way.
       else if (form.isConnected) closeDatabaseForm();
     } catch (x) {
-      err.textContent = String(x);
-      err.hidden = false;
+      showFailure("database", x);
       submit.disabled = false;
     }
   };

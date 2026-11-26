@@ -1,6 +1,6 @@
 import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import { orcaOverview as placedOverview, streamList as placedStream, studio } from "../orca-support";
-import { boot, callsOf, copiedTexts, count, databaseCell, databaseColumn, databaseNull, databaseProfile, databaseRecords, databaseSqlResult, databaseSqlRun, databaseSqlStatement, databaseStructure, databaseTable, emitEvent, holds, inbox, mock, onceId, orcaOverview, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, stubClipboard, textsOf, timers, waitForCalls, waitForCount, CARD, CARDS, waitForLog } from "../support";
+import { boot, callsOf, copiedTexts, count, databaseCell, databaseColumn, databaseNull, databaseProfile, databaseRecords, databaseSqlResult, databaseSqlRun, databaseSqlStatement, databaseStructure, databaseTable, emitEvent, holds, inbox, mock, onceId, orcaOverview, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, stubClipboard, textsOf, timers, waitForCalls, waitForCount, CARD, CARDS, waitForCard, waitForLog } from "../support";
 
 const direct = databaseProfile("p1", "Example direct");
 // The read of the list at an interval (#866) put so far off that a spec that counts the reads of the list meets none of it.
@@ -210,7 +210,7 @@ describe("database: register", () => {
     expect(await waitForCalls(save)).toEqual([{ profile: { ...typed, dbPort: 0 }, password: "" }]);
   });
 
-  it("shows the reason of a refused save under the fields, keeps the edit pane and what was typed, and saves again", async () => {
+  it("shows the reason of a refused save on a card, keeps the edit pane and what was typed, and saves again", async () => {
     await openDatabase([]);
     const save = await mock("database_profile_save", rejects("同じ名前の接続があります: Example new"));
     await $("#database-add").click();
@@ -218,8 +218,9 @@ describe("database: register", () => {
     await field("password").setValue("secret");
     await $("#database-form button[type=submit]").click();
     await waitForCalls(save);
-    await expect($("#database-form-error")).toHaveText("同じ名前の接続があります: Example new");
-    await expect($("#database-form-error")).toHaveAttribute("role", "alert");
+    await waitForCard("同じ名前の接続があります: Example new");
+    await expect($(CARDS)).toHaveAttribute("role", "alert");
+    expect(await count("#database-form-error")).toBe(0);
     await expect($("#database-form")).toBeDisplayed();
     await expect(field("name")).toHaveValue("Example new");
     await expect(field("password")).toHaveValue("secret");
@@ -229,7 +230,6 @@ describe("database: register", () => {
     await $("#database-form button[type=submit]").click();
     await waitForCalls(again);
     await expect($("#database-form")).not.toExist();
-    await expect($("#database-form-error")).not.toExist();
   });
 
   it("closes the edit pane when the keychain refuses after the connection was saved, shows the error on the screen, and lists the connection", async () => {
@@ -720,7 +720,7 @@ describe("database: test the connection", () => {
     await expect($("#database-form")).toBeDisplayed();
     await expect($("#database-pane")).not.toBeDisplayed();
     await expect(probe()).toBeEnabled();
-    await expect($("#database-form-error")).not.toBeDisplayed();
+    expect(await count(CARDS)).toBe(0);
     expect(await callsOf(save)).toEqual([]);
     expect(await callsOf("database_profiles")).toEqual([null]);
   });
@@ -751,7 +751,7 @@ describe("database: test the connection", () => {
     ]);
   });
 
-  it("shows the error as it is, in the danger color, keeps the edit pane, and a second test replaces it", async () => {
+  it("shows the error of a test as it is on a card, keeps the edit pane with no answer under the fields, and a second test shows the version", async () => {
     await openDatabase([]);
     const message = "接続のスクリプトが、準備ができる前に終了しました（終了コード 1）。標準エラーの最後の行: no route to host / connection refused";
     const test = await mock("database_test", rejects(message));
@@ -759,17 +759,16 @@ describe("database: test the connection", () => {
     await fillDirect();
     await probe().click();
     await waitForCalls(test);
-    await expect(result()).toHaveText(message);
-    await expect(result()).toHaveElementClass("danger");
-    await expect(result()).not.toHaveElementClass("status");
+    await waitForCard(message);
+    await expect($(CARDS)).toHaveAttribute("role", "alert");
+    await expect(result()).not.toBeDisplayed();
     await expect($("#database-form")).toBeDisplayed();
     await expect(probe()).toBeEnabled();
-    await expect($("#database-form-error")).not.toBeDisplayed();
     const again = await mock("database_test", "8.4.0");
     await probe().click();
     await waitForCalls(again);
     await expect(result()).toHaveText("MySQL 8.4.0");
-    await expect(result()).not.toHaveElementClass("danger");
+    await expect(result()).toHaveElementClass("ok");
   });
 
   it("keeps the button off and the old answer hidden while the test is on its way", async () => {
@@ -962,7 +961,7 @@ describe("database: tree", () => {
     expect(await notes()).toEqual([]);
   });
 
-  it("drops the output of the script when the opening fails, and shows the error as before", async () => {
+  it("drops the output of the script when the opening fails, and shows the error on a card", async () => {
     await openDatabase();
     const message = "接続のスクリプトが、準備ができる前に終了しました（終了コード 1）。標準エラーの最後の行: aws login required";
     const connect = await mock("database_connect", holds);
@@ -971,28 +970,28 @@ describe("database: tree", () => {
     await emitEvent("database-script-output", { id: "p1", line: "aws login required" });
     await browser.waitUntil(async () => (await notes())[0] === "aws login required");
     await release("database_connect", rejects(message));
-    await browser.waitUntil(async () => (await notes())[0] === message);
-    expect(await notes()).toEqual([message]);
-    await expect($("#database-side-feed .database-note")).toHaveElementClass("danger");
-    // The next opening starts with no line of the one before.
+    await waitForCard(message);
+    expect(await notes()).toEqual([]);
+    // The next opening starts with no line of the one before, and the card goes.
     const again = await mock("database_connect", holds);
     await row("p1").click();
     await waitForCalls(again);
     expect(await notes()).toEqual(["接続中…"]);
+    expect(await count(CARDS)).toBe(0);
     await release("database_connect", ["shop"]);
     await waitForCount('#database-side-feed [data-key^="p1/d/"]', 1);
   });
 
-  it("shows the error of a connection that cannot be opened under it, with a gray dot, and opens again on the next press", async () => {
+  it("shows the error of a connection that cannot be opened on a card, with a gray dot, and opens again on the next press", async () => {
     await openDatabase();
     const message = "接続のスクリプトが、準備ができる前に終了しました（終了コード 1）。標準エラーの最後の行: aws login required";
     const connect = await mock("database_connect", rejects(message));
     await row("p1").click();
     await waitForCalls(connect);
-    await browser.waitUntil(async () => (await notes()).length === 1);
-    expect(await notes()).toEqual([message]);
-    await expect($("#database-side-feed .database-note")).toHaveElementClass("danger");
-    await expect($("#database-side-feed .database-note")).toHaveAttribute("role", "alert");
+    await waitForCard(message);
+    expect(await count(CARDS)).toBe(1);
+    await expect($(CARDS)).toHaveAttribute("role", "alert");
+    expect(await notes()).toEqual([]);
     await expect(dot("p1")).toHaveAttribute("data-state", "closed");
     expect(await keys()).toEqual(["p1", "p2"]);
     const again = await mock("database_connect", ["shop"]);
@@ -1000,24 +999,22 @@ describe("database: tree", () => {
     expect(await waitForCalls(again)).toEqual([{ id: "p1" }]);
     await waitForCount('#database-side-feed [data-key^="p1/d/"]', 1);
     expect(await notes()).toEqual([]);
+    expect(await count(CARDS)).toBe(0);
     await expect(dot("p1")).toHaveAttribute("data-state", "connected");
   });
 
-  it("clears the error under a connection with the × at its right end, calls nothing, and reads again on the next press", async () => {
+  it("closes the card of the error of a connection with its ×, calls nothing, and reads again on the next press", async () => {
     await openDatabase();
     const message = "接続のスクリプトが、準備ができる前に終了しました（終了コード 1）。標準エラーの最後の行: aws login required";
     const connect = await mock("database_connect", rejects(message));
     const disconnect = await mock("database_disconnect", null);
     await row("p1").click();
     await waitForCalls(connect);
-    await browser.waitUntil(async () => (await notes()).length === 1);
-    const clear = $("#database-side-feed .database-note.danger button.icon-btn");
-    await expect(clear).toHaveAttribute("aria-label", "エラーを消す");
-    expect(await clear.getText()).toBe("");
-    expect(await count("#database-side-feed .database-note.danger button svg")).toBe(1);
-    await clear.click();
-    await browser.waitUntil(async () => (await notes()).length === 0);
-    expect(await count("#database-side-feed .database-note.danger")).toBe(0);
+    await waitForCard(message);
+    expect(await count("#database-side-feed .database-note button")).toBe(0);
+    await $(`${CARDS} .error-card-close`).click();
+    await browser.waitUntil(async () => (await count(CARDS)) === 0);
+    expect(await notes()).toEqual([]);
     await expect(dot("p1")).toHaveAttribute("data-state", "closed");
     expect(await keys()).toEqual(["p1", "p2"]);
     expect(await callsOf(connect)).toHaveLength(1);
@@ -1029,7 +1026,7 @@ describe("database: tree", () => {
     await expect(dot("p1")).toHaveAttribute("data-state", "connected");
   });
 
-  it("clears the error of a read of tables from the tree and from the work pane, keeps the connection open, and reads again on the next press", async () => {
+  it("closes the card of the error of a read of tables with its ×, keeps the connection open, and reads again on the next press", async () => {
     await openTree();
     const message = "MySQL がエラーを返しました (1142): SELECT command denied";
     const read = await mock("database_tables", rejects(message));
@@ -1037,15 +1034,13 @@ describe("database: tree", () => {
     await mock("database_connections", ["p1"]);
     await row("p1/d/shop").click();
     await waitForCalls(read);
-    await browser.waitUntil(async () => (await notes()).length === 1);
+    await waitForCard(message);
+    expect(await notes()).toEqual([]);
     expect(await textsOf("#database-work .database-note")).toEqual([message]);
     expect(await count("#database-work .database-note button")).toBe(0);
-    const clear = $("#database-side-feed .database-note.danger button.icon-btn");
-    await expect(clear).toHaveAttribute("aria-label", "エラーを消す");
-    await clear.click();
-    await browser.waitUntil(async () => (await notes()).length === 0);
-    expect(await count("#database-work .database-note")).toBe(0);
-    await expect($("#database-work h3")).toHaveText("shop");
+    await $(`${CARDS} .error-card-close`).click();
+    await browser.waitUntil(async () => (await count(CARDS)) === 0);
+    expect(await notes()).toEqual([]);
     await expect(dot("p1")).toHaveAttribute("data-state", "connected");
     expect(await callsOf(read)).toHaveLength(1);
     expect(await callsOf(disconnect)).toHaveLength(0);
@@ -1103,15 +1098,15 @@ describe("database: tree", () => {
     expect(await count("#database-work .database-note")).toBe(0);
   });
 
-  it("shows the error of a read of tables under the database and in the work pane, keeps the connection, and reads again on the next press", async () => {
+  it("shows the error of a read of tables on a card and in the work pane, keeps the connection, and reads again on the next press", async () => {
     await openTree();
     const message = "MySQL がエラーを返しました (1142): SELECT command denied";
     const read = await mock("database_tables", rejects(message));
     await mock("database_connections", ["p1"]);
     await row("p1/d/shop").click();
     await waitForCalls(read);
-    await browser.waitUntil(async () => (await notes()).length === 1);
-    expect(await notes()).toEqual([message]);
+    await waitForCard(message);
+    expect(await notes()).toEqual([]);
     expect(await textsOf("#database-work .database-note")).toEqual([message]);
     await expect($("#database-work .database-note")).toHaveElementClass("danger");
     expect(await count("#database-work table")).toBe(0);
@@ -1124,14 +1119,15 @@ describe("database: tree", () => {
     expect(await notes()).toEqual([]);
   });
 
-  it("closes the tree of a connection that the read shows lost, and says why under the connection", async () => {
+  it("closes the tree of a connection that the read shows lost, and says why on a card", async () => {
     await openTree();
     const read = await mock("database_tables", rejects(lost));
     await mock("database_connections", []);
     await row("p1/d/shop").click();
     await waitForCalls(read);
     await waitForCount('#database-side-feed [data-key^="p1/d/"]', 0);
-    expect(await notes()).toEqual([lost]);
+    await waitForCard(lost);
+    expect(await notes()).toEqual([]);
     await expect(dot("p1")).toHaveAttribute("data-state", "closed");
     expect(await count("#database-work > *")).toBe(0);
     await expect(row("p1")).toHaveAttribute("aria-pressed", "true");
@@ -1537,14 +1533,15 @@ describe("database: tree", () => {
       expect(await count("#database-work .database-note")).toBe(0);
     });
 
-    it("closes the tree of a connection that the read shows lost, and says why under the connection", async () => {
+    it("closes the tree of a connection that the read shows lost, and says why on a card", async () => {
       await openTable();
       await mock("database_records", rejects(lost));
       await mock("database_connections", []);
       await button("reload").click();
       await waitForCalls("database_records");
       await waitForCount('#database-side-feed [data-key^="p1/d/"]', 0);
-      expect(await notes()).toEqual([lost]);
+      await waitForCard(lost);
+      expect(await notes()).toEqual([]);
       await expect(dot("p1")).toHaveAttribute("data-state", "closed");
       expect(await count("#database-work > *")).toBe(0);
     });
@@ -2635,14 +2632,15 @@ describe("database: tree", () => {
       expect(await count("#database-work .database-note")).toBe(0);
     });
 
-    it("closes the tree of a connection that the read shows lost, and says why under the connection", async () => {
+    it("closes the tree of a connection that the read shows lost, and says why on a card", async () => {
       await openTable();
       await mock("database_structure", rejects(lost));
       await mock("database_connections", []);
       await tab("structure").click();
       await waitForCalls("database_structure");
       await waitForCount('#database-side-feed [data-key^="p1/d/"]', 0);
-      expect(await notes()).toEqual([lost]);
+      await waitForCard(lost);
+      expect(await notes()).toEqual([]);
       await expect(dot("p1")).toHaveAttribute("data-state", "closed");
       expect(await count("#database-work > *")).toBe(0);
     });
@@ -3192,14 +3190,15 @@ describe("database: tree", () => {
       expect(await count("#database-work .database-note")).toBe(0);
     });
 
-    it("closes the tree of a connection that the run shows lost, with its query tabs, and says why under the connection", async () => {
+    it("closes the tree of a connection that the run shows lost, with its query tabs, and says why on a card", async () => {
       await openQuery();
       await mock("database_sql", rejects(lost));
       await mock("database_connections", []);
       await runText();
       await waitForCalls("database_sql");
       await waitForCount('#database-side-feed [data-key^="p1/d/"]', 0);
-      expect(await notes()).toEqual([lost]);
+      await waitForCard(lost);
+      expect(await notes()).toEqual([]);
       await expect(dot("p1")).toHaveAttribute("data-state", "closed");
       expect(await count("#database-work > *")).toBe(0);
       await expect($(strip)).not.toBeDisplayed();
@@ -3586,7 +3585,7 @@ describe("database: tree", () => {
     await release("database_connect", rejects("接続を切断しました"));
     await browser.pause(300);
     expect(await notes()).toEqual([]);
-    expect(await count("#database-side-feed .database-note.danger")).toBe(0);
+    expect(await count(CARDS)).toBe(0);
     await expect(dot("p1")).toHaveAttribute("data-state", "closed");
     // The next press opens it, and only its own answer is drawn.
     await mock("database_connect", ["shop"]);
@@ -3815,7 +3814,7 @@ describe("database: terminal pane, terminals", () => {
     await expect($(termTab)).toHaveAttribute("aria-selected", "true");
     await expect($("#database-claude-tab")).toHaveAttribute("aria-selected", "false");
     expect(await count("#database-terminal-body > .database-terminal-term")).toBe(1);
-    expect(await count("#database-terminal-body > .pending")).toBe(0);
+    expect(await count(CARDS)).toBe(0);
     expect((await callsOf("orca_terminal_read"))[0]).toEqual({ handle: zsh });
   });
 
@@ -4129,20 +4128,19 @@ describe("database: terminal pane, terminals", () => {
     await waitForCount(termTab, 1);
   });
 
-  it("keeps the tab and says Rust's message when the close fails, reads the list again, and clears the notice at the next press", async () => {
+  it("keeps the tab and says Rust's message on a card when the close fails, and reads the list again", async () => {
     await openTwo();
     const close = await mock("orca_close", rejects("Orca が時間内に応答しませんでした"));
     const overview = await mock("orca_overview", bothListed());
     await closeButton(1).click();
     await waitForCalls(close);
-    await expect($("#database-terminal-body > .pending.fail")).toHaveText("Orca が時間内に応答しませんでした");
+    await waitForCard("Orca が時間内に応答しませんでした");
     await waitForCalls(overview);
     expect(await tabs()).toEqual(["example-api ・ main", "example-app ・ feat/a"]);
     await expect(closeButton(1)).toBeEnabled();
     await mock("orca_close", null);
     await closeButton(1).click();
     await waitForCount(termTab, 1);
-    expect(await count("#database-terminal-body > .pending")).toBe(0);
   });
 
   it("forgets a terminal that Orca closed, whether or not its tab is selected, and keeps the other with its reads", async () => {
@@ -4215,35 +4213,35 @@ describe("database: terminal pane, terminals", () => {
     expect((await callsOf("claude_code_start")).length).toBe(1);
   });
 
-  it("says in the pane that Orca is missing, and opens no dialog", async () => {
+  it("says on a card that Orca is missing, and opens no dialog", async () => {
     await openPane(orcaOverview([], [], { state: "missing" }));
     const create = await mock("orca_terminal_create", created);
     await plus().click();
-    await expect($("#database-terminal-body > .pending.fail")).toHaveText(expect.stringContaining("orca コマンドが見つかりません"));
+    await waitForCard("orca コマンドが見つかりません");
     await expect($(".orca-dest-pop")).not.toExist();
     expect(await callsOf(create)).toEqual([]);
   });
 
-  it("says in the pane that the list could not be read, and clears it at the next press", async () => {
+  it("says on a card that the list could not be read, and opens the dialog at the next press", async () => {
     await openPane(orcaOverview([], [], { state: "failed", message: "接続できません" }));
     await plus().click();
-    await expect($("#database-terminal-body > .pending.fail")).toHaveText("読み込めませんでした: 接続できません");
+    await waitForCard("読み込めませんでした: 接続できません");
+    expect(await count(CARDS)).toBe(1);
     await mock("orca_overview", listed());
     await plus().click();
     await expect($(".orca-dest-pop")).toBeDisplayed();
-    expect(await count("#database-terminal-body > .pending")).toBe(0);
   });
 
-  it("says Rust's message when the terminal cannot be opened, and keeps the one that is held", async () => {
+  it("says Rust's message on a card when the terminal cannot be opened, and keeps the one that is held", async () => {
     await openTerminal();
     await mock("orca_terminal_create", rejects("起動先の worktree が見つかりません。一覧を読み直してください"));
     await pick("/work/example-app");
-    await expect($("#database-terminal-body > .pending.fail")).toHaveText("起動先の worktree が見つかりません。一覧を読み直してください");
+    await waitForCard("起動先の worktree が見つかりません。一覧を読み直してください");
     expect(await tabs()).toEqual(["example-api ・ main"]);
     await expect(plus()).toBeEnabled();
     await mock("orca_terminal_create", { paneKey: null, handle: null });
     await pick("/work/example-app");
-    await expect($("#database-terminal-body > .pending.fail")).toHaveText("Orca がターミナルの名前を返しませんでした");
+    await waitForCard("Orca がターミナルの名前を返しませんでした");
     expect(await tabs()).toEqual(["example-api ・ main"]);
   });
 });
