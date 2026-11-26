@@ -153,7 +153,7 @@ describe("database: register", () => {
     await expect(field("script")).toHaveValue("");
     expect(await browser.execute(() => document.activeElement?.getAttribute("name"))).toBe("name");
     expect(await count("#database-form [placeholder]")).toBe(0);
-    await expect($("#database-form .status")).not.toExist();
+    expect(await count("#database-form .status:not([hidden])")).toBe(0);
     expect(await browser.execute(() => document.getElementById("content")!.inert)).toBe(false);
   });
 
@@ -287,7 +287,7 @@ describe("database: edit", () => {
     await expect(field("name")).toHaveValue("Example tunnel");
     await expect(field("username")).toHaveValue("reader");
     await expect(field("password")).toHaveValue("");
-    await expect($("#database-form .status.ok")).toHaveText("保存済み");
+    await expect($("#database-form .status.ok:not([hidden])")).toHaveText("保存済み");
     await expect(field("script")).toBeDisplayed();
     await expect(field("script")).toHaveValue('exec forward-port "$TSUNAGIAI_PORT"');
     await expect(field("dbHost")).toBeDisplayed();
@@ -317,7 +317,7 @@ describe("database: edit", () => {
     await openDatabase();
     await pickFromMenu("p1", 1);
     await expect(field("name")).toHaveValue("Example direct");
-    await expect($("#database-form .status")).not.toExist();
+    expect(await count("#database-form .status:not([hidden])")).toBe(0);
   });
 
   it("saves with the id of the connection and an empty password, and draws the renamed row", async () => {
@@ -785,7 +785,8 @@ describe("database: test the connection", () => {
     await expect(result()).not.toBeDisplayed();
     await release("database_test", rejects("MySQL へのログインに失敗しました。ユーザー名とパスワードを確かめてください: Access denied"));
     await expect(probe()).toBeEnabled();
-    await expect(result()).toHaveText("MySQL へのログインに失敗しました。ユーザー名とパスワードを確かめてください: Access denied");
+    await waitForCard("MySQL へのログインに失敗しました。ユーザー名とパスワードを確かめてください: Access denied");
+    await expect(result()).not.toBeDisplayed();
   });
 
   it("draws nothing when the edit pane was closed while the test was on its way, and a new one shows no answer", async () => {
@@ -1036,8 +1037,6 @@ describe("database: tree", () => {
     await waitForCalls(read);
     await waitForCard(message);
     expect(await notes()).toEqual([]);
-    expect(await textsOf("#database-work .database-note")).toEqual([message]);
-    expect(await count("#database-work .database-note button")).toBe(0);
     await $(`${CARDS} .error-card-close`).click();
     await browser.waitUntil(async () => (await count(CARDS)) === 0);
     expect(await notes()).toEqual([]);
@@ -1098,7 +1097,7 @@ describe("database: tree", () => {
     expect(await count("#database-work .database-note")).toBe(0);
   });
 
-  it("shows the error of a read of tables on a card and in the work pane, keeps the connection, and reads again on the next press", async () => {
+  it("shows the error of a read of tables on a card, keeps the connection, and reads again on the next press", async () => {
     await openTree();
     const message = "MySQL がエラーを返しました (1142): SELECT command denied";
     const read = await mock("database_tables", rejects(message));
@@ -1107,8 +1106,6 @@ describe("database: tree", () => {
     await waitForCalls(read);
     await waitForCard(message);
     expect(await notes()).toEqual([]);
-    expect(await textsOf("#database-work .database-note")).toEqual([message]);
-    await expect($("#database-work .database-note")).toHaveElementClass("danger");
     expect(await count("#database-work table")).toBe(0);
     await expect(dot("p1")).toHaveAttribute("data-state", "connected");
     await expect(row("p1/d/shop")).toHaveAttribute("aria-expanded", "true");
@@ -1511,15 +1508,15 @@ describe("database: tree", () => {
       await expect(button("copy")).toBeDisabled();
     });
 
-    it("shows the error of a read under the tab, drops the page, and 再読み込み reads it again", async () => {
+    it("shows the error of a read on a card, drops the page, and 再読み込み reads it again", async () => {
       await openTable();
       const message = "MySQL がエラーを返しました (1142): SELECT command denied";
       await mock("database_records", rejects(message));
       await mock("database_connections", ["p1"]);
       await button("next").click();
       await waitForCalls("database_records");
-      await expect($("#database-work .database-note")).toHaveText(message);
-      await expect($("#database-work .database-note")).toHaveElementClass("danger");
+      await waitForCard(message);
+      expect(await count("#database-work .database-note")).toBe(0);
       expect(await count("#database-work .database-grid")).toBe(0);
       await expect(button("next")).toBeDisabled();
       await expect(button("last")).toBeDisabled();
@@ -1530,7 +1527,7 @@ describe("database: tree", () => {
       await button("reload").click();
       expect(await waitForCalls(again)).toEqual([read(1)]);
       await expect($("#database-work .database-range")).toHaveText("3–3 行目 / 約 1,200 行");
-      expect(await count("#database-work .database-note")).toBe(0);
+      await waitForCount(CARDS, 0);
     });
 
     it("closes the tree of a connection that the read shows lost, and says why on a card", async () => {
@@ -2612,15 +2609,15 @@ describe("database: tree", () => {
       expect(await copiedTexts()).toEqual([text]);
     });
 
-    it("shows the error of a read in the danger color with the connection kept, and a press on the tab again reads it", async () => {
+    it("shows the error of a read on a card with the connection kept, and a press on the tab again reads it", async () => {
       await openTable();
       const message = "MySQL がエラーを返しました (1142): SELECT command denied";
       await mock("database_structure", rejects(message));
       await mock("database_connections", ["p1"]);
       await tab("structure").click();
       await waitForCalls("database_structure");
-      await expect($("#database-work .database-note")).toHaveText(message);
-      await expect($("#database-work .database-note")).toHaveElementClass("danger");
+      await waitForCard(message);
+      expect(await count("#database-work .database-note")).toBe(0);
       expect(await count("#database-work .database-structure")).toBe(0);
       await expect($('#database-work [data-key="copy"]')).toBeDisabled();
       await expect(dot("p1")).toHaveAttribute("data-state", "connected");
@@ -2629,7 +2626,7 @@ describe("database: tree", () => {
       await tab("structure").click();
       await waitForCalls(again);
       await expect($("#database-work .database-range")).toHaveText("4 列 / InnoDB / utf8mb4");
-      expect(await count("#database-work .database-note")).toBe(0);
+      await waitForCount(CARDS, 0);
     });
 
     it("closes the tree of a connection that the read shows lost, and says why on a card", async () => {
@@ -2982,7 +2979,7 @@ describe("database: tree", () => {
         await expect(csv()).toBeDisabled();
         await mock("database_sql", databaseSqlRun([databaseSqlStatement(["n"], [[databaseCell("1", "number")]])], "列が見つかりません (1054): Unknown column 'x'"));
         await runText("SELECT 1; SELECT x");
-        await expect($("#database-work .database-note")).toHaveText(expect.stringContaining("列が見つかりません"));
+        await waitForCard("列が見つかりません");
         await expect(csv()).toBeDisabled();
         await mock("database_sql", rejects("SQL を入力してください"));
         await mock("database_connections", ["p1"]);
@@ -3117,13 +3114,13 @@ describe("database: tree", () => {
         expect(await callsOf("database_sql")).toHaveLength(1);
       });
 
-      it("has the tab of the statement that failed after the ones that ran, selected, with its words in the danger color", async () => {
+      it("has the tab of the statement that failed after the ones that ran, selected, with its words on a card", async () => {
         await openQuery();
         const message = "2 文目: 列が見つかりません (1054): Unknown column 'nam' in 'field list'";
         await mock("database_sql", databaseSqlRun([databaseSqlStatement([], [], "1 行を変更 / 3 ms", "", "1 行を変更")], message));
         await runText("UPDATE users SET plan = 'pro'; SELECT nam FROM users; SELECT 3");
-        await expect($("#database-work .database-note")).toHaveText(message);
-        await expect($("#database-work .database-note")).toHaveElementClass("danger");
+        await waitForCard(message);
+        expect(await count("#database-work .database-note")).toBe(0);
         expect(await resultTabs()).toEqual(["1: 1 行を変更", "2: エラー"]);
         expect(await resultSelected()).toEqual(["2: エラー"]);
         await expect(resultTab(1)).toHaveAttribute("data-failed", "true");
@@ -3131,9 +3128,9 @@ describe("database: tree", () => {
         await expect($('#database-work [data-key="copy"]')).toBeDisabled();
         await resultTab(0).click();
         await expect(range()).toHaveText("1 行を変更 / 3 ms");
-        expect(await count("#database-work .database-note")).toBe(0);
+        await waitForCount(CARDS, 0);
         await resultTab(1).click();
-        await expect($("#database-work .database-note")).toHaveText(message);
+        await waitForCard(message);
       });
 
       it("draws no tabs for one statement, and a failure of the only statement as the error with no tab", async () => {
@@ -3144,7 +3141,7 @@ describe("database: tree", () => {
         expect(await count("#database-work .database-result-tabs")).toBe(0);
         await mock("database_sql", databaseSqlRun([], "列が見つかりません (1054): Unknown column 'x' in 'field list'"));
         await runText("SELECT x FROM users");
-        await expect($("#database-work .database-note")).toHaveText("列が見つかりません (1054): Unknown column 'x' in 'field list'");
+        await waitForCard("列が見つかりません (1054): Unknown column 'x' in 'field list'");
         expect(await count("#database-work .database-result-tabs")).toBe(0);
         expect(await count("#database-work .database-grid")).toBe(0);
         await expect(run()).toBeEnabled();
@@ -3165,7 +3162,7 @@ describe("database: tree", () => {
       });
     });
 
-    it("shows the error of MySQL in the danger color, drops the old result, keeps the text and the connection, and runs again", async () => {
+    it("shows the error of MySQL on a card, drops the old result, keeps the text and the connection, and runs again", async () => {
       await openQuery();
       await mock("database_sql", result);
       await runText();
@@ -3176,8 +3173,7 @@ describe("database: tree", () => {
       await input().setValue("DELETE FROM users");
       await run().click();
       await waitForCalls("database_sql");
-      await expect($("#database-work .database-note")).toHaveText(message);
-      await expect($("#database-work .database-note")).toHaveElementClass("danger");
+      await waitForCard(message);
       expect(await count("#database-work .database-grid")).toBe(0);
       await expect(range()).toHaveText("");
       await expect(input()).toHaveValue("DELETE FROM users");
@@ -3187,7 +3183,7 @@ describe("database: tree", () => {
       await runText();
       expect(await waitForCalls(again)).toEqual([ran()]);
       await expect(range()).toHaveText("2 行 / 12 ms");
-      expect(await count("#database-work .database-note")).toBe(0);
+      await waitForCount(CARDS, 0);
     });
 
     it("closes the tree of a connection that the run shows lost, with its query tabs, and says why on a card", async () => {
@@ -3210,7 +3206,7 @@ describe("database: tree", () => {
       await mock("database_connections", ["p1"]);
       await run().click();
       expect(await waitForCalls("database_sql")).toEqual([ran("")]);
-      await expect($("#database-work .database-note")).toHaveText("SQL を入力してください");
+      await waitForCard("SQL を入力してください");
     });
 
     it("has no other control on a query than the two selects, 実行, the copy and the CSV, the line, and the field is the only input", async () => {

@@ -50,8 +50,6 @@ export interface SideActions {
   closeDatabase: (profile: DatabaseProfileView, database: string) => void;
   edit?: (profile: DatabaseProfileView) => void;
   disconnect: (profile: DatabaseProfileView) => void;
-  // Not called by the tree any more (the error is a card, whose × the screen does not hear): takes the error away (the database's, or the connection's when `database` is null) and closes the row. It calls nothing and leaves the connection as it is.
-  clearError: (profile: DatabaseProfileView, database: string | null) => void;
   // `anchor` is the name of the row, which the confirmation opens under.
   remove?: (profile: DatabaseProfileView, anchor: Element) => void;
 }

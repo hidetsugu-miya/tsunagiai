@@ -84,14 +84,13 @@ async function post() {
 }
 
 // Draws the list of the channels, grouped by workspace, in `list`: the ones whose name holds `query`, and a line when none does. `pick` is called with the choice.
-function drawList(list: HTMLElement, groups: { workspace: Workspace; channels: Channel[] | string }[], query: string, pick: (c: Chosen) => void) {
+function drawList(list: HTMLElement, groups: { workspace: Workspace; channels: Channel[] | null }[], query: string, pick: (c: Chosen) => void) {
   const re = partMatcher(query);
   const nodes: Node[] = [];
   let hits = 0;
   for (const { workspace, channels } of groups) {
-    if (typeof channels === "string") {
-      // A workspace whose list could not be read says why, under its name.
-      nodes.push(tag("div", "menu-group", workspace.team), tag("div", "menu-group fail", channels));
+    if (channels === null) {
+      // A workspace whose list could not be read is a card (A-28) and has no part in the list.
       continue;
     }
     const found = channels.filter((c) => !re || re.test(c.name));
@@ -107,7 +106,7 @@ function drawList(list: HTMLElement, groups: { workspace: Workspace; channels: C
       nodes.push(b);
     }
   }
-  if (!hits && !groups.some((g) => typeof g.channels === "string")) nodes.push(tag("div", "menu-empty", "該当するチャンネルがありません"));
+  if (!hits && !groups.some((g) => g.channels === null)) nodes.push(tag("div", "menu-empty", "該当するチャンネルがありません"));
   list.replaceChildren(...nodes);
 }
 
@@ -127,7 +126,7 @@ async function openList() {
   pop.append(input, list);
   showMenu(anchor, pop);
   const seq = ++listSeq;
-  let groups: { workspace: Workspace; channels: Channel[] | string }[] = [];
+  let groups: { workspace: Workspace; channels: Channel[] | null }[] = [];
   const pick = (c: Chosen) => {
     chosen = c;
     closeMenu();
@@ -153,11 +152,15 @@ async function openList() {
     if (seq !== listSeq || !pop.isConnected) return;
     groups = workspaces.map((workspace, i) => {
       const r = got[i];
-      return { workspace, channels: r.status === "fulfilled" ? r.value : String(r.reason) };
+      if (r.status === "fulfilled") return { workspace, channels: r.value };
+      showFailure("mail-slack", `${workspace.team}: ${r.reason}`);
+      return { workspace, channels: null };
     });
     redraw();
   } catch (e) {
-    if (seq === listSeq && pop.isConnected) list.replaceChildren(tag("div", "menu-group fail", String(e)));
+    if (seq !== listSeq || !pop.isConnected) return;
+    showFailure("mail-slack", e);
+    closeMenu();
   }
 }
 

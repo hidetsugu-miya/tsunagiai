@@ -354,8 +354,8 @@ describe("slack list", () => {
     expect((await textsOf(CARD)).sort()).toEqual(["Example Team: users:read、files:read の権限がありません", "Other Team を読み込めませんでした: 接続できません"]);
     // The lacking scopes are a warning; the failed workspace is a failure. The band above the list is gone.
     expect(await count(WARN_CARDS)).toBe(1);
-    expect(await count("#slack-notice")).toBe(0);
-    await $("#error-cards").$("div*=Other Team").$("button=設定を開く").click();
+    // The newest card is the first: the warning of the scopes, then the failure of the workspace.
+    await $$(CARDS)[1].$("button=設定を開く").click();
     await expect($("#settings-tab-slack")).toHaveAttribute("aria-selected", "true");
   });
 
@@ -378,7 +378,6 @@ describe("slack list", () => {
     await waitForCard("読み込めませんでした: 接続できません");
     expect(await count(CARDS)).toBe(1);
     expect(await count(WARN_CARDS)).toBe(0);
-    expect(await count("#slack-feed .pending.fail")).toBe(0);
     expect(await count("#slack-feed .feed-empty")).toBe(0);
     await mock("slack_timeline", timeline(sample()));
     await $("#error-cards").$("button=再読み込み").click();
@@ -391,7 +390,6 @@ describe("slack list", () => {
     await expect($("#slack-feed .feed-empty")).toHaveText("メッセージはありません");
     await mock("slack_timeline", rejects("接続できません"));
     await waitForCard("読み込めませんでした: 接続できません");
-    expect(await count("#slack-feed .pending.fail")).toBe(0);
     await mock("slack_timeline", timeline(sample()));
     await $("#error-cards").$("button=再読み込み").click();
     await waitForCount("#slack-feed .feed-row", 2);
@@ -590,7 +588,6 @@ describe("slack list", () => {
     await waitForCard("Example Team を読み込めませんでした: 接続できません");
     expect(await count(CARDS)).toBe(1);
     expect(await count("#slack-feed .feed-empty")).toBe(0);
-    expect(await count("#slack-feed .pending.fail")).toBe(0);
     await mock("slack_timeline", timeline(sample()));
     await $("#error-cards").$("button=再読み込み").click();
     await waitForCount("#slack-feed .feed-row", 2);
@@ -1387,7 +1384,6 @@ describe("slack list", () => {
     await boot({ inbox: inbox(), slack_load: { workspaces: [workspace, other] }, slack_timeline: timeline([], { failed: [failure], refreshSecs: 1 }), claude_status: claudeReady });
     await $("#nav-slack").click();
     await expect($("#slack-feed .feed-empty")).toHaveText("メッセージはありません");
-    expect(await count("#slack-feed .pending.fail")).toBe(0);
     await waitForCard("Other Team を読み込めませんでした: 接続できません");
     expect(await textsOf(CARD)).toEqual(["Other Team を読み込めませんでした: 接続できません"]);
     expect(await textsOf(".error-card-action")).toEqual(["設定を開く"]);
@@ -2399,7 +2395,6 @@ describe("slack list: the history of a channel (S-20)", () => {
     await waitForCalls(failing);
     await waitForCard("読み込めませんでした: 権限がありません");
     expect(await count(CARDS)).toBe(1);
-    expect(await count("#sc-feed .pending.fail")).toBe(0);
     expect(await count("#sc-feed .feed-row")).toBe(0);
     const history = await mock("slack_channel_history", historySample());
     await $("#error-cards").$("button=再読み込み").click();
@@ -2636,7 +2631,6 @@ describe("slack list: posting to a channel (S-21)", () => {
     await write("Keep me");
     await sendButton().click();
     await waitForCard("投稿できませんでした: 投稿できません");
-    expect(await count("#sc-error")).toBe(0);
     expect(await fieldText()).toBe("Keep me");
     await expect(sendButton()).toBeEnabled();
     expect(await editable()).toBe("true");

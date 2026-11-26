@@ -260,7 +260,7 @@ function showSelected(focus: boolean) {
 
 const hasPage = (name: string) => children.some((c) => c.name === name && c.pendingPage !== null);
 
-// Reads the page of `name` for the mark of the time `atMs` and puts it in the pane, hidden until its tab is shown (`syncPages`); a read that failed shows the violations or the reason in its place.
+// Reads the page of `name` for the mark of the time `atMs` and puts it in the pane, hidden until its tab is shown (`syncPages`); a read that failed shows the violations or the reason as a failure card (A-28).
 async function loadPage(formation: string, name: string, atMs: number) {
   const state: PageState = { atMs, el: null, error: null };
   pages.set(name, state);
@@ -271,11 +271,12 @@ async function loadPage(formation: string, name: string, atMs: number) {
   } catch (e) {
     if (pages.get(name) !== state) return;
     state.error = String(e);
-    state.el = tag("p", "fp-error pending fail", state.error);
-    state.el.setAttribute("role", "alert");
+    showFailure("formation-flow", e);
   }
-  state.el.hidden = name !== pageChild;
-  $("formation-page").append(state.el);
+  if (state.el) {
+    state.el.hidden = name !== pageChild;
+    $("formation-page").append(state.el);
+  }
   draw();
 }
 

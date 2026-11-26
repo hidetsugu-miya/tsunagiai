@@ -3271,12 +3271,13 @@ describe("orchestration mode: the decision page of a child", () => {
     expect(await textsOf("#formation-page .fp-title")).toEqual(["置き換えたページ"]);
   });
 
-  it("says why when the page cannot be read, and reads it again when the tab is pressed again", async () => {
+  it("says why on a card when the page cannot be read, and reads it again when the tab is pressed again", async () => {
     await openFlow([asking()], { formation_page_read: rejects("$.questions[0].title: 空です\n$.what: ありません") });
     await browser.waitUntil(async () => (await cardNames()).length === 1);
     await $(OPEN).click();
-    await expect($("#formation-page .fp-error")).toBeDisplayed();
-    expect(await rawTextsOf("#formation-page .fp-error")).toEqual(["$.questions[0].title: 空です\n$.what: ありません"]);
+    await waitForCard("$.questions[0].title: 空です");
+    await waitForCard("$.what: ありません");
+    expect(await count("#formation-page .fp-title")).toBe(0);
     await mock("formation_page_read", decisionPage({ title: "直したページ" }));
     await $("#formation-tab-leader-main").click();
     await $(PAGE_TAB).click();
@@ -3284,7 +3285,6 @@ describe("orchestration mode: the decision page of a child", () => {
   });
 
   const SEND = "#formation-page .fp-send-btn";
-  const SEND_ERROR = "#formation-page .fp-send .fp-error";
   const QUESTION_2 = decisionCard("Q2", { title: "いつまでに決めるか", options: [decisionOption("A", "今週", null)], recommendation: "A", recommendationReason: "早い" });
   const answerCalls = () => callsOf("formation_page_answer");
 
@@ -3350,14 +3350,12 @@ describe("orchestration mode: the decision page of a child", () => {
     expect(await waitForCalls("formation_page_answer", 1)).toEqual([{ name: "formation", child: "req-login", atMs: MARK_AT, answers: [], verdict: "approve", revision: "" }]);
   });
 
-  it("keeps the page and the answers, and says why, when the reply could not be sent, and sends again when it is pressed again", async () => {
+  it("keeps the page and the answers, and says why on a card, when the reply could not be sent, and sends again when it is pressed again", async () => {
     await openPage(decisionPage({ questions: [QUESTION, QUESTION_2] }));
     await mock("formation_page_answer", rejects("回答が必要なカードが未回答です: Q2"));
     await $('#formation-page [data-card="Q1"] input[value="A"]').click();
     await $(SEND).click();
-    await expect($(SEND_ERROR)).toBeDisplayed();
-    expect(await rawTextsOf(SEND_ERROR)).toEqual(["回答が必要なカードが未回答です: Q2"]);
-    await expect($(SEND_ERROR)).toHaveAttribute("role", "alert");
+    await waitForCard("回答が必要なカードが未回答です: Q2");
     // The tab, the page and the choice stay, and the button can be pressed again.
     await expect($(PAGE_TAB)).toBeDisplayed();
     await expect($("#formation-page .fp-title")).toBeDisplayed();
@@ -3380,7 +3378,6 @@ describe("orchestration mode: the decision page of a child", () => {
         revision: "",
       },
     ]);
-    await expect($(SEND_ERROR)).not.toBeDisplayed();
   });
 
   const VERDICT = "#formation-page .fp-verdict";

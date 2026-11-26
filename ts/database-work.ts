@@ -9,6 +9,7 @@ import type { DatabaseTable } from "./bindings/DatabaseTable";
 import { canEditCell, cellKey, changesOf, type EditState, isAdded, markable, originalText } from "./database-edit.js";
 import { type GridEdit, gridNode, syncEdit } from "./database-grid.js";
 import { $, onEnter, tag } from "./dom.js";
+import { setNotice } from "./error-card.js";
 import { invoke } from "./ipc.js";
 import { CHECK_SVG, CHEVRON_LEFT_SVG, CHEVRON_SVG, CLOSE_SVG, COPY_SVG, DOWNLOAD_SVG, MINUS_SVG, PAGE_FIRST_SVG, PAGE_LAST_SVG, PLUS_SVG, RELOAD_SVG } from "./icons.js";
 
@@ -180,11 +181,38 @@ function tableNode(tables: DatabaseTable[], actions: WorkActions) {
   return table;
 }
 
-function note(text: string, failed: boolean) {
-  const line = tag("p", failed ? "database-note danger" : "database-note", text);
-  line.setAttribute("role", failed ? "alert" : "status");
+function note(text: string) {
+  const line = tag("p", "database-note", text);
+  line.setAttribute("role", "status");
   return line;
 }
+
+// The error of the body that a box shows is a card (A-28), one for each box: it is made while the body has an error, is rewritten in place when the text changes, and goes when the body has none, the tab is closed or the box is made again with another body. A card closed with its × is not made again until then.
+const noticeKeys = new WeakMap<HTMLElement, string>();
+let boxCount = 0;
+const noticeKeyOf = (box: HTMLElement) => {
+  let key = noticeKeys.get(box);
+  if (key === undefined) {
+    boxCount += 1;
+    key = `database-work:${boxCount}`;
+    noticeKeys.set(box, key);
+  }
+  return key;
+};
+const showBodyError = (box: HTMLElement, text: string | null) => setNotice(noticeKeyOf(box), text === null ? null : { text });
+
+// Takes the card of a box off when its tab is closed (A-43).
+export const dropBodyError = (box: HTMLElement) => showBodyError(box, null);
+
+// What the SQL of a tab says when it failed: the error of the call, or the statement that failed in a run of several.
+const sqlError = (sql: SqlState) => sql.error ?? (sql.data !== null && sql.tab >= sql.data.results.length ? sql.data.error : null);
+
+// The error of the tab of a table that is shown.
+const tableError = (t: { tab: string; records: RecordsState; structure: StructureState | null; sql: SqlState | null }) =>
+  t.tab === "structure" && t.structure !== null ? t.structure.error : t.tab === "sql" && t.sql !== null ? sqlError(t.sql) : t.records.error;
+
+// The list of the tables of a database (オブジェクト) has the error of that database, which the card of the tree already holds (`database-side.ts`).
+const bodyError = (body: WorkBody) => (body.kind === "table" ? tableError({ ...body, sql: null }) : body.kind === "query" ? sqlError(body.query.sql) : null);
 
 function tabsNode(tabs: { id: string; label: string }[], active: string, pick: (id: string) => void, keyPrefix = "tab") {
   const bar = tag("div", "database-tabs");
@@ -323,8 +351,7 @@ function recordsNode(records: RecordsState, actions: TabActions, sizes: string) 
   const box = tag("div", "database-records");
   const scroll = tag("div", "database-records-scroll");
   const edit = records.edit !== undefined && actions.edit !== undefined ? { state: records.edit, actions: actions.edit } : null;
-  if (records.error !== null) scroll.append(note(records.error, true));
-  else if (records.data !== null && records.data.columns.length > 0) {
+  if (records.data !== null && records.data.columns.length > 0) {
     const { data } = records;
     scroll.append(edit ? editGridNode(data, edit.state, edit.actions, sizes) : gridOf(data, () => gridNode(data.columns, data.rows, sizes)));
   }
@@ -382,8 +409,7 @@ function recordsNode(records: RecordsState, actions: TabActions, sizes: string) 
 function structureNode(structure: StructureState, sizes: string) {
   const box = tag("div", "database-records");
   const scroll = tag("div", "database-records-scroll");
-  if (structure.error !== null) scroll.append(note(structure.error, true));
-  else if (structure.data !== null && structure.data.columns.length > 0) {
+  if (structure.data !== null && structure.data.columns.length > 0) {
     const { data } = structure;
     scroll.append(
       gridOf(data, () => {
@@ -435,14 +461,11 @@ function resultTabsNode(run: DatabaseSqlRun, active: number, pick: (index: numbe
 function sqlResultNodes(sql: SqlState, sizes: string, actions: TabActions) {
   const { data } = sql;
   const shown = data !== null && sql.tab < data.results.length ? data.results[sql.tab] : null;
-  const failed = data !== null && shown === null ? data.error : null;
   const nodes: Node[] = [];
   const bar = data === null ? null : resultTabsNode(data, sql.tab, actions.sqlTab);
   if (bar) nodes.push(bar);
   const scroll = tag("div", "database-records-scroll");
-  if (sql.error !== null) scroll.append(note(sql.error, true));
-  else if (failed !== null) scroll.append(note(failed, true));
-  else if (shown !== null && shown.columns.length > 0) scroll.append(gridOf(shown, () => gridNode(shown.columns, shown.rows, sizes)));
+  if (shown !== null && shown.columns.length > 0) scroll.append(gridOf(shown, () => gridNode(shown.columns, shown.rows, sizes)));
   const footer = tag("div", "database-pager");
   const summary = tag("span", "database-range", sql.loading ? "実行中…" : (shown?.summary ?? ""));
   summary.setAttribute("role", "status");
@@ -583,6 +606,7 @@ export function drawDatabaseWork(state: WorkState | null, actions: WorkActions) 
   if (key === drawn) return;
   drawn = key;
   const box = $("database-work");
+  showBodyError(box, state === null ? null : bodyError(state.body));
   const strip = $("database-work-tabs");
   const active = document.activeElement as HTMLElement | null;
   const focused = active?.dataset?.key;
@@ -606,8 +630,7 @@ export function drawDatabaseWork(state: WorkState | null, actions: WorkActions) 
   else if (body.kind === "query") nodes.push(queryNode(body.query, actions));
   else if (body.kind === "objects") {
     nodes.push(tag("h3", "database-work-title", body.database));
-    if (body.loading) nodes.push(note("読み込み中…", false));
-    else if (body.error !== null) nodes.push(note(body.error, true));
+    if (body.loading) nodes.push(note("読み込み中…"));
     else if (body.tables.length > 0) nodes.push(tableNode(body.tables, actions));
   }
   box.replaceChildren(...nodes);
@@ -629,6 +652,7 @@ export function drawTableTab(box: HTMLElement, state: TabState, actions: TabActi
   const key = keyOf(state);
   if (key === tabDrawn.get(box)) return;
   tabDrawn.set(box, key);
+  showBodyError(box, state.table !== null ? (state.records === null ? null : tableError({ ...state, records: state.records })) : sqlError(state.sql));
   const active = document.activeElement as HTMLElement | null;
   const focused = active !== null && box.contains(active) ? active.dataset?.key : undefined;
   const caret = active instanceof HTMLTextAreaElement ? ([active.selectionStart, active.selectionEnd] as const) : null;

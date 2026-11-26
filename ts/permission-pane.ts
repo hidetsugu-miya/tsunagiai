@@ -76,14 +76,11 @@ export function openPermissionPane(w: Workspace, missing: string[]) {
   const submit = tag("button", "text-btn", "貼り直す");
   const form = tag("form", "card-add");
   form.append(input, submit);
-  const err = tag("p", "err danger");
-  err.hidden = true;
   form.onsubmit = async (e) => {
     e.preventDefault();
     // The token is never shown: the field is emptied as soon as it is read.
     const token = input.value;
     input.value = "";
-    err.hidden = true;
     submit.disabled = true;
     try {
       const list = await invoke("slack_add_workspace", { token });
@@ -92,12 +89,10 @@ export function openPermissionPane(w: Workspace, missing: string[]) {
       const other = list.length > getSlackWorkspaces()!.length || !list.some((x) => x.teamId === w.teamId);
       renderWorkspaces(list);
       if (other) {
-        err.textContent = `${w.team} のトークンではありません`;
-        err.hidden = false;
+        showFailure("permission-pane", `${w.team} のトークンではありません`);
       } else closePane();
     } catch (x) {
-      err.textContent = String(x);
-      err.hidden = false;
+      showFailure("permission-pane", x);
     }
     submit.disabled = false;
   };
@@ -111,7 +106,6 @@ export function openPermissionPane(w: Workspace, missing: string[]) {
       ["「User OAuth Token」（", code("xoxp-"), "）をコピーして、下の欄に貼る"],
     ]),
     form,
-    err,
     lockFoot("トークンは OS の資格情報の保管場所に入れ、画面には出しません"),
   );
 }

@@ -2812,7 +2812,6 @@ describe("todo detail comments", () => {
   it("shows a failed fetch as a card, not in the section, and takes the card off when the detail is left", async () => {
     await openReport(rejects("boom"));
     await waitForCard("コメントを読み込めませんでした: boom");
-    await expect($("#todo-detail .c-note.fail")).not.toExist();
     expect(await count(CARDS)).toBe(1);
     await expect($(field)).toBeDisplayed();
     await $("#todo-back").click();

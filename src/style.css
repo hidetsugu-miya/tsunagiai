@@ -149,8 +149,6 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 #main::-webkit-scrollbar-thumb:hover, #cal-scroll::-webkit-scrollbar-thumb:hover, #todo-main::-webkit-scrollbar-thumb:hover, #settings::-webkit-scrollbar-thumb:hover, #slack-feed::-webkit-scrollbar-thumb:hover,, #slack-side-feed::-webkit-scrollbar-thumb:hover, #orca-feed::-webkit-scrollbar-thumb:hover, #orca-stopped-feed::-webkit-scrollbar-thumb:hover, #formation-list-feed::-webkit-scrollbar-thumb:hover, #formation-flow-body::-webkit-scrollbar-thumb:hover, #st-msgs::-webkit-scrollbar-thumb:hover { background: var(--side-fg); }
 
 #login { display: flex; justify-content: center; padding: 64px; }
-#relogin { margin-bottom: 8px; }
-#relogin > div, #cal-notice > div, #todo-notice > div, #slack-notice > div { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-radius: 12px; background: var(--warn-bg); margin-bottom: 4px; }
 #threads ul { list-style: none; margin: 0; padding: 0; }
 #unread-heading, #read-heading, .feed-heading { display: flex; align-items: center; gap: 6px; margin: 16px 16px 4px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: calc(13px * var(--fs)); font-weight: normal; color: var(--ink-soft); }
 #unread-heading svg, #read-heading svg, .feed-heading svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; }
@@ -264,9 +262,7 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 #thread-head .label { display: inline-block; white-space: nowrap; margin-left: 8px; padding: 1px 6px; border-radius: 4px; background: var(--code-line); color: #444746; font-size: calc(11px * var(--fs)); vertical-align: middle; }
 #mail-summary { margin: 0 0 20px 56px; padding: 12px 14px; border-radius: 12px; background: var(--bar); color: #1f1f1f; line-height: 1.6; }
 #mail-summary[data-phase="loading"] { display: flex; align-items: center; gap: 10px; color: #444746; }
-#mail-summary[data-phase="failed"] { background: var(--warn-bg); color: var(--warn); }
 .summary-head { display: flex; align-items: center; gap: 8px; font-size: calc(12px * var(--fs)); font-weight: 500; color: var(--accent); }
-#mail-summary[data-phase="failed"] .summary-head { color: var(--warn); }
 .summary-head svg { width: 16px; height: 16px; flex: none; }
 .summary-head .icon-btn { width: 26px; height: 26px; margin-left: auto; color: #444746; }
 .summary-head .icon-btn svg { width: 14px; height: 14px; }
@@ -300,7 +296,6 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .msg-bars span:nth-child(1) { width: 92%; }
 .msg-bars span:nth-child(2) { width: 78%; }
 .msg-bars span:nth-child(3) { width: 55%; }
-.msg-fail { display: block; font-size: calc(13px * var(--fs)); color: var(--warn); overflow-wrap: anywhere; }
 /* The body of a text mail draws as Gmail does, in the family chosen for the mail screen (A-20) or Arial, not in a monospace face. */
 .plain { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--ff-mail, Arial, Helvetica, sans-serif); font-size: calc(13px * var(--fs)); }
 .plain a { color: var(--accent); }
@@ -375,7 +370,6 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .text-btn { height: 32px; padding: 0 16px; border: 1px solid var(--chip-line); border-radius: 16px; background: var(--surface); color: #333; cursor: pointer; font-family: inherit; font-size: calc(11px * var(--fs)); }
 .text-btn:hover, .text-btn[aria-pressed="true"] { background: var(--soft); }
 .text-btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
-#cal-notice:not(:empty), #todo-notice:not(:empty), #slack-notice:not(:empty) { padding: 0 32px 8px; }
 #calendar.loading #cal-scroll { opacity: .5; }
 #cal-scroll { flex: 1; overflow-y: auto; }
 #cal-top { position: sticky; top: 0; z-index: 3; background: var(--surface); border-bottom: 1px solid var(--chip-line); }
@@ -427,7 +421,7 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .cal-pop-row > svg { width: 16px; height: 16px; flex: none; margin-top: 2px; color: var(--muted); }
 .cal-pop-row > :last-child { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .cal-pop-desc { max-height: 160px; overflow-y: auto; white-space: pre-wrap; }
-.cal-pop-foot { display: flex; align-items: center; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.cal-pop-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
 .cal-pop-cal { flex: 1; min-width: 0; color: var(--muted); font-size: calc(12px * var(--fs)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* C-5: the draft of an event being created and the form beside it (ts/calendar-create.ts): the frame of the detail, 400px wide. */
 .cal-draft { position: absolute; z-index: 1; left: 2px; right: 2px; top: calc(var(--hour) * var(--s) / 60); height: calc(var(--hour) * var(--d) / 60 - 1px); box-sizing: border-box; overflow: hidden; padding: 2px 6px; border-radius: 4px; background: var(--c); color: var(--on-accent); font-size: calc(12px * var(--fs)); line-height: 1.35; outline: 2px solid var(--surface); box-shadow: 0 6px 16px rgba(0, 0, 0, .22); }
@@ -456,8 +450,6 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 .cal-create-card .icon-btn { width: 28px; height: 28px; }
 .cal-create textarea { box-sizing: border-box; width: 100%; padding: 7px 10px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); color: inherit; font: inherit; font-size: calc(12px * var(--fs)); resize: vertical; outline: none; }
 .cal-create textarea:focus { border-color: var(--accent); }
-.cal-create-error { flex: 1; min-width: 0; color: var(--danger); font-size: calc(12px * var(--fs)); overflow-wrap: anywhere; }
-.cal-create-error .text-btn { margin-left: 8px; }
 .cal-create .text-btn:disabled, .cal-pop-confirm .text-btn:disabled { opacity: .4; cursor: default; }
 .cal-pop-confirm { display: flex; flex-direction: column; gap: 12px; }
 .cal-pop-confirm p { margin: 0; overflow-wrap: anywhere; }
@@ -531,7 +523,6 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 #todo-add-hint svg { width: 14px; height: 14px; flex: none; }
 #todo-pending:not(:empty) { margin-bottom: 8px; }
 .pending { display: flex; align-items: center; gap: 10px; padding: 10px 12px; margin-bottom: 4px; border-radius: 12px; background: var(--bar); color: var(--ink-soft); }
-.pending.fail { background: var(--warn-bg); color: var(--warn); }
 .pending .sp { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .pending .pending-channel { font-size: calc(12px * var(--fs)); color: #888; }
 .pending .icon-btn { width: 26px; height: 26px; }
@@ -565,7 +556,6 @@ button.review-chip:hover { background: var(--hover); }
 .review-src { display: flex; align-items: center; gap: 5px; font-size: calc(12px * var(--fs)); color: #777; }
 .review-src svg { width: 13px; height: 13px; flex: none; color: var(--slack); }
 .review-omitted, .review-target-cut { font-size: calc(12px * var(--fs)); color: var(--warn); }
-.review-err { margin: 0; }
 .review-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .review-keys { margin-right: auto; font-size: calc(11px * var(--fs)); color: #999; }
 .review-keys kbd { padding: 0 4px; border: 1px solid var(--chip-line); border-bottom-width: 2px; border-radius: 4px; font: inherit; font-size: calc(10px * var(--fs)); color: #666; }
@@ -595,7 +585,6 @@ button.review-chip:hover { background: var(--hover); }
 .draft-desc:focus { outline: 2px solid var(--accent); border-color: transparent; }
 .draft-link { font-size: calc(12px * var(--fs)); color: #777; overflow-wrap: anywhere; }
 .draft-omitted, .draft-target-cut { font-size: calc(12px * var(--fs)); color: var(--warn); }
-.draft-err { margin: 0; }
 .draft .detail-side { grid-column: 2; align-self: stretch; overflow-y: auto; border-radius: 0; border-left: 1px solid var(--line); }
 .draft-foot { grid-column: 1 / 3; display: flex; align-items: center; padding: 12px 20px; border-top: 1px solid var(--line); }
 .draft-undo { margin-right: 12px; }
@@ -606,7 +595,6 @@ button.review-chip:hover { background: var(--hover); }
 .draft-add .spin { border-color: var(--accent-dim); border-top-color: #fff; }
 #todo-token { max-width: 520px; margin: 32px auto; }
 #todo-token .row { display: flex; gap: 8px; }
-#todo-token-note { color: #b00020; }
 .todo-empty { color: #888; text-align: center; padding: 48px; }
 .group { font-size: calc(12px * var(--fs)); color: #888; margin: 16px 16px 4px; }
 .group.overdue { color: #b00020; }
@@ -796,7 +784,6 @@ a.c-file:hover { background: var(--hover); }
 .c-file svg { width: 28px; height: 28px; color: #aaa; flex: none; }
 .c-file-name { min-width: 0; font-weight: bold; overflow-wrap: anywhere; }
 .c-note { display: flex; align-items: center; gap: 8px; font-size: calc(12px * var(--fs)); color: #888; }
-.c-note.fail { color: var(--warn); }
 .c-form { margin-top: 16px; }
 .c-box { display: flex; align-items: flex-end; gap: 2px; box-sizing: border-box; min-height: 36px; padding: 0 4px 0 16px; border: 1px solid var(--chip-line); border-radius: 18px; background: var(--surface); }
 .c-box:focus-within { outline: 2px solid var(--accent); border-color: transparent; }
@@ -975,7 +962,6 @@ button.status:hover { filter: brightness(.95); }
 .pane-head h2 { white-space: normal; font-size: calc(15px * var(--fs)); }
 .pane p { margin: 0 0 12px; }
 .pane .card-add { padding: 0; border-top: 0; background: none; }
-.pane .err { margin: 8px 0 0; font-size: calc(12px * var(--fs)); }
 @keyframes pane-in { from { transform: translateX(100%); } }
 @media (prefers-reduced-motion: reduce) { .pane { animation: none; } }
 
@@ -985,7 +971,6 @@ button.status:hover { filter: brightness(.95); }
 #prompt header { box-sizing: border-box; min-height: var(--header-h); gap: 8px; padding: 0 24px 0 16px; border-bottom: 1px solid var(--line); }
 #prompt h1 { flex: none; }
 #prompt .grow { flex: 1; }
-#prompt-error { margin: 8px 24px 0; }
 #prompt-main { flex: 1; min-height: 0; display: flex; }
 #prompt-edit { flex: 1; min-width: 0; box-sizing: border-box; padding: 16px 24px 24px; display: flex; flex-direction: column; gap: 14px; }
 .prompt-label { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-size: calc(12px * var(--fs)); color: #666; }
@@ -1039,7 +1024,6 @@ button.status:hover { filter: brightness(.95); }
 /* The formations at the top of the list (A-37): the heading, and a row with the name and the number of its children, in the shape of a project's row (the arrow at its left is the project's, `.orca-arrow`); the selected row has the ground of the selected project. */
 .orca-list-head { flex: none; display: flex; align-items: center; gap: 6px; margin: 0; padding: 10px 18px 4px; color: var(--muted); font-size: calc(11px * var(--fs)); font-weight: 700; letter-spacing: .04em; }
 #orca-formations { flex: none; display: flex; flex-direction: column; max-height: 40vh; min-height: 0; }
-#formation-list-error { flex: none; margin: 4px 8px 0; overflow-wrap: anywhere; }
 #formation-list-feed { min-height: 0; overflow-y: auto; padding: 0 8px; }
 .formation-item { position: relative; }
 /* A line holds the row, a button, and at its right the count of the done children and the number of the children, outside the button (#1112); the ground of the hover and of the selected row is the line's. */
@@ -1082,7 +1066,6 @@ button.status:hover { filter: brightness(.95); }
 #formation-head { align-items: flex-end; gap: 8px; padding: 0 12px 0 8px; }
 #formation-tabs { flex: 1; min-width: 0; display: flex; align-items: flex-end; gap: 2px; overflow-x: auto; scrollbar-width: none; }
 #formation-tabs-mates { display: contents; }
-#formation-term-error { flex: none; margin: 8px; overflow-wrap: anywhere; }
 .formation-tab { flex: none; display: flex; align-items: center; box-sizing: border-box; height: 34px; margin-bottom: 0; border: 1px solid var(--line); border-bottom: 0; border-radius: 8px 8px 0 0; font-size: calc(12px * var(--fs)); color: var(--ink-soft); }
 .formation-tab:has([aria-selected="true"]) { height: 36px; margin-bottom: -1px; background: var(--surface); color: inherit; font-weight: 700; }
 .formation-tab[aria-busy="true"] { opacity: .5; }
@@ -1124,8 +1107,6 @@ button.formation-tab-main:focus-visible { outline: 2px solid var(--accent); outl
 .fp-progress-fill { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
 .fp-bar .text-btn { height: 26px; padding: 0 12px; font-size: calc(12px * var(--fs)); }
 .fp-bar-actions { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px 10px; }
-.fp-bar .fp-error { margin: 0; flex-basis: 100%; }
-.fp-error { margin: 16px; white-space: pre-wrap; }
 .fp-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 0; }
 .fp-title { flex: 0 1 auto; margin: 0; font-size: calc(17px * var(--fs)); white-space: normal; overflow: visible; }
 .fp-from { color: var(--muted); font-size: calc(13px * var(--fs)); }
@@ -1175,7 +1156,6 @@ button.formation-tab-main:focus-visible { outline: 2px solid var(--accent); outl
 .fp-image figcaption { color: var(--muted); font-size: calc(13px * var(--fs)); }
 .fp-image-zoom { align-self: flex-start; padding: 2px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--accent-text); font: inherit; font-size: calc(13px * var(--fs)); cursor: pointer; }
 .fp-image-zoom:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.fp-image-error { margin: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--danger); font-size: calc(13px * var(--fs)); }
 .fp-diagram-source, .fp-pre { margin: 0; padding: 8px 10px; border: 1px solid var(--code-line); border-radius: 8px; background: var(--code); font-family: ui-monospace, Menlo, monospace; font-size: calc(13px * var(--fs)); white-space: pre-wrap; }
 .fp-diagram-box[data-drawn="true"] .fp-diagram-source { display: none; }
 .fp-evidence { display: flex; flex-direction: column; gap: 10px; }
@@ -1260,7 +1240,6 @@ button.formation-tab-main:focus-visible { outline: 2px solid var(--accent); outl
 .fp-cancel { align-self: flex-start; margin-left: 8px; height: 26px; font-size: calc(13px * var(--fs)); }
 .fp-cancel:disabled { opacity: .4; cursor: default; }
 .fp-send { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
-.fp-send .fp-error { flex-basis: 100%; margin: 0; }
 .fp-send-btn:disabled { opacity: .4; cursor: default; }
 /* Every control of the page shows one focus ring, 3:1 or more against the ground (#1158). */
 #formation-page :is(button, a, summary, input, textarea, [role="link"], [role="tab"]):focus-visible, .fp-choice-label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -1320,7 +1299,6 @@ button.formation-tab-main:focus-visible { outline: 2px solid var(--accent); outl
 #formation-flow-size { flex: none; margin-left: auto; color: var(--muted); }
 #formation-flow-size[aria-pressed="true"], #formation-flow-size[aria-pressed="true"]:hover:not(:disabled) { background: var(--soft); color: var(--accent-text); }
 #formation-flow-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; box-sizing: border-box; padding: 14px 12px; }
-#formation-flow-error { margin: 0 0 10px; overflow-wrap: anywhere; }
 /* The cards of the decision pages that wait (A-41): a heading line, a card for each page, and a line under the group that parts it from the leader's card. */
 #formation-flow-pages { margin-bottom: 14px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
 #formation-flow-pages-title { margin: 0 0 8px; color: var(--agent-question); font-size: calc(11px * var(--fs)); font-weight: 700; }
@@ -1396,7 +1374,6 @@ li[data-talk="in"] .formation-talk, li[data-talk="in"] .formation-talk::before {
 #formation-flow[data-compact="true"] #formation-flow-size { order: 0; margin-left: 0; }
 #formation-flow[data-compact="true"] .formation-done { order: 2; padding: 0 8px; }
 #formation-flow[data-compact="true"] #formation-flow-body { padding: 14px 0; overflow-x: hidden; }
-#formation-flow[data-compact="true"] #formation-flow-error { margin: 0 6px 10px; font-size: calc(11px * var(--fs)); }
 #formation-flow-compact { display: flex; flex-direction: column; align-items: center; }
 #formation-flow-page-orbs { list-style: none; margin: 0 0 12px; padding: 0 0 12px; width: 100%; display: flex; flex-direction: column; align-items: center; gap: 12px; border-bottom: 1px solid var(--line); }
 #formation-flow-page-orbs:empty { display: none; }
@@ -1615,7 +1592,6 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-dest-chev { display: flex; }
 .orca-dest-chev svg { width: 12px; height: 12px; }
 .orca-dest-more-btn[aria-expanded="true"] .orca-dest-chev svg { transform: rotate(180deg); }
-.orca-dest-list .empty.fail { color: var(--warn); }
 #orca-files-tree { flex: 1; min-height: 0; overflow: auto; padding: 4px 4px 8px; }
 #orca-files-tree .pending { margin: 4px; }
 .orca-file { display: flex; align-items: center; gap: 4px; width: 100%; min-width: 0; height: 26px; box-sizing: border-box; padding: 0 8px 0 calc(6px + var(--depth, 0) * 14px); border: 0; border-radius: 6px; background: transparent; font: inherit; font-size: calc(12.5px * var(--fs)); color: inherit; text-align: left; white-space: nowrap; cursor: pointer; }
@@ -1660,7 +1636,6 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-drop-pop .popup-actions { flex-wrap: wrap; justify-content: flex-end; }
 .orca-file-drag { position: fixed; z-index: 30; padding: 2px 8px; border: 1px solid var(--chip-line); border-radius: 8px; background: var(--surface); box-shadow: 0 4px 14px rgba(0, 0, 0, .16); font-size: calc(12.5px * var(--fs)); white-space: nowrap; opacity: .92; pointer-events: none; }
 .orca-file-note { margin: 0; padding: 2px 8px 2px calc(24px + var(--depth, 0) * 14px); font-size: calc(12px * var(--fs)); color: var(--muted); overflow-wrap: anywhere; }
-.orca-file-note.fail { color: var(--warn); }
 /* A-27: the buttons that choose the files or the history in the top row of the file pane, and the history (the commits above, the files of the chosen commit below). */
 .orca-files-mode { flex: none; width: var(--header-btn); height: var(--header-btn); margin-left: 6px; color: var(--ink-soft); }
 .orca-files-mode:first-child { margin-left: 12px; }
@@ -1818,7 +1793,6 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 #orca-lsp-ask { flex: none; margin-left: auto; width: 24px; height: 24px; color: var(--claude); }
 #orca-lsp-reload { flex: none; width: 24px; height: 24px; color: var(--ink-soft); }
 #orca-lsp-ask svg, #orca-lsp-reload svg { width: 14px; height: 14px; }
-#orca-lsp-error, .orca-lsp-note { padding: 0; margin: 0; }
 #orca-lsp-cards { display: flex; flex-direction: column; gap: 8px; }
 .orca-lsp-card { display: flex; flex-direction: column; gap: 4px; box-sizing: border-box; padding: 6px 10px 8px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); }
 .orca-lsp-card[data-kind="found"] { border-style: dashed; background: transparent; }
@@ -1947,7 +1921,6 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-edit-body .tok-emphasis { font-style: italic; }
 .orca-edit-body .tok-heading, .orca-edit-body .tok-strong { font-weight: 700; }
 .orca-diff { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.orca-diff .orca-empty { margin: 0; padding: 48px 24px; }
 .orca-diff-head { gap: 4px; }
 .orca-diff-head .orca-edit-path { margin-right: 8px; }
 .orca-diff-count { flex: none; margin-right: 8px; color: var(--muted); }
@@ -2074,7 +2047,6 @@ body.orca-dragging .orca-edit-preview iframe, #orca-panes[data-resizing] .orca-e
 .orca-browse-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .orca-browse-next { display: inline-flex; flex: none; margin-left: auto; color: var(--muted); }
 .orca-browse-note { margin: 0; padding: 6px 8px; overflow-wrap: anywhere; color: var(--muted); font-size: calc(12px * var(--fs)); }
-.orca-browse-note.err { color: var(--danger); }
 .orca-browse-foot { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .orca-browse-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: calc(12px * var(--fs)); }
 .orca-browse-buttons { display: flex; flex: none; gap: 8px; }
@@ -2113,7 +2085,6 @@ body.orca-dragging .orca-edit-preview iframe, #orca-panes[data-resizing] .orca-e
 #mail-slack-channel .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #mail-slack-channel svg { flex: none; width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 #mail-slack-body { flex: 1; min-height: 0; }
-#mail-slack-error { flex: none; margin: 0; padding: 6px 16px; color: var(--danger); font-size: calc(12px * var(--fs)); overflow-wrap: anywhere; }
 #mail-slack-foot { flex: none; display: flex; align-items: flex-end; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); background: var(--bar); }
 #mail-slack-text { flex: 1; min-width: 0; box-sizing: border-box; min-height: 64px; max-height: 200px; resize: none; padding: 8px 12px; border: 1px solid var(--chip-line); border-radius: 16px; background: var(--surface); color: inherit; font: inherit; }
 #mail-slack-text:focus { outline: 2px solid var(--accent); border-color: transparent; }
@@ -2121,7 +2092,6 @@ body.orca-dragging .orca-edit-preview iframe, #orca-panes[data-resizing] .orca-e
 #mail-slack-send:disabled { opacity: .4; cursor: default; }
 .mail-slack-pop { width: 320px; max-height: calc(100vh - 32px); }
 .mail-slack-pop .menu-group { flex: none; padding: 8px 10px 2px; color: var(--muted); font-size: calc(12px * var(--fs)); }
-.mail-slack-pop .menu-group.fail { color: var(--danger); overflow-wrap: anywhere; }
 .ho-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bar); }
 /* The mail's side is 40% wide at first, at least 400px; the Todo's right side (T-7) is 30% at first, its least, between 30% and 45%; the Slack tab keeps the width of the Claude pane, at least 400px. */
 #todo-side { flex: none; display: flex; flex-direction: column; min-width: 0; width: clamp(30%, var(--chat-w, 30%), 45%); }
@@ -2157,8 +2127,6 @@ body.orca-dragging .orca-edit-preview iframe, #orca-panes[data-resizing] .orca-e
 .ho-head .icon-btn { width: 28px; height: 28px; flex: none; }
 .ho-head .icon-btn svg { width: 16px; height: 16px; }
 .ho-title { flex: 1; }
-.ho-notice:not(:empty) { padding: 8px 12px 0; }
-.ho-fill .ho-notice:not(:empty) { padding: 0; }
 .ho-new { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .ho-chip { height: 26px; padding: 0 10px; border-radius: 13px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ho-chip:disabled { opacity: .6; cursor: default; }
@@ -2248,7 +2216,6 @@ body.orca-dragging .orca-edit-preview iframe, #orca-panes[data-resizing] .orca-e
 #slack-screen.below #reply-split { width: auto; height: 7px; border-left: 0; border-top: 1px solid var(--line); cursor: row-resize; }
 #slack-screen.below #reply-split span { width: 32px; height: 3px; }
 #slack-pending { padding: 8px 32px 0; }
-#slack-notice:not(:empty) { padding-top: 8px; }
 #slack-feed, #sc-feed { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 12px 24px 16px; }
 /* A row holds links and a toggle, so it is no button: one button is stretched over it, what is drawn lies above and lets the press through, and only links and the toggle take it. z-index keeps the row's stack under the buttons beside it. */
 .feed-row { position: relative; z-index: 0; display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: start; gap: 14px; width: 100%; box-sizing: border-box; padding: 10px 16px; border-radius: 12px; }
@@ -2418,7 +2385,6 @@ a.icon-btn { text-decoration: none; }
 .emoji-cell .reaction-emoji[data-emoji-image] { border-radius: 6px; background: var(--soft); }
 .emoji-cell .reaction-img { height: 24px; width: 24px; object-fit: contain; }
 .emoji-status { margin: 8px 4px; color: var(--muted); }
-.emoji-status.err { color: #b00020; }
 .st-files { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .st-thumb { display: flex; align-items: center; justify-content: center; box-sizing: border-box; min-width: 160px; min-height: 100px; max-width: 360px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--bar); }
 .st-thumb.loading { width: 240px; height: 140px; }
@@ -2476,7 +2442,6 @@ a.st-att-title:hover { text-decoration: underline; }
 a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-start; }
 .st-images { margin-top: 8px; }
 .st-note { margin: 0 24px 8px; padding: 8px 12px; border-radius: 12px; background: var(--soft); color: var(--ins); font-size: calc(13px * var(--fs)); }
-#st-note.pending { margin: 0 24px 8px; }
 #st-card .review { margin: 0 24px 10px; }
 #st-reply, #sc-reply { flex: none; padding: 12px 24px 16px; border-top: 1px solid var(--line); }
 /* S-7: the host of Claude Code's terminal takes the rows of the old log and request field in the grid of the pane; 「元に戻す」 of its writes is above the reply field, at the right. */
@@ -2486,7 +2451,6 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 #reply-claude-ask p { margin: 0; color: var(--ink-soft); }
 #st-undo-bar { display: flex; justify-content: flex-end; margin-bottom: 8px; }
 #st-undo { height: 26px; padding: 0 12px; font-size: calc(12px * var(--fs)); }
-#st-error, #sc-error { margin: 0 0 8px; }
 
 /* D-1, D-3: the database screen is the column of connections (like #slack-side, with its divider), which open into databases and tables, and the work pane, which holds the tables of the database that was pressed last. The edit pane that registers or edits a connection takes the place of the work pane. */
 #database { flex: 1; min-height: 0; display: flex; }
@@ -2519,7 +2483,6 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 #database-terminal-plus:hover:not(:disabled) { background: var(--hover); }
 #database-terminal-plus svg { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
 #database-terminal-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-#database-terminal-body > .pending { flex: none; margin: 8px; }
 .database-terminal-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
 /* D-9: the strip of the open tabs over the work pane (オブジェクト and a tab for each opened table), made as the tabs of the terminal pane are. */
 #database-work-tabs { flex: none; display: flex; align-items: flex-end; gap: 2px; padding: 0 24px; border-bottom: 1px solid var(--line); overflow-x: auto; overflow-y: hidden; }
@@ -2553,11 +2516,6 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 .database-dot[data-state="connected"] { background: var(--accent); }
 .database-dot[data-state="connecting"] { background: var(--agent-working); }
 .database-note { margin: 0; padding: 2px 8px 2px calc(26px + var(--depth, 0) * 16px); font-size: calc(12px * var(--fs)); color: var(--muted); overflow-wrap: anywhere; }
-.database-note.danger { color: var(--danger); }
-.database-note.clearable { display: flex; align-items: flex-start; gap: 6px; }
-.database-note-text { flex: 1; min-width: 0; }
-.database-note-clear { flex: none; width: 22px; height: 22px; color: var(--danger); }
-.database-note-clear svg { width: 14px; height: 14px; }
 #database-work, .orca-database-tab { padding: 16px 24px; font-size: calc(13px * var(--fs)); }
 .database-work-title { margin: 0 0 12px; font-size: calc(15px * var(--fs)); overflow-wrap: anywhere; }
 #database-work .database-note, .orca-database-tab .database-note { padding: 0; }
@@ -2644,7 +2602,5 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 .database-edit-body input:focus { outline: 2px solid var(--accent); border-color: transparent; }
 .database-script-text { box-sizing: border-box; width: 100%; min-height: 200px; resize: vertical; padding: 8px 12px; border: 1px solid var(--chip-line); border-radius: 12px; background: var(--surface); color: inherit; font-family: var(--ff-mono, ) ui-monospace, Menlo, monospace; font-size: calc(13px * var(--fs)); line-height: 1.5; }
 .database-script-text:focus { outline: 2px solid var(--accent); border-color: transparent; }
-.database-edit-body .err { margin: 0; font-size: calc(12px * var(--fs)); }
 .database-edit-body .database-test { margin: 0; }
 .database-test.status { align-self: flex-start; }
-.database-test.err { font-size: calc(12px * var(--fs)); overflow-wrap: anywhere; }

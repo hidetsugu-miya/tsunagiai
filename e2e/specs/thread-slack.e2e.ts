@@ -1,6 +1,6 @@
 import type { Channel } from "../../ts/bindings/Channel";
 import type { SlackLoad } from "../../ts/bindings/SlackLoad";
-import { boot, callsOf, holds, inbox, mock, rejects, release, rowOf, textsOf, threadDetail, threadLoaded, waitForCalls, waitForCard, waitForCount, workspace, CARD } from "../support";
+import { boot, callsOf, count, holds, inbox, mock, rejects, release, rowOf, textsOf, threadDetail, threadLoaded, waitForCalls, waitForCard, waitForCount, workspace, CARD, CARDS } from "../support";
 
 // S-28 (#1224): the # of the row of operations of an open mail opens and closes a post pane on the right: the channel button in its header (a list of the channels of every workspace, grouped by workspace, with a search field),
 // and the text field and the send button in its foot. The send is `slack_channel_post` (S-21).
@@ -104,9 +104,11 @@ describe("mail: the Slack post pane on the right", () => {
     await openPane();
     await mock("slack_channels", rejects("missing_scope"));
     await channelButton().click();
-    // Both workspaces fail with the same answer: each says why under its name.
-    await browser.waitUntil(async () => (await textsOf(".mail-slack-pop .menu-group.fail")).length === 2, { timeoutMsg: "the errors of the workspaces never came" });
-    expect(await textsOf(".mail-slack-pop .menu-group")).toEqual(["Example Team", expect.stringContaining("missing_scope"), "Second Team", expect.stringContaining("missing_scope")]);
+    // Both workspaces fail with the same answer: each says why on a card with its name, and the list holds neither.
+    await waitForCount(CARDS, 2);
+    await waitForCard("Example Team: missing_scope");
+    await waitForCard("Second Team: missing_scope");
+    expect(await count(".mail-slack-pop .menu-group")).toBe(0);
     await browser.keys("Escape");
     await expect($(".mail-slack-pop")).not.toExist();
   });

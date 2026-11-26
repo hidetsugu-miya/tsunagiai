@@ -1,4 +1,4 @@
-import { callsOf, CARD, CARDS, count, holds, jiraBoard, jiraDetail, jiraIssue, jiraIssues, jiraIssueType, jiraProject, jiraSprint, logged, mock, onceId, rejects, release, textsOf, waitForCalls, waitForCard, waitForCount, waitForLog } from "../support";
+import { callsOf, CARD, CARDS, WARN_CARDS, count, holds, jiraBoard, jiraDetail, jiraIssue, jiraIssues, jiraIssueType, jiraProject, jiraSprint, logged, mock, onceId, rejects, release, textsOf, waitForCalls, waitForCard, waitForCount, waitForLog } from "../support";
 import { filesToggle, openOrca, orcaOverview, project, sample, selectedTab, tabOf, worktrees } from "../orca-support";
 
 // J-2: the Jira part of the file pane (#870). Rust reads the boards, the sprints and the tickets (unit tests); here the screen is checked: what it asks of Rust, and how it draws the answers.
@@ -783,20 +783,19 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await expect(tabOf("jira:1").$(".orca-tab-btn")).toHaveAttribute("aria-selected", "true");
   });
 
-  it("shows the reason in place of the ticket when it cannot be read, writes it to the log with no card, and reads again with the button (J-2)", async () => {
+  it("shows the reason on a card when the ticket cannot be read, writes it to the log, and reads again with the button (J-2)", async () => {
     await openJira(withTickets());
     await waitForCount("#orca-jira-list .orca-jira-issue", 3);
     await mock("jira_issue", rejects("Jira が 404 を返しました: no ticket"));
     await openTicket("EX-1");
-    await waitForCount(".orca-jira-tab .orca-file-note.fail", 1);
-    expect(await textsOf(".orca-jira-tab .orca-file-note.fail")).toEqual(["Jira が 404 を返しました: no ticket"]);
+    await waitForCard("Jira が 404 を返しました: no ticket");
+    expect(await textsOf(CARD)).toEqual(["Jira が 404 を返しました: no ticket"]);
     expect((await logged()).some((l) => l.level === "error" && l.source === "orca-jira")).toBe(true);
-    expect(await count("#error-cards .error-card")).toBe(0);
     expect(await count(".orca-jira-side")).toBe(0);
     await mock("jira_issue", detailOf["EX-1"]);
     await $('.orca-jira-tab-head .icon-btn[aria-label="読み直す"]').click();
     await expect($(".orca-jira-tab .orca-jira-title")).toHaveText("Write the page");
-    expect(await count(".orca-jira-tab .orca-file-note.fail")).toBe(0);
+    await waitForCount(CARDS, 0);
     // `mock` cleared the record: this is the read of the button.
     expect(await callsOf("jira_issue")).toEqual([{ ...here, key: "EX-1" }]);
   });
@@ -1345,7 +1344,7 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await expect(tabOf("jira:1").$(".orca-tab-title")).toHaveText("EX-9");
   });
 
-  it("shows Jira's refusal of the sprints under the select of the sprints, keeps the form, makes the ticket with no sprint, and draws the sprints again when they can be read (J-2, #874, #1395)", async () => {
+  it("shows Jira's refusal of the sprints on a warning card, keeps the form, makes the ticket with no sprint, and draws the sprints again when they can be read (J-2, #874, #1395)", async () => {
     await openJira(withNew());
     await waitForCount("#orca-jira-list .orca-jira-issue", 3);
     const refusal = "Jira が 400 を返しました: The board does not support sprints";
@@ -1353,22 +1352,23 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await plus().click();
     await expect($(".orca-jira-new")).toBeDisplayed();
     await waitForCalls("jira_issue_types");
-    expect(await textsOf(".orca-jira-new-sprint-note")).toEqual([refusal]);
+    await waitForCard(refusal);
+    expect(await count(WARN_CARDS)).toBe(1);
     expect(await newOptions("スプリント")).toEqual([["", "バックログ"]]);
     await expect(newField("スプリント")).toBeDisabled();
     expect(await newOptions("プロジェクト")).toEqual([["10000", "Example (EX)"], ["10001", "Alpha (AB)"]]);
     expect(await newOptions("種類")).toEqual([["10001", "Task"], ["10002", "Bug"]]);
-    expect(await count(CARDS)).toBe(0);
+    expect(await count(CARDS)).toBe(1);
     await newField("件名").setValue("Brand new");
     await expect(submitNew()).toBeEnabled();
     await submitNew().click();
     expect(await waitForCalls("jira_create_issue")).toEqual([{ ...here, projectId: "10000", issueTypeId: "10001", summary: "Brand new", markdown: expect.any(String), sprintId: null }]);
-    // A tab that is still a new one reads the sprints again with 「読み直す」, and the note goes.
+    // The card goes with the form of the tab that made the ticket. A tab that is still a new one reads the sprints again with 「読み直す」.
     await plus().click();
     await mock("jira_sprints", [sprint12, sprint13]);
     await $('.orca-jira-tab-head .icon-btn[aria-label="読み直す"]').click();
     await waitForCalls("jira_sprints");
-    await waitForCount(".orca-jira-new-sprint-note:not([hidden])", 0);
+    await waitForCount(WARN_CARDS, 0);
     expect(await newOptions("スプリント")).toEqual([["", "バックログ"], ["12", "Sprint 12"], ["13", "Sprint 13"]]);
     await expect(newField("スプリント")).toBeEnabled();
   });
@@ -1411,20 +1411,20 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     expect(await count(".orca-jira-new")).toBe(0);
   });
 
-  it("shows the reason in place of the form when the options cannot be read, with no card, and reads them again with the button (J-2, #874)", async () => {
+  it("shows the reason on a card when the options cannot be read, and reads them again with the button (J-2, #874)", async () => {
     await openJira(withNew());
     await waitForCount("#orca-jira-list .orca-jira-issue", 3);
     await mock("jira_projects", rejects("Jira が 403 を返しました: no scope"));
     await plus().click();
-    await waitForCount(".orca-jira-tab-body .orca-file-note.fail", 1);
-    expect(await textsOf(".orca-jira-tab-body .orca-file-note.fail")).toEqual(["Jira が 403 を返しました: no scope"]);
-    expect(await count(CARDS)).toBe(0);
+    await waitForCard("Jira が 403 を返しました: no scope");
+    expect(await textsOf(CARD)).toEqual(["Jira が 403 を返しました: no scope"]);
     expect((await logged()).some((l) => l.level === "error" && l.source === "orca-jira")).toBe(true);
     expect(await count(".orca-jira-new")).toBe(0);
     await mock("jira_projects", projectsOf);
     await $('.orca-jira-tab-head .icon-btn[aria-label="読み直す"]').click();
     await expect($(".orca-jira-new")).toBeDisplayed();
     expect(await newOptions("プロジェクト")).toEqual([["10000", "Example (EX)"], ["10001", "Alpha (AB)"]]);
+    await waitForCount(CARDS, 0);
   });
 
   it("says so when there is no project to create a ticket in, and when the types cannot be read (J-2, #874)", async () => {
@@ -1437,8 +1437,7 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await mock("jira_projects", projectsOf);
     await mock("jira_issue_types", rejects("Jira が 404 を返しました: no project"));
     await $('.orca-jira-tab-head .icon-btn[aria-label="読み直す"]').click();
-    await waitForCount(".orca-jira-tab-body .orca-file-note.fail", 1);
-    expect(await textsOf(".orca-jira-tab-body .orca-file-note.fail")).toEqual(["Jira が 404 を返しました: no project"]);
-    expect(await count(CARDS)).toBe(0);
+    await waitForCard("Jira が 404 を返しました: no project");
+    expect(await textsOf(CARD)).toEqual(["Jira が 404 を返しました: no project"]);
   });
 });

@@ -1640,16 +1640,18 @@ describe("orca: files and editor (A-18)", () => {
     expect(await waitForCalls("orca_files_changes")).toEqual([{ path: "/work/example-app", paths: ["src", "target", "a.rs", "b.log"], environment: "Studio" }]);
   });
 
-  it("shows the message of a root that cannot be read, and of a folder that cannot", async () => {
+  it("shows the message of a root that cannot be read, and of a folder that cannot, on a card", async () => {
     await openFiles({ orca_files_list: rejects("Orca に接続できません") });
-    await expect($("#orca-files-tree .orca-file-note.fail")).toHaveText("Orca に接続できません");
+    await waitForCard("Orca に接続できません");
+    expect(await count("#orca-files-tree .orca-file-note")).toBe(0);
     await mock("orca_files_list", root());
     // The next return of the focus reads the root that failed again.
     await focusBack();
     await waitForCount("#orca-files-tree .orca-file", 4);
     await mock("orca_files_list", rejects("ファイルが見つかりません"));
     await row("src").click();
-    await expect($("#orca-files-tree .orca-file-note.fail")).toHaveText("ファイルが見つかりません");
+    await waitForCard("ファイルが見つかりません");
+    expect(await count("#orca-files-tree .orca-file-note")).toBe(0);
     expect(await names()).toEqual(["src", "target", "a.rs", "b.log"]);
   });
 
@@ -3606,24 +3608,23 @@ describe("orca: files and editor (A-18)", () => {
     await expect(diffButton("次の変更")).toBeDisabled();
   });
 
-  it("shows the reason Rust gives in place of the diff (A-24)", async () => {
+  it("shows the reason Rust gives on a card in place of the diff (A-24)", async () => {
     await openFiles();
     await waitForCount("#orca-files-tree .orca-file", 4);
     const diff = await mock("orca_file_diff", rejects("バイナリのファイルの差分は表示できません"));
     expect(await rightClickRow("a.rs")).toBe(true);
     await pickItem("差分を表示");
     await waitForCalls(diff);
-    await expect($(".orca-diff .feed-empty")).toHaveText("バイナリのファイルの差分は表示できません");
+    await waitForCard("バイナリのファイルの差分は表示できません");
     await expect($(".orca-diff-rows")).not.toBeDisplayed();
     await expect($(".orca-diff-count")).toHaveText("");
     await expect(diffButton("1 列で表示")).toBeDisabled();
     await expect(diffButton("次の変更")).toBeDisabled();
-    await expect($(CARDS)).not.toExist();
-    // The reload button reads again, and draws the diff when it can.
+    // The reload button reads again, and draws the diff when it can: the card goes with the failure.
     await mock("orca_file_diff", diffOfA());
     await diffButton("読み直す").click();
     await waitForCount(".orca-diff-rows .odf-row", 7);
-    await expect($(".orca-diff .feed-empty")).not.toBeDisplayed();
+    await waitForCount(CARDS, 0);
   });
 
   it("reads the diff again with the reload button, and selects the tab instead of opening a second one for the same file (A-24)", async () => {
@@ -4002,11 +4003,11 @@ describe("orca: files and editor (A-18)", () => {
     expect(await waitForCalls("orca_git_worktrees", 2)).toHaveLength(2);
   });
 
-  it("says why in the worktree section when the read failed, and keeps the branches (A-25)", async () => {
+  it("says why on a card when the worktree read failed, and keeps the branches (A-25)", async () => {
     await openBranches({ orca_git_worktrees: rejects("worktree の一覧を読めません") });
     await waitForCount(".orca-dest-pop .orca-branch-row", 5);
     expect(await textsOf(".orca-dest-pop .orca-dest-name")).toEqual(["worktree", "ローカル", "リモート"]);
-    expect(await textsOf(".orca-dest-pop .empty.fail")).toEqual(["worktree の一覧を読めません"]);
+    await waitForCard("worktree の一覧を読めません");
   });
 
   it("shows the worktree picked in the file pane: its files are read with its path, and the heading is its own (A-25)", async () => {
@@ -4140,9 +4141,9 @@ describe("orca: files and editor (A-18)", () => {
     await expect($("#orca-files-title")).toHaveText("example-app ・ feat/a");
   });
 
-  it("shows the message of the branches that cannot be read in their section, and the other section stays (A-25)", async () => {
+  it("shows the message of the branches that cannot be read on a card, and the other section stays (A-25)", async () => {
     await openBranches({ orca_local_branches: rejects("worktree が見つかりません") });
-    await expect($(".orca-dest-pop .empty.fail")).toHaveText("worktree が見つかりません");
+    await waitForCard("worktree が見つかりません");
     await waitForCount(".orca-dest-pop .orca-branch-row", 2);
     expect(await branchRows()).toEqual(["origin/feat/a", "origin/feat/d"]);
   });
@@ -4275,27 +4276,24 @@ describe("orca: files and editor (A-18)", () => {
     expect(await callsOf("database_tables")).toHaveLength(1);
   });
 
-  it("shows the error of a connection that cannot be opened and opens it again at the next press (A-43)", async () => {
+  it("shows the error of a connection that cannot be opened on a card and opens it again at the next press (A-43)", async () => {
     await openDatabasePart({ database_connect: { __e2e_reject__: "接続できません" } });
     await dbRow("p1").click();
-    await waitForCount("#orca-database .database-note.danger", 1);
-    expect(await textsOf("#orca-database .database-note.danger")).toEqual(["接続できません"]);
+    await waitForCard("接続できません");
+    expect(await count("#orca-database .database-note")).toBe(0);
     await expect(dbDot("p1")).toHaveAttribute("data-state", "closed");
     await mock("database_connect", ["shop"]);
     await dbRow("p1").click();
     await waitForCount("#orca-database .database-children .database-btn", 1);
-    expect(await count("#orca-database .database-note.danger")).toBe(0);
+    await waitForCount(CARDS, 0);
   });
 
-  it("clears the error of a connection and of a read of tables with the × at its right end, calls nothing, and reads again at the next press (A-43)", async () => {
+  it("closes the card of the error of a connection and of a read of tables with its ×, calls nothing, and reads again at the next press (A-43)", async () => {
     await openDatabasePart({ database_connect: { __e2e_reject__: "接続できません" }, database_disconnect: null });
     await dbRow("p1").click();
-    await waitForCount("#orca-database .database-note.danger", 1);
-    const clear = $("#orca-database .database-note.danger button.icon-btn");
-    await expect(clear).toHaveAttribute("aria-label", "エラーを消す");
-    expect(await clear.getText()).toBe("");
-    await clear.click();
-    await waitForCount("#orca-database .database-note.danger", 0);
+    await waitForCard("接続できません");
+    await $(`${CARDS} .error-card-close`).click();
+    await waitForCount(CARDS, 0);
     await expect(dbDot("p1")).toHaveAttribute("data-state", "closed");
     expect(await callsOf("database_connect")).toHaveLength(1);
     await mock("database_connect", ["shop"]);
@@ -4305,9 +4303,9 @@ describe("orca: files and editor (A-18)", () => {
     await dbRow("p1").click();
     await waitForCount("#orca-database .database-children .database-btn", 1);
     await dbRow("p1/d/shop").click();
-    await waitForCount("#orca-database .database-note.danger", 1);
-    await $("#orca-database .database-note.danger button.icon-btn").click();
-    await waitForCount("#orca-database .database-note.danger", 0);
+    await waitForCard("SELECT command denied");
+    await $(`${CARDS} .error-card-close`).click();
+    await waitForCount(CARDS, 0);
     await expect(dbDot("p1")).toHaveAttribute("data-state", "connected");
     expect(await callsOf("database_tables")).toHaveLength(1);
     expect(await callsOf("database_disconnect")).toHaveLength(0);
@@ -4881,20 +4879,20 @@ describe("orca: files and editor (A-18)", () => {
     expect(await callsOf("orca_file_diff")).toEqual([]);
   });
 
-  it("shows the reason in place of the rows when the diff of the commit cannot be read (A-27)", async () => {
+  it("shows the reason on a card when the diff of the commit cannot be read (A-27)", async () => {
     await openHistory({ orca_commit_file_diff: rejects("バイナリのファイルの差分は表示できません") });
     await waitForCount("#orca-history-list .orca-commit", 3);
     await commitRow(3).click();
     await waitForCount("#orca-history-files .orca-hfile", 2);
     await pressTwice('#orca-history-files .orca-hfile[data-path="b.md"]');
-    await expect($(".orca-diff .orca-empty")).toHaveText("バイナリのファイルの差分は表示できません");
-    await expect($(CARDS)).not.toExist();
+    await waitForCard("バイナリのファイルの差分は表示できません");
+    expect(await count(".orca-diff .orca-diff-rows > *")).toBe(0);
   });
 
-  it("shows the reason of a list that cannot be read, and the next return of the focus reads it again from the start (A-27)", async () => {
+  it("shows the reason of a list that cannot be read on a card, and the next return of the focus reads it again from the start (A-27)", async () => {
     await openHistory({ orca_git_history: rejects("Git の履歴を読めません") });
-    await expect($("#orca-history-list .orca-file-note.fail")).toHaveText("Git の履歴を読めません");
-    await expect($(CARDS)).not.toExist();
+    await waitForCard("Git の履歴を読めません");
+    expect(await count("#orca-history-list .orca-file-note")).toBe(0);
     await browser.pause(300);
     expect(await callsOf("orca_git_history")).toHaveLength(1);
     await mock("orca_git_history", page(3, 1, false));
@@ -4904,11 +4902,12 @@ describe("orca: files and editor (A-18)", () => {
     expect(await callsOf("orca_git_history")).toEqual([{ path: "/work/example-app", limit: 50, skip: 0, historyToken: null, environment: null }]);
   });
 
-  it("shows the reason of the files of a commit that cannot be read, and says so for a commit with no file (A-27)", async () => {
+  it("shows the reason of the files of a commit that cannot be read on a card, and says so for a commit with no file (A-27)", async () => {
     await openHistory({ orca_commit_files: rejects("コミットのファイルを読めません") });
     await waitForCount("#orca-history-list .orca-commit", 3);
     await commitRow(3).click();
-    await expect($("#orca-history-files .orca-file-note.fail")).toHaveText("コミットのファイルを読めません");
+    await waitForCard("コミットのファイルを読めません");
+    expect(await count("#orca-history-files .orca-file-note")).toBe(0);
     await mock("orca_commit_files", changedFiles([]));
     await commitRow(2).click();
     await expect($("#orca-history-files .orca-file-note")).toHaveText("変更されたファイルはありません");

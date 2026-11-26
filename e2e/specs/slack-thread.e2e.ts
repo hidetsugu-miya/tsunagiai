@@ -194,7 +194,6 @@ describe("slack thread", () => {
     await $("#slack-feed .feed-open").click();
     await waitForCard("読み込めませんでした: 読めません");
     expect(await count(CARDS)).toBe(1);
-    expect(await count("#st-msgs .pending.fail")).toBe(0);
     await mock("slack_thread", base());
     await $("#error-cards").$("button=再読み込み").click();
     await waitForCount("#st-msgs .st-msg", 2);
@@ -1485,7 +1484,6 @@ describe("slack thread: reply", () => {
     await write("Keep me");
     await send().click();
     await waitForCard("返信できませんでした: 投稿できません");
-    expect(await count("#st-error")).toBe(0);
     expect(await fieldText()).toBe("Keep me");
     await expect(send()).toBeEnabled();
     expect(await editable()).toBe("true");

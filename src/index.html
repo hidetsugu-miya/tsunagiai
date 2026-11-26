@@ -70,7 +70,6 @@
       <section id="login" hidden>
         <button id="login-button">Google でログイン</button>
       </section>
-      <div id="relogin" hidden></div>
       <div id="inbox-state" hidden></div>
       <div id="threads" hidden>
         <h2 id="unread-heading" hidden><svg data-svg="dot"></svg><span>未読</span><span id="unread-count"></span><button id="mail-mark-all" class="text-btn">すべて既読にする</button></h2>
@@ -184,7 +183,6 @@
           </button>
         </div>
         <div id="mail-slack-body"></div>
-        <p id="mail-slack-error" class="err" role="alert" hidden></p>
         <div id="mail-slack-foot">
           <textarea id="mail-slack-text" aria-label="投稿する文" rows="3" spellcheck="false"></textarea>
           <button id="mail-slack-send" class="text-btn primary" type="button" disabled>送信</button>
@@ -214,7 +212,6 @@
           <div id="cal-side-feed"></div>
         </aside>
         <div id="cal-main">
-          <div id="cal-notice"></div>
           <div id="cal-scroll">
             <div id="cal-top">
               <div id="cal-head" class="cal-row"></div>
@@ -257,11 +254,9 @@
               <span>編集</span>
             </button>
           </header>
-          <div id="todo-notice"></div>
           <div id="todo-main">
             <form id="todo-token" hidden>
               <p>Todoist の設定の「連携」にある個人 API トークンを入力してください。トークンは OS の資格情報の保管場所（macOS はキーチェーン、Windows は資格情報マネージャー）に保存し、画面には表示しません。</p>
-              <p id="todo-token-note"></p>
               <div class="row">
                 <input id="todo-token-input" type="password" autocomplete="off" aria-label="Todoist の API トークン" placeholder="API トークン">
                 <button class="text-btn">保存</button>
@@ -595,7 +590,6 @@
         <button id="prompt-reset" class="text-btn">デフォルトに戻す</button>
         <button id="prompt-save" class="text-btn primary">保存</button>
       </header>
-      <p id="prompt-error" class="pending fail" hidden></p>
       <div id="prompt-main">
         <div id="prompt-edit">
           <div>
@@ -633,7 +627,6 @@
             <button id="slack-hidden-open" class="icon-btn" aria-label="一覧に出さないチャンネル"></button>
           </header>
           <span id="slack-pending" class="header-sub" hidden></span>
-          <div id="slack-notice"></div>
           <div id="slack-feed"></div>
         </section>
         <section id="slack-channel" hidden>
@@ -642,7 +635,6 @@
           </header>
           <div id="sc-feed"></div>
           <div id="sc-reply">
-            <p id="sc-error" class="pending fail" role="alert" hidden></p>
           </div>
         </section>
         <section id="slack-thread" class="split-main" hidden>
@@ -668,7 +660,6 @@
               <div id="st-undo-bar" hidden>
                 <button id="st-undo" class="text-btn" type="button">元に戻す</button>
               </div>
-              <p id="st-error" class="pending fail" role="alert" hidden></p>
             </div>
           </div>
           <div id="reply-split" class="split-bar" role="separator" aria-orientation="vertical" aria-label="Claude の幅" aria-valuemin="33" aria-valuemax="50" aria-valuenow="33" tabindex="0"><span></span></div>
@@ -731,7 +722,6 @@
         </header>
         <div id="orca-formations">
           <h2 class="orca-list-head"><svg data-svg="formation"></svg>フォーメーション</h2>
-          <p id="formation-list-error" class="pending fail" role="alert" hidden></p>
           <div id="formation-list-feed"></div>
         </div>
         <div id="orca-projects">
@@ -819,7 +809,6 @@
               <button id="orca-lsp-ask" class="icon-btn" type="button" aria-label="Claude に設定を頼む"></button>
               <button id="orca-lsp-reload" class="icon-btn" type="button" aria-label="再読み込み"></button>
             </div>
-            <p id="orca-lsp-error" class="orca-file-note fail" role="alert" hidden></p>
             <div id="orca-lsp-ssh-row" class="orca-lsp-row" hidden>
               <label for="orca-lsp-ssh">ssh の接続先</label>
               <select id="orca-lsp-ssh"></select>
@@ -839,7 +828,6 @@
             <span id="formation-tabs-mates"></span>
           </div>
         </header>
-        <p id="formation-term-error" class="pending fail" role="alert" hidden></p>
         <div id="formation-term"></div>
         <div id="formation-teammate-term" hidden></div>
         <div id="formation-page" hidden></div>
@@ -851,7 +839,6 @@
           <button id="formation-flow-size" class="icon-btn" type="button" aria-label="コンパクト表示" aria-pressed="false"><svg data-svg="sidebar-right"></svg></button>
         </header>
         <div id="formation-flow-body">
-          <p id="formation-flow-error" class="pending fail" role="alert" hidden></p>
           <div id="formation-flow-pages" hidden>
             <p id="formation-flow-pages-title"></p>
             <ul id="formation-flow-page-list"></ul>

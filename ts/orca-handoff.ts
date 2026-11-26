@@ -18,7 +18,7 @@ import { openMenu } from "./menu.js";
 import { childrenFresh, isChildWorktree, readForChoice, readList } from "./formation-list.js";
 import { elapsed, heldOrca, noticeOf, openInOrca, readDestination, refreshOrca, THIS_MACHINE, worktreeLabel } from "./orca.js";
 import { STATUS_LABELS } from "./orca-status.js";
-import { setNotice } from "./error-card.js";
+import { setNotice, showFailure } from "./error-card.js";
 
 // The item a pane is for: a key that is the same while the same thread or task is shown, and the content to hand over, built when the pane is opened.
 export interface HandoffItem {
@@ -128,9 +128,8 @@ export class HandoffPane {
   private keys: Record<string, string> = {};
   private card: HandoffCard | null = null;
   private removed = false;
-  // The keys of the items whose hand-over (or follow-up) is on its way, and the message of the last failed hand-over or post of each item. They belong to the item, so a switch of the item loses none.
+  // The keys of the items whose hand-over (or follow-up) is on its way. They belong to the item, so a switch of the item loses none.
   private sending = new Set<string>();
-  private errors = new Map<string, string>();
   // What the host was last told, and the minute the pane last drew.
   private lastOpen: boolean | null = null;
   private lastMinute = 0;
@@ -163,7 +162,6 @@ export class HandoffPane {
     modeExisting?: HTMLButtonElement;
     branchName?: HTMLInputElement;
     existingChip?: HTMLButtonElement;
-    error: HTMLElement;
     input: HTMLTextAreaElement;
     send: HTMLButtonElement;
   } | null = null;
@@ -357,9 +355,6 @@ export class HandoffPane {
   // The parts of the form: the form with its message, the files attached, the field of the instruction and the arrow button that sends it.
   private parts() {
     const form = tag("form", "ho-form");
-    const error = tag("p", "pending fail");
-    error.setAttribute("role", "alert");
-    error.hidden = true;
     const cardBox = tag("div", "ho-card-box");
     const strip = tag("div", "attachments");
     strip.hidden = true;
@@ -379,7 +374,7 @@ export class HandoffPane {
       e.preventDefault();
       this.handOver();
     };
-    return { form, error, cardBox, strip, frame, input, send };
+    return { form, cardBox, strip, frame, input, send };
   }
 
   private buildForm() {
@@ -557,10 +552,10 @@ export class HandoffPane {
       this.handOver();
     };
     parts.form.classList.add("ho-fill");
-    parts.form.append(fresh, freshBox, claudeNote, parts.error, parts.cardBox, parts.strip, parts.frame);
+    parts.form.append(fresh, freshBox, claudeNote, parts.cardBox, parts.strip, parts.frame);
     this.formMain.replaceChildren(head, parts.form);
     this.sess = null;
-    this.el = { chip, claudeNote, destChip, projectChip, name, freshBox, base, modeNew, modeExisting, branchName, existingChip, cardBox: parts.cardBox, strip: parts.strip, error: parts.error, input: parts.input, send: parts.send };
+    this.el = { chip, claudeNote, destChip, projectChip, name, freshBox, base, modeNew, modeExisting, branchName, existingChip, cardBox: parts.cardBox, strip: parts.strip, input: parts.input, send: parts.send };
     // The content is taken when the form is drawn, that is when the pane opens.
     this.card = this.item?.card() ?? null;
     this.host.root.replaceChildren(this.formMain);
@@ -638,13 +633,12 @@ export class HandoffPane {
     this.updateSend();
   }
 
-  // Takes the files pasted or dropped on the pane for the item in view (A-10); a file that cannot be read is refused with the message of a failed send.
+  // Takes the files pasted or dropped on the pane for the item in view (A-10); a file that cannot be read is refused with a failure card (A-28).
   private async addFiles(files: File[]) {
     const key = this.itemKey;
     if (!this.el || key === null || this.busy) return;
     const read = await readFiles(files);
-    if (read.message === null) this.errors.delete(key);
-    else this.errors.set(key, read.message);
+    if (read.message !== null) showFailure("orca-handoff", read.message);
     attached.set(key, [...(attached.get(key) ?? []), ...read.files]);
     this.update();
   }
@@ -794,9 +788,6 @@ export class HandoffPane {
     el.input.disabled = this.busy;
     el.send.disabled = this.busy || !ready || this.overview?.state === "missing" || !el.input.value.trim() || !this.target(form);
     el.claudeNote!.hidden = ready;
-    const error = this.itemKey === null ? "" : (this.errors.get(this.itemKey) ?? "");
-    el.error.hidden = !error;
-    el.error.textContent = error;
   }
 
   // ---- acting ----
@@ -805,7 +796,6 @@ export class HandoffPane {
   private forget() {
     if (this.itemKey === null) return;
     sessions.delete(this.itemKey);
-    this.errors.delete(this.itemKey);
     this.removed = false;
     // The form is drawn again, and takes the content then.
     this.card = null;
@@ -854,7 +844,6 @@ export class HandoffPane {
     const card = this.removed ? null : this.card;
     if (card && !this.claudeReady()) return;
     this.sending.add(key);
-    this.errors.delete(key);
     this.update();
     // The session that was started, which the Orca screen is to show (below).
     let follow: { paneKey: string | null; handle: string | null } | null = null;
@@ -876,7 +865,7 @@ export class HandoffPane {
       else attached.delete(key);
       this.lastRead = 0;
     } catch (e) {
-      this.errors.set(key, String(e));
+      showFailure("orca-handoff", e);
       this.keepText(key, instruction);
     } finally {
       this.sending.delete(key);
