@@ -47,13 +47,7 @@ When it is 0, make one line of each output the line `CI:` and the line `E2E:` of
    - `issue`: it disagrees with a requirement or with the owner's instruction, or it can become a bug
    - `drop`: otherwise, such as taste, an optimization with no effect, or the form of a generated file
    - `local`: every finding of security-reviewer, whatever it says. It is never sorted `issue`, because the repository is public: it stays in the caller's completion report only (decided by the agent, 2026-11-21, at the owner's leave; #1211)
-8. On a pass, write the record by giving the whole verdict on stdin.
-
-```sh
-"$(git rev-parse --path-format=absolute --git-common-dir)/../.claude/hooks/record-review.sh" <<'EOF'
-{判定の全文}
-EOF
-```
+8. On a pass, write the whole verdict (the output format below) to a file outside the tracked tree (`tmp/` of the worktree or the session scratchpad) with one Bash command of its own, then give it on stdin in one call, with no heredoc: `"$(git rev-parse --path-format=absolute --git-common-dir)/../.claude/hooks/record-review.sh" < {the file}`. Never call the script with no stdin: it waits for input.
 
 ## Output format
 
