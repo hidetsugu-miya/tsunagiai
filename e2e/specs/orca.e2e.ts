@@ -101,6 +101,10 @@ type Row = ReturnType<typeof orcaRow>;
 // The count of the sidebar button: 0 is no number at all.
 const expectCount = (n: number) => (n === 0 ? expect($("#nav-orca .nav-count")).not.toBeDisplayed() : expect($("#nav-orca .nav-count")).toHaveText(String(n)));
 
+// Waits until the mirror read the terminal of `handle`. A read of the terminal of a tab that was already there (the selected project's) may come first, so the first call is not the one of the session that was started.
+const waitForReadOf = (read: string, handle: string) =>
+  browser.waitUntil(async () => (await callsOf(read)).some((c) => (c as { handle: string }).handle === handle), { timeoutMsg: `${read} never read ${handle}` });
+
 // Answers the next read with `rows`, shows the screen again, and waits until the list of projects shows the status of each, so a count checked after it is the one of that read.
 async function reread(rows: Row[], extra: Partial<Parameters<typeof orcaOverview>[2]> = {}) {
   const read = orcaOverview(rows, worktrees(), extra);
@@ -633,7 +637,7 @@ describe("orca", () => {
     const read = await mock("orca_terminal_read", ["$ antigravity"]);
     await mock("orca_overview", orcaOverview(sample(), worktrees(), { terminals: [createdTerminal()] }));
     await showAgain();
-    expect((await waitForCalls(read))[0]).toEqual({ handle: "term_new_sh" });
+    await waitForReadOf(read, "term_new_sh");
     await expect($('.orca-tabs [data-tab="orca:term_new_sh"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
     await expect($(".toast")).not.toBeDisplayed();
     await expect($(".orca-plus")).toBeEnabled();
@@ -929,7 +933,7 @@ describe("orca", () => {
     const read = await mock("orca_terminal_read", ["$"]);
     await mock("orca_overview", orcaOverview([...sample(), startedRow()], worktrees()));
     await showAgain();
-    expect((await waitForCalls(read))[0]).toEqual({ handle: "term_new" });
+    await waitForReadOf(read, "term_new");
     await expect($(".toast")).not.toBeDisplayed();
     await expect($('#orca-feed .orca-project[data-key="proj_example-api"]')).toHaveAttribute("aria-pressed", "true");
     await expect($('.orca-tabs [data-tab="claude:tab_new:leaf_1"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
@@ -962,7 +966,7 @@ describe("orca", () => {
     const read = await mock("orca_terminal_read", ["$ pwd"]);
     await mock("orca_overview", orcaOverview(sample(), worktrees(), { terminals: [createdTerminal()] }));
     await showAgain();
-    expect((await waitForCalls(read))[0]).toEqual({ handle: "term_new_sh" });
+    await waitForReadOf(read, "term_new_sh");
     await expect($(".toast")).not.toBeDisplayed();
     await expect($('#orca-feed .orca-project[data-key="proj_example-api"]')).toHaveAttribute("aria-pressed", "true");
     await expect($('.orca-tabs [data-tab="orca:term_new_sh"] [role="tab"]')).toHaveAttribute("aria-selected", "true");
