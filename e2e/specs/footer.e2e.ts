@@ -472,6 +472,9 @@ describe("footer: the resources (A-48)", () => {
   const quiet = timers({ machineResources: 600_000, machineUsage: 600_000 });
   const stats = () => textsOf("#footer-stats .stat");
   const names = () => textsOf("#footer-stats .stat-name");
+  // The weekly of each AI in the footer, machine by machine (Claude then Antigravity), and the wait for them to be drawn.
+  const ais = () => textsOf("#footer-stats .stat-ai");
+  const waitForAis = (count: number) => browser.waitUntil(async () => (await ais()).length === count, { timeoutMsg: `the footer never drew ${count} AI numbers` });
   // The pane as it is drawn: a line for each machine's heading, group heading and row (the texts of its parts).
   const pane = () =>
     browser.execute(() =>
@@ -484,11 +487,13 @@ describe("footer: the resources (A-48)", () => {
     await expect($("#resource-pane")).toBeDisplayed();
   };
 
-  it("shows the CPU and the memory of each machine and the weekly of this Mac's Claude and Antigravity as numbers at the left of the footer, before the bell, with a dash where there is none", async () => {
+  it("shows the CPU, the memory and the weekly of Claude and Antigravity of each machine, this Mac and a saved environment, as numbers at the left of the footer, before the bell, with a dash where there is none", async () => {
     await start({ machine_resources: [machine("この Mac"), saved("PC 1")], machine_usage: [usageOf(null, ai("ok", 30, 74), idle), usageOf("PC 1", ai("ok", null, 12), ai("ok", 46, 93))], ...quiet });
-    await waitForText("#footer-stats", "AG");
+    await waitForAis(4);
     expect(await names()).toEqual(["この Mac", "PC 1"]);
-    expect(await stats()).toEqual(["CPU 38%", "メモリ 10%", "CPU 9%", "メモリ 11%", "Claude 74%", "AG —"]);
+    expect(await stats()).toEqual(["CPU 38%", "メモリ 10%", "CPU 9%", "メモリ 11%"]);
+    // The AI of the machine of its own row: this Mac's Claude 74% and Antigravity idle (a dash), then PC 1's Claude 12% and Antigravity 93%.
+    expect(await ais()).toEqual(["74%", "—", "12%", "93%"]);
     const place = await browser.execute(() => {
       const s = document.getElementById("footer-stats")!.getBoundingClientRect();
       const b = document.getElementById("footer-bell")!.getBoundingClientRect();
@@ -499,25 +504,53 @@ describe("footer: the resources (A-48)", () => {
     expect(place.beforeBell).toBe(true);
   });
 
+  it("puts the AI of a machine inside its group, names it by aria-label with no text of its name, and stands one separator between two machines", async () => {
+    await start({ machine_resources: [machine("この Mac"), saved("PC 1")], machine_usage: [usageOf(null, ai("ok", 30, 74), idle), usageOf("PC 1", ai("ok", null, 12), ai("ok", 46, 93))], ...quiet });
+    await waitForAis(4);
+    const shape = await browser.execute(() => {
+      const kids = [...document.getElementById("footer-stats")!.children];
+      return {
+        order: kids.map((k) => (k.classList.contains("stat-sep") ? "sep" : k.classList.contains("stat-machine") ? "machine" : "other")),
+        groups: kids.filter((k) => k.classList.contains("stat-machine")).map((k) => [...k.querySelectorAll(".stat-ai")].map((a) => ({ label: a.getAttribute("aria-label"), ai: a.querySelector(".stat-dot")?.getAttribute("data-ai"), text: a.textContent }))),
+        outside: document.querySelectorAll("#footer-stats > .stat-ai").length,
+      };
+    });
+    expect(shape.order).toEqual(["machine", "sep", "machine"]);
+    expect(shape.outside).toBe(0);
+    expect(shape.groups).toEqual([
+      [
+        { label: "Claude", ai: "claude", text: "74%" },
+        { label: "Antigravity", ai: "antigravity", text: "—" },
+      ],
+      [
+        { label: "Claude", ai: "claude", text: "12%" },
+        { label: "Antigravity", ai: "antigravity", text: "93%" },
+      ],
+    ]);
+    expect((await textsOf("#footer-stats"))[0]).not.toMatch(/Claude|AG/);
+  });
+
   it("draws a dash for a machine that gave nothing and for an AI whose status is not ok, and draws 80% and over in orange", async () => {
     await start({
       machine_resources: [machine("この Mac", { cpuPercent: 80, memoryPercent: 79 }), saved("PC 1", { cpuPercent: null, loadAverage: null, cores: null, memoryPercent: null, usedBytes: null, totalBytes: null, error: "unavailable" })],
-      machine_usage: [usageOf(null, ai("error", null, 90), ai("ok", null, 100))],
+      machine_usage: [usageOf(null, ai("error", null, 90), ai("ok", null, 100)), usageOf("PC 1", ai("unavailable", null, null), ai("unavailable", null, null))],
       ...quiet,
     });
-    await waitForText("#footer-stats", "AG");
-    expect(await stats()).toEqual(["CPU 80%", "メモリ 79%", "CPU —", "メモリ —", "Claude —", "AG 100%"]);
+    await waitForAis(4);
+    expect(await stats()).toEqual(["CPU 80%", "メモリ 79%", "CPU —", "メモリ —"]);
+    expect(await ais()).toEqual(["—", "100%", "—", "—"]);
     const colors = await browser.execute(() => [...document.querySelectorAll("#footer-stats .stat-num")].map((n) => getComputedStyle(n).color));
     const [hot, plain] = [colors[0], colors[1]];
     expect(hot).toBe("rgb(154, 91, 0)");
     expect(plain).not.toBe(hot);
-    expect(colors.map((c) => c === hot)).toEqual([true, false, false, false, false, true]);
+    expect(colors.map((c) => c === hot)).toEqual([true, false, false, true, false, false, false, false]);
   });
 
   it("draws no AI before the first reading of the usage is back, and nothing when there is no machine", async () => {
     await start({ machine_usage: holds, ...quiet });
     await waitForText("#footer-stats", "CPU 38%");
     expect(await stats()).toEqual(["CPU 38%", "メモリ 10%"]);
+    expect(await ais()).toEqual([]);
     await boot({ machine_resources: [], ...quiet });
     await waitForCalls("machine_resources");
     await expect($("#footer-stats")).not.toBeDisplayed();
@@ -532,7 +565,7 @@ describe("footer: the resources (A-48)", () => {
 
   it("opens the pane from the right, with the heading リソース, the same place and width as the pane of the unread, and the numbers of each machine under it", async () => {
     await start({ machine_resources: [machine("この Mac"), saved("PC 1", { cpuPercent: 85 })], machine_usage: [usageOf(null, ai("ok", null, 74), idle), usageOf("PC 1", ai("error", null, null), ai("ok", 46, 93))], ...quiet });
-    await waitForText("#footer-stats", "AG");
+    await waitForAis(4);
     await expect($("#resource-pane")).not.toBeDisplayed();
     await open();
     await expect($("#resource-pane h2")).toHaveText("リソース");
@@ -553,7 +586,7 @@ describe("footer: the resources (A-48)", () => {
 
   it("draws a machine that gave nothing in the pane as dashes with no small text", async () => {
     await start({ machine_resources: [machine("この Mac", { cpuPercent: null, loadAverage: null, cores: null, memoryPercent: null, usedBytes: null, totalBytes: null, error: "unavailable" })], machine_usage: [usageOf(null, ai("unavailable", null, null), ai("unavailable", null, null))], ...quiet });
-    await waitForText("#footer-stats", "AG");
+    await waitForAis(2);
     await open();
     expect(await pane()).toEqual([["この Mac", "CPU —", "メモリ —", "Claude", "weekly —", "Antigravity", "weekly —"]]);
   });
@@ -602,12 +635,12 @@ describe("footer: the resources (A-48)", () => {
     expect(await callsOf(resources)).toHaveLength(1);
     expect(await callsOf(usage)).toHaveLength(1);
     await waitForText("#resource-pane-list", "51%");
-    await waitForText("#footer-stats", "Claude 20%");
+    await waitForText("#footer-stats", "20%");
   });
 
   it("reads the load every period and the usage by its own, one reading at a time", async () => {
     await start(timers({ machineResources: 300, machineUsage: 700 }));
-    await waitForText("#footer-stats", "Claude 74%");
+    await waitForText("#footer-stats", "74%");
     const resources = await mock("machine_resources", holds);
     const usage = await mock("machine_usage", [usageOf(null, ai("ok", null, 74), idle)]);
     await waitForCalls(resources);
@@ -622,7 +655,7 @@ describe("footer: the resources (A-48)", () => {
 
   it("reads nothing while the window is hidden, and reads again when it is shown", async () => {
     await start(timers({ machineResources: 300, machineUsage: 300 }));
-    await waitForText("#footer-stats", "Claude 74%");
+    await waitForText("#footer-stats", "74%");
     await browser.execute(() => Object.defineProperty(document, "hidden", { get: () => true, configurable: true }));
     const resources = await mock("machine_resources", [machine("この Mac")]);
     const usage = await mock("machine_usage", [usageOf(null, idle, idle)]);

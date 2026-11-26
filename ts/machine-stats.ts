@@ -1,4 +1,4 @@
-// The load of the machines and the use of the AI in the footer (A-48): the numbers of this Mac and of each saved environment (CPU and memory), and this Mac's Claude and Antigravity (weekly), and, pressed, the pane "リソース" from the right with the whole of them.
+// The load of the machines and the use of the AI in the footer (A-48): for this Mac and for each saved environment, its CPU, its memory and its Claude and Antigravity (weekly), and, pressed, the pane "リソース" from the right with the whole of them.
 // Rust reads Orca (`machine_resources` every 5 seconds, `machine_usage` every 60 seconds); this module only reads those commands and draws, as text. A read does not start while the window is hidden or while the one before it is not back, and the machines drawn are always the last answer, so a saved environment that left the list is not drawn or read again.
 import type { AiUsage } from "./bindings/AiUsage";
 import type { MachineResources } from "./bindings/MachineResources";
@@ -39,10 +39,26 @@ const stat = (label: string, value: number | null) => {
   return node;
 };
 
+// The weekly of an AI as a dot and a number; the dot says which AI, and the label gives its name to a reader that does not see the color.
+function aiStat(name: string, kind: string, value: AiUsage | undefined) {
+  const node = span("stat-ai", "");
+  node.setAttribute("role", "group");
+  node.setAttribute("aria-label", name);
+  const dot = tag("i", "stat-dot");
+  dot.dataset.ai = kind;
+  node.append(dot, num(usedOf(value, "weekly")));
+  return node;
+}
+
 function machineChip(m: MachineResources) {
   const chip = span("stat-machine", "");
   const ok = m.error === null;
   chip.append(tag("b", "stat-name", m.name), stat("CPU", ok ? m.cpuPercent : null), stat("メモリ", ok ? m.memoryPercent : null));
+  // The AI of this machine: the row of the usage with the same environment, drawn once the first reading is back.
+  if (usage) {
+    const mine = usage.find((u) => u.environment === m.environment);
+    chip.append(aiStat("Claude", "claude", mine?.claude), aiStat("Antigravity", "antigravity", mine?.antigravity));
+  }
   return chip;
 }
 
@@ -54,20 +70,8 @@ function drawFooter() {
     return;
   }
   button.hidden = false;
-  const parts: Node[] = resources.map(machineChip);
-  if (usage) {
-    // The AI of this Mac (no environment).
-    const mac = usage.find((u) => u.environment === null);
-    const ai = (name: string, kind: string, value: AiUsage | undefined) => {
-      const node = stat(name, usedOf(value, "weekly"));
-      const dot = tag("i", "stat-dot");
-      dot.dataset.ai = kind;
-      node.prepend(dot);
-      return node;
-    };
-    parts.push(tag("i", "stat-sep"), ai("Claude", "claude", mac?.claude), ai("AG", "antigravity", mac?.antigravity));
-  }
-  button.replaceChildren(...parts);
+  // A separator stands between two machines.
+  button.replaceChildren(...resources.flatMap((m, i): Node[] => (i === 0 ? [machineChip(m)] : [tag("i", "stat-sep"), machineChip(m)])));
 }
 
 // A line of the pane: the key, the number, and under them the small text (the load and the cores, the bytes, the reset) when there is one.
