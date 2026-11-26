@@ -6,6 +6,8 @@ import type { BrowsedDir } from "./bindings/BrowsedDir";
 import type { Channel } from "./bindings/Channel";
 import type { CalendarChoices } from "./bindings/CalendarChoices";
 import type { CreatedEvent } from "./bindings/CreatedEvent";
+import type { EventNotice } from "./bindings/EventNotice";
+import type { TimedItem } from "./bindings/TimedItem";
 import type { EditedEvent } from "./bindings/EditedEvent";
 import type { Checked } from "./bindings/Checked";
 import type { Claude } from "./bindings/Claude";
@@ -159,6 +161,7 @@ export interface Commands {
   set_calendar_first_day: { args: { firstDay: number }; result: null };
   // The weeks that hold the month (1 to 12) of the small calendar of C-4.
   calendar_month: { args: { year: number; month: number; firstDay: number }; result: MonthGrid };
+  calendar_notices: { args: { events: TimedItem[]; nowMs: number }; result: EventNotice[] };
   calendar_choices: { args: undefined; result: CalendarChoices };
   set_calendar_shown: { args: { account: string; calendarId: string; shown: boolean }; result: null };
   // C-5: the calendars an event can be created in (those of each account that the user owns), in the shape of `calendar_choices`.

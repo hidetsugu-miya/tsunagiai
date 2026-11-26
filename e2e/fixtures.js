@@ -62,6 +62,9 @@ const answers = {
   thread_held: null,
   calendar_cached: [],
   calendar_first_day: 0,
+  // C-8: the app reads the week of today in the background once an account is known; a spec of the notices mocks `calendar_week` and `calendar_notices`.
+  calendar_week: { weekStart: "1970-01-04", allDay: [], timed: [], needsLogin: [], failed: {}, calendarFailed: [] },
+  calendar_notices: [],
   set_calendar_first_day: null,
   calendar_choices: { accounts: [], needsLogin: [], failed: {} },
   set_calendar_shown: null,

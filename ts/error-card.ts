@@ -16,8 +16,9 @@ export function logError(source: string, e: unknown) {
   invoke("log_write", { level: "error", source, message: textOf(e).split(STDERR_MARK)[0] }).catch(() => {});
 }
 
-function card(text: string, extra: (HTMLElement | null)[]) {
-  const root = tag("div", "error-card");
+// `className` is added to the card: the notice of an event (C-8) is this card with another color at its left.
+export function card(text: string, extra: (HTMLElement | null)[], className = "") {
+  const root = tag("div", `error-card ${className}`.trim());
   root.setAttribute("role", "alert");
   const close = tag("button", "icon-btn error-card-close");
   close.type = "button";

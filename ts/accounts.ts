@@ -1,6 +1,7 @@
 // The accounts: the popup of the Claude avatar, the Google card of the settings, logging in and removing an account.
 import type { Claude } from "./bindings/Claude";
 import { calendarNeedsLogin, loadCalendar, resetCalendar } from "./calendar.js";
+import { syncCalendarNotice } from "./calendar-notice.js";
 import { getClaude } from "./claude.js";
 import { $, el, tag } from "./dom.js";
 import { avatarColor, initials } from "./format.js";
@@ -37,6 +38,7 @@ export function renderAccounts({ accounts: list, needsLogin, failed }: { account
   inboxIssues = { needsLogin, failed };
   accounts = list;
   $<HTMLButtonElement>("nav-calendar").disabled = list.length === 0;
+  syncCalendarNotice();
   renderGoogleCard();
   $("relogin").replaceChildren(
     ...needsLogin.map((a) => {

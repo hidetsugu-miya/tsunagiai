@@ -313,6 +313,7 @@ pub fn run() {
             calendar::calendar_first_day,
             calendar::set_calendar_first_day,
             calendar::calendar_month,
+            calendar::calendar_notices,
             calendar::calendar_choices,
             calendar::calendar_owned,
             calendar::calendar_create_event,

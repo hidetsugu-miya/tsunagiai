@@ -1,18 +1,19 @@
 // The calendar screen: a week of the selected calendars' events, kept in memory and fetched in the background.
 import type { AllDayItem } from "./bindings/AllDayItem";
+import type { Info } from "./bindings/Info";
 import type { TimedItem } from "./bindings/TimedItem";
 import type { Week } from "./bindings/Week";
 import { addAccount, renderGoogleCard } from "./accounts.js";
 import { closeCreate, forgetOwnedCalendars, initCalendarCreate, openCreate, redrawDraft } from "./calendar-create.js";
 import { initCalendarClaude } from "./calendar-claude.js";
 import { drawSlots } from "./calendar-slots.js";
-import { bindEvent, closeDetail, endEvents, startEvents } from "./calendar-detail.js";
+import { bindEvent, closeDetail, endEvents, eventNode, startEvents } from "./calendar-detail.js";
 import { closeMonthPop, followCalendarWeek, initCalendarMonth, refreshCalendarDay, showCalendarMonth } from "./calendar-month.js";
 import { forgetCalendarChoices, initCalendarSide, loadCalendarChoices } from "./calendar-side.js";
 import { $, el } from "./dom.js";
 import { addDays, avatarColor, hhmm, isoDate, pad2, WEEKDAYS } from "./format.js";
 import { invoke } from "./ipc.js";
-import { currentScreen } from "./nav.js";
+import { currentScreen, setScreen } from "./nav.js";
 import { logError, setRelogin } from "./error-card.js";
 import { onScreenChanged } from "./screen-bridge.js";
 import { show } from "./view.js";
@@ -51,6 +52,15 @@ let calRefresh = false;
 const calAhead = new Set<string>();
 // The first render after opening the calendar scrolls to the morning; later ones keep the position.
 let calScrolled = false;
+// The event whose detail the card of C-8 asked for: it opens when a week that holds the event is drawn, and the wish ends when the load that was started for it ends.
+let pendingOpen: Info | null = null;
+
+// Shows the week of today and opens the detail of `info` (the button 「予定を開く」 of the card of C-8).
+export function openCalendarEvent(info: Info) {
+  pendingOpen = info;
+  calDate = isoDate(new Date());
+  setScreen("calendar");
+}
 
 // The accounts changed (a login, a removal): the weeks kept so far and the calendar lists behind them are stale.
 // The popup must not keep the old state until the calendar is opened; `dropKept` also forgets the weeks of the last run.
@@ -227,6 +237,12 @@ function renderWeek(w: Week) {
     $("cal-scroll").scrollTop = Math.max(0, (new Date().getHours() - 2) * HOUR_PX - 12);
     calScrolled = true;
   }
+  const node = pendingOpen && eventNode(pendingOpen);
+  if (node) {
+    pendingOpen = null;
+    node.scrollIntoView({ block: "nearest" });
+    node.click();
+  }
 }
 
 // The date of the first day of the week, which starts on the weekday `first`, holding the "YYYY-MM-DD" date.
@@ -299,7 +315,10 @@ export async function loadCalendar(refresh = false, follow = false, ahead = true
   } catch (e) {
     if (seq === calSeq) logError("calendar", e);
   } finally {
-    if (seq === calSeq) $("calendar").classList.remove("loading");
+    if (seq === calSeq) {
+      $("calendar").classList.remove("loading");
+      pendingOpen = null;
+    }
     // After the week, whose fetch lists the calendars again when they are stale, so this read finds them kept.
     loadCalendarChoices(refresh);
   }

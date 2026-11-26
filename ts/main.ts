@@ -3,6 +3,7 @@
 import { initAccounts, popupOpen } from "./accounts.js";
 import { initCalendar } from "./calendar.js";
 import { initCalendarDetail } from "./calendar-detail.js";
+import { initCalendarNotice } from "./calendar-notice.js";
 import { initClaude, refreshClaude } from "./claude.js";
 import { initDatabase } from "./database.js";
 import { initEditorSettings } from "./editor-settings.js";
@@ -50,6 +51,7 @@ initMailSlack();
 initNav();
 initCalendar();
 initCalendarDetail();
+initCalendarNotice();
 initToast();
 initMenu();
 initTodo();
