@@ -54,7 +54,7 @@ import { hideTerminals, initOrcaTerminal, type Placement, pruneTerminals, showTe
 import { type Fields, registerDraftTarget } from "./screen-bridge.js";
 import { initSplit } from "./split.js";
 import { hideStay, showStay } from "./toast.js";
-import { logError, showFailure } from "./error-card.js";
+import { logError, setNotice, showFailure } from "./error-card.js";
 import { copyText, setNavCount, show } from "./view.js";
 
 export const THIS_MACHINE = "このマシン";
@@ -154,9 +154,8 @@ const streams = new Map<string | null, Stream>();
 // Whether this machine's Orca is paired with the app (A-12), null before it was read; `pairingSeq` is the number of the latest read (0: none was asked for).
 let paired: boolean | null = null;
 let pairingSeq = 0;
-// What the feed, the tabs and the notice show now; they are drawn again only when this changes.
+// What the feed and the tabs show now; they are drawn again only when this changes.
 let feedKey = "";
-let noticeKey = "";
 
 const feed = () => $("orca-feed");
 // The development screen is shown: the list is.
@@ -394,33 +393,38 @@ export function noticeOf(v: OrcaOverview | null) {
   return v?.state === "missing" ? MISSING_NOTICE : v?.state === "failed" ? `読み込めませんでした: ${v.message}` : null;
 }
 
-// The lines of the notice above the list (A-6, A-33). While this machine is the target, or the command is missing, it is the one line of `noticeOf`. While a saved environment is the target, this machine and the saved environment are read apart,
-// so each read that failed has a line of its own that names its place, this machine's first as in the list; the other place's rows stay drawn.
-function noticeLines() {
-  if (view === null) return [];
+// The cards of what a read says (A-6, A-33), one card for each key: the command that is missing (one for both places), this machine's read and the saved environment's.
+const NOTICE_COMMAND = "orca:command";
+const NOTICE_MACHINE = "orca:machine";
+const NOTICE_ENVIRONMENT = "orca:environment";
+
+// What each card says now. While this machine is the target, or the command is missing, it is the one text of `noticeOf` (a missing command is a warning). While a saved environment is the target, this machine and the saved environment are read apart,
+// so each read that failed has a card of its own that names its place; the other place's rows stay drawn.
+function noticeTexts(): Record<string, { text: string; warn: boolean } | null> {
+  const texts: Record<string, { text: string; warn: boolean } | null> = { [NOTICE_COMMAND]: null, [NOTICE_MACHINE]: null, [NOTICE_ENVIRONMENT]: null };
+  if (view === null) return texts;
   if (view.target === null || view.state === "missing") {
     const text = noticeOf(view);
-    return text === null ? [] : [{ text, failed: view.state === "failed" }];
+    if (text !== null) texts[view.state === "missing" ? NOTICE_COMMAND : NOTICE_MACHINE] = { text, warn: view.state === "missing" };
+    return texts;
   }
-  const failed = (place: string, message: string) => ({ text: `${place} を読み込めませんでした: ${message}`, failed: true });
-  const lines: { text: string; failed: boolean }[] = [];
-  if (here?.state === "failed") lines.push(failed(THIS_MACHINE, here.message));
-  if (view.state === "failed") lines.push(failed(view.target, view.message));
-  return lines;
+  const failed = (place: string, message: string) => ({ text: `${place} を読み込めませんでした: ${message}`, warn: false });
+  if (here?.state === "failed") texts[NOTICE_MACHINE] = failed(THIS_MACHINE, here.message);
+  if (view.state === "failed") texts[NOTICE_ENVIRONMENT] = failed(view.target, view.message);
+  return texts;
 }
 
-function drawNotice() {
-  const lines = noticeLines();
-  const key = JSON.stringify(lines);
-  if (key === noticeKey) return;
-  noticeKey = key;
-  $("orca-notice").replaceChildren(
-    ...lines.map((line) => {
-      const row = tag("div", line.failed ? "pending fail" : "pending");
-      row.append(tag("span", "sp", line.text));
-      return row;
-    }),
-  );
+// Sets the cards while the screen is shown, and takes them off when it is not (the card belongs to the screen, and the × is forgotten with it).
+function drawNotice(on: boolean) {
+  const texts = on ? noticeTexts() : {};
+  for (const key of [NOTICE_COMMAND, NOTICE_MACHINE, NOTICE_ENVIRONMENT]) setNotice(key, texts[key] ?? null);
+}
+
+// Whether the read of `place` (null: this machine) failed, which its card says already.
+function readFailed(place: string | null) {
+  if (view === null) return false;
+  if (view.target === place) return view.state === "failed";
+  return place === null && here?.state === "failed";
 }
 
 // Whether the list is the work: the bell is pressed and no search text is typed (A-8).
@@ -1355,8 +1359,11 @@ function draw() {
   syncPopouts(lookPopout);
 }
 
-// Watches the disk of the worktrees whose files the screen shows, where the list streams (A-12, A-18). The screen calls it when another screen is shown, which lets them go.
-export const watchFiles = () => syncFileWatches(shown() && !document.hidden, streamsEnvironment);
+// Watches the disk of the worktrees whose files the screen shows, where the list streams (A-12, A-18). The screen calls it when another screen is shown, which lets them go, and takes the cards of the reads off (A-28).
+export function watchFiles() {
+  drawNotice(listShown());
+  syncFileWatches(shown() && !document.hidden, streamsEnvironment);
+}
 
 function drawScreen() {
   syncServers(serverGone);
@@ -1364,8 +1371,8 @@ function drawScreen() {
   drawStarted();
   // Before the terminals of the screen are shown, so that a terminal the project selected now owns is not held by the modal.
   syncPeek();
+  drawNotice(listShown());
   if (!listShown()) return pauseLsp();
-  drawNotice();
   drawSearch();
   drawFeed();
   // A formation takes the place of the work pane: the terminals of the pane are hidden, and nothing else of it is drawn.
@@ -1623,7 +1630,7 @@ export function showOrca() {
   show("orca");
   readAgents(true);
   forgetFailed.clear();
-  noticeKey = feedKey = "";
+  feedKey = "";
   draw();
   // The environments are read when the screen is shown, whatever read is on its way.
   load("full", true);
@@ -1911,7 +1918,8 @@ function readAgentsOf(place: string | null) {
     if (!listShown()) return;
     agentLists.set(place, agents);
     agentReadAt.set(place, Date.now());
-    if (agents === null) showFailure("orca", error);
+    // A place whose read of the list failed says so on its card already.
+    if (agents === null) readFailed(place) ? logError("orca", error) : showFailure("orca", error);
   };
   const read: Promise<void> = invoke("orca_agents_installed", { environment: place }).then(
     (agents) => take(agents),
