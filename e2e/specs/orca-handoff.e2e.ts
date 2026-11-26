@@ -1,7 +1,7 @@
 import type { HandoffSummary } from "../../ts/bindings/HandoffSummary";
 import type { OrcaStarted } from "../../ts/bindings/OrcaStarted";
 import { streamList as streamedList } from "../orca-support";
-import { boot, callsOf, claudeReady, claudeSettings, composerLayout, count, fire, formationEntry, formationList, handoffSummary, heightOf, holds, huge, image, inbox, listedChild, mock, note, onceId, orcaOverview, orcaRow, orcaWorktree, PNG, rejects, release, slackLoad, sendStream, slackThread, slackTs, streamList, textsOf, threadMessage, timeline, timelineMessage, todoData, waitForCalls, waitForCount, CARDS } from "../support";
+import { boot, callsOf, claudeReady, claudeSettings, composerLayout, count, fire, formationEntry, formationList, handoffSummary, heightOf, holds, huge, image, inbox, listedChild, mock, note, onceId, orcaOverview, orcaRow, orcaWorktree, PNG, rejects, release, slackLoad, sendStream, slackThread, slackTs, streamList, textsOf, threadMessage, timeline, timelineMessage, todoData, waitForCalls, waitForCard, waitForCount, CARDS, WARN_CARDS } from "../support";
 
 // A finished agent has one stop time that every read of it repeats, as Orca's `updatedAt` does (A-6: a stopped row with a newer time is a new notice).
 const DONE_AT = Date.now() - 18 * 60_000 - 5_000;
@@ -962,17 +962,20 @@ describe("orca handoff", () => {
     expect(await callsOf(handoff)).toHaveLength(1);
   });
 
-  it("shows the notice of the Orca screen in the pane when the command is missing or the read failed", async () => {
+  it("shows the notice of the Orca screen on a card when the command is missing (a warning) or the read failed", async () => {
     await openSlack({ orca_overview: orcaOverview([], [], { state: "missing" }) });
     await $(SLACK.button).click();
-    await expect($(`${SLACK.pane} .ho-notice`)).toHaveText(expect.stringContaining("orca コマンドが見つかりません"));
+    await waitForCard("orca コマンドが見つかりません");
+    expect(await count(WARN_CARDS)).toBe(1);
+    expect(await count(`${SLACK.pane} .ho-notice`)).toBe(0);
     await write(SLACK, "やって");
     await expect(sendButton(SLACK)).toBeDisabled();
     await mock("orca_overview", orcaOverview([], [], { state: "failed", message: "接続できません" }));
     // Another tab and back: the pane reads the list again.
     await $("#reply-tab-claude").click();
     await $(SLACK.button).click();
-    await browser.waitUntil(async () => (await textsOf(`${SLACK.pane} .ho-notice`))[0]?.includes("読み込めませんでした: 接続できません"), { timeoutMsg: "the failed read was not told" });
+    await waitForCard("読み込めませんでした: 接続できません");
+    expect(await count(WARN_CARDS)).toBe(0);
   });
 
   it("shows the session after the send as a card: its header, its state, the button of the development screen and the close icon, with no terminal and no field", async () => {
@@ -1321,13 +1324,13 @@ describe("orca handoff", () => {
     await browser.waitUntil(async () => (await textsOf(`${SLACK.pane} .ho-destination`))[0] === "このマシン", { timeoutMsg: "the destination was not shown" });
   });
 
-  it("shows the notice of the Orca screen in the pane when the destination cannot be read, and sends nothing to it", async () => {
+  it("shows the notice of the Orca screen on a card when the destination cannot be read, and sends nothing to it", async () => {
     await openSlack({ orca_overview: orcaOverview(sample(), worktrees(), { environments: ["Studio"] }) });
     await mock("orca_destination", orcaOverview([], [], { state: "failed", message: "接続できません", target: "Studio", environments: ["Studio"], known: false }));
     await openPane(SLACK);
     await $(`${SLACK.pane} .ho-destination`).click();
     await $('//div[@role="menu"]//button[normalize-space(.)="Studio"]').click();
-    await browser.waitUntil(async () => (await textsOf(`${SLACK.pane} .ho-notice`))[0]?.includes("読み込めませんでした: 接続できません"), { timeoutMsg: "the failed read was not told" });
+    await waitForCard("読み込めませんでした: 接続できません");
     expect(await textsOf(`${SLACK.pane} .ho-project`)).toEqual(["プロジェクトがありません"]);
     await expect($(`${SLACK.pane} .ho-project`)).toBeDisabled();
     await write(SLACK, "やって");

@@ -1,4 +1,4 @@
-import { boot, callsOf, count, decisionCard, decisionOption, decisionPage, formationChild, formationConsent, formationEntry, formationEnvironments, formationList, formationMessage, holds, inbox, listedChild, mock, onceId, orcaOverview, orcaRow, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, streamList, textsOf, timers, waitForCalls, CARDS, CARD } from "../support";
+import { boot, callsOf, count, decisionCard, decisionOption, decisionPage, formationChild, formationConsent, formationEntry, formationEnvironments, formationList, formationMessage, holds, inbox, listedChild, mock, onceId, orcaOverview, orcaRow, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, streamList, textsOf, timers, waitForCalls, waitForCard, waitForCount, CARDS, CARD, WARN_CARDS } from "../support";
 import { pickItem } from "../orca-support";
 
 import type { DecisionPage } from "../../ts/bindings/DecisionPage";
@@ -512,16 +512,17 @@ describe("orchestration mode: the flow pane", () => {
     expect(button.bottom).toBeLessThanOrEqual(head.bottom);
   });
 
-  it("says that a read failed in the pane, keeps the tree, and clears the text when a read works", async () => {
+  it("says that a read failed on a card, keeps the tree, and takes the card off when a read works", async () => {
     await openFlow(mixed());
     await browser.waitUntil(async () => (await cardNames()).length === 5);
-    await expect($("#formation-flow-error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
     await mock("formation_children", rejects("Orca に届きません"));
-    await expect($("#formation-flow-error")).toBeDisplayed();
-    await expect($("#formation-flow-error")).toHaveText("Orca に届きません");
+    await waitForCard("Orca に届きません");
+    expect(await count(CARDS)).toBe(1);
+    expect(await count(WARN_CARDS)).toBe(0);
     expect((await cardNames()).length).toBe(5);
     await mock("formation_children", [formationChild("api-update", "working")]);
-    await expect($("#formation-flow-error")).not.toBeDisplayed();
+    await waitForCount(CARDS, 0);
     expect(await cardNames()).toEqual(["api-update"]);
   });
 
@@ -538,7 +539,7 @@ describe("orchestration mode: the flow pane", () => {
     await openFlow([formationChild("api-update", "working")]);
     await expect($("#formation-flow")).toBeDisplayed();
     await mock("formation_children", rejects("Orca に届きません"));
-    await expect($("#formation-flow-error")).toHaveText("Orca に届きません");
+    await waitForCard("Orca に届きません");
     await expect($("#formation-orchestrator")).toBeDisplayed();
     await expect($("#formation-flow")).toBeDisplayed();
     expect((await cardNames()).length).toBe(1);
@@ -1253,7 +1254,7 @@ describe("orchestration mode: close a child from its card", () => {
     expect(await textsOf(".pop-lost-head")).toEqual(["追跡していないファイル"]);
   });
 
-  it("tells the branch that Orca kept when the worktree is closed, and drops the words at the next close", async () => {
+  it("tells the branch that Orca kept when the worktree is closed on a warning card, and drops the card at the next close", async () => {
     await openSession(mixed());
     const close = await mock("formation_close_child", { ...gone, preservedBranch: "me/web-update" });
     await mock("formation_children", without("web-update"));
@@ -1261,13 +1262,14 @@ describe("orchestration mode: close a child from its card", () => {
     await yes().click();
     await waitForCalls(close);
     await browser.waitUntil(async () => (await cardNames()).join() === "batch-update,e2e-check,summary,api-update");
-    await expect($("#formation-flow-error")).toHaveText(expect.stringContaining("「web-update」のブランチは、どのリモートにもないコミットがあるので、ローカルに残しました（me/web-update）"));
+    await waitForCard("「web-update」のブランチは、どのリモートにもないコミットがあるので、ローカルに残しました（me/web-update）");
+    expect(await count(WARN_CARDS)).toBe(1);
     await mock("formation_close_child", gone);
     await ask("summary");
     await yes().click();
     // `mock` set the calls back to none, so the second close is the first call of the new mock.
     await waitForCalls(close);
-    await expect($("#formation-flow-error")).not.toBeDisplayed();
+    await waitForCount(CARDS, 0);
   });
 
   it("closes it with force on 強制削除, and takes the card away", async () => {
@@ -1285,18 +1287,22 @@ describe("orchestration mode: close a child from its card", () => {
     await expect(confirm()).not.toExist();
   });
 
-  it("shows the message of a failure where a failed read shows it, and keeps the cards", async () => {
+  it("shows the message of a failed close on a card that stays until its close button is pressed, and keeps the cards", async () => {
     await openSession(mixed());
     const message = "子「web-update」の記録の worktree は、orca worktree ps に載っていません";
     const close = await mock("formation_close_child", rejects(message));
     await ask("web-update");
     await yes().click();
     await waitForCalls(close);
-    await expect($("#formation-flow-error")).toHaveText(message);
+    await waitForCard(message);
+    expect(await count(WARN_CARDS)).toBe(0);
     await expect(confirm()).not.toExist();
     expect(await cardNames()).toHaveLength(5);
-    // The words go at the next read that works.
-    await expect($("#formation-flow-error")).not.toBeDisplayed();
+    // A read that works takes none of it away: the card is the owner's to close.
+    await browser.pause(READ * 2);
+    expect(await count(CARDS)).toBe(1);
+    await $(`${CARDS} .error-card-close`).click();
+    await waitForCount(CARDS, 0);
   });
 
   it("closes one child once while it is on its way, and marks its card busy", async () => {
@@ -1590,16 +1596,19 @@ describe("orchestration mode: the list of the formations", () => {
     expect((await callsOf("formation_list")).length).toBe(afterScreen);
   });
 
-  it("says that a read of the list failed, and keeps the rows", async () => {
+  it("says that a read of the list failed on a card, and keeps the rows", async () => {
     await openList();
-    await expect($("#formation-list-error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
     await mock("formation_list", rejects("一覧を読めません"));
-    await expect($("#formation-list-error")).toHaveText("一覧を読めません");
+    await waitForCard("一覧を読めません");
+    expect(await count(CARDS)).toBe(1);
     expect((await rowNames()).length).toBe(3);
+    // Another text of the same read rewrites the one card.
     await mock("formation_list", formationList(listed().formations, "Orca に届きません"));
-    await expect($("#formation-list-error")).toHaveText("Orca に届きません");
+    await waitForCard("Orca に届きません");
+    expect(await count(CARDS)).toBe(1);
     await mock("formation_list", listed());
-    await expect($("#formation-list-error")).not.toBeDisplayed();
+    await waitForCount(CARDS, 0);
   });
 
   it("has the divider of the Orca list for the formations too, at 19% of the screen at first", async () => {
@@ -2267,14 +2276,16 @@ describe("orchestration mode: delete a formation", () => {
     await mock("formation_delete", rejects(message));
     await ask("won-2485");
     await yes().click();
-    await expect($("#formation-list-error")).toHaveText(message);
+    await waitForCard(message);
     expect(await rowNames()).toEqual(["formation", "won-2485", "mail-summary"]);
     expect(await pressedRows()).toEqual(["won-2485"]);
     expect(await headName()).toBe("won-2485");
     expect(await callsOf("claude_code_close")).toEqual([]);
-    // The words go when another row is pressed.
+    // The card stays when another row is pressed, until its close button is pressed.
     await row("formation").click();
-    await expect($("#formation-list-error")).not.toBeDisplayed();
+    expect(await count(CARDS)).toBe(1);
+    await $(`${CARDS} .error-card-close`).click();
+    await waitForCount(CARDS, 0);
   });
 
   it("says why the children were kept and what is lost, keeps the formation, and calls nothing more on キャンセル", async () => {
@@ -2299,7 +2310,7 @@ describe("orchestration mode: delete a formation", () => {
     expect(await rowNames()).toEqual(["formation", "won-2485", "mail-summary"]);
     expect(await pressedRows()).toEqual(["won-2485"]);
     await expect(row("won-2485")).not.toHaveAttribute("aria-busy", "true");
-    await expect($("#formation-list-error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
     expect(await callsOf("claude_code_close")).toEqual([]);
     await $('.pop[role="alertdialog"] .text-btn:not(.danger)').click();
     await expect(confirm()).not.toExist();
@@ -2320,10 +2331,10 @@ describe("orchestration mode: delete a formation", () => {
     expect(await waitForCalls(del)).toEqual([{ name: "mail-summary", force: true, shown: [{ name: "api-update", path: "/w/api-update" }, { name: "web-update", path: "/srv/web-update" }] }]);
     await browser.waitUntil(async () => (await rowNames()).join() === "formation,won-2485");
     await expect(confirm()).not.toExist();
-    await expect($("#formation-list-error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
-  it("tells the branches that Orca kept when the formation is deleted", async () => {
+  it("tells the branches that Orca kept when the formation is deleted, on a warning card", async () => {
     await openList();
     const del = await mock("formation_delete", { deleted: true, kept: [], preserved: ["api-update: me/a", "web-update: me/web-update"] });
     await mock("formation_list", without("mail-summary"));
@@ -2331,7 +2342,8 @@ describe("orchestration mode: delete a formation", () => {
     await yes().click();
     await waitForCalls(del);
     await browser.waitUntil(async () => (await rowNames()).join() === "formation,won-2485");
-    await expect($("#formation-list-error")).toHaveText("どのリモートにもないコミットがあるブランチは、ローカルに残しました: api-update: me/a、web-update: me/web-update");
+    await waitForCard("どのリモートにもないコミットがあるブランチは、ローカルに残しました: api-update: me/a、web-update: me/web-update");
+    expect(await count(WARN_CARDS)).toBe(1);
   });
 
   it("shows the words of a forced deletion that is refused, and keeps the formation", async () => {
@@ -2343,7 +2355,7 @@ describe("orchestration mode: delete a formation", () => {
     const message = "子「api-update」を閉じられないので、フォーメーション「mail-summary」を削除していません（何も閉じておらず、リーダーのプロセスも終えていません）。記録にある worktree が Orca の一覧になく、または repository 本体のフォルダです";
     await mock("formation_delete", rejects(message));
     await yes().click();
-    await expect($("#formation-list-error")).toHaveText(message);
+    await waitForCard(message);
     expect(await rowNames()).toEqual(["formation", "won-2485", "mail-summary"]);
     expect(await callsOf("claude_code_close")).toEqual([]);
   });
@@ -2414,7 +2426,7 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
     expect((await waitForCalls("orca_terminal_read"))[0]).toEqual({ handle: "term_orch", environment: "mac-studio" });
     await browser.waitUntil(async () => (await orchestratorText()).includes("リーダーです"), { timeoutMsg: "the terminal of the orchestrator never showed" });
     expect(await headName()).toBe("studio-work");
-    await expect($("#formation-term-error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
     expect(await starts()).toBe(0);
   });
 
@@ -2512,23 +2524,26 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
     expect(await callsOf("claude_code_close")).toEqual([]);
   });
 
-  it("says in the pane why the terminal could not be made, and asks again when the formation is pressed again", async () => {
+  it("says on a card why the terminal could not be made, and asks again when the formation is pressed again", async () => {
     const reason = "リーダーを起動できません（環境「mac-studio」）: Orca がターミナルの handle を答えませんでした";
     await openList({ formation_list: remote(), ...SHOWN }, null);
     await mock("formation_orchestrator", rejects(reason));
     await row("studio-work").click();
     await waitForCalls("formation_orchestrator", 1);
-    await expect($("#formation-term-error")).toHaveText(reason);
-    await expect($("#formation-term-error")).toHaveAttribute("role", "alert");
+    await waitForCard(reason);
+    await expect($(CARDS)).toHaveAttribute("role", "alert");
+    expect(await count(WARN_CARDS)).toBe(0);
     expect(await callsOf("orca_terminal_read")).toEqual([]);
     await browser.pause(300);
     expect(await callsOf("formation_orchestrator")).toHaveLength(1);
     await mock("formation_orchestrator", terminal());
     await row("formation").click();
     await waitForStarts(1);
+    // Another formation is shown: the card is gone, and a new failure would make a new one.
+    await waitForCount(CARDS, 0);
     await row("studio-work").click();
     expect(await waitForCalls("formation_orchestrator", 1)).toEqual([{ name: "studio-work", restart: false }]);
-    await expect($("#formation-term-error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
     await browser.waitUntil(async () => (await orchestratorText()).includes("リーダーです"));
     expect(await callsOf("claude_code_close")).toEqual([]);
   });
@@ -2566,7 +2581,7 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
     await browser.pause(400);
     expect(await callsOf(consent)).toEqual([]);
     expect(await callsOf("formation_orchestrator")).toEqual([]);
-    await expect($("#formation-term-error")).not.toBeDisplayed();
+    await expect($(CARDS)).not.toExist();
   });
 
   it("asks nothing of a PC that has the consent, and nothing of a formation of this Mac", async () => {
@@ -4910,7 +4925,7 @@ describe("orchestration mode: the compact flow pane", () => {
     it("keeps the children when the read of the told ones fails, and says why", async () => {
       await asCompact(kids(), {}, true);
       await mock("formation_instructed", rejects("記録を読めません"));
-      await browser.waitUntil(async () => (await textsOf("#formation-flow-error")).join("").includes("記録を読めません"));
+      await waitForCard("記録を読めません");
       expect(await orbNames()).toEqual(["web-update", "batch-update", "review-codex"]);
     });
   });
@@ -5032,10 +5047,10 @@ describe("orchestration mode: the talk of the leader and the children in the flo
     const calls = await waitForCalls("formation_messages", 2);
     expect(calls[0]).toEqual({ name: "formation" });
     await mock("formation_messages", rejects("記録を読めません"));
-    await browser.waitUntil(async () => (await textsOf("#formation-flow-error")).join("").includes("記録を読めません"));
+    await waitForCard("記録を読めません");
     expect(await cardNames()).toEqual(["req-login", "api-update", "review-codex"]);
     await mock("formation_messages", []);
-    await browser.waitUntil(async () => (await textsOf("#formation-flow-error")).join("") === "");
+    await waitForCount(CARDS, 0);
     expect(await talking()).toBe(0);
     // The compact view reads the told ones instead, and the view that comes back reads the messages again.
     await $(SIZE).click();

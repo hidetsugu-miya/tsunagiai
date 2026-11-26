@@ -55,6 +55,7 @@ import { type Fields, registerDraftTarget } from "./screen-bridge.js";
 import { initSplit } from "./split.js";
 import { hideStay, showStay } from "./toast.js";
 import { logError, setNotice, showFailure } from "./error-card.js";
+import { drawNotices as drawJiraNotices } from "./orca-jira.js";
 import { copyText, setNavCount, show } from "./view.js";
 
 export const THIS_MACHINE = "このマシン";
@@ -1362,6 +1363,7 @@ function draw() {
 // Watches the disk of the worktrees whose files the screen shows, where the list streams (A-12, A-18). The screen calls it when another screen is shown, which lets them go, and takes the cards of the reads off (A-28).
 export function watchFiles() {
   drawNotice(listShown());
+  drawJiraNotices();
   syncFileWatches(shown() && !document.hidden, streamsEnvironment);
 }
 
@@ -1948,7 +1950,6 @@ async function openStartMenu(anchor: Element) {
     anchor,
     rows,
     {
-      note: list === null ? "AI CLI を読み込めませんでした" : undefined,
       icons: [
         { label: "ターミナルを開く", icon: TERMINAL_SVG, pick: () => void chooseWorktree(anchor, (w) => start("terminal", w)) },
         { label: "スクラッチパッド", icon: SCRATCHPAD_SVG, pick: () => void chooseWorktree(anchor, (w) => askScratchpad(anchor, w.path, placeOf(w))) },

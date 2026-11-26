@@ -1,4 +1,4 @@
-import { callsOf, CARD, CARDS, count, holds, jiraBoard, jiraDetail, jiraIssue, jiraIssues, jiraIssueType, jiraProject, jiraSprint, logged, mock, onceId, rejects, release, textsOf, waitForCalls, waitForCount, waitForLog } from "../support";
+import { callsOf, CARD, CARDS, count, holds, jiraBoard, jiraDetail, jiraIssue, jiraIssues, jiraIssueType, jiraProject, jiraSprint, logged, mock, onceId, rejects, release, textsOf, waitForCalls, waitForCard, waitForCount, waitForLog } from "../support";
 import { filesToggle, openOrca, orcaOverview, project, sample, selectedTab, tabOf, worktrees } from "../orca-support";
 
 // J-2: the Jira part of the file pane (#870). Rust reads the boards, the sprints and the tickets (unit tests); here the screen is checked: what it asks of Rust, and how it draws the answers.
@@ -439,7 +439,7 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     expect(await optionsOf("orca-jira-board")).toEqual([["1", "Example board"], ["3", "Team board"]]);
   });
 
-  it("draws Jira's refusal in the place of the sprints of a team-managed board that has none, and still reads its backlog (J-2, #1395)", async () => {
+  it("says Jira's refusal of the sprints of a team-managed board that has none on a card, and still reads its backlog (J-2, #1395)", async () => {
     await openJira(jiraFixtures({ jira_boards: [jiraBoard(3, "Team board", "simple")] }));
     await waitForCount("#orca-jira-list .orca-jira-issue", 3);
     const refusal = "Jira が 400 を返しました: The board does not support sprints";
@@ -448,8 +448,9 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     await mock("jira_sprint_issues", issuesOf[12]);
     await mock("jira_settings", { ...connected, boardId: 3 });
     await $("#orca-jira-reload").click();
-    await waitForCount("#orca-jira-list .orca-jira-sprint-note", 1);
-    expect(await textsOf("#orca-jira-list .orca-jira-sprint-note")).toEqual([refusal]);
+    await waitForCard(refusal);
+    expect(await count(CARDS)).toBe(1);
+    expect(await count("#orca-jira-list .orca-file-note")).toBe(0);
     expect(await callsOf("jira_sprints")).toEqual([{ ...here, boardId: 3 }]);
     await waitForCount("#orca-jira-list .orca-jira-issue", 2);
     expect(await sectionsOf()).toEqual([["backlog", "EX-5", "EX-6"]]);
@@ -457,13 +458,14 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     expect(await callsOf("jira_sprint_issues")).toEqual([]);
     await expect(select("orca-jira-sprint")).not.toBeDisplayed();
     await expect(plus()).toBeDisplayed();
-    expect(await count(CARDS)).toBe(0);
-    // A failed read of the sprints of a scrum board is still the failure of the board, with the button that reads again.
+    expect(await count(CARDS)).toBe(1);
+    // A failed read of the sprints of a scrum board is still the failure of the board, with the button that reads again on its card.
     await mock("jira_boards", [board]);
     await mock("jira_settings", { ...connected, boardId: 1 });
     await $("#orca-jira-reload").click();
-    await waitForCount("#orca-jira-list .pending.fail", 1);
-    expect(await count(".orca-jira-sprint-note")).toBe(0);
+    await waitForCount(`${CARDS} .error-card-action`, 1);
+    expect(await count(CARDS)).toBe(1);
+    expect(await count("#orca-jira-list .orca-jira-issue")).toBe(0);
   });
 
   it("reads the scrum boards, the sprints and the tickets of the first sprint only, and draws a row of two lines for each ticket (J-2, #1407)", async () => {
@@ -580,34 +582,39 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     expect(await callsOf("jira_sprints")).toEqual([]);
   });
 
-  it("keeps a section that failed with its message and a button that reads it again (J-2)", async () => {
+  it("keeps a section that failed with a card of its message and a button that reads it again (J-2)", async () => {
     await openJira(jiraFixtures({ jira_backlog: rejects("Jira が認証を拒否しました（401）") }));
     await waitForCount("#orca-jira-list .orca-jira-issue", 3);
     await pick("orca-jira-sprint", "backlog");
-    await waitForCount("#orca-jira-list .pending.fail", 1);
+    await waitForCard("Jira が認証を拒否しました（401）");
+    expect(await count(CARDS)).toBe(1);
     expect(await sectionsOf()).toEqual([["backlog"]]);
-    expect(await textsOf("#orca-jira-list .pending.fail")).toEqual(["Jira が認証を拒否しました（401）再読み込み"]);
-    expect((await logged()).some((l) => l.level === "error" && l.source === "orca-jira")).toBe(true);
-    expect(await count("#error-cards .error-card")).toBe(0);
+    expect(await count("#orca-jira-list .pending")).toBe(0);
+    expect(await textsOf(`${CARDS} .error-card-action`)).toEqual(["再読み込み"]);
+    expect((await logged()).filter((l) => l.level === "error" && l.source === "orca-jira" && l.message.includes("401"))).toHaveLength(1);
     await mock("jira_backlog", backlog);
-    await $("#orca-jira-list .pending.fail .text-btn").click();
+    await $(`${CARDS} .error-card-action`).click();
     expect(await waitForCalls("jira_backlog")).toEqual([{ ...here, boardId: 1 }]);
     await waitForCount("#orca-jira-list .orca-jira-issue", 2);
+    await waitForCount(CARDS, 0);
     expect(await callsOf("jira_sprint_issues")).toHaveLength(1);
   });
 
-  it("shows a failed read of the boards as a row with its message, writes it to the log, and reads again with the button (J-2)", async () => {
+  it("shows a failed read of the boards as a card with its message, writes it to the log once, and reads again with the button (J-2)", async () => {
     await openJira(jiraFixtures({ jira_boards: rejects("Jira が 500 を返しました: boom") }));
-    await waitForCount("#orca-jira-list .pending.fail", 1);
+    await waitForCard("Jira が 500 を返しました: boom");
     await waitForLog("Jira が 500 を返しました: boom");
-    expect(await textsOf("#orca-jira-list .pending.fail")).toEqual(["Jira が 500 を返しました: boom再読み込み"]);
+    expect((await logged()).filter((l) => l.message === "Jira が 500 を返しました: boom")).toHaveLength(1);
+    expect(await count(CARDS)).toBe(1);
+    expect(await count("#orca-jira-list .orca-jira-issue")).toBe(0);
+    expect(await textsOf(`${CARDS} .error-card-action`)).toEqual(["再読み込み"]);
     await mock("jira_boards", [board]);
     await mock("jira_sprints", [sprint12]);
     await mock("jira_sprint_issues", issuesOf[12]);
     await mock("jira_backlog", backlog);
-    await $("#orca-jira-list .pending.fail .text-btn").click();
+    await $(`${CARDS} .error-card-action`).click();
     await waitForCount("#orca-jira-list .orca-jira-issue", 3);
-    expect(await count("#orca-jira-list .pending.fail")).toBe(0);
+    await waitForCount(CARDS, 0);
   });
 
   it("says how many tickets were read when Jira has more, and reads everything again with the reload button (J-2)", async () => {

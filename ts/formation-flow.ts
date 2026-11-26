@@ -13,6 +13,7 @@ import type { PageAnswer } from "./bindings/PageAnswer";
 import type { PageVerdict } from "./bindings/PageVerdict";
 import { $, span, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
+import { setNotice, showFailure } from "./error-card.js";
 import { currentFormation, readList, STATE_LABELS } from "./formation-list.js";
 import { drawPage } from "./formation-page.js";
 import { pad2 } from "./format.js";
@@ -35,15 +36,24 @@ const OWNER = "formation-session";
 // The environment of this Mac in `FormationChild.environment`; the terminal source calls it null, as the Orca screen's.
 const LOCAL = "local";
 
-// The last read; a read that failed keeps it and says why in `failure`.
+// The last read; a read that failed keeps it and says why in `failure`, which is a card while a formation is shown (A-28).
 let children: FormationChild[] = [];
 let failure: string | null = null;
 // The children that the leader told something and that have not answered (the last read of `formation_instructed`, newest first, #1087). Read only while the compact view is shown; the standard view has none.
 let instructed: string[] = [];
 // The messages between the leader and the children (the last read of `formation_messages`, oldest first, #1085). Read only while the standard view is shown; the compact view has `instructed`.
 let messages: FormationMessage[] = [];
-// What a close told that is no failure: the branch that Orca kept for the commits no remote has. It stays until the next close or another formation, which a read of the children does not clear.
+// What a close told that is no failure: the branch that Orca kept for the commits no remote has (a warning card). It stays until the next close or another formation, which a read of the children does not clear.
 let notice: string | null = null;
+const NOTICE_READ = "formation-flow:read";
+const NOTICE_KEPT = "formation-flow:kept";
+
+// The cards of the flow pane (A-28): the read of the children that failed, and the branch that a close kept. They are there while a formation is shown (`watching` is "flow") and go with it.
+function drawNotices() {
+  const on = watching === "flow";
+  setNotice(NOTICE_READ, on && failure !== null ? { text: failure } : null);
+  setNotice(NOTICE_KEPT, on && notice !== null ? { text: notice, warn: true } : null);
+}
 // The children that have a terminal (the last read), and the selected tab (the child's name; null is the leader's).
 let terms: FormationChild[] = [];
 let selected: string | null = null;
@@ -208,6 +218,7 @@ export function stopFlow() {
   if (timer !== null) window.clearInterval(timer);
   timer = null;
   watching = null;
+  drawNotices();
 }
 
 function placementOf(child: FormationChild): Placement {
@@ -331,7 +342,7 @@ function openCardMenu(c: FormationChild, anchor: Element, e: MouseEvent) {
   openMenu(anchor, [{ label: "停止", color: "", icon: DELETE_SVG, current: false, danger: true, pick: () => askClose(c, anchor, true) }], { at: { x: e.clientX, y: e.clientY } });
 }
 
-// Closes the child `name` of `formation` (A-37). Without `force` a worktree that has something to lose is kept, and the answer asks the owner to force it; with it (`path`: where the worktree was shown to be) the worktree goes all the same, and only when Rust finds the child at that path. An error shows as a failed read does, and so does the branch that Orca kept (`notice`).
+// Closes the child `name` of `formation` (A-37). Without `force` a worktree that has something to lose is kept, and the answer asks the owner to force it; with it (`path`: where the worktree was shown to be) the worktree goes all the same, and only when Rust finds the child at that path. An error is a card of its failure, and the branch that Orca kept (`notice`) is a warning card.
 async function closeChild(formation: string, name: string, force: boolean, path: string | null) {
   const key = closingKey(formation, name);
   if (closing.has(key)) return;
@@ -353,7 +364,7 @@ async function closeChild(formation: string, name: string, force: boolean, path:
   }
   // Another formation is shown now: what this one answered is not drawn (its children are read when it is shown again).
   if (currentFormation() !== formation) return draw();
-  if (error !== null) failure = error;
+  if (error !== null) showFailure("formation-flow", error);
   notice = closed && preserved !== null ? `「${name}」のブランチは、どのリモートにもないコミットがあるので、ローカルに残しました（${preserved}）。` : null;
   if (closed) {
     // The child is gone from the tabs and from the cards at once (its terminal is let go), and a read that began before the close, which still lists it, is dropped.
@@ -755,6 +766,7 @@ function talkKey(c: FormationChild, now: number) {
 
 function draw() {
   const now = Date.now();
+  drawNotices();
   if (watching === "list") return;
   // The selection first: a read may close a tab and so move it, and the tabs and the cards mark it.
   if (watching === "flow") syncSelection();
@@ -769,9 +781,6 @@ function draw() {
   $("formation-flow-list").hidden = compact;
   $("formation-flow-pages").hidden = compact || waiting.length === 0;
   $("formation-flow-compact").hidden = !compact;
-  const said = failure ?? notice;
-  $("formation-flow-error").hidden = said === null;
-  $("formation-flow-error").textContent = said ?? "";
   drawDoneChip();
   const key = JSON.stringify([compact, selected, pageChild, [...closing], showDone(), children.map((c) => [c.name, c.state, c.state === "planned" ? "" : elapsed(c.atMs, now, c.state === "done"), c.reply, c.pendingPage?.title ?? null, ...talkKey(c, now)]), instructed]);
   if (key === treeKey) return;

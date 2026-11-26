@@ -13,6 +13,8 @@ import { CHEVRON_SVG, DELETE_SVG, FOLDER_SVG, FORMATION_NEW_SVG } from "./icons.
 import { invoke } from "./ipc.js";
 import { type MenuItem, openMenu } from "./menu.js";
 import { redrawOrca } from "./orca.js";
+import { currentScreen } from "./nav.js";
+import { setNotice, showFailure } from "./error-card.js";
 import { statusIcon } from "./orca-status.js";
 
 export const STATE_LABELS: Record<FormationState, string> = { working: "作業中", waiting: "承認待ち", done: "完了", planned: "予定" };
@@ -35,7 +37,7 @@ export const deselectFormation = () => choose(null);
 // The PC the formation `name` belongs to, from the last read: `local` (this Mac) or a saved environment. Its orchestrator runs there.
 export const formationEnvironment = (name: string) => formations.find((f) => f.name === name)?.environment ?? LOCAL;
 
-// The last read; a read that failed keeps it and says why in `failure`.
+// The last read; a read that failed keeps it and says why in `failure`, which is a card while the screen is shown (A-28).
 let formations: FormationEntry[] = [];
 let failure: string | null = null;
 let inflight: Promise<void> | null = null;
@@ -68,11 +70,12 @@ let onRemoved: (name: string) => void = () => {};
 let onChild: (name: string) => void = () => {};
 // The formations whose children are folded away (in memory only); a formation shows its children until its arrow is pressed.
 const folded = new Set<string>();
-// The formations whose deletion is on its way (the children are being closed), and why the last deletion was refused.
+// The formations whose deletion is on its way (the children are being closed). A deletion that is refused is a card of its failure.
 const deleting = new Set<string>();
-let deleteFailure: string | null = null;
-// What a deletion that worked told that is no failure: the branches that Orca kept for the commits no remote has.
+// What a deletion that worked told that is no failure: the branches that Orca kept for the commits no remote has (a warning card).
 let deleteNotice: string | null = null;
+const NOTICE_READ = "formation-list:read";
+const NOTICE_KEPT = "formation-list:kept";
 
 const placeKey = (environment: string | null | undefined, path: string) => `${environment ?? LOCAL}\n${path}`;
 
@@ -155,7 +158,6 @@ async function load() {
 // A formation was made in the dialog: it is in the list now, in the order of the names, and it is selected (its orchestrator starts).
 function added(entry: FormationEntry) {
   made++;
-  deleteFailure = null;
   deleteNotice = null;
   formations = [...formations.filter((f) => f.name !== entry.name), entry].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   holdChildren();
@@ -167,7 +169,6 @@ function added(entry: FormationEntry) {
 async function remove(name: string, force: boolean, shown: FormationShown[]) {
   if (deleting.has(name)) return;
   deleting.add(name);
-  deleteFailure = null;
   deleteNotice = null;
   draw();
   let kept: FormationKeptChild[] | null = null;
@@ -176,7 +177,7 @@ async function remove(name: string, force: boolean, shown: FormationShown[]) {
     if (!answer.deleted) kept = answer.kept;
     else if (answer.preserved.length > 0) deleteNotice = `どのリモートにもないコミットがあるブランチは、ローカルに残しました: ${answer.preserved.join("、")}`;
   } catch (e) {
-    deleteFailure = String(e);
+    showFailure("formation-list", e);
     deleting.delete(name);
     draw();
     // Some children may be closed already, so the counts are read again.
@@ -222,7 +223,6 @@ function choose(name: string | null) {
 
 // Selects the formation and shows the tab of its child: a child's row of this list.
 function openChild(formation: string, child: string) {
-  deleteFailure = null;
   deleteNotice = null;
   choose(formation);
   onChild(child);
@@ -237,8 +237,7 @@ function row(f: FormationEntry, done: number): HTMLDivElement {
   node.dataset.formation = f.name;
   node.setAttribute("aria-pressed", String(f.name === current));
   const select = () => {
-    deleteFailure = null;
-    deleteNotice = null;
+      deleteNotice = null;
     choose(f.name);
     draw();
   };
@@ -340,11 +339,16 @@ function focusedControl(feed: HTMLElement): string | undefined {
   return undefined;
 }
 
+// The cards of the list (A-28), made while the development screen is shown and taken off when it is left (`hideFormation` calls this): a read of the list that failed, and the branches that a deletion kept.
+export function drawNotices() {
+  const on = currentScreen() === "orca";
+  setNotice(NOTICE_READ, on && failure !== null ? { text: failure } : null);
+  setNotice(NOTICE_KEPT, on && deleteNotice !== null ? { text: deleteNotice, warn: true } : null);
+}
+
 function draw() {
   drawLeaderMark();
-  const error = deleteFailure ?? failure ?? deleteNotice;
-  $("formation-list-error").hidden = error === null;
-  $("formation-list-error").textContent = error ?? "";
+  drawNotices();
   const key = JSON.stringify([current, [...deleting], [...folded], formations.map((f) => [f.name, f.projects, f.waiting, f.awaitingPage, f.children.map((c) => [c.name, c.repo, c.branch, c.state, c.terminal, c.awaitingPage])])]);
   if (key === listKey) return;
   listKey = key;

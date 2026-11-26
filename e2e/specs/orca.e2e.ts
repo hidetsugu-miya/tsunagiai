@@ -696,14 +696,14 @@ describe("orca", () => {
     expect(await waitForCalls(launch)).toEqual([{ path: "/work/example-app", agent: "antigravity", environment: null }]);
   });
 
-  it("says in one line that the AI CLIs could not be read, with the reason on a card, and keeps the two icons and no row of an AI CLI", async () => {
+  it("says on a card only that the AI CLIs could not be read, and keeps the two icons, with no row of an AI CLI and no line in the menu", async () => {
     await openOrca(orcaOverview(sample(), worktrees()), { orca_agents_installed: rejects("orca agent installed: 読めません") });
     await expect($(CARD)).toHaveText("orca agent installed: 読めません");
     await pickProject("example-api");
     await pressPlus();
     expect(await menuItems()).toEqual([TERMINAL, SCRATCHPAD]);
-    await expect($(".menu .menu-empty")).toHaveText("AI CLI を読み込めませんでした");
-    expect(await count('.menu[role="menu"] > .menu-icons + [role="separator"] + .menu-empty')).toBe(1);
+    expect(await count(".menu .menu-empty")).toBe(0);
+    expect(await count(".menu .menu-icons")).toBe(1);
     // The icons work as always.
     const create = await mock("orca_terminal_create", noPane);
     await pickItem(TERMINAL);
@@ -5539,7 +5539,9 @@ describe("orca: add a project (A-38)", () => {
     await openDialog();
     await filter().setValue("/nowhere");
     await browser.keys("Enter");
-    await expect($(".orca-browse-note")).toHaveText("Orca のフォルダの一覧を読めません");
+    await waitForCard("Orca のフォルダの一覧を読めません");
+    expect(await count(CARDS)).toBe(1);
+    expect(await count(".orca-browse-note")).toBe(0);
     expect((await callsOf(BROWSE)).at(-1)).toEqual({ environment: "Studio", path: "/nowhere" });
     // The folder shown stays in the trail, so the way back is there; nothing can be added until a folder is read.
     expect(await trail()).toEqual(["/", "home", "dev"]);
@@ -5549,7 +5551,7 @@ describe("orca: add a project (A-38)", () => {
     await expect($('.orca-browse [aria-label="上のフォルダ"]')).toBeEnabled();
     await crumbOf("home").click();
     await waitForRows(["dev"]);
-    expect(await count(".orca-browse-note")).toBe(0);
+    await expect($(CARDS)).not.toExist();
     await expect(pickFolder()).toBeEnabled();
     expect(await pathText()).toBe("/home");
   });
@@ -5561,7 +5563,8 @@ describe("orca: add a project (A-38)", () => {
     await choosePlace("Studio");
     await pick().click();
     await expect(dialog()).toBeDisplayed();
-    await expect($(".orca-browse-note")).toHaveText("Orca のフォルダの一覧を読めません");
+    await waitForCard("Orca のフォルダの一覧を読めません");
+    expect(await count(".orca-browse-note")).toBe(0);
     expect(await count(".orca-browse-row")).toBe(0);
     expect(await trail()).toEqual([]);
     expect(await pathText()).toBe("");

@@ -17,7 +17,7 @@ import type { OrcaRemoteBranch } from "../../ts/bindings/OrcaRemoteBranch";
 import type { OrcaSaved } from "../../ts/bindings/OrcaSaved";
 import type { PaneLayout } from "../../ts/bindings/PaneLayout";
 import type { PaneNode } from "../../ts/bindings/PaneNode";
-import { type GivenFile, callsOf, copiedTexts, count, huge, note, databaseCell, databaseColumn, databaseProfile, databaseRecords, databaseSqlResult, databaseSqlRun, databaseSqlStatement, databaseStructure, databaseTable, emitEvent, fontSettings, holds, mock, onceId, orcaRow, orcaTerminal, orcaWorktree, popoutTab, rejects, release, sendFiles, sendPopout, sendStream, stubClipboard, textsOf, timers, waitForCalls, waitForCount, CARDS, CARD } from "../support";
+import { type GivenFile, callsOf, copiedTexts, count, huge, note, databaseCell, databaseColumn, databaseProfile, databaseRecords, databaseSqlResult, databaseSqlRun, databaseSqlStatement, databaseStructure, databaseTable, emitEvent, fontSettings, holds, mock, onceId, orcaRow, orcaTerminal, orcaWorktree, popoutTab, rejects, release, sendFiles, sendPopout, sendStream, stubClipboard, textsOf, timers, waitForCalls, waitForCard, waitForCount, CARDS, CARD } from "../support";
 import { blurEditor, caretOffset, charBoxes, claudeTab, CONTENT, editorText, filesToggle, onThisMachine, openOrca, orcaOverview, pickItem, pressEnter, pressFold, pressTab, pressUnfold, project, sample, selectedTab, setCaret, setText, showAgain, streamList, studio, tabOf, tabTitles, typeIn, waitForText, worktrees } from "../orca-support";
 
 // A-18: the file pane and the editor. Rust reads the folders, reads and saves the text, and decides whether a save went through (unit tests); here the screen is checked: what it asks of Rust, and how it draws the answers.
@@ -1003,7 +1003,8 @@ describe("orca: files and editor (A-18)", () => {
       };
     });
     await doublePress("a.rs");
-    await expect($(".orca-edit .orca-empty")).toHaveText("vendor/codemirror.js を読めませんでした");
+    await waitForCard("vendor/codemirror.js を読めませんでした");
+    expect(await count(CARDS)).toBe(1);
     await expect($(CONTENT)).not.toBeDisplayed();
     expect(await dirtyMarks()).toBe(0);
     await browser.execute(() => {
@@ -1762,12 +1763,13 @@ describe("orca: files and editor (A-18)", () => {
     expect(await callsOf("orca_file_read")).toHaveLength(1);
   });
 
-  it("shows the message of a file that cannot be read in the tab, with no editor", async () => {
+  it("shows the message of a file that cannot be read on a card, with no editor", async () => {
     await openFiles();
     await waitForCount("#orca-files-tree .orca-file", 4);
     await mock("orca_file_read", rejects("バイナリのファイルは開けません"));
     await doublePress("a.rs");
-    await expect($(".orca-edit .orca-empty")).toHaveText("バイナリのファイルは開けません");
+    await waitForCard("バイナリのファイルは開けません");
+    expect(await count(CARDS)).toBe(1);
     await expect($(CONTENT)).not.toBeDisplayed();
     expect(await dirtyMarks()).toBe(0);
   });
@@ -1824,12 +1826,13 @@ describe("orca: files and editor (A-18)", () => {
       expect(await callsOf("orca_file_image")).toEqual([{ path: "/work/example-app", relative: "PHOTO.JPG", environment: null }]);
     });
 
-    it("shows the message of an image that cannot be read, in the tab, with no picture", async () => {
+    it("shows the message of an image that cannot be read on a card, with no picture", async () => {
       await withImages();
       await mock("orca_file_image", rejects("画像が大きすぎます（4096 KiB。3072 KiB までに縮められませんでした）"));
       await waitForCount("#orca-files-tree .orca-file", 3);
       await doublePress("logo.png");
-      await expect($(".orca-edit .orca-empty")).toHaveText("画像が大きすぎます（4096 KiB。3072 KiB までに縮められませんでした）");
+      await waitForCard("画像が大きすぎます（4096 KiB。3072 KiB までに縮められませんでした）");
+    expect(await count(CARDS)).toBe(1);
       await expect($(".orca-edit-picture")).not.toBeDisplayed();
       await expect($(CONTENT)).not.toBeDisplayed();
     });
@@ -1840,7 +1843,8 @@ describe("orca: files and editor (A-18)", () => {
       await mock("orca_file_read", rejects("バイナリのファイルは開けません"));
       await waitForCount("#orca-files-tree .orca-file", 3);
       await doublePress("data.bin");
-      await expect($(".orca-edit .orca-empty")).toHaveText("バイナリのファイルは開けません");
+      await waitForCard("バイナリのファイルは開けません");
+    expect(await count(CARDS)).toBe(1);
       await expect($(".orca-edit-picture")).not.toBeDisplayed();
       expect(await callsOf("orca_file_image")).toEqual([]);
       expect(await callsOf("orca_file_read")).toEqual([{ path: "/work/example-app", relative: "data.bin", environment: null }]);

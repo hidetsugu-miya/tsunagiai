@@ -18,6 +18,7 @@ import { openMenu } from "./menu.js";
 import { childrenFresh, isChildWorktree, readForChoice, readList } from "./formation-list.js";
 import { elapsed, heldOrca, noticeOf, openInOrca, readDestination, refreshOrca, THIS_MACHINE, worktreeLabel } from "./orca.js";
 import { STATUS_LABELS } from "./orca-status.js";
+import { setNotice } from "./error-card.js";
 
 // The item a pane is for: a key that is the same while the same thread or task is shown, and the content to hand over, built when the pane is opened.
 export interface HandoffItem {
@@ -94,6 +95,8 @@ const summarised = new Map<string, { context: HandoffContext; points: string[] }
 // The Orca the panes talk to (a saved environment's name, null for this machine), kept for the next handoff. Undefined until one is chosen: the panes then follow the target of the Orca screen, which a choice here never changes.
 let chosenDest: string | null | undefined;
 const panes = new Set<HandoffPane>();
+// Counts the panes made, for the key of the card of each (A-28).
+let paneCount = 0;
 let ticking = false;
 // While a session is shown and not ended, the list is read again this often (for its header).
 const POLL_MS = 10_000;
@@ -140,11 +143,12 @@ export class HandoffPane {
   private lastRead = 0;
   // The element that takes the files dropped or pasted before a hand-over: it stays, and the form is drawn in it (A-10).
   private formMain = tag("div", "ho-main ho-whole");
-  // The parts of the session shown: its notice and the title of its card.
-  private sess: { notice: HTMLElement; title: HTMLElement } | null = null;
+  // The key of the card that says the read of the list (A-28): one for each pane, because the panes of two screens may be drawn at the same time.
+  private noticeKey = `orca-handoff:notice:${++paneCount}`;
+  // The parts of the session shown: the title of its card.
+  private sess: { title: HTMLElement } | null = null;
   // The parts of the form shown.
   private el: {
-    notice: HTMLElement;
     chip?: HTMLButtonElement;
     claudeNote?: HTMLElement;
     cardBox?: HTMLElement;
@@ -328,6 +332,7 @@ export class HandoffPane {
       this.drawn = "";
       this.el = null;
       this.sess = null;
+      setNotice(this.noticeKey, null);
       return;
     }
     const signature = `${this.mode()}/${this.itemKey}`;
@@ -388,7 +393,6 @@ export class HandoffPane {
     head.append(orcaIcon(), tag("span", "ho-title", "Orca に渡す"), close);
     // The tabs of the Slack thread name the pane, and the thread has nothing to close.
     head.hidden = this.host.forced === true;
-    const notice = tag("div", "ho-notice");
     const fresh = tag("div", "ho-new");
     const destChip = tag("button", "review-chip ho-chip ho-destination");
     destChip.type = "button";
@@ -553,10 +557,10 @@ export class HandoffPane {
       this.handOver();
     };
     parts.form.classList.add("ho-fill");
-    parts.form.append(notice, fresh, freshBox, claudeNote, parts.error, parts.cardBox, parts.strip, parts.frame);
+    parts.form.append(fresh, freshBox, claudeNote, parts.error, parts.cardBox, parts.strip, parts.frame);
     this.formMain.replaceChildren(head, parts.form);
     this.sess = null;
-    this.el = { notice, chip, claudeNote, destChip, projectChip, name, freshBox, base, modeNew, modeExisting, branchName, existingChip, cardBox: parts.cardBox, strip: parts.strip, error: parts.error, input: parts.input, send: parts.send };
+    this.el = { chip, claudeNote, destChip, projectChip, name, freshBox, base, modeNew, modeExisting, branchName, existingChip, cardBox: parts.cardBox, strip: parts.strip, error: parts.error, input: parts.input, send: parts.send };
     // The content is taken when the form is drawn, that is when the pane opens.
     this.card = this.item?.card() ?? null;
     this.host.root.replaceChildren(this.formMain);
@@ -581,11 +585,10 @@ export class HandoffPane {
     top.append(title, close);
     const card = tag("div", "ho-session-card");
     card.append(top, open);
-    const notice = tag("div", "ho-notice");
     const main = tag("div", "ho-main ho-whole");
-    main.append(card, notice);
+    main.append(card);
     this.el = null;
-    this.sess = { notice, title };
+    this.sess = { title };
     this.host.root.replaceChildren(main);
   }
 
@@ -613,12 +616,12 @@ export class HandoffPane {
       if (!s) return;
       const row = this.rowOf(s);
       if (row) s.seen = true;
-      this.part("notice", [this.overview?.state, this.overview?.message], () => this.drawNotice(this.sess!.notice));
+      this.part("notice", [this.overview?.state, this.overview?.message], () => this.drawNotice());
       this.part("session", [s, row, this.overview?.state, this.overview?.worktrees, Math.floor(Date.now() / 60_000)], () => this.drawSessionHead());
       return;
     }
     if (!this.el) return;
-    this.part("notice", [this.overview?.state, this.overview?.message], () => this.drawNotice(this.el!.notice));
+    this.part("notice", [this.overview?.state, this.overview?.message], () => this.drawNotice());
     const form = this.form();
     this.settle(form);
     this.part("dest", [chosenProject, form.fresh, form.name, form.worktree, form.base, form.branchMode, form.branch, form.existing, this.destination(), this.environments(), this.overview?.projects, this.overview?.worktrees], () => this.drawDest());
@@ -646,11 +649,10 @@ export class HandoffPane {
     this.update();
   }
 
-  private drawNotice(box: HTMLElement) {
+  // The read of the list that failed, or the command that is missing (a warning), is the card of this pane (A-28).
+  private drawNotice() {
     const text = noticeOf(this.overview);
-    const row = tag("div", this.overview?.state === "failed" ? "pending fail" : "pending");
-    row.append(tag("span", "sp", text ?? ""));
-    box.replaceChildren(...(text ? [row] : []));
+    setNotice(this.noticeKey, text === null ? null : { text, warn: this.overview?.state === "missing" });
   }
 
   // The worktrees of the project chosen, its own folder (`isMain`) first. Those of the formations' children are not among them (A-9, A-37).
