@@ -8,6 +8,7 @@ import type { Todo } from "./bindings/Todo";
 import { accountList } from "./accounts.js";
 import { $ } from "./dom.js";
 import { isoDate } from "./format.js";
+import { dropComments } from "./todo-comments.js";
 import { setNavCount } from "./view.js";
 
 // What a label created from the screen is drawn in until the reload brings Todoist's color: Todoist's default, charcoal.
@@ -45,8 +46,8 @@ export const todoState = {
   // True until a load has fetched from Todoist since the start or a disconnect; an answer from the cache (`offline`) leaves it as it is.
   // Every load asks for the completed tasks (`withDone`) while it is set, so the detail, the counts and the cache the backend saves keep the done subtasks once Todoist answers.
   doneStale: true,
-  // The description being edited ({ id, value }), or null. It outlives a redraw, so a refresh keeps the mode and the text; the textarea's own caret is restored by renderDetail.
-  descEdit: null as { id: string; value: string } | null,
+  // The descriptions being edited, by the task's ID (the text typed). They outlive a redraw and another task's detail, so a refresh keeps the mode and the text; the textarea's own caret is restored by renderDetail. A task's goes when its tab closes.
+  descEdit: new Map<string, string>(),
   // The projects whose children the side list hides (all are shown at first). Kept in memory only.
   closedProjects: new Set<string>(),
   // The text in the search field (T-9). A text with no word is no search: the list shows.
@@ -83,7 +84,8 @@ export function closeTab(id: string) {
   const i = todoState.tabs.indexOf(id);
   if (i < 0) return;
   todoState.tabs.splice(i, 1);
-  if (todoState.descEdit?.id === id) todoState.descEdit = null;
+  todoState.descEdit.delete(id);
+  dropComments(id);
   if (todoState.selected === id) todoState.selected = todoState.tabs[i] ?? todoState.tabs[i - 1] ?? null;
 }
 

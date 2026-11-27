@@ -326,11 +326,8 @@ export interface DetailHost {
   plain: boolean;
 }
 const SCREEN: DetailHost = { open: (id) => openTodoTab(id), get plain() { return isTaskWindow(); } };
-// The host of the detail that renderDetail is drawing; its rows take it while they are made.
-let host: DetailHost = SCREEN;
 
-function subtaskRow(s: TaskItem["subtasks"][number]) {
-  const { open, plain } = host;
+function subtaskRow(s: TaskItem["subtasks"][number], { open, plain }: DetailHost) {
   const li = tag("li", `task single${s.done ? " done" : ""}`);
   const box = checkBox(PRIORITY_COLORS[4], s.done, s.done ? "未完了に戻す" : "完了にする");
   box.onchange = () => {
@@ -450,11 +447,10 @@ function foldDesc(t: TaskItem, view: HTMLElement, wrap: HTMLElement) {
 }
 
 // The description of `t` in `box`: its Markdown shown in full, or, while it is edited, the textarea and its buttons.
-function descParts(box: HTMLElement, t: TaskItem): HTMLElement[] {
-  const redraw = () => renderDetail(box, t.id);
-  if (todoState.descEdit?.id !== t.id) {
-    // Another task was opened: what was typed for the old one is dropped.
-    todoState.descEdit = null;
+function descParts(box: HTMLElement, t: TaskItem, at: DetailHost): HTMLElement[] {
+  const redraw = () => renderDetail(box, t.id, at);
+  const typed = todoState.descEdit.get(t.id);
+  if (typed === undefined) {
     const view = tag("div", t.description ? "desc md" : "desc empty");
     if (t.description) view.innerHTML = markdownHtml(t.description);
     else view.textContent = "説明を追加";
@@ -464,7 +460,7 @@ function descParts(box: HTMLElement, t: TaskItem): HTMLElement[] {
     // Not aria-label: it would replace the description itself for a screen reader.
     view.setAttribute("aria-description", "押すと編集");
     const edit = () => {
-      todoState.descEdit = { id: t.id, value: t.description };
+      todoState.descEdit.set(t.id, t.description);
       redraw();
       const area = box.querySelector<HTMLTextAreaElement>(".desc-edit")!;
       area.focus();
@@ -483,8 +479,8 @@ function descParts(box: HTMLElement, t: TaskItem): HTMLElement[] {
       clearTimeout(editTimer);
       if (e.detail > 1 || selectedIn()) return;
       editTimer = setTimeout(() => {
-        // The task's tab was closed, a redraw replaced the view, a screen change hid it (offsetParent is null), or the selection came after the press.
-        if (todoState.tabs.includes(t.id) && view.isConnected && view.offsetParent !== null && !selectedIn()) edit();
+        // The task's tab was closed (the detail is hidden or out of the page), a redraw replaced the view, a screen change hid it (offsetParent is null), or the selection came after the press.
+        if (view.isConnected && view.offsetParent !== null && !selectedIn()) edit();
       }, 250);
     };
     view.onkeydown = (e) => {
@@ -509,16 +505,16 @@ function descParts(box: HTMLElement, t: TaskItem): HTMLElement[] {
     return [wrap];
   }
   const area = tag("textarea", "desc-edit");
-  area.value = todoState.descEdit.value;
+  area.value = typed;
   area.placeholder = "説明を追加";
   area.dataset.field = "desc";
   area.setAttribute("aria-label", "説明");
   area.oninput = () => {
-    todoState.descEdit!.value = area.value;
+    todoState.descEdit.set(t.id, area.value);
     growDesc(area);
   };
   const close = () => {
-    todoState.descEdit = null;
+    todoState.descEdit.delete(t.id);
     redraw();
   };
   const cancel = tag("button", "text-btn", "キャンセル");
@@ -526,12 +522,12 @@ function descParts(box: HTMLElement, t: TaskItem): HTMLElement[] {
   const save = tag("button", "text-btn", "保存");
   save.onclick = () => {
     const value = area.value;
-    todoState.descEdit = null;
+    todoState.descEdit.delete(t.id);
     if (value === t.description) return redraw();
     // A failed save reopens the editor with what was typed, so a long description is not lost to the reload. Not when the box shows another task by then.
     saveTask(t.id, { description: value }).then((answer) => {
-      if (answer !== null || box.dataset.task !== t.id || todoState.descEdit) return;
-      todoState.descEdit = { id: t.id, value };
+      if (answer !== null || box.dataset.task !== t.id || todoState.descEdit.has(t.id)) return;
+      todoState.descEdit.set(t.id, value);
       redraw();
     });
   };
@@ -553,7 +549,6 @@ function parentDescPanel(parentId: string) {
 export function renderDetail(box: HTMLElement, id: string, at: DetailHost = SCREEN) {
   const t = todoState.taskById.get(id);
   if (!t) return;
-  host = at;
   // A reload redraws the whole detail; the field being typed in keeps the focus and the caret.
   const active = document.activeElement as HTMLInputElement;
   const field = box.contains(active) ? active.dataset.field : null;
@@ -592,7 +587,7 @@ export function renderDetail(box: HTMLElement, id: string, at: DetailHost = SCRE
 
   // The subtasks created since that load are in it now: their rows are drawn for real.
   for (let i = creating.length - 1; i >= 0; i--) if (creating[i].settled !== null && creating[i].settled! < todoState.loaded) creating.splice(i, 1);
-  const parts: HTMLElement[] = [head, ...descParts(box, t)];
+  const parts: HTMLElement[] = [head, ...descParts(box, t, at)];
   // A subtask's direct parent, when it has a row to open.
   const parent = t.parent && todoState.taskById.get(t.parent.id);
   // The checkbox is beside the button, not in it: a button may hold no other control. Completing the parent takes the open task out of the list with it, and its tab closes.
@@ -633,7 +628,7 @@ export function renderDetail(box: HTMLElement, id: string, at: DetailHost = SCRE
     title.append(bar);
   }
   const subs = tag("ul", "subs");
-  subs.append(...t.subtasks.map(subtaskRow), ...creating.filter((c) => c.parentId === t.id).map(creatingRow));
+  subs.append(...t.subtasks.map((s) => subtaskRow(s, at)), ...creating.filter((c) => c.parentId === t.id).map(creatingRow));
   const add = tag("div", "add-sub");
   add.insertAdjacentHTML("beforeend", PLUS_SVG);
   const input = tag("input");

@@ -49,6 +49,11 @@ interface View {
   chip: HTMLElement;
 }
 const views = new Map<string, View>();
+// Forgets the section drawn last for `taskId`, when its tab is closed: a detail that is out of the page has nothing left to draw an answer into.
+export function dropComments(taskId: string) {
+  views.delete(taskId);
+}
+
 // The task whose 「ファイルを添付」 was pressed last: the file the picker gives is for it.
 let pickedFor: string | null = null;
 

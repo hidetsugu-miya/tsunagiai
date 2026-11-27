@@ -3915,6 +3915,26 @@ describe("todo: tabs of task details (T-10)", () => {
     await expect($("#todo-back")).not.toBeDisplayed();
   });
 
+  it("keeps the description being edited of each task by its ID: selecting another tab does not drop it, and closing the tab does", async () => {
+    const data = todoData();
+    await openWork({ ...data, tasks: data.tasks.map((t) => (t.id === "k1" ? { ...t, description: "Report text" } : t)) });
+    await rowOf("Write report").click();
+    await $("#todo-detail .desc").click();
+    await expect($("#todo-detail .desc-edit")).toBeDisplayed();
+    await $("#todo-detail .desc-edit").addValue(" more");
+    await rowOf("Plan trip").click();
+    expect(await nameOfDetail()).toBe("Plan trip");
+    expect(await count("#todo-detail .desc-edit")).toBe(0);
+    await tabButton("Write report").click();
+    expect(await nameOfDetail()).toBe("Write report");
+    await expect($("#todo-detail .desc-edit")).toHaveValue("Report text more");
+    await closeOf("Write report").click();
+    await rowOf("Write report").click();
+    expect(await nameOfDetail()).toBe("Write report");
+    await expect($("#todo-detail .desc")).toBeDisplayed();
+    expect(await count("#todo-detail .desc-edit")).toBe(0);
+  });
+
   it("opens a task in a tab when its row is pressed, keeps the list, and selects the tab it has instead of opening a second", async () => {
     await openWork();
     await rowOf("Write report").click();

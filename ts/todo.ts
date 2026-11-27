@@ -482,7 +482,7 @@ export function initTodo() {
       renderTodo();
     },
     closed: (id) => {
-      if (todoState.descEdit?.id === id) todoState.descEdit = null;
+      todoState.descEdit.delete(id);
     },
     failed: (e) => showFailure("todo", e),
   });

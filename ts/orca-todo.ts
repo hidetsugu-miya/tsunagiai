@@ -6,7 +6,7 @@ import type { TaskItem } from "./bindings/TaskItem";
 import { $, span, tag } from "./dom.js";
 import { currentScreen } from "./nav.js";
 import { dueLabel, inboxOf, projectName, todoState, useOrcaTodo, viewTasks } from "./todo-data.js";
-import { fitCommentInput } from "./todo-comments.js";
+import { dropComments, fitCommentInput } from "./todo-comments.js";
 import { renderDetail } from "./todo-detail.js";
 import { loadTodo } from "./todo.js";
 
@@ -99,13 +99,21 @@ function drawTab(t: TodoTab) {
   else t.body.replaceChildren(pending());
 }
 
-// What follows the data: the part's list, the tabs of tasks that are gone closed, and the screen told to draw the tabs again (their names, their details).
+// The tabs (their IDs and names) as the screen was last told of them: it is drawn again only when they change.
+let drawnTabs = "";
+
+// What follows the data: the part's list, the tabs of tasks that are gone closed, the details of the tabs in the page drawn in place, and the screen told to draw the tabs again when a name or the tabs changed.
 function drawFollow() {
   stamp++;
   drawList();
   if (tabs.size === 0) return;
   // Not before the data is read: a task that is not there yet is not a task that is gone (the content the last run kept is not a read of this one).
   if (todoState.todo !== null && !todoState.kept) for (const t of [...tabs.values()]) if (!todoState.taskById.has(t.taskId)) closeTodoTab(t.id);
+  for (const t of tabs.values()) if (t.el.isConnected) drawTab(t);
+  fitCommentInput();
+  const key = JSON.stringify([...tabs.values()].map((t) => [t.id, todoTitleOf(t)]));
+  if (key === drawnTabs) return;
+  drawnTabs = key;
   changed();
 }
 
@@ -143,6 +151,8 @@ export function closeTodoTab(id: string) {
   if (!t) return;
   t.el.remove();
   tabs.delete(id);
+  todoState.descEdit.delete(t.taskId);
+  dropComments(t.taskId);
 }
 
 // Shows each tab of `placements` in its host element and takes every other tab out of the page (it keeps what it holds and its scroll). The detail is drawn again when the data was drawn since.

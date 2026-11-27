@@ -1,4 +1,4 @@
-import { callsOf, comment, count, mock, onceId, popoutTab, sendPopout, textsOf, todoData, waitForCalls, waitForCount } from "../support";
+import { account, callsOf, comment, count, mock, onceId, popoutTab, sendPopout, textsOf, todoData, waitForCalls, waitForCount } from "../support";
 import { filesToggle, openOrca, orcaOverview, pickItem, project, sample, selectedTab, tabOf, worktrees } from "../orca-support";
 
 // A-49: the Todo part of the file pane and the tab of a task in the work pane. The tasks are the Todo screen's own (T-1; its reads are the Todo spec's); here the screen is checked: what the part draws from them, what a press opens, and what the tab does.
@@ -133,6 +133,35 @@ describe("orca: the Todo part of the file pane and the tab of a task (A-49)", ()
     await $(".orca-todo-detail .parent-link").click();
     expect(await taskTabs()).toEqual(["task:1", "task:2"]);
     await expect(tabOf("task:1").$(".orca-tab-btn")).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("keeps the look of the work pane while the description is edited, cancelled or saved unchanged: no mail card, no grip, and a subtask opens a tab beside (A-49)", async () => {
+    const base = todoData();
+    const withText = { ...base, tasks: base.tasks.map((t) => (t.id === "k2" ? { ...t, description: "Plan it", mail: { account, threadId: "t1" } } : t)) };
+    await openTodo({ todoist_load: withText });
+    await pick("p1");
+    await waitForCount("#orca-todo-list .orca-todo-row", 2);
+    await row("k2").click();
+    await waitForCount(".orca-todo-detail .subs li.task", 1);
+    const plain = async () => {
+      expect(await count(".orca-todo-detail .mail-link")).toBe(0);
+      expect(await count(".orca-todo-detail .subs .grip")).toBe(0);
+    };
+    await plain();
+    await $(".orca-todo-detail .desc").click();
+    await expect($(".orca-todo-detail .desc-edit")).toBeDisplayed();
+    await plain();
+    await $(".orca-todo-detail .desc-actions").$("button=キャンセル").click();
+    await expect($(".orca-todo-detail .desc")).toBeDisplayed();
+    await plain();
+    await $(".orca-todo-detail .desc").click();
+    await expect($(".orca-todo-detail .desc-edit")).toBeDisplayed();
+    await $(".orca-todo-detail .desc-actions").$("button=保存").click();
+    await expect($(".orca-todo-detail .desc")).toBeDisplayed();
+    await plain();
+    await $(".orca-todo-detail .subs li.task").click();
+    await expect(tabOf("task:2").$(".orca-tab-title")).toHaveText("Book flights");
+    expect(await taskTabs()).toEqual(["task:1", "task:2"]);
   });
 
   it("writes through the commands of the Todo screen, and the tab closes when the task is completed (A-49)", async () => {
