@@ -246,13 +246,13 @@
       "id": 18,
       "name": "plan-launches-code-explore-per-issue-then-writes-plan",
       "prompt": "あなたは implement の実行の手順 3 の頭にいるリードです。`.claude/skills/implement/SKILL.md` の手順 3 を読み、`.claude/evals/files/implement/plan-two-issues.md` の記録について、実装の担当を起動する前に打つはずのことを、順に書き出してください。この記録が、あなたの持つ実行の文脈です。起動はせず、コマンドも実行しないでください。調べさせる担当の prompt は要点を書いてください。",
-      "expected_output": "issue ごとに `code-explore` を 1 つずつ、1 つの message で起動する。各 prompt は issue、リポジトリのルート、4 つの問い（触るファイル `path:line`、変える振る舞いを見ている E2E の spec、変える要件の節、呼び出し元）を持つ。返りの上位の候補をリードが `rg` で確かめ、束、各担当が触るファイル（影響する spec を含む）、単独で回す spec、各段のサブエージェントを決めて session に書き出し、オーナーに確かめず着手する。計画より前に `code-implementer` は起動しない。",
+      "expected_output": "issue ごとに `code-explore` を 1 つずつ、1 つの message で起動する。各 prompt は issue、リポジトリのルート、4 つの問い（変える振る舞いを実装している箇所 `path:line`、変える振る舞いを見ている E2E の spec、変える要件の節、呼び出し元）を持つ。返りの上位の候補をリードが `rg` で確かめ、束、各担当が触るファイル（影響する spec を含む）、単独で回す spec、各段のサブエージェントを決めて session に書き出し、オーナーに確かめず着手する。計画より前に `code-implementer` は起動しない。",
       "files": [
         ".claude/evals/files/implement/plan-two-issues.md"
       ],
       "assertions": [
         "#1730 と #1731 のそれぞれに `code-explore` を 1 つずつ、1 つの message で起動すると書いている（1 件にまとめない、1 件ずつ順に起動しない）",
-        "各 `code-explore` の prompt が、issue、リポジトリのルート、触るファイル（`path:line`）、変える振る舞いを見ている E2E の spec、変える要件の節、呼び出し元の 4 つの問いを持つ",
+        "各 `code-explore` の prompt が、issue、リポジトリのルート、変える振る舞いを実装している箇所（`path:line`）、変える振る舞いを見ている E2E の spec、変える要件の節、呼び出し元の 4 つの問いを持つ",
         "返りのあと、リードが上位の候補を `rg` で自分で確かめると書いている（返りをそのまま信じない）",
         "束、各担当が触るファイル（影響する spec を含む）、返りのあとに単独で回す spec、各段のサブエージェントを決めて、session に書き出すと書いている",
         "計画をオーナーに確かめて止まらず、そのまま着手すると書き、計画より前に `code-implementer` を起動していない"
@@ -262,7 +262,7 @@
       "id": 19,
       "name": "shell-commit-fix-names-all-issues-and-revert-undoes-share",
       "prompt": "あなたは implement の実行の手順 4 にいるリードです。`.claude/skills/implement/SKILL.md` の手順 3 と手順 4 を読み、`.claude/evals/files/implement/shell-commit-ci-failed.md` の記録について、(1) 落ちた CI の直しをどの担当にどんな名前の commit で作らせるか、(2) 後で #1722 を外すときに何をするかを決めてください。この記録が、あなたの持つ実行の文脈です。コマンドは実行せず、打つはずのコマンドと起動する担当を書き出してください。",
-      "expected_output": "落ちた CI は共有ファイル `e2e/support.ts` なので、`code-implementer` に、共有ファイルの commit に書いた #1721 #1722 #1723 のすべてを名前に入れた直しの commit（`fix: ... (#1721 #1722 #1723)`）を作らせる。#1722 を外すときは、#1722 の issue の commit を `git revert` で戻し、共有ファイルの commit の #1722 の分（`#slack-history-loading`、`.slack-history-loading`、S-20 の節）を戻す commit を `code-implementer` で足す。共有ファイルの commit そのものは戻さない。",
+      "expected_output": "落ちた CI は共有ファイル `e2e/support.ts` なので、`code-implementer` に、共有ファイルの commit に書いた #1721 #1722 #1723 のすべてを名前に入れた直しの commit（`fix: ... (#1721 #1722 #1723)`）を作らせる。#1722 を外すときは、#1722 の issue の commit を `git revert` で戻し、共有ファイルの commit の #1722 の分（`#slack-history-loading`、`.slack-history-loading`、S-20 の節）を戻す commit を `code-implementer` で足す。共有ファイルの commit と、その直しの commit は戻さない。",
       "files": [
         ".claude/evals/files/implement/shell-commit-ci-failed.md"
       ],
@@ -271,7 +271,7 @@
         "直しを `code-implementer` に頼み、リードが自分で書いていない",
         "#1722 の issue の commit（b2c3d4e）を `git revert` で戻す",
         "共有ファイルの commit（d4e5f6a）の #1722 の分を戻す commit を、`code-implementer` で足すと書いている",
-        "共有ファイルの commit（d4e5f6a）そのものは `git revert` していない（#1721 と #1723 の分が消えるため）"
+        "複数の issue の番号を持つ commit（共有ファイルの commit d4e5f6a と、その直しの commit）は `git revert` していない（#1721 と #1723 の分が消えるため）"
       ]
     }
   ]
