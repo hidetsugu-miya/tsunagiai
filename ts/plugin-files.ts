@@ -82,21 +82,21 @@ function treeOf(folder: string): Tree {
 }
 
 function icon(svg: string) {
-  const node = tag("span", "orca-file-ic");
+  const node = tag("span", "plugin-file-ic");
   node.innerHTML = svg;
   return node;
 }
 
 function row(folder: string, tree: Tree, entry: PluginEntry, relative: string, depth: number) {
-  const button = tag("button", "orca-file");
+  const button = tag("button", "plugin-file");
   button.type = "button";
   button.dataset.path = relative;
   button.dataset.kind = entry.folder ? "dir" : "file";
   button.dataset.selected = String(tree.selected === relative);
   button.style.setProperty("--depth", String(depth));
-  const mark = tag("span", "orca-file-mark");
+  const mark = tag("span", "plugin-file-mark");
   mark.innerHTML = CHEVRON_SVG;
-  button.append(mark, icon(entry.folder ? FOLDER_SVG : FILE_SVG), tag("span", "orca-file-name", entry.name));
+  button.append(mark, icon(entry.folder ? FOLDER_SVG : FILE_SVG), tag("span", "plugin-file-name", entry.name));
   if (entry.folder) {
     button.setAttribute("aria-expanded", String(tree.expanded.has(relative)));
     button.onclick = () => toggle(folder, relative);
@@ -202,7 +202,7 @@ function setSave(ed: Editor, save: Save) {
 
 // The arrow of a line that can be folded, as the editor of the Orca screen draws it.
 function foldMarker(open: boolean): HTMLElement {
-  const mark = tag("span", open ? "orca-fold open" : "orca-fold");
+  const mark = tag("span", open ? "plugin-fold open" : "plugin-fold");
   mark.innerHTML = CHEVRON_SVG;
   return mark;
 }
@@ -216,12 +216,12 @@ export const isDirty = (folder: string, relative: string) => editors.get(keyOf(f
 export function openEditor(folder: string, relative: string) {
   const key = keyOf(folder, relative);
   if (editors.has(key)) return;
-  const el = tag("div", "orca-edit");
+  const el = tag("div", "plugin-edit");
   el.hidden = true;
-  const head = tag("div", "orca-edit-head");
-  const state = tag("span", "orca-edit-state");
-  const body = tag("div", "orca-edit-body");
-  head.append(tag("span", "orca-edit-path", relative), state);
+  const head = tag("div", "plugin-edit-head");
+  const state = tag("span", "plugin-edit-state");
+  const body = tag("div", "plugin-edit-body");
+  head.append(tag("span", "plugin-edit-path", relative), state);
   el.append(head, body);
   const ed: Editor = { folder, relative, el, state, body, cm: null, signature: "", crlf: false, read: "loading", save: "idle", dirty: false, writing: null, wantFocus: true };
   editors.set(key, ed);

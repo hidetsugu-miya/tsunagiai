@@ -1588,19 +1588,19 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 #orca-panes[data-resizing="column"], #orca-panes[data-resizing="column"] * { cursor: row-resize !important; }
 .orca-pane { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 #orca-panes[data-multi="true"] .orca-pane[data-focused="true"]::after { content: ""; position: absolute; z-index: 2; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent); pointer-events: none; }
-.orca-tabbar { flex: none; display: flex; align-items: center; min-height: max(var(--header-h), calc(32px * var(--fs))); box-sizing: border-box; border-bottom: 1px solid var(--line); background: var(--bar); }
-.orca-tabs { flex: 0 1 auto; min-width: 0; align-self: stretch; display: flex; align-items: flex-end; gap: 2px; padding: 0 0 0 6px; overflow-x: auto; overflow-y: hidden; }
-.orca-plus { flex: none; width: var(--header-btn); height: var(--header-btn); margin: 0 6px 0 2px; color: var(--ink-soft); }
-.orca-plus svg { width: var(--header-ic); height: var(--header-ic); fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
-.orca-tab { flex: none; display: flex; align-items: center; height: calc(max(var(--header-h), calc(32px * var(--fs))) - 4px); max-width: 220px; min-width: 0; box-sizing: border-box; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--muted); }
-.orca-tab:has(.orca-tab-btn[aria-selected="true"]) { border-color: var(--line); background: var(--surface); color: inherit; }
-.orca-tab-btn { display: flex; align-items: center; gap: 6px; min-width: 0; height: 100%; padding: 0 2px 0 10px; border: 0; border-radius: 8px 0 0 0; background: transparent; font: inherit; font-size: calc(12px * var(--fs)); color: inherit; text-align: left; cursor: pointer; }
-.orca-tab-btn:hover { color: var(--accent); }
-.orca-tab-btn[aria-selected="true"] { font-weight: 600; }
-.orca-tab-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.orca-tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.orca-tab-close { flex: none; width: 22px; height: 22px; margin-right: 4px; color: inherit; }
-.orca-tab-close svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.orca-tabbar, .plugin-tabbar { flex: none; display: flex; align-items: center; min-height: max(var(--header-h), calc(32px * var(--fs))); box-sizing: border-box; border-bottom: 1px solid var(--line); background: var(--bar); }
+.orca-tabs, .plugin-tabs { flex: 0 1 auto; min-width: 0; align-self: stretch; display: flex; align-items: flex-end; gap: 2px; padding: 0 0 0 6px; overflow-x: auto; overflow-y: hidden; }
+.orca-plus, .plugin-plus { flex: none; width: var(--header-btn); height: var(--header-btn); margin: 0 6px 0 2px; color: var(--ink-soft); }
+.orca-plus svg, .plugin-plus svg { width: var(--header-ic); height: var(--header-ic); fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.orca-tab, .plugin-tab { flex: none; display: flex; align-items: center; height: calc(max(var(--header-h), calc(32px * var(--fs))) - 4px); max-width: 220px; min-width: 0; box-sizing: border-box; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; color: var(--muted); }
+.orca-tab:has(.orca-tab-btn[aria-selected="true"]), .plugin-tab:has(.plugin-tab-btn[aria-selected="true"]) { border-color: var(--line); background: var(--surface); color: inherit; }
+.orca-tab-btn, .plugin-tab-btn { display: flex; align-items: center; gap: 6px; min-width: 0; height: 100%; padding: 0 2px 0 10px; border: 0; border-radius: 8px 0 0 0; background: transparent; font: inherit; font-size: calc(12px * var(--fs)); color: inherit; text-align: left; cursor: pointer; }
+.orca-tab-btn:hover, .plugin-tab-btn:hover { color: var(--accent); }
+.orca-tab-btn[aria-selected="true"], .plugin-tab-btn[aria-selected="true"] { font-weight: 600; }
+.orca-tab-btn:focus-visible, .plugin-tab-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.orca-tab-title, .plugin-tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.orca-tab-close, .plugin-tab-close { flex: none; width: 22px; height: 22px; margin-right: 4px; color: inherit; }
+.orca-tab-close svg, .plugin-tab-close svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 #orca-panes .orca-empty { margin: 0; padding: 48px 24px; }
 /* The terminal fills the pane. The box of each tab has a definite size (it is placed in the pane), so that the fit counts the rows that show and the bottom is not cut off. */
 #orca-panes .orca-term { position: relative; flex: 1; min-height: 0; overflow: hidden; background: var(--term-bg); }
@@ -1641,32 +1641,32 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-dest-more-btn[aria-expanded="true"] .orca-dest-chev svg { transform: rotate(180deg); }
 #orca-files-tree { flex: 1; min-height: 0; overflow: auto; padding: 4px 4px 8px; }
 #orca-files-tree .pending { margin: 4px; }
-.orca-file { display: flex; align-items: center; gap: 4px; width: 100%; min-width: 0; height: 26px; box-sizing: border-box; padding: 0 8px 0 calc(6px + var(--depth, 0) * 14px); border: 0; border-radius: 6px; background: transparent; font: inherit; font-size: calc(12.5px * var(--fs)); color: inherit; text-align: left; white-space: nowrap; cursor: pointer; }
-.orca-file:hover { background: var(--hover); }
-.orca-file:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.orca-file-mark { flex: none; width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; }
-.orca-file-mark svg { width: 12px; height: 12px; stroke-width: 2; transition: transform .1s; }
-.orca-file[data-kind="file"] .orca-file-mark svg { display: none; }
-.orca-file[aria-expanded="true"] .orca-file-mark svg { transform: rotate(90deg); }
-.orca-file-ic { flex: none; display: inline-flex; color: var(--muted); }
-.orca-file-ic svg { width: 14px; height: 14px; stroke-width: 1.8; }
-.orca-file-ic img { width: 14px; height: 14px; pointer-events: none; }
-.orca-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.orca-file[data-ignored="true"] { opacity: .55; }
-.orca-file[data-ignored="true"] .orca-file-name { font-style: italic; }
-.orca-file[data-open="true"] { background: var(--soft); color: var(--accent); }
-.orca-file[data-open="true"] .orca-file-ic { color: var(--accent); }
+.orca-file, .plugin-file { display: flex; align-items: center; gap: 4px; width: 100%; min-width: 0; height: 26px; box-sizing: border-box; padding: 0 8px 0 calc(6px + var(--depth, 0) * 14px); border: 0; border-radius: 6px; background: transparent; font: inherit; font-size: calc(12.5px * var(--fs)); color: inherit; text-align: left; white-space: nowrap; cursor: pointer; }
+.orca-file:hover, .plugin-file:hover { background: var(--hover); }
+.orca-file:focus-visible, .plugin-file:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.orca-file-mark, .plugin-file-mark { flex: none; width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; }
+.orca-file-mark svg, .plugin-file-mark svg { width: 12px; height: 12px; stroke-width: 2; transition: transform .1s; }
+.orca-file[data-kind="file"] .orca-file-mark svg, .plugin-file[data-kind="file"] .plugin-file-mark svg { display: none; }
+.orca-file[aria-expanded="true"] .orca-file-mark svg, .plugin-file[aria-expanded="true"] .plugin-file-mark svg { transform: rotate(90deg); }
+.orca-file-ic, .plugin-file-ic { flex: none; display: inline-flex; color: var(--muted); }
+.orca-file-ic svg, .plugin-file-ic svg { width: 14px; height: 14px; stroke-width: 1.8; }
+.orca-file-ic img, .plugin-file-ic img { width: 14px; height: 14px; pointer-events: none; }
+.orca-file-name, .plugin-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.orca-file[data-ignored="true"], .plugin-file[data-ignored="true"] { opacity: .55; }
+.orca-file[data-ignored="true"] .orca-file-name, .plugin-file[data-ignored="true"] .plugin-file-name { font-style: italic; }
+.orca-file[data-open="true"], .plugin-file[data-open="true"] { background: var(--soft); color: var(--accent); }
+.orca-file[data-open="true"] .orca-file-ic, .plugin-file[data-open="true"] .plugin-file-ic { color: var(--accent); }
 /* A-39: a change from HEAD gives the name and the icon its color, after the open row's rule and before the selected row's, which stays white. */
-.orca-file[data-change="changed"], .orca-file[data-change="changed"] .orca-file-ic { color: var(--warn); }
-.orca-file[data-change="new"], .orca-file[data-change="new"] .orca-file-ic { color: var(--diff-ins-mark); }
+.orca-file[data-change="changed"], .orca-file[data-change="changed"] .orca-file-ic, .plugin-file[data-change="changed"], .plugin-file[data-change="changed"] .plugin-file-ic { color: var(--warn); }
+.orca-file[data-change="new"], .orca-file[data-change="new"] .orca-file-ic, .plugin-file[data-change="new"], .plugin-file[data-change="new"] .plugin-file-ic { color: var(--diff-ins-mark); }
 .orca-file-git { flex: none; margin-left: auto; padding-left: 8px; font-size: calc(11px * var(--fs)); }
 .orca-file[data-kind="dir"] .orca-file-git { width: 6px; height: 6px; box-sizing: border-box; margin-right: 2px; padding: 0; border-radius: 50%; background: currentColor; }
-.orca-file[data-selected="true"] { background: var(--accent); color: var(--on-accent); }
-.orca-file[data-selected="true"] .orca-file-ic { color: var(--on-accent); }
+.orca-file[data-selected="true"], .plugin-file[data-selected="true"] { background: var(--accent); color: var(--on-accent); }
+.orca-file[data-selected="true"] .orca-file-ic, .plugin-file[data-selected="true"] .plugin-file-ic { color: var(--on-accent); }
 .orca-file-new { display: flex; align-items: center; gap: 4px; min-width: 0; height: 26px; box-sizing: border-box; padding: 0 8px 0 calc(6px + var(--depth, 0) * 14px); }
 .orca-file-input { flex: 1; min-width: 0; height: 20px; box-sizing: border-box; padding: 0 8px; border: 1px solid var(--accent); border-radius: 10px; outline: 0; background: var(--surface); font: inherit; font-size: calc(12.5px * var(--fs)); color: inherit; }
 /* A-18: the folder a dragged row would be dropped in (its row, or the tree for the root of the worktree), and the name that follows the pointer. */
-.orca-file[data-drop="true"], #orca-files-tree[data-drop="true"] { background: var(--soft); outline: 2px solid var(--accent); outline-offset: -2px; }
+.orca-file[data-drop="true"], #orca-files-tree[data-drop="true"], .plugin-file[data-drop="true"] { background: var(--soft); outline: 2px solid var(--accent); outline-offset: -2px; }
 /* A-47: a drop from outside on the tree: the line above it with the count and the bar, the spinner on the folder's row, and the question about a name that is taken. */
 #orca-drop { flex: none; display: flex; flex-direction: column; gap: 6px; margin: 6px; padding: 8px 10px; border-radius: 8px; background: var(--soft); font-size: calc(12px * var(--fs)); }
 .orca-drop-text { display: flex; justify-content: space-between; gap: 8px; font-variant-numeric: tabular-nums; }
@@ -1888,7 +1888,7 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 #orca-lsp-reset { margin-left: auto; }
 .orca-edit-lock { flex: none; display: flex; color: var(--muted); }
 .orca-edit-lock svg { width: 13px; height: 13px; stroke-width: 1.8; }
-.orca-edit-state[data-state="outside"] { padding: 0 6px; border-radius: 9px; background: var(--soft); color: var(--accent-text); line-height: 18px; }
+.orca-edit-state[data-state="outside"], .plugin-edit-state[data-state="outside"] { padding: 0 6px; border-radius: 9px; background: var(--soft); color: var(--accent-text); line-height: 18px; }
 .orca-diff-commit { flex: none; margin-right: 8px; padding: 0 6px; border-radius: 8px; background: var(--soft); color: var(--accent); font-family: var(--ff-mono, ) ui-monospace, monospace; font-size: calc(12px * var(--fs)); }
 .orca-files-toggle { flex: none; margin: 0 6px 0 auto; width: var(--header-btn); height: var(--header-btn); color: var(--ink-soft); }
 .orca-files-toggle svg { width: var(--header-ic); height: var(--header-ic); }
@@ -1899,14 +1899,14 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-tab-mode svg { width: var(--header-ic); height: var(--header-ic); }
 .orca-file-tab-ic { color: var(--muted); }
 .orca-file-tab-ic svg { width: 13px; height: 13px; stroke-width: 1.8; }
-.orca-tab-dirty { flex: none; width: 7px; height: 7px; margin-left: 2px; border-radius: 50%; background: var(--accent); }
+.orca-tab-dirty, .plugin-tab-dirty { flex: none; width: 7px; height: 7px; margin-left: 2px; border-radius: 50%; background: var(--accent); }
 #orca-panes .orca-edit-host { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--surface); }
-.orca-edit { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.orca-edit-head { flex: none; display: flex; align-items: center; gap: 12px; height: calc(28px * var(--fs)); box-sizing: border-box; padding: 0 12px; border-bottom: 1px solid var(--line); font-size: calc(12px * var(--fs)); }
-.orca-edit-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.orca-edit-state { flex: none; color: var(--muted); }
-.orca-edit-state[data-state="saved"] { color: var(--accent); }
-.orca-edit-state[data-state="changed"], .orca-edit-state[data-state="missing"], .orca-edit-state[data-state="not-utf8"], .orca-edit-state[data-state="error"] { color: var(--warn); }
+.orca-edit, .plugin-edit { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.orca-edit-head, .plugin-edit-head { flex: none; display: flex; align-items: center; gap: 12px; height: calc(28px * var(--fs)); box-sizing: border-box; padding: 0 12px; border-bottom: 1px solid var(--line); font-size: calc(12px * var(--fs)); }
+.orca-edit-path, .plugin-edit-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.orca-edit-state, .plugin-edit-state { flex: none; color: var(--muted); }
+.orca-edit-state[data-state="saved"], .plugin-edit-state[data-state="saved"] { color: var(--accent); }
+.orca-edit-state[data-state="changed"], .orca-edit-state[data-state="missing"], .orca-edit-state[data-state="not-utf8"], .orca-edit-state[data-state="error"], .plugin-edit-state[data-state="changed"], .plugin-edit-state[data-state="missing"], .plugin-edit-state[data-state="not-utf8"], .plugin-edit-state[data-state="error"] { color: var(--warn); }
 .orca-edit .orca-empty { margin: 0; padding: 48px 24px; }
 .orca-edit-modes { flex: none; display: inline-flex; gap: 2px; }
 .orca-edit-mode { width: calc(22px * var(--fs)); height: calc(22px * var(--fs)); }
@@ -1949,43 +1949,43 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-edit-rich th, .orca-edit-rich td { padding: 4px 10px; border: 1px solid var(--line); }
 .orca-edit-rich th { background: var(--soft); }
 /* A-21: the editor is CodeMirror 6 (src/vendor/codemirror.js, A-18): its own box (`.cm-editor`), numbers (`.cm-gutters`), lines (`.cm-line`) and band of the caret's line (`.cm-activeLine`). It takes the font of the editor (A-20) in the text and in the numbers, and the colors of the page. */
-.orca-edit-body { position: relative; flex: 1; min-height: 0; display: flex; background: var(--surface); }
-.orca-edit-body .cm-editor { flex: 1; min-width: 0; min-height: 0; background: var(--surface); color: CanvasText; }
-.orca-edit-body .cm-editor.cm-focused { outline: none; }
-.orca-edit-body .cm-scroller { font-family: var(--editor-family, ui-monospace, Menlo, monospace); font-size: var(--editor-size, 12.5px); line-height: 1.6; }
-.orca-edit-body .cm-content { padding: 8px 0; tab-size: 2; caret-color: CanvasText; }
-.orca-edit-body .cm-line { padding: 0 12px; }
-.orca-edit-body .cm-content ::selection { background: var(--hl-select); }
+.orca-edit-body, .plugin-edit-body { position: relative; flex: 1; min-height: 0; display: flex; background: var(--surface); }
+.orca-edit-body .cm-editor, .plugin-edit-body .cm-editor { flex: 1; min-width: 0; min-height: 0; background: var(--surface); color: CanvasText; }
+.orca-edit-body .cm-editor.cm-focused, .plugin-edit-body .cm-editor.cm-focused { outline: none; }
+.orca-edit-body .cm-scroller, .plugin-edit-body .cm-scroller { font-family: var(--editor-family, ui-monospace, Menlo, monospace); font-size: var(--editor-size, 12.5px); line-height: 1.6; }
+.orca-edit-body .cm-content, .plugin-edit-body .cm-content { padding: 8px 0; tab-size: 2; caret-color: CanvasText; }
+.orca-edit-body .cm-line, .plugin-edit-body .cm-line { padding: 0 12px; }
+.orca-edit-body .cm-content ::selection, .plugin-edit-body .cm-content ::selection { background: var(--hl-select); }
 /* The numbers: not selected, in the muted color, as wide as the digits of the last number (CodeMirror measures them). */
-.orca-edit-body .cm-editor .cm-gutters { border-right: 1px solid var(--line); background: var(--surface); color: var(--muted); user-select: none; -webkit-user-select: none; }
-.orca-edit-body .cm-lineNumbers .cm-gutterElement { padding: 0 8px 0 12px; min-width: 0; }
+.orca-edit-body .cm-editor .cm-gutters, .plugin-edit-body .cm-editor .cm-gutters { border-right: 1px solid var(--line); background: var(--surface); color: var(--muted); user-select: none; -webkit-user-select: none; }
+.orca-edit-body .cm-lineNumbers .cm-gutterElement, .plugin-edit-body .cm-lineNumbers .cm-gutterElement { padding: 0 8px 0 12px; min-width: 0; }
 /* The band of the line of the caret (A-18): the editor marks the line only while it has the focus and nothing is selected. */
-.orca-edit-body .cm-editor .cm-activeLine { background: var(--cursor-band); }
+.orca-edit-body .cm-editor .cm-activeLine, .plugin-edit-body .cm-editor .cm-activeLine { background: var(--cursor-band); }
 /* The arrows of folding (A-18), right of the numbers: a line that is open shows its arrow (down) only while the pointer is over the numbers, a folded line (right) always. The range that is folded is a small `…` that opens it. */
-.orca-edit-body .cm-foldGutter .cm-gutterElement { padding: 0 4px 0 0; cursor: pointer; }
-.orca-edit-body .orca-fold { height: 100%; width: 14px; display: flex; align-items: center; justify-content: center; color: var(--muted); }
-.orca-edit-body .orca-fold svg { width: 12px; height: 12px; stroke-width: 2; }
-.orca-edit-body .orca-fold.open { visibility: hidden; }
-.orca-edit-body .orca-fold.open svg { transform: rotate(90deg); }
-.orca-edit-body .cm-gutters:hover .orca-fold.open { visibility: visible; }
-.orca-edit-body .orca-fold:hover { color: var(--ink-soft); }
-.orca-edit-body .cm-editor .cm-foldPlaceholder { margin: 0 2px; padding: 0 5px; border: 1px solid var(--code-line); border-radius: 4px; background: var(--code); color: var(--muted); cursor: pointer; }
-.orca-edit-body .cm-editor .cm-foldPlaceholder:hover { color: var(--ink-soft); }
+.orca-edit-body .cm-foldGutter .cm-gutterElement, .plugin-edit-body .cm-foldGutter .cm-gutterElement { padding: 0 4px 0 0; cursor: pointer; }
+.orca-edit-body .orca-fold, .plugin-edit-body .plugin-fold { height: 100%; width: 14px; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+.orca-edit-body .orca-fold svg, .plugin-edit-body .plugin-fold svg { width: 12px; height: 12px; stroke-width: 2; }
+.orca-edit-body .orca-fold.open, .plugin-edit-body .plugin-fold.open { visibility: hidden; }
+.orca-edit-body .orca-fold.open svg, .plugin-edit-body .plugin-fold.open svg { transform: rotate(90deg); }
+.orca-edit-body .cm-gutters:hover .orca-fold.open, .plugin-edit-body .cm-gutters:hover .plugin-fold.open { visibility: visible; }
+.orca-edit-body .orca-fold:hover, .plugin-edit-body .plugin-fold:hover { color: var(--ink-soft); }
+.orca-edit-body .cm-editor .cm-foldPlaceholder, .plugin-edit-body .cm-editor .cm-foldPlaceholder { margin: 0 2px; padding: 0 5px; border: 1px solid var(--code-line); border-radius: 4px; background: var(--code); color: var(--muted); cursor: pointer; }
+.orca-edit-body .cm-editor .cm-foldPlaceholder:hover, .plugin-edit-body .cm-editor .cm-foldPlaceholder:hover { color: var(--ink-soft); }
 /* A-34: the underline of a name that has a definition while the Command key is down, over the editor; the script sets its place and width. */
 .orca-edit-link { position: absolute; z-index: 1; left: 0; top: 0; height: 1px; pointer-events: none; background: var(--accent); }
 /* The colors (A-21): the classes `tok-*` of the editor's highlighter on the variables of `:root`, as the colors of a diff (A-24) are. */
-.orca-edit-body .tok-comment { color: var(--hl-comment); font-style: italic; }
-.orca-edit-body .tok-keyword, .orca-edit-body .tok-labelName { color: var(--hl-keyword); }
-.orca-edit-body .tok-string, .orca-edit-body .tok-string2 { color: var(--hl-string); }
-.orca-edit-body .tok-number, .orca-edit-body .tok-atom, .orca-edit-body .tok-bool, .orca-edit-body .tok-literal, .orca-edit-body .tok-url, .orca-edit-body .tok-link { color: var(--hl-number); }
-.orca-edit-body .tok-definition, .orca-edit-body .tok-heading { color: var(--hl-title); }
-.orca-edit-body .tok-typeName, .orca-edit-body .tok-className, .orca-edit-body .tok-namespace { color: var(--hl-type); }
-.orca-edit-body .tok-propertyName, .orca-edit-body .tok-variableName2 { color: var(--hl-attr); }
-.orca-edit-body .tok-meta, .orca-edit-body .tok-macroName { color: var(--hl-meta); }
-.orca-edit-body .tok-inserted { color: var(--ins); background: var(--soft); }
-.orca-edit-body .tok-deleted { color: var(--del); background: var(--del-bg); }
-.orca-edit-body .tok-emphasis { font-style: italic; }
-.orca-edit-body .tok-heading, .orca-edit-body .tok-strong { font-weight: 700; }
+.orca-edit-body .tok-comment, .plugin-edit-body .tok-comment { color: var(--hl-comment); font-style: italic; }
+.orca-edit-body .tok-keyword, .orca-edit-body .tok-labelName, .plugin-edit-body .tok-keyword, .plugin-edit-body .tok-labelName { color: var(--hl-keyword); }
+.orca-edit-body .tok-string, .orca-edit-body .tok-string2, .plugin-edit-body .tok-string, .plugin-edit-body .tok-string2 { color: var(--hl-string); }
+.orca-edit-body .tok-number, .orca-edit-body .tok-atom, .orca-edit-body .tok-bool, .orca-edit-body .tok-literal, .orca-edit-body .tok-url, .orca-edit-body .tok-link, .plugin-edit-body .tok-number, .plugin-edit-body .tok-atom, .plugin-edit-body .tok-bool, .plugin-edit-body .tok-literal, .plugin-edit-body .tok-url, .plugin-edit-body .tok-link { color: var(--hl-number); }
+.orca-edit-body .tok-definition, .orca-edit-body .tok-heading, .plugin-edit-body .tok-definition, .plugin-edit-body .tok-heading { color: var(--hl-title); }
+.orca-edit-body .tok-typeName, .orca-edit-body .tok-className, .orca-edit-body .tok-namespace, .plugin-edit-body .tok-typeName, .plugin-edit-body .tok-className, .plugin-edit-body .tok-namespace { color: var(--hl-type); }
+.orca-edit-body .tok-propertyName, .orca-edit-body .tok-variableName2, .plugin-edit-body .tok-propertyName, .plugin-edit-body .tok-variableName2 { color: var(--hl-attr); }
+.orca-edit-body .tok-meta, .orca-edit-body .tok-macroName, .plugin-edit-body .tok-meta, .plugin-edit-body .tok-macroName { color: var(--hl-meta); }
+.orca-edit-body .tok-inserted, .plugin-edit-body .tok-inserted { color: var(--ins); background: var(--soft); }
+.orca-edit-body .tok-deleted, .plugin-edit-body .tok-deleted { color: var(--del); background: var(--del-bg); }
+.orca-edit-body .tok-emphasis, .plugin-edit-body .tok-emphasis { font-style: italic; }
+.orca-edit-body .tok-heading, .orca-edit-body .tok-strong, .plugin-edit-body .tok-heading, .plugin-edit-body .tok-strong { font-weight: 700; }
 .orca-diff { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .orca-diff-head { gap: 4px; }
 .orca-diff-head .orca-edit-path { margin-right: 8px; }

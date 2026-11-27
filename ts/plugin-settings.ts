@@ -102,14 +102,14 @@ function drawTabs() {
   const folder = selected;
   $("plugin-tabs").replaceChildren(
     ...(o?.tabs ?? []).map((t) => {
-      const wrap = tag("div", "orca-tab");
+      const wrap = tag("div", "plugin-tab");
       wrap.setAttribute("role", "presentation");
-      const select = tag("button", "orca-tab-btn");
+      const select = tag("button", "plugin-tab-btn");
       select.type = "button";
       select.setAttribute("role", "tab");
       select.setAttribute("aria-selected", String(t.id === o?.active));
-      select.append(tag("span", "orca-tab-title", t.title));
-      if (folder !== null && t.file !== undefined && isDirty(folder, t.file)) select.append(tag("span", "orca-tab-dirty"));
+      select.append(tag("span", "plugin-tab-title", t.title));
+      if (folder !== null && t.file !== undefined && isDirty(folder, t.file)) select.append(tag("span", "plugin-tab-dirty"));
       select.onclick = () => {
         if (!o) return;
         o.active = t.id;
@@ -119,7 +119,7 @@ function drawTabs() {
         rereadFiles();
       };
       // The close button is beside the tab, not in it, so that pressing it never selects the tab.
-      const close = tag("button", "icon-btn orca-tab-close");
+      const close = tag("button", "icon-btn plugin-tab-close");
       close.type = "button";
       close.setAttribute("aria-label", "閉じる");
       close.innerHTML = CLOSE_SVG;
