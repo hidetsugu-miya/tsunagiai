@@ -1,4 +1,5 @@
-import { askScreen, boot, callsOf, claudeKeyReady, claudeMissing, claudeReady, comment, copiedTexts, count, dueToday, holds, inbox, mock, onceId, pickFile, rejects, release, setClock, slackLoad, slackMessageUrl, slackSummary, stubClipboard, task, textsOf, today, todoData, waitForCalls, waitForCount, waitForText, openTodo, taskHit, CARD, CARDS, WARN_CARDS, waitForCard } from "../support";
+import { askScreen, boot, callsOf, claudeKeyReady, claudeMissing, claudeReady, comment, copiedTexts, count, dueToday, holds, inbox, mock, onceId, pickFile, rejects, release, sendPopout, setClock, slackLoad, slackMessageUrl, slackSummary, stubClipboard, task, textsOf, today, todoData, waitForCalls, waitForCount, waitForText, openTodo, taskHit, CARD, CARDS, WARN_CARDS, waitForCard } from "../support";
+import { pickItem } from "../orca-support";
 
 // A press as a mouse makes it. WebDriver's element click sends no pointerdown, which is what closes a popover (as in calendar.e2e.ts).
 const press = (target: ChainablePromiseElement) => browser.action("pointer").move({ origin: target }).down().up().perform();
@@ -4169,5 +4170,131 @@ describe("todo: tabs of task details (T-10)", () => {
       await expect($("#todo-split")).toHaveAttribute("aria-label", "詳細の幅");
       await expect($("#todo-split")).toHaveAttribute("aria-orientation", "vertical");
     });
+  });
+});
+
+// T-11: the tab of a task in a window of its own. Rust makes the window (unit tests) and the page of the window is `orca-popout.e2e.ts`; here the screen is checked: the menu of a tab, what it asks of `orca_popout_open`, and what it does with what the owner did in the window.
+describe("todo: a task's tab in a window of its own (T-11)", () => {
+  const tabTitles = () => textsOf("#todo-tabs .orca-tab-title");
+  const selectedTitle = () => browser.execute(() => document.querySelector('#todo-tabs [aria-selected="true"] .orca-tab-title')?.textContent ?? null);
+  // What the screen gives for the task `id`.
+  const windowOf = (id: string, title: string) => ({ tab: `todo:${id}`, project: "todo", title, status: "done", label: "", environment: null, content: { kind: "todo", id } });
+  const rightClick = (id: string) =>
+    browser.execute(
+      (tab, once) => {
+        if (!window.__e2e_once__(once)) return;
+        document.querySelector(`#todo-tabs [data-tab="${tab}"]`)!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 }));
+      },
+      id,
+      onceId(),
+    );
+  // The Todo screen on the list of Work, with the tabs of "Write report" and "Plan trip" open.
+  async function openTabs() {
+    await boot({ inbox: inbox(), todoist_load: todoData(), slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await $('#projects .proj[data-view="p1"]').click();
+    await waitForCount(ROWS, 2);
+    await rowOf("Write report").click();
+    await rowOf("Plan trip").click();
+    expect(await tabTitles()).toEqual(["Write report", "Plan trip"]);
+  }
+  async function popOut(id: string) {
+    await rightClick(id);
+    await pickItem("別ウィンドウで開く");
+  }
+
+  it("opens a menu with one row on the right button of a tab", async () => {
+    await openTabs();
+    await rightClick("k1");
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["別ウィンドウで開く"]);
+    expect(await count('.menu[role="menu"] svg')).toBe(1);
+  });
+
+  it("asks orca_popout_open for the task, takes the tab out of the strip, and selects its neighbour", async () => {
+    await openTabs();
+    await rowOf("Write report").click();
+    expect(await selectedTitle()).toBe("Write report");
+    await popOut("k1");
+    expect(await waitForCalls("orca_popout_open")).toEqual([{ tab: windowOf("k1", "Write report") }]);
+    expect(await tabTitles()).toEqual(["Plan trip"]);
+    expect(await selectedTitle()).toBe("Plan trip");
+    await expect($("#todo-detail .name")).toHaveValue("Plan trip");
+  });
+
+  it("gives the tab back at the end of the strip, selected, with the message, when the window cannot be made", async () => {
+    await openTabs();
+    const opened = await mock("orca_popout_open", rejects("別ウィンドウを開けませんでした: test"));
+    await popOut("k1");
+    await waitForCalls(opened);
+    await expect($(CARD)).toHaveText("別ウィンドウを開けませんでした: test");
+    expect(await tabTitles()).toEqual(["Plan trip", "Write report"]);
+    expect(await selectedTitle()).toBe("Write report");
+  });
+
+  it("brings the window to the front, and makes no tab, when the row of its task is pressed", async () => {
+    await openTabs();
+    await popOut("k1");
+    await waitForCalls("orca_popout_open");
+    const focused = await mock("orca_popout_focus", null);
+    await rowOf("Write report").click();
+    expect(await waitForCalls(focused)).toEqual([{ tab: "todo:k1" }]);
+    expect(await tabTitles()).toEqual(["Plan trip"]);
+    expect(await selectedTitle()).toBe("Plan trip");
+  });
+
+  it("asks for the window of a task again with the same one: the second press of its row is no new window", async () => {
+    await openTabs();
+    await popOut("k1");
+    await waitForCalls("orca_popout_open");
+    const opened = await mock("orca_popout_open", "tab-1");
+    await rowOf("Write report").click();
+    expect(await callsOf(opened)).toEqual([]);
+  });
+
+  it("puts the tab back at the end of the strip, selected, and ends the window, when the window's button at the right end is pressed", async () => {
+    await openTabs();
+    await popOut("k1");
+    await waitForCalls("orca_popout_open");
+    const ended = await mock("orca_popout_end", null);
+    await sendPopout({ kind: "restore", tab: "todo:k1" });
+    expect(await waitForCalls(ended)).toEqual([{ tab: "todo:k1" }]);
+    expect(await tabTitles()).toEqual(["Plan trip", "Write report"]);
+    expect(await selectedTitle()).toBe("Write report");
+    await expect($("#todo-detail .name")).toHaveValue("Write report");
+  });
+
+  it("ends the window and leaves no tab when the red button of the window is pressed", async () => {
+    await openTabs();
+    await popOut("k1");
+    await waitForCalls("orca_popout_open");
+    const ended = await mock("orca_popout_end", null);
+    await sendPopout({ kind: "close", tab: "todo:k1" });
+    expect(await waitForCalls(ended)).toEqual([{ tab: "todo:k1" }]);
+    expect(await tabTitles()).toEqual(["Plan trip"]);
+    // Pressing the row again opens a tab, as the window is gone.
+    await rowOf("Write report").click();
+    expect(await tabTitles()).toEqual(["Plan trip", "Write report"]);
+  });
+
+  it("ends the window of a task that a reload no longer has", async () => {
+    await openTabs();
+    await popOut("k1");
+    await waitForCalls("orca_popout_open");
+    const ended = await mock("orca_popout_end", null);
+    const data = todoData();
+    await mock("todoist_load", { ...data, tasks: data.tasks.filter((t) => t.id !== "k1") });
+    await browser.execute((id) => window.__e2e_once__(id) && document.dispatchEvent(new Event("visibilitychange")), onceId());
+    expect(await waitForCalls(ended)).toEqual([{ tab: "todo:k1" }]);
+  });
+
+  it("tells the window the new name of its task as the data says it", async () => {
+    await openTabs();
+    await popOut("k1");
+    await waitForCalls("orca_popout_open");
+    const updated = await mock("orca_popout_update", null);
+    const data = todoData();
+    await mock("todoist_load", { ...data, tasks: data.tasks.map((t) => (t.id === "k1" ? { ...t, content: "Write the report" } : t)) });
+    await browser.execute((id) => window.__e2e_once__(id) && document.dispatchEvent(new Event("visibilitychange")), onceId());
+    expect(await waitForCalls(updated)).toEqual([{ was: "todo:k1", tab: windowOf("k1", "Write the report") }]);
   });
 });

@@ -6,7 +6,7 @@ import { CLOSE_SVG, COPY_SVG, DATE_SVG, FOLDER_SVG, MAIL_SVG, OUTDENT_SVG, PLUS_
 import { rowButton } from "./inbox-rows.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { commentsSection, fitCommentInput } from "./todo-comments.js";
-import { accountSet, dueLabel, linkedMail, markdownHtml, PRIORITY_COLORS, projectName, projectOf, todoState } from "./todo-data.js";
+import { accountSet, dueLabel, isTaskWindow, linkedMail, markdownHtml, PRIORITY_COLORS, projectName, projectOf, todoState } from "./todo-data.js";
 import { checkBox, gripOf, openMailFromTodo } from "./todo-list.js";
 import { createLabel, moveTask, saveTask, setTaskDone, todoCall } from "./todo-write.js";
 import { openTodoTab } from "./todo.js";
@@ -346,7 +346,8 @@ function subtaskRow(s: TaskItem["subtasks"][number]) {
       rowButton("unparent-row", "親タスクから外す", OUTDENT_SVG, () => moveTask(t.id, t.projectId)),
     );
     trail.append(actions);
-    li.append(gripOf(li, t));
+    // The grip drags onto a project of the list or a row of tasks, which the window of a task has none of (T-11).
+    if (!isTaskWindow()) li.append(gripOf(li, t));
   }
   li.append(trail);
   return li;
@@ -599,7 +600,8 @@ export function renderDetail(box: HTMLElement, id: string) {
     if (parent.description) below.push(parentDescPanel(parent.id));
     parts.unshift(...below);
   }
-  const mail = linkedMail(t, accountSet());
+  // The mail is opened on the mail screen, which the window of a task has not (T-11).
+  const mail = isTaskWindow() ? null : linkedMail(t, accountSet());
   if (mail) {
     const card = tag("div", "mail-link");
     card.insertAdjacentHTML("beforeend", MAIL_SVG);

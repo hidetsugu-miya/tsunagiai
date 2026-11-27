@@ -1,14 +1,16 @@
 // The Todo screen: which part it shows, loading and refreshing from Todoist, and the header's back button and the menu of the open task.
 import type { Offline } from "./bindings/Offline";
+import type { PopoutTab } from "./bindings/PopoutTab";
 import type { TaskItem } from "./bindings/TaskItem";
 import type { Todo } from "./bindings/Todo";
 import { $, tag } from "./dom.js";
 import { pad2 } from "./format.js";
-import { CLOSE_SVG, COPY_SVG, DELETE_SVG, LINK_SVG } from "./icons.js";
+import { CLOSE_SVG, COPY_SVG, DELETE_SVG, LINK_SVG, POPOUT_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
-import { closeMenu, showMenu } from "./menu.js";
+import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { HandoffPane } from "./orca-handoff.js";
+import { focusPopout, initTodoPopout, popOut, syncTodoPopouts } from "./orca-popout.js";
 import { todoCard } from "./orca-handoff-cards.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
 import { onScreenChanged } from "./screen-bridge.js";
@@ -27,6 +29,21 @@ const TODO_REFRESH_MS = 10 * 1000;
 
 // The pane that hands the open task to Orca (A-9).
 let handoff: HandoffPane;
+
+// The page that holds the detail of one task and not the screen (the window of a task, T-11) gives these three, and then the modules of the detail (`todo-detail.ts`, `todo-write.ts`, `todo-comments.ts`) call them in place of the screen's:
+// draw what the data says, read the data again (true when a token is needed), and open another task (a window has no strip, so it opens none).
+export interface TodoOwner {
+  render: () => void;
+  load: (quiet: boolean, withDone: boolean) => Promise<boolean>;
+  open: (id: string) => void;
+}
+let owner: TodoOwner | null = null;
+export function ownTodo(page: TodoOwner) {
+  owner = page;
+}
+
+// The id the window of the task `id` has among the windows of the app (T-11).
+const windowOf = (id: string) => `todo:${id}`;
 
 // The right side is there while the task list is shown, and holds the tabs of the task details (T-10). The pane that hands the selected task to Orca (A-9) is in it too, under the detail.
 let sideUsable = false;
@@ -139,13 +156,17 @@ export function showTokenForm() {
 }
 
 // Opens the task `id` in a tab of the side and selects it, or selects the tab it has already (T-10). A row of a list, a subtask row and the parent chip of a detail do it.
+// A task that is in a window has no tab: the window is brought to the front instead (T-11).
 export function openTodoTab(id: string) {
+  if (owner) return owner.open(id);
+  if (focusPopout(windowOf(id))) return;
   openTab(id);
   renderTodo();
 }
 
 // Shows the detail of task `id` on the Todo screen, in its tab (the row of a task in the pane of the notices, A-35). Until the screen's own load has drawn, the task is the one it opens on.
 export function openTodoTask(id: string) {
+  if (focusPopout(windowOf(id))) return;
   openTab(id);
   setScreen("todo");
   if (todoState.todo) renderTodo();
@@ -177,6 +198,10 @@ function drawTabs() {
       renderTodo();
     };
     wrap.append(select, close);
+    wrap.oncontextmenu = (e) => {
+      e.preventDefault();
+      openMenu(select, [{ label: "別ウィンドウで開く", color: "var(--accent)", icon: POPOUT_SVG, current: false, pick: () => void popOutTask(id) }]);
+    };
     return wrap;
   });
   $("todo-tabs").replaceChildren(...nodes);
@@ -200,7 +225,27 @@ function renderSide() {
   syncTodoHandoff();
 }
 
+// The tab of the task `id` as a window of its own (T-11): the window shows the task as Todoist has it now, with the name of the tab as its title.
+const popoutOf = (id: string, title: string): PopoutTab => ({ tab: windowOf(id), project: "todo", title, status: "done", label: "", environment: null, content: { kind: "todo", id } });
+
+// Puts the tab of the task `id` in a window: it leaves the strip at once (its neighbour is selected, and what was typed in its description is dropped), and comes back when the window could not be made.
+async function popOutTask(id: string) {
+  const task = todoState.taskById.get(id);
+  if (!task || !todoState.tabs.includes(id)) return;
+  closeTab(id);
+  renderTodo();
+  await popOut(popoutOf(id, task.content));
+}
+
+// What the data says of the window of a task now: its name, null when the task is gone (completed, deleted, in a project that went), and undefined when the data is not read yet (the kept content is not).
+function lookTask(entry: PopoutTab): PopoutTab | null | undefined {
+  if (entry.content.kind !== "todo" || !todoState.todo || todoState.kept) return undefined;
+  const task = todoState.taskById.get(entry.content.id);
+  return task ? popoutOf(task.id, task.content) : null;
+}
+
 export function renderTodo() {
+  if (owner) return owner.render();
   todoState.undrawn = false;
   if (!projectOf(todoState.view) && todoState.view !== "today" && todoState.view !== "inbox") todoState.view = "today";
   // A task that is gone from the data (completed, deleted) loses its tab.
@@ -214,6 +259,7 @@ export function renderTodo() {
     renderList();
     renderSide();
   }
+  syncTodoPopouts(lookTask);
 }
 
 // The card that says the list is the last one fetched (A-28, `setNotice`): a warning, drawn while the Todo screen is shown.
@@ -241,6 +287,7 @@ let quietFails = 0;
 // Fetches the tasks and draws them. `quiet` is the timed refresh: it fetches nothing while a field is being typed in, and draws nothing when nothing changed.
 // Without `withDone` the backend reuses the completed tasks it fetched last, unless `doneStale` says it has none. Returns true when a token is needed (the token form is shown).
 export async function loadTodo(quiet = false, withDone = true) {
+  if (owner) return owner.load(quiet, withDone);
   if (quiet && (editingField() || todoState.writes)) return false;
   const seq = ++todoState.seq;
   try {
@@ -417,6 +464,18 @@ async function refreshTodo() {
 }
 
 export function initTodo() {
+  initTodoPopout({
+    // The tab comes back at the end of the strip, selected; a task that Todoist no longer has comes back as nothing.
+    restore: (id) => {
+      if (!todoState.todo || !todoState.taskById.has(id)) return;
+      openTab(id);
+      renderTodo();
+    },
+    closed: (id) => {
+      if (todoState.descEdit?.id === id) todoState.descEdit = null;
+    },
+    failed: (e) => showFailure("todo", e),
+  });
   const inList = listToggle("プロジェクト一覧", toggleList);
   inList.id = "projects-toggle";
   $("projects").prepend(inList);

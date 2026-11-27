@@ -121,8 +121,16 @@ export function dueTasks() {
   return counted.filter((t) => t.dueAt !== null && t.dueAt <= now);
 }
 
+// Set on the page of the window of a task (T-11), which holds the detail of one task and nothing else: the count of the side menu and of the Dock is the main page's, and the rows of the detail that open another tab, a mail or a drag have nowhere to go.
+let taskWindow = false;
+export const isTaskWindow = () => taskWindow;
+export const useTaskWindow = () => {
+  taskWindow = true;
+};
+
 // Remembers `tasks` (the open tasks, subtasks included) as what the count is made of, and counts them. An empty list clears the count.
 export function setTodoCount(tasks: TaskItem[]) {
+  if (taskWindow) return;
   counted = tasks;
   recountTodo();
 }
@@ -161,7 +169,8 @@ export const accountSet = () => new Set(accountList());
 export function editingField() {
   if (todoState.dragging) return true;
   const a = document.activeElement as HTMLElement;
-  if ($("todo-list").contains(a)) return a.matches(".row-edit");
+  // The window of a task (T-11) has no list.
+  if ($("todo-list")?.contains(a)) return a.matches(".row-edit");
   return $("todo-detail").contains(a) && a.matches("textarea, input:not([type=checkbox])") && ((a.dataset.field !== "sub" && a.dataset.field !== "comment") || (a as HTMLInputElement).value !== "");
 }
 

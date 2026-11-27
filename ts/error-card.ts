@@ -37,11 +37,18 @@ export function showFailure(source: string, e: unknown) {
   logError(source, e);
   const text = textOf(e);
   if ([...document.querySelectorAll(".error-card-text")].some((n) => n.textContent === text)) return;
-  const log = tag("button", "text-btn error-card-log", "ログを見る");
-  log.type = "button";
+  const log = logButton();
   const { root, close } = card(text, [log]);
   close.onclick = () => root.remove();
+}
+
+// The button that opens the log tab of the settings, or none on a page that has no settings screen (the window of a task, T-11).
+function logButton() {
+  if (document.getElementById("settings") === null) return null;
+  const log = tag("button", "text-btn error-card-log", "ログを見る");
+  log.type = "button";
   log.onclick = () => setScreen("settings", "log");
+  return log;
 }
 
 // A button of a notice: `run` gets the button, so that it can be disabled while the work goes on.
@@ -94,11 +101,8 @@ function actionButtons(held: Held) {
 
 function makeNotice(key: string, notice: Notice, actions: NoticeAction[], labels: string) {
   const held: Held = { text: notice.text, root: null, actions, labels };
-  const log = tag("button", "text-btn error-card-log", "ログを見る");
-  log.type = "button";
-  log.onclick = () => setScreen("settings", "log");
   const box = tag("div", "error-card-actions");
-  box.append(...actionButtons(held), log);
+  box.append(...actionButtons(held), ...[logButton()].filter((b) => b !== null));
   const { root, close } = card(notice.text, [box], notice.warn ? WARN_CLASS : "");
   close.onclick = () => {
     root.remove();

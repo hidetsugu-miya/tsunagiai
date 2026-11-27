@@ -4,6 +4,7 @@
 // except for a file, whose text and save this page holds: Rust tells this page (the channel), which closes the file as the × of a pane does and then asks for the close (`orca_popout_close`).
 // A kind of tab that this page can show has a function in `shows`; the terminal of a Claude session and of a plain terminal is shown as the Orca screen shows it (the owner of its terminals is this window), with the font and the colors the settings give the terminals.
 // A diff, a definition and a database tab (A-24, A-34, A-43) are opened here with the modules of the Orca screen, from the conditions of the tab (the file of the difference and its commit, the question of the definition, the table with its tab, page and SQL); a diff is read again by the clock too, and a place that a definition tab opens is shown by the Orca screen in its own pane.
+// A task of the Todo screen (T-11) is drawn here by `ts/todo-window.ts`: the detail of the Todo screen, which reads and writes the task through the `todoist_*` commands.
 // A file (A-18, A-29) is opened here with the editor of the Orca screen (`ts/orca-editor.ts`), read from the disk again: nothing of the editor it left (the undo history, the scroll, the caret) comes with it. Its disk is read by the clock (the watch of the disk belongs to the Orca screen), its language server is the one that screen started, and what its editor opens next (a definition, A-34) is shown by the Orca screen in its own pane (`orca_popout_definition`).
 import type { PopoutPage } from "./bindings/PopoutPage";
 import type { PopoutTab } from "./bindings/PopoutTab";
@@ -18,7 +19,8 @@ import { closeFile, initOrcaEditor, openFile, refreshEditors, saveFile, setAutos
 import { closeDatabaseTab, initDatabaseTabs, restoreDatabaseTab, showDatabaseTabs } from "./orca-database-tabs.js";
 import { closeDefinition, initDefinition, openDefinition, showDefinitions } from "./orca-definition.js";
 import { closeDiff, openDiff, refreshDiffs, showDiffs } from "./orca-diff.js";
-import { databaseIcon, definitionIcon, diffIcon, fileIcon, lockIcon, statusIcon } from "./orca-status.js";
+import { databaseIcon, definitionIcon, diffIcon, fileIcon, lockIcon, statusIcon, todoIcon } from "./orca-status.js";
+import { showTodo } from "./todo-window.js";
 import { applyTerminalFont, applyTerminalSettings, applyTerminalTheme, hideTerminals, initOrcaTerminal, showTerminals } from "./orca-terminal.js";
 
 const OWNER = "orca-popout";
@@ -61,13 +63,23 @@ const shows: { [K in PopoutTab["content"]["kind"]]: (tab: PopoutTab & { content:
     const { connection, name, database, table, tab: selected, page, sql } = tab.content;
     showDocument(tab, () => restoreDatabaseTab(tab.environment, tab.project, { connection, name, database, table, tab: selected, page, sql }).id, closeDatabaseTab, showDatabaseTabs);
   },
+  todo: (tab) => {
+    showBody("todo");
+    showTodo(tab.content.id, {
+      fail,
+      named: (name) => {
+        $("popout-name").textContent = name;
+      },
+      gone: () => void invoke("orca_popout_close").catch(fail),
+    });
+  },
 };
 
 // The diff, the definition or the database tab that this page opened from the conditions of its tab: it is opened again only when the tab's conditions are other than the ones it was opened with (the screen gives the tab at each change of its name or status too).
 let opened: { key: string; id: string; close: (id: string) => void } | null = null;
 
 function showDocument(tab: PopoutTab, open: () => string, close: (id: string) => void, show: (placements: { id: string; host: HTMLElement }[]) => void) {
-  showBody(true);
+  showBody("file");
   const key = JSON.stringify([tab.environment, tab.project, tab.content]);
   if (opened?.key !== key) {
     opened?.close(opened.id);
@@ -76,20 +88,21 @@ function showDocument(tab: PopoutTab, open: () => string, close: (id: string) =>
   show([{ id: opened.id, host: $("popout-file") }]);
 }
 
-// The body is the terminal or the editor of the tab (a window shows one tab).
-function showBody(file: boolean) {
-  $("popout-term").hidden = file;
-  $("popout-file").hidden = !file;
+// The body is the terminal, the editor (a file, a diff, a definition, a database) or the detail of a task of the tab (a window shows one tab).
+function showBody(shown: "term" | "file" | "todo") {
+  $("popout-term").hidden = shown !== "term";
+  $("popout-file").hidden = shown !== "file";
+  $("popout-todo").hidden = shown !== "todo";
 }
 
 function showFile(tab: PopoutTab & { content: { kind: "file" } }) {
   const { path, relative, server } = tab.content;
-  showBody(true);
+  showBody("file");
   showEditors([{ id: openFile(tab.environment, tab.project, path, relative, server, tab.tab), host: $("popout-file") }]);
 }
 
 function showTerminal(tab: PopoutTab & { content: { kind: "claude" | "terminal" } }) {
-  showBody(false);
+  showBody("term");
   const { handle, path, stream, ended } = tab.content;
   const source = { kind: stream ? ("stream" as const) : ("mirror" as const), handle, path, environment: tab.environment, ended };
   showTerminals([{ id: handle, source, host: $("popout-term") }], handle, OWNER);
@@ -102,6 +115,7 @@ function iconOf(tab: PopoutTab) {
   if (content.kind === "diff") return diffIcon();
   if (content.kind === "definition") return definitionIcon();
   if (content.kind === "database") return databaseIcon();
+  if (content.kind === "todo") return todoIcon();
   return statusIcon(tab.status, tab.label);
 }
 

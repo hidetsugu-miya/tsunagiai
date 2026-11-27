@@ -11,7 +11,7 @@ body { font-family: var(--ff-base); font-size: calc(14px * var(--fs)); margin: 0
 #mail-header, #inbox-header, #new-mail-header, #mail-area, #mail-side { --fs: var(--fs-mail, 1); font-family: var(--ff-mail, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #calendar { --fs: var(--fs-calendar, 1); font-family: var(--ff-calendar, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #projects { --fs: var(--fs-todo-list, 1); font-family: var(--ff-todo-list, var(--ff-base)); font-size: calc(14px * var(--fs)); }
-#todo-body, #todo-side, #todo-handoff { --fs: var(--fs-todo-work, 1); font-family: var(--ff-todo-work, var(--ff-base)); font-size: calc(14px * var(--fs)); }
+#todo-body, #todo-side, #todo-handoff, #popout-todo { --fs: var(--fs-todo-work, 1); font-family: var(--ff-todo-work, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #slack-side, #slack-list, #slack-channel, #slack-thread { --fs: var(--fs-slack, 1); font-family: var(--ff-slack, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #orca-list { --fs: var(--fs-orca-list, 1); font-family: var(--ff-orca-list, var(--ff-base)); font-size: calc(14px * var(--fs)); }
 #orca-work, #orca-files { --fs: var(--fs-orca-pane, 1); font-family: var(--ff-orca-pane, var(--ff-base)); font-size: calc(14px * var(--fs)); }
@@ -1984,6 +1984,9 @@ body#popout { flex-direction: column; overflow: hidden; }
 #popout-head .icon-btn[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
 #popout-term { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
 #popout-file { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--surface); }
+/* T-11: the window of a task holds the detail of the Todo screen (#todo-detail, whose rules apply), scrolled as #todo-pane is. */
+#popout-todo { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 16px 32px; background: var(--surface); }
+#popout-todo ul { list-style: none; margin: 0; padding: 0; }
 /* The host of a Claude Code pane (A-36), as `#orca-panes .orca-term` is the host of an Orca terminal: the box of the terminal fills it. */
 .claude-code-pane { position: relative; flex: 1; min-height: 0; background: var(--term-bg); }
 .orca-drop { position: fixed; z-index: 30; box-sizing: border-box; border: 2px solid var(--accent); border-radius: 8px; background: var(--soft); opacity: .6; pointer-events: none; }
