@@ -963,7 +963,11 @@ select[data-effort="max"] { --eff: var(--effort-max); --eff-bg: var(--effort-max
 .plugin-skill { padding: 0 10px 0 22px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .plugins-main { flex: 1; min-width: 0; align-self: stretch; display: flex; flex-direction: column; min-height: 560px; }
 #plugin-term { flex: 1; min-height: 0; }
-#plugin-files { flex: none; width: 0; align-self: stretch; }
+#plugin-files { box-sizing: border-box; flex: none; display: flex; flex-direction: column; width: 260px; min-height: 0; align-self: stretch; border-left: 1px solid var(--line); }
+.plugin-files-head { flex: none; display: flex; align-items: center; gap: 8px; min-height: max(var(--header-h), calc(32px * var(--fs))); box-sizing: border-box; padding: 0 6px 0 12px; border-bottom: 1px solid var(--line); background: var(--bar); font-size: calc(12px * var(--fs)); }
+.plugin-files-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+#plugin-tree { flex: 1; min-height: 0; overflow: auto; padding: 4px 4px 8px; }
+#plugin-editors { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--surface); }
 .card-add { display: flex; gap: 8px; padding: 12px 12px 14px 20px; border-top: 1px solid var(--line); background: var(--bar); border-radius: 0 0 12px 12px; }
 .card-add input { flex: 1; min-width: 0; height: 32px; padding: 0 14px; border: 1px solid var(--chip-line); border-radius: 16px; font: inherit; background: var(--surface); }
 .card-add input:focus { outline: 2px solid var(--accent); border-color: transparent; }

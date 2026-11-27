@@ -73,7 +73,6 @@ ts/            TypeScript, compiled by tsc to src/js/ (gitignored). No framework
 ts/bindings/   Rust struct types written by ts-rs (generated, committed)
 src/           index.html, CSS, vendored libraries (src/vendor/) and the JetBrains file icons (src/vendor/jetbrains-icons/)
 src-tauri/     Rust backend (Tauri v2); src/bin/tsunagiai-mcp.rs is the MCP server
-src-tauri/formation/  the leader's skill and the children's plugin of A-41, embedded in the binary by build.rs
 e2e/           WebdriverIO specs, fixtures and mocks
 scripts/       check-version.sh, install-app.sh, make-latest-json.sh, build-milkdown.mjs and milkdown-entry.js (bundle src/vendor/milkdown.js), build-codemirror.mjs and codemirror-entry.js (bundle src/vendor/codemirror.js)
 docs/          public documentation (GitHub Pages)
