@@ -226,6 +226,20 @@
         "レビュアー（code-reviewer と performance-reviewer）を起動すると書き、レビューを省いていない",
         "`release-verifier` を、レビュアーが返ってから起動すると書いている"
       ]
+    },
+    {
+      "id": 17,
+      "name": "shell-files-only-overlap-runs-in-one-bundle",
+      "prompt": "あなたは implement の実行の手順 3 にいるリードです。`.claude/skills/implement/SKILL.md` の手順 3 を読み、`.claude/evals/files/implement/bundle-shell-files-only.md` の issue について、束の組み立てと、担当の起動の prompt の要点と、担当が返ったあとの commit までの流れを決めてください。この記録が、あなたの持つ実行の文脈です。起動はせず、コマンドも実行しないでください。打つはずのコマンドと、起動するはずの担当を書き出してください。",
+      "expected_output": "3 件は `src/index.html` と `src/style.css` だけを共有するので重ならず、1 つの束で 3 人を 1 つの message で同時に起動する。起動の prompt は共有ファイルを触らせず、消すものと足すものを返りに書かせる。返りのあと 1 人の担当で共有ファイルをまとめて直し、3 件の番号をすべて書いた commit を最後に作る。",
+      "files": [
+        ".claude/evals/files/implement/bundle-shell-files-only.md"
+      ],
+      "assertions": [
+        "3 件を 1 つの束にして、3 人の `code-implementer` を 1 つの message で同時に起動する（後の束に回さない）",
+        "起動の prompt が、`src/index.html` と `src/style.css` を触らせず、消すものと足すものを返りに書かせている",
+        "返りのあと、共有ファイルを 1 人の `code-implementer` でまとめて直し、#1721 #1722 #1723 のすべてを書いた commit を issue ごとの commit のあとに作る"
+      ]
     }
   ]
 }
