@@ -2488,7 +2488,7 @@ function bagOut(projectId: string) {
 
 describe("todo detail: moving a subtask", () => {
   const SUBS = "#todo-detail .subs li.task";
-  const dragSub = (name: string, ...over: ChainablePromiseElement[]) => dragFrom(() => subRowOf(name), ...over);
+  const dragSub = (name: string, ...over: (ChainablePromiseElement | Spot)[]) => dragFrom(() => subRowOf(name), ...over);
   // The row buttons show on hover, which the driver never does: press one in the page.
   const pressSub = (name: string, button: string) =>
     browser.execute(
@@ -2589,9 +2589,17 @@ describe("todo detail: moving a subtask", () => {
     await waitForCount(SUBS, 1);
   });
 
-  it("makes a subtask the subtask of another subtask it is dropped on, marking that row on the way", async () => {
+  // The left edge and the top and bottom of the subtask row `name` in the detail.
+  const subBoxOf = (name: string) =>
+    browser.execute((n) => {
+      const li = [...document.querySelectorAll<HTMLElement>("#todo-detail .subs li.task")].find((l) => l.textContent!.includes(n))!;
+      const { left, top, bottom } = li.getBoundingClientRect();
+      return { left, top, bottom };
+    }, name);
+
+  it("draws a line under a subtask at the depth of its subtasks, and puts the subtask there as its last, though the detail shows none of them", async () => {
     await openTrip();
-    const moveUnder = await mock("todoist_move_under", true);
+    const place = await mock("todoist_place", true);
     // What Todoist answers once "Pack bag" (k5) is the last subtask of "Book flights" (k3).
     const after = tripWithBag();
     const [, trip, flights, , bag] = after.tasks;
@@ -2601,31 +2609,73 @@ describe("todo detail: moving a subtask", () => {
     trip.subtasks = trip.subtasks.filter((x) => x.id !== bag.id);
     trip.subTotal--;
     await mock("todoist_load", after);
+    await watchLines();
     await watchDrops();
-    await dragSub("Pack bag", subRowOf("Book flights"));
-    expect(await waitForCalls(moveUnder)).toEqual([{ id: "k5", parentId: "k3" }]);
-    expect(await dropsSeen()).toEqual(["k3"]);
+    // Measured before the drop, which redraws the detail.
+    const box = await subBoxOf("Book flights");
+    // Below "Book flights" the depth 0 is where "Pack bag" is already, so only the depth 1 is offered, whatever the x.
+    await dragSub("Pack bag", await spot(subRowOf("Book flights"), 4, "lower"));
+    const line = (await linesSeen()).at(-1)!;
+    expect(line.left).toBeCloseTo(box.left + INDENT, 0);
+    expect(line.top + 1).toBeCloseTo(box.bottom, 0);
+    // "Book flights" has a subtask already ("Pick seat"), which the detail does not show: the row goes last.
+    expect(await waitForCalls(place)).toEqual([{ id: "k5", parentId: "k3", projectId: null, beforeId: null }]);
+    // No row is marked: the line is the mark.
+    expect(await dropsSeen()).toEqual([]);
     await waitForCount(SUBS, 1);
     await expect($("#todo-detail .subs")).not.toHaveText(expect.stringContaining("Pack bag"));
-    await expect($(".dragging, .drop")).not.toExist();
+    await expect($(".dragging, .drop, .drop-line")).not.toExist();
   });
 
-  it("does not mark or accept the subtask's own row", async () => {
+  it("draws the line at the left edge of the subtasks, and puts the subtask after the last, in the detail's own order", async () => {
     await openTrip();
-    const moveUnder = await mock("todoist_move_under", true);
+    const place = await mock("todoist_place", true);
+    // What Todoist answers once "Book flights" (k3) is the last subtask of "Plan trip" (k2).
+    const after = tripWithBag();
+    after.tasks[1].subtasks.reverse();
+    await mock("todoist_load", after);
+    await watchLines();
+    const box = await subBoxOf("Pack bag");
+    await dragSub("Book flights", await spot(subRowOf("Pack bag"), 4, "lower"));
+    const line = (await linesSeen()).at(-1)!;
+    expect(line.left).toBeCloseTo(box.left, 0);
+    expect(line.top + 1).toBeCloseTo(box.bottom, 0);
+    expect(await waitForCalls(place)).toEqual([{ id: "k3", parentId: "k2", projectId: null, beforeId: null }]);
+    await browser.waitUntil(async () => (await textsOf(SUBS))[0]?.includes("Pack bag"), { timeoutMsg: "the detail did not follow the order" });
+    expect(await count(SUBS)).toBe(2);
+  });
+
+  it("puts a subtask before the one the line is above", async () => {
+    await openTrip();
+    const place = await mock("todoist_place", true);
+    await watchLines();
+    const box = await subBoxOf("Book flights");
+    await dragSub("Pack bag", await spot(subRowOf("Book flights"), 4, "upper"));
+    const line = (await linesSeen()).at(-1)!;
+    expect(line.left).toBeCloseTo(box.left, 0);
+    expect(line.top + 1).toBeCloseTo(box.top, 0);
+    expect(await waitForCalls(place)).toEqual([{ id: "k5", parentId: "k2", projectId: null, beforeId: "k3" }]);
+  });
+
+  it("draws no line, and calls nothing, where the subtask is already", async () => {
+    await openTrip();
+    const place = await mock("todoist_place", true);
+    await watchLines();
     await watchDrops();
-    await dragSub("Book flights", subRowOf("Book flights"));
+    // Above and below its own row, and above "Pack bag" where its own row would not count: the place it has.
+    await dragSub("Book flights", await spot(subRowOf("Book flights"), 4, "upper"), await spot(subRowOf("Book flights"), 4, "lower"));
+    expect(await linesSeen()).toEqual([]);
     expect(await dropsSeen()).toEqual([]);
-    expect(await callsOf(moveUnder)).toEqual([]);
-    await expect($(".dragging, .drop")).not.toExist();
+    expect(await callsOf(place)).toEqual([]);
+    await expect($(".dragging, .drop, .drop-line")).not.toExist();
     expect(await count(SUBS)).toBe(2);
   });
 
   it("puts the row back and shows the error when the move fails", async () => {
     await openTrip();
-    const moveUnder = await mock("todoist_move_under", rejects("Todoist に接続できません"));
-    await dragSub("Pack bag", subRowOf("Book flights"));
-    await waitForCalls(moveUnder);
+    const place = await mock("todoist_place", rejects("Todoist に接続できません"));
+    await dragSub("Pack bag", await spot(subRowOf("Book flights"), 4, "lower"));
+    await waitForCalls(place);
     // The reload brings back what Todoist has: both subtasks under "Plan trip".
     await waitForCount(SUBS, 2);
     await expect($(CARD)).toHaveText(expect.stringContaining("Todoist に接続できません"));

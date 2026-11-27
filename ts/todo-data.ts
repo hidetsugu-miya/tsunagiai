@@ -283,19 +283,21 @@ function byDue(a: TaskItem, b: TaskItem) {
 
 // The places the task `t` may be dropped at, in the gap before `rows[gap]` (the IDs of the rows of the open list of a project, top to bottom; `rows.length` is the gap after the last), by depth, the shallowest first (T-2).
 // The rows of `t` and of its subtasks are left out, as they leave when it moves: the row above the gap and the row below it are the ones that remain, so a place under `t` itself or under one of its subtasks is never offered.
+// `root` is the task of an open detail, whose subtasks are the rows (T-6): they stand in the place of the top level (depth 0 is a subtask of `root`), and the subtasks of a row are not shown, so the task goes last under a row.
 // Between the row above (A) and the row below (B) the depths run from B's to one more than A's: at each the task is a sibling of A or of one of its parents, after it, or at the deepest a child of A.
 // Not offered: the place `t` has now, and, at the top level, a place that the list's order by due moment would not keep.
-export function placesAt(rows: string[], gap: number, t: TaskItem): Place[] {
+export function placesAt(rows: string[], gap: number, t: TaskItem, root?: TaskItem): Place[] {
   const shown = (id: string) => id !== t.id && !isUnder(todoState.taskById.get(id)!, t.id);
   let above: string | undefined;
   for (const id of rows.slice(0, gap)) if (shown(id)) above = id;
   const below = rows.slice(gap).find(shown);
   const ancestry = (id: string) => {
     const chain: TaskItem[] = [];
-    for (let x = todoState.taskById.get(id); x; x = x.parent ? todoState.taskById.get(x.parent.id) : undefined) chain.unshift(x);
+    for (let x = todoState.taskById.get(id); x && x.id !== root?.id; x = x.parent ? todoState.taskById.get(x.parent.id) : undefined) chain.unshift(x);
     return chain;
   };
   const chain = above ? ancestry(above) : [];
+  const kidsShown = (p: TaskItem | null) => (root ? p?.id === root.id : !p || todoState.openTasks.has(p.id));
   const siblings = (parent: TaskItem | null) => (parent ? subRows(parent) : viewTasks(todoState.view)).filter((s) => s.id !== t.id);
   const nextOf = (list: TaskItem[], x: TaskItem) => list[list.findIndex((s) => s.id === x.id) + 1]?.id ?? null;
   // The sibling that follows `t` where it is now.
@@ -304,9 +306,9 @@ export function placesAt(rows: string[], gap: number, t: TaskItem): Place[] {
   const nowBefore = own[own.findIndex((s) => s.id === t.id) + 1]?.id ?? null;
   const places: Place[] = [];
   for (let depth = below ? ancestry(below).length - 1 : 0; depth <= chain.length; depth++) {
-    const parent = depth > 0 ? chain[depth - 1] : null;
+    const parent = depth > 0 ? chain[depth - 1] : root ?? null;
     // Under the row above: before its first subtask when they are shown, else last. Elsewhere: before the sibling that follows the row above or its parent at this depth.
-    const beforeId = depth < chain.length ? nextOf(siblings(parent), chain[depth]) : !parent || todoState.openTasks.has(parent.id) ? siblings(parent)[0]?.id ?? null : null;
+    const beforeId = depth < chain.length ? nextOf(siblings(parent), chain[depth]) : kidsShown(parent) ? siblings(parent)[0]?.id ?? null : null;
     if ((parent?.id ?? null) === (t.parent?.id ?? null) && beforeId === nowBefore) continue;
     if (!parent) {
       const next = beforeId === null ? undefined : todoState.taskById.get(beforeId);

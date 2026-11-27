@@ -326,12 +326,12 @@ function projectTarget(el: Element | null | undefined, t: TaskItem) {
   return proj.dataset.view !== "today" && (viewProjectId(proj.dataset.view!) !== t.projectId || t.parent) ? proj : null;
 }
 
-// What the task `t` may be dropped on at `el` when the list draws no line (the flat "今日" list, a search, the detail): a project in the side list (not "today"; the project it is in only when it is a subtask, which then stands alone),
-// or the row of another task it may become a subtask of: a row of the list, or a subtask row of the open task's detail.
+// What the task `t` may be dropped on at `el` when the list draws no line (the flat "今日" list, a search): a project in the side list (not "today"; the project it is in only when it is a subtask, which then stands alone),
+// or the row of another task it may become a subtask of.
 function dropTarget(el: Element | null | undefined, t: TaskItem) {
   const proj = projectTarget(el, t);
   if (proj !== undefined) return proj;
-  const row = el?.closest<HTMLElement>("#todo-list li.task, #todo-detail .subs li.task[data-id]");
+  const row = el?.closest<HTMLElement>("#todo-list li.task");
   return row && canMoveUnder(t, row.dataset.id!) ? row : null;
 }
 
@@ -406,20 +406,22 @@ function pressDrag<T extends object>(
   document.addEventListener("keydown", onKey);
 }
 
-// What a drag of the task `t` in a project's list lands on: a project of the side list, or a place of the list, with where its line is drawn (T-2).
+// What a drag of the task `t` in a project's list or in a detail's subtasks lands on: a project of the side list, or a place among the rows, with where its line is drawn (T-2, T-6).
 type ListDrop = HTMLElement | (Place & { left: number; right: number; top: number });
 
-// The place of the list at the pointer `e` over `el`: the gap at the nearer edge of the row under it (or at its height, over the indent left of it), at the depth that its x is nearest to among the depths the gap offers (`placesAt`).
-// Its line starts at the indent of that depth, from the left of the list.
-function placeAt(el: Element | null | undefined, e: PointerEvent, t: TaskItem): ListDrop | null {
-  const rows = [...document.querySelectorAll<HTMLElement>("#todo-list li.task")];
+// The place among the rows at the pointer `e` over `el`: the gap at the nearer edge of the row under it (or at its height, over the indent left of it), at the depth that its x is nearest to among the depths the gap offers (`placesAt`).
+// The rows are the list's, or, with `root` (the task of the open detail), its open subtasks, which are all at depth 0 (a done one has no place to be dropped at). Its line starts at the indent of that depth, from the left of the rows.
+function placeAt(el: Element | null | undefined, e: PointerEvent, t: TaskItem, root?: TaskItem): ListDrop | null {
+  const [rowQuery, boxQuery] = root ? ["#todo-detail .subs li.task[data-id]:not(.done)", "#todo-detail .subs"] : ["#todo-list li.task", "#todo-list"];
+  const rows = [...document.querySelectorAll<HTMLElement>(rowQuery)];
   // Over the indent left of a subtask row there is no row: the row at the pointer's height counts, so the pointer can go left to a shallower depth.
-  const row = el?.closest<HTMLElement>("#todo-list li.task") ?? (el?.closest("#todo-list") ? rows.find((r) => r.getBoundingClientRect().top <= e.clientY && e.clientY < r.getBoundingClientRect().bottom) : undefined);
+  const row = el?.closest<HTMLElement>(rowQuery) ?? (el?.closest(boxQuery) ? rows.find((r) => r.getBoundingClientRect().top <= e.clientY && e.clientY < r.getBoundingClientRect().bottom) : undefined);
   if (!row) return null;
   const box = row.getBoundingClientRect();
   const lower = e.clientY > box.top + box.height / 2;
-  const places = placesAt(rows.map((r) => r.dataset.id!), rows.indexOf(row) + (lower ? 1 : 0), t);
-  const list = row.parentElement!.getBoundingClientRect();
+  const places = placesAt(rows.map((r) => r.dataset.id!), rows.indexOf(row) + (lower ? 1 : 0), t, root);
+  // The list's rows are indented by their own margin, so its left is the list's; the detail's rows are all at depth 0, so theirs is the row's.
+  const list = (root ? row : row.parentElement!).getBoundingClientRect();
   const want = (e.clientX - list.left) / INDENT;
   let best: Place | undefined;
   for (const p of places) if (!best || Math.abs(p.depth - want) < Math.abs(best.depth - want)) best = p;
@@ -444,9 +446,9 @@ function showListDrop(next: ListDrop | null, prev: ListDrop | null) {
   dropLine.style.width = `${next.right - next.left}px`;
 }
 
-// The grip at a row's left edge: drag it onto a project in the side list to move the task there, or, in a project's list, to a line between rows, which puts it there (T-2).
-// The flat "今日" list and a search have no order of a project to draw, and the detail has its own rows: there the row under the pointer is marked, and a drop makes the task its subtask.
-export function gripOf(li: HTMLElement, t: TaskItem) {
+// The grip at a row's left edge: drag it onto a project in the side list to move the task there, or, in a project's list and among the subtasks of a detail (`root` is its task), to a line between rows, which puts it there (T-2, T-6).
+// The flat "今日" list and a search have no order of a project to draw: there the row under the pointer is marked, and a drop makes the task its subtask.
+export function gripOf(li: HTMLElement, t: TaskItem, root?: TaskItem) {
   const grip = tag("span", "grip");
   grip.setAttribute("role", "img");
   grip.setAttribute("aria-label", "ドラッグしてプロジェクトまたは親タスクへ移動");
@@ -456,11 +458,11 @@ export function gripOf(li: HTMLElement, t: TaskItem) {
   grip.onpointerdown = (e) => {
     if (e.button !== 0) return;
     e.preventDefault();
-    if (li.closest("#todo-list") && todoState.view !== "today" && !searching()) {
+    if (root || (li.closest("#todo-list") && todoState.view !== "today" && !searching())) {
       let last: ListDrop | null = null;
       // The same place gives the same object, so a move that does not change it draws nothing.
       const find = (el: Element | null | undefined, ev: PointerEvent) => {
-        const next = projectTarget(el, t) ?? placeAt(el, ev, t);
+        const next = projectTarget(el, t) ?? placeAt(el, ev, t, root);
         const same = last && next && !(next instanceof HTMLElement) && !(last instanceof HTMLElement) && next.parentId === last.parentId && next.beforeId === last.beforeId && next.top === last.top && next.left === last.left;
         if (!same) last = next;
         return last;

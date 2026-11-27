@@ -327,7 +327,7 @@ export interface DetailHost {
 }
 const SCREEN: DetailHost = { open: (id) => openTodoTab(id), get plain() { return isTaskWindow(); } };
 
-function subtaskRow(s: TaskItem["subtasks"][number], { open, plain }: DetailHost) {
+function subtaskRow(s: TaskItem["subtasks"][number], { open, plain }: DetailHost, parent: TaskItem) {
   const li = tag("li", `task single${s.done ? " done" : ""}`);
   const box = checkBox(PRIORITY_COLORS[4], s.done, s.done ? "未完了に戻す" : "完了にする");
   box.onchange = () => {
@@ -354,8 +354,8 @@ function subtaskRow(s: TaskItem["subtasks"][number], { open, plain }: DetailHost
       rowButton("unparent-row", "親タスクから外す", OUTDENT_SVG, () => moveTask(t.id, t.projectId)),
     );
     trail.append(actions);
-    // The grip drags onto a project of the list or a row of tasks, which the window of a task has none of (T-11).
-    if (!plain) li.append(gripOf(li, t));
+    // The grip drags onto a project of the list or to a line between the subtasks, which the window of a task has none of (T-11).
+    if (!plain) li.append(gripOf(li, t, parent));
   }
   li.append(trail);
   return li;
@@ -628,7 +628,7 @@ export function renderDetail(box: HTMLElement, id: string, at: DetailHost = SCRE
     title.append(bar);
   }
   const subs = tag("ul", "subs");
-  subs.append(...t.subtasks.map((s) => subtaskRow(s, at)), ...creating.filter((c) => c.parentId === t.id).map(creatingRow));
+  subs.append(...t.subtasks.map((s) => subtaskRow(s, at, t)), ...creating.filter((c) => c.parentId === t.id).map(creatingRow));
   const add = tag("div", "add-sub");
   add.insertAdjacentHTML("beforeend", PLUS_SVG);
   const input = tag("input");
