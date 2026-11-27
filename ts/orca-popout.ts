@@ -6,6 +6,8 @@
 // A diff, a definition and a database tab (A-24, A-34, A-43) stay in the memory of the screen, away from their pane: the window reads them again from the conditions it was given (`orca_popout_open`), and what it changes after that (the page of the records, the text of the SQL) is not taken back by a restore.
 // A file in a window (A-18, A-29) is held by the page of its window, not here: it is saved and closed there before the tab leaves its pane, so this module keeps only its entry; the tab stays in the layout (it is away whether the list holds it or not), and coming back opens the file again in its pane with the id it had.
 // What the editor of a file window opens next (the definition of a name, A-34) comes from the window by the same channel, and the screen shows it in its own pane.
+// The tab of a task of the Todo screen (T-11) is held here the same way, by its id `todo:{id}`, with a second owner: the Todo screen (`TodoPopoutHost`). The Orca screen never sees it (`syncPopouts` leaves it out), and the Todo screen sees only its own.
+// A task's tab of the Orca work pane (A-49) can be put in the same window; the window then goes back to where it came from (`home`): the button at the right end opens the tab in the work pane again, in the Todo screen's own windows the strip of the Todo screen.
 import type { PopoutAction } from "./bindings/PopoutAction";
 import type { PopoutTab } from "./bindings/PopoutTab";
 import { invoke } from "./ipc.js";
@@ -24,6 +26,13 @@ export interface PopoutHost {
   failed: (e: unknown) => void;
 }
 
+// What the Todo screen does for its windows (T-11): puts the tab of a task back in its strip, selected (the window's button at the right end, and a window that could not be made), drops what belongs to a tab that was closed (the red button), and shows a failure.
+export interface TodoPopoutHost {
+  restore: (id: string) => void;
+  closed: (id: string) => void;
+  failed: (e: unknown) => void;
+}
+
 const windows = new Map<string, PopoutTab>();
 let host: PopoutHost = { changed: () => {}, close: async () => false, reopen: () => {}, definition: () => {}, place: () => {}, lost: () => {}, failed: () => {} };
 
@@ -31,6 +40,11 @@ let host: PopoutHost = { changed: () => {}, close: async () => false, reopen: ()
 export const isAway = (tab: string) => windows.has(tab);
 
 // The ids of the tabs of the project `project` that are in a window: a terminal while `live` (the tabs the list holds) has it, a file always (the window holds it).
+let todoHost: TodoPopoutHost = { restore: () => {}, closed: () => {}, failed: () => {} };
+// The windows of tasks that came from the work pane of the Orca screen, by the id of the window, and what puts such a tab back there.
+const workHomes = new Set<string>();
+let workRestore: (id: string) => void = () => {};
+
 export const awayIn = (project: string, live: string[]) => [...windows.values()].filter((w) => w.project === project && (w.content.kind === "file" || live.includes(w.tab))).map((w) => w.tab);
 
 // The id of the tab that holds the file `relative` of the worktree at `path` in a window (`outside`: the file that a definition named outside the worktree), none when no window holds it: the file is not opened a second time.
@@ -40,21 +54,27 @@ export const awayFile = (target: string | null, project: string, path: string, r
 // Whether a window holds a file of the worktree at `path` of `target`: its language server is still wanted (A-34).
 export const awayFileIn = (target: string | null, path: string) => [...windows.values()].some((w) => w.environment === target && w.content.kind === "file" && w.content.path === path);
 
-// Puts the tab in a window: it leaves its pane at once (the draw stops its terminal here), and comes back when the window could not be made.
-export async function popOut(tab: PopoutTab) {
+// Puts the tab in a window: it leaves its pane at once (the draw stops its terminal here), and comes back when the window could not be made. The tab of a task has left the strip of the Todo screen (or, with `fromWork`, the work pane of the Orca screen) before it is given.
+export async function popOut(tab: PopoutTab, fromWork = false) {
   if (windows.has(tab.tab)) return;
   windows.set(tab.tab, tab);
-  host.changed();
+  if (fromWork) workHomes.add(tab.tab);
+  const task = tab.content.kind === "todo" ? tab.content.id : null;
+  if (task === null) host.changed();
   try {
     await invoke("orca_popout_open", { tab });
   } catch (e) {
     if (windows.get(tab.tab) === tab) {
       windows.delete(tab.tab);
-      // A file left the editor of this page to be saved and opened in the window: it is opened here again.
-      host.reopen(tab);
-      host.changed();
+      const home = workHomes.delete(tab.tab) ? workRestore : todoHost.restore;
+      if (task !== null) home(task);
+      else {
+        // A file left the editor of this page to be saved and opened in the window: it is opened here again.
+        host.reopen(tab);
+        host.changed();
+      }
     }
-    host.failed(e);
+    (task === null ? host : todoHost).failed(e);
   }
 }
 
@@ -69,6 +89,17 @@ export function focusPopout(tab: string) {
 // The page of a file window closed the file before it asked for the close or the restore, so only the restore has something to do for it: the file opens again in its pane. A diff, a definition and a database tab are kept by the screen, so the restore only shows them again.
 async function act(action: PopoutAction) {
   const entry = windows.get(action.tab);
+  // The window of a task (T-11): the red button closes its tab, which is in no strip, so only the window ends; the button at the right end puts the tab back in the strip of the Todo screen.
+  if (entry?.content.kind === "todo") {
+    if (action.kind !== "close" && action.kind !== "restore") return;
+    const { id } = entry.content;
+    windows.delete(action.tab);
+    const home = workHomes.delete(action.tab) ? workRestore : todoHost.restore;
+    await invoke("orca_popout_end", { tab: action.tab }).catch(todoHost.failed);
+    if (action.kind === "restore") home(id);
+    else todoHost.closed(id);
+    return;
+  }
   if (action.kind === "definition") {
     if (entry !== undefined) host.definition({ ...action.query, tab: action.tab });
     return;
@@ -98,12 +129,19 @@ const same = (a: unknown, b: unknown): boolean => {
 };
 
 // Gives each window what the list says of its tab now: `look` answers the tab as it is (its id may have changed, a plain terminal where Claude starts), null when the list no longer has it (its window ends), and undefined when the list cannot say (it is not read, or not on the screen).
-export function syncPopouts(look: (entry: PopoutTab) => PopoutTab | null | undefined) {
+export const syncPopouts = (look: (entry: PopoutTab) => PopoutTab | null | undefined) => sync(false, look);
+
+// The same for the windows of the tasks (T-11), which the Todo screen gives as it has the data: a task that is gone (completed, deleted, its project archived) ends its window, and a new name is given to it.
+export const syncTodoPopouts = (look: (entry: PopoutTab) => PopoutTab | null | undefined) => sync(true, look);
+
+function sync(todo: boolean, look: (entry: PopoutTab) => PopoutTab | null | undefined) {
   for (const [id, entry] of [...windows]) {
+    if ((entry.content.kind === "todo") !== todo) continue;
     const now = look(entry);
     if (now === undefined) continue;
     if (now === null) {
       windows.delete(id);
+      workHomes.delete(id);
       invoke("orca_popout_end", { tab: id }).catch(host.failed);
     } else if (!same(now, entry)) {
       windows.delete(id);
@@ -111,6 +149,15 @@ export function syncPopouts(look: (entry: PopoutTab) => PopoutTab | null | undef
       invoke("orca_popout_update", { was: id, tab: now }).catch(host.failed);
     }
   }
+}
+
+export function initTodoPopout(screen: TodoPopoutHost) {
+  todoHost = screen;
+}
+
+// What puts the tab of a task back in the work pane of the Orca screen (A-49), for a window that came from there.
+export function initWorkTodoPopout(restore: (id: string) => void) {
+  workRestore = restore;
 }
 
 export function initPopout(screen: PopoutHost) {

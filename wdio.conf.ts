@@ -36,7 +36,7 @@ const freePorts = async (count: number) => {
 // `wdio:maxInstances: 1` keeps two workers out of one app.
 const namedSpecs = [
   ["./e2e/specs/orca.e2e.ts", "./e2e/specs/thread.e2e.ts", "./e2e/specs/footer.e2e.ts"],
-  ["./e2e/specs/slack-list.e2e.ts", "./e2e/specs/orca-handoff.e2e.ts", "./e2e/specs/todo-claude.e2e.ts"],
+  ["./e2e/specs/slack-list.e2e.ts", "./e2e/specs/orca-handoff.e2e.ts"],
   ["./e2e/specs/orca-files.e2e.ts", "./e2e/specs/todo-prompt.e2e.ts"],
   ["./e2e/specs/formation.e2e.ts", "./e2e/specs/slack-thread.e2e.ts"],
   ["./e2e/specs/todo.e2e.ts", "./e2e/specs/database.e2e.ts", "./e2e/specs/calendar.e2e.ts"],

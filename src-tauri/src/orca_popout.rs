@@ -92,6 +92,15 @@ pub struct PopoutDatabase {
     pub sql: String,
 }
 
+/// The task of Todoist that a task's tab (T-11) shows: its id, which Todoist makes of ASCII letters and digits (`valid_id` of `todoist.rs`). The tab's id is `todo:{id}`, its project is `todo` and it has no environment.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct PopoutTodo {
+    pub id: String,
+}
+
 /// What a window shows, by the kind of the tab.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
@@ -104,6 +113,7 @@ pub enum PopoutContent {
     Diff(PopoutDiff),
     Definition(PopoutDefinition),
     Database(PopoutDatabase),
+    Todo(PopoutTodo),
 }
 
 /// A tab of the screen that is in a window: its id and project (which `orca_panes` keeps its place under), the name and the status its header shows, where it is (`environment`: null for this machine) and what it shows.
@@ -237,6 +247,11 @@ fn check_text(what: &str, text: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The project of the tab of a task (T-11): the Todo screen is no Orca project, so the key is a fixed one that no Orca project has (those begin `proj_`).
+const TODO_PROJECT: &str = "todo";
+/// The most that the id of a task holds.
+const MAX_TASK_ID: usize = 64;
+
 /// Checks what the screen gave: every text is one line of a size that Orca's list can hold, and a tab that has a terminal names it.
 fn check(tab: &PopoutTab) -> Result<(), String> {
     check_text("タブ", &tab.tab)?;
@@ -287,6 +302,21 @@ fn check(tab: &PopoutTab) -> Result<(), String> {
             check_text("名前", &q.word)?;
             if q.text.len() > MAX_DEFINITION_TEXT {
                 return Err("ファイルが大きすぎます".into());
+            }
+        }
+        PopoutContent::Todo(t) => {
+            // The tab is the task's own (`todo:{id}`), of the Todo screen: no Orca project and no place of its own.
+            if t.id.is_empty()
+                || t.id.len() > MAX_TASK_ID
+                || !t.id.bytes().all(|b| b.is_ascii_alphanumeric())
+            {
+                return Err("タスクが正しくありません".into());
+            }
+            if tab.tab != format!("todo:{}", t.id)
+                || tab.project != TODO_PROJECT
+                || tab.environment.is_some()
+            {
+                return Err("タスクのタブが正しくありません".into());
             }
         }
         PopoutContent::Database(d) => {
@@ -1111,6 +1141,66 @@ mod tests {
                 sql: "select 1\nfrom t".into(),
             }),
         }
+    }
+
+    fn todo_tab(id: &str) -> PopoutTab {
+        PopoutTab {
+            tab: format!("todo:{id}"),
+            project: "todo".into(),
+            title: "レポートを書く".into(),
+            status: OrcaStatus::Done,
+            label: String::new(),
+            environment: None,
+            content: PopoutContent::Todo(PopoutTodo { id: id.into() }),
+        }
+    }
+
+    #[test]
+    fn a_task_tab_names_a_task_of_todoist_and_belongs_to_no_orca_project() {
+        assert!(check(&todo_tab("6X7rM8997g3RQmvh")).is_ok());
+        assert!(check(&todo_tab("k2")).is_ok());
+        assert!(check(&todo_tab(&"a".repeat(MAX_TASK_ID))).is_ok());
+        // An id that Todoist does not make: empty, too long, with a mark or a space, or not ASCII.
+        for bad in ["", "a-b", "a_b", "a b", "a\nb", "あ", "a/b"] {
+            assert!(check(&todo_tab(bad)).is_err(), "{bad:?}");
+        }
+        assert!(check(&todo_tab(&"a".repeat(MAX_TASK_ID + 1))).is_err());
+        // The tab is the task's own, of the Todo screen, with no place.
+        let mut other = todo_tab("k2");
+        other.tab = "todo:k3".into();
+        assert!(check(&other).is_err());
+        let mut project = todo_tab("k2");
+        project.project = "proj_a".into();
+        assert!(check(&project).is_err());
+        let mut place = todo_tab("k2");
+        place.environment = Some("Studio".into());
+        assert!(check(&place).is_err());
+        // A title may be empty or hold what Todoist holds, as long as it is one line.
+        let mut long = todo_tab("k2");
+        long.title = "あ".repeat(100);
+        assert!(check(&long).is_ok());
+        long.title = "a\nb".into();
+        assert!(check(&long).is_err());
+        assert!(!has_document(&todo_tab("k2").content));
+    }
+
+    #[test]
+    fn a_task_tab_travels_as_the_screen_writes_it_and_has_one_window() {
+        let text = r#"{"tab":"todo:k2","project":"todo","title":"レポートを書く","status":"done","label":"","environment":null,"content":{"kind":"todo","id":"k2"}}"#;
+        let read: PopoutTab = serde_json::from_str(text).unwrap();
+        assert_eq!(read, todo_tab("k2"));
+        assert_eq!(serde_json::to_string(&read).unwrap(), text);
+        let mut table = Table::default();
+        assert_eq!(table.open(todo_tab("k2")), Ok(("tab-1".into(), true)));
+        assert_eq!(table.open(todo_tab("k2")), Ok(("tab-1".into(), false)));
+        assert_eq!(table.open(todo_tab("k3")), Ok(("tab-2".into(), true)));
+        // A window that went by itself puts the task's tab back in the screen's strip.
+        assert_eq!(
+            table.gone("tab-1"),
+            Some(PopoutAction::Restore {
+                tab: "todo:k2".into()
+            })
+        );
     }
 
     #[test]

@@ -19,11 +19,10 @@ import { loadSettings, selectSettingsTab, type SettingsTab } from "./settings.js
 import { hideSkillClaude } from "./skill-settings.js";
 import { showSlackList } from "./slack-list.js";
 import { hideThreadClaude } from "./slack-thread.js";
-import { loadTodo, renderTodo } from "./todo.js";
+import { clearTodoNotices, loadTodo, renderTodo } from "./todo.js";
 import { fetchOpenComments } from "./todo-comments.js";
 import { hideDraftClaude, syncDraftClaude } from "./todo-draft.js";
 import { hidePromptClaude } from "./todo-prompt.js";
-import { hideTodoClaude, syncTodoClaude } from "./todo-claude.js";
 import { todoState } from "./todo-data.js";
 import { show } from "./view.js";
 
@@ -75,9 +74,9 @@ export function setScreen(name: Screen, tab?: SettingsTab) {
   closeDetail();
   closeCreate();
   closeDatabaseForm();
-  // The terminal of the Todo screen's Claude pane is hidden while another screen is shown (its process goes on).
+  // The cards that belong to the Todo screen go while another screen is shown (A-28).
   if (name !== "todo") {
-    hideTodoClaude();
+    clearTodoNotices();
     // The same for the pane of the page of a Todo draft (S-18), which the Todo screen holds.
     hideDraftClaude();
   }
@@ -102,7 +101,6 @@ export function setScreen(name: Screen, tab?: SettingsTab) {
     syncCalendarClaude();
   } else if (name === "todo") {
     show("todo");
-    syncTodoClaude();
     syncDraftClaude();
     if (todoState.kept) renderTodo();
     fetchOpenComments();

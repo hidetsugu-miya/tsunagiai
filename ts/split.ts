@@ -1,8 +1,8 @@
 // The divider between a screen's parts: the Slack thread (on the right, a third to a half of `main`), 
-// the list of the Orca screen (on the left, 15% to 50%), and the right side of the Todo screen (on the right, 30% to 45%). It sets that pane's width as a ratio of `main`, so a resized window keeps it.
+// the list of the Orca screen (on the left, 15% to 50%), and the right side of the Todo screen (on the right, 35% to 65%). It sets that pane's width as a ratio of `main`, so a resized window keeps it.
 // Each divider keeps its own ratio in memory. The CSS (`.split-chat`, `#orca-list`, `#todo-side`) holds the range too.
 // A divider can also lie down (`lying`, `lie()`): the pane then sits under the rest (`side: "right"`) or over it (`side: "left"`), and the divider sets its height as a ratio of `main`, with a ratio, a range and a property of its own,
-// so the Todo screen puts Claude under the tasks in a narrow window (T-7), and the Slack screen does the same with the pane of the thread (S-7).
+// so the Todo screen puts its side under the tasks in a narrow window (T-10), and the Slack screen does the same with the pane of the thread (S-7).
 const KEY_STEP = 0.02;
 
 // One way a divider sets its pane: the pane's share of `main` and what bounds it, and the CSS property that carries it.

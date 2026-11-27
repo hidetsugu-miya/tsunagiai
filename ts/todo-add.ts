@@ -144,9 +144,9 @@ function readyRow(job: PendingAdd) {
   return row;
 }
 
-// Opens the draft page for the first summary that waits for it, when no draft is open, the Todo screen is shown and it is on the list (not on a task, nor on the token form).
+// Opens the draft page for the first summary that waits for it, when no draft is open, the Todo screen is shown and it has its data (not the token form).
 function openNextDraft() {
-  if (draftOpen() || currentScreen() !== "todo" || todoState.open !== null || todoState.todo === null) return;
+  if (draftOpen() || currentScreen() !== "todo" || todoState.todo === null) return;
   const job = pendingAdds.find((j) => j.summary && !j.opened);
   if (!job?.summary) return;
   job.opened = true;

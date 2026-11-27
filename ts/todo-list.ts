@@ -17,7 +17,7 @@ import { openDuePop, openProjectMenu } from "./todo-detail.js";
 import { accountSet, canMoveUnder, dueLabel, editingField, inboxOf, isDueToday, linkedMail, moveTargets, PRIORITY_COLORS, projectName, projectOf, searching, setTodoCount, subRows, TODO_GROUPS, todoState, viewProjectId, viewTasks } from "./todo-data.js";
 import { clearSearch } from "./todo-search.js";
 import { archiveProject, deleteProject, moveProject, moveTask, moveUnder, saveTask, setTaskDone } from "./todo-write.js";
-import { renderTodo, todoMode } from "./todo.js";
+import { openTodoTab, renderTodo, todoMode } from "./todo.js";
 import { showFailure } from "./error-card.js";
 
 function projectButton(view: string, icon: string, name: string, count: number) {
@@ -33,8 +33,7 @@ function projectButton(view: string, icon: string, name: string, count: number) 
   b.append(tag("span", "name", name), tag("span", "count", String(count)));
   b.onclick = () => {
     todoState.view = view;
-    todoState.open = null;
-    // Picking a list leaves the search (T-9).
+    // Picking a list leaves the search (T-9); the tabs stay (T-10).
     clearSearch();
     renderTodo();
   };
@@ -256,11 +255,12 @@ function taskRow(t: TaskItem, showProject: boolean, accounts: Set<string | undef
   const mail = linkedMail(t, accounts);
   const li = tag("li", "task tall");
   li.dataset.id = t.id;
+  // The name of a task that has a tab is bold (T-10).
+  li.classList.toggle("tabbed", todoState.tabs.includes(t.id));
   li.onclick = () => {
     // A drag that starts in the name field and ends elsewhere on the row clicks the row; the edit keeps it.
     if (li.querySelector(".row-edit")) return;
-    todoState.open = t.id;
-    renderTodo();
+    openTodoTab(t.id);
   };
   const box = checkBox(PRIORITY_COLORS[t.priority], false, "完了にする");
   // The row opens the task on click; the checkbox must not.
@@ -480,7 +480,6 @@ function renderResults() {
 }
 
 export function renderList() {
-  todoState.descEdit = null;
   todoMode("list");
   const view = todoState.view;
   $("todo-title").textContent = view === "today" ? "今日" : view === "inbox" ? "インボックス" : projectOf(view)!.name;

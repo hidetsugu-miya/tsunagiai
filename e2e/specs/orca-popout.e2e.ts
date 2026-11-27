@@ -6,7 +6,7 @@ import type { OrcaFileText } from "../../ts/bindings/OrcaFileText";
 import type { OrcaSaved } from "../../ts/bindings/OrcaSaved";
 import type { PopoutTab } from "../../ts/bindings/PopoutTab";
 import { charBoxes, CONTENT, typeIn, waitForText } from "../orca-support";
-import { boot, callsOf, copiedTexts, count, databaseCell, databaseColumn, databaseRecords, databaseSqlResult, databaseStructure, mock, onceId, popoutTab, rejects, sendPopoutClose, sendPopoutTab, sendTerm, stubClipboard, textsOf, timers, waitForCalls, waitForCount, CARD } from "../support";
+import { boot, callsOf, copiedTexts, count, databaseCell, databaseColumn, databaseRecords, databaseSqlResult, databaseStructure, mock, onceId, popoutTab, rejects, sendPopoutClose, sendPopoutTab, sendTerm, stubClipboard, textsOf, timers, todoData, waitForCalls, waitForCount, CARD } from "../support";
 
 type Bridge = { __TAURI_INTERNALS__: { invoke: (command: string, args: object) => Promise<unknown> }; __TAURI__: { core: { Channel: new () => object } } };
 
@@ -467,6 +467,94 @@ describe("orca: the window of a tab (A-46)", () => {
       await browser.waitUntil(async () => (await copiedTexts()).length === 1, { timeoutMsg: "the list was never copied" });
       expect(await copiedTexts()).toEqual(["id\tname\n1\tAlice"]);
       expect(await count(CARD)).toBe(0);
+    });
+  });
+
+  // A task of the Todo screen (T-11): the page draws the detail of the task of the Todo screen from `todoist_load`, and writes through the commands of the screen.
+  describe("a task", () => {
+    const work = popoutTab("todo:k1", "", "Write report", { project: "todo", label: "", content: { kind: "todo", id: "k1" } });
+    const nameOfDetail = () => browser.execute(() => (document.querySelector("#todo-detail .name") as HTMLTextAreaElement | null)?.value ?? null);
+    const later = (...names: string[]) => browser.waitUntil(async () => names.includes((await nameOfDetail()) ?? ""), { timeoutMsg: `the detail never showed ${names.join()}` });
+
+    it("draws the icon of Todo and the name of the task in the header, and the detail of the task under it in place of a terminal, reading the tasks with the completed ones", async () => {
+      await openWindow(work, { todoist_load: todoData() });
+      await expect($("#popout-name")).toHaveText("Write report");
+      expect(await count("#popout-icon .orca-file-tab-ic svg")).toBe(1);
+      expect(await waitForCalls("todoist_load")).toEqual([{ withDone: true }]);
+      await later("Write report");
+      await expect($("#popout-todo")).toBeDisplayed();
+      await expect($("#popout-term")).not.toBeDisplayed();
+      await expect($("#popout-file")).not.toBeDisplayed();
+      expect(await count(".orca-term, .orca-diff")).toBe(0);
+      // The detail of the screen, with what the window leaves out: no linked mail, and the project, the date and the labels beside it.
+      expect(await textsOf("#todo-detail .field-label")).toEqual(["プロジェクト", "日付", "ラベル"]);
+      expect(await count("#todo-detail .mail-link")).toBe(0);
+      expect(await count("#popout-head button")).toBe(2);
+    });
+
+    it("writes through the commands of the screen: a task completed here is written with todoist_set_done, and the window asks for its close when the task is gone", async () => {
+      await openWindow(work, { todoist_load: todoData(), todoist_set_done: true });
+      await later("Write report");
+      await mock("todoist_set_done", true);
+      await mock("orca_popout_close", null);
+      await $("#todo-detail .head .check").click();
+      expect(await waitForCalls("todoist_set_done")).toEqual([{ id: "k1", done: true }]);
+      expect(await waitForCalls("orca_popout_close")).toHaveLength(1);
+    });
+
+    it("draws the subtasks of the task and opens nothing from them, and shows no grip", async () => {
+      await openWindow({ ...work, tab: "todo:k2", title: "Plan trip", content: { kind: "todo", id: "k2" } }, { todoist_load: todoData() });
+      await later("Plan trip");
+      await waitForCount("#todo-detail .subs li.task", 1);
+      expect(await count("#todo-detail .subs .grip")).toBe(0);
+      await $("#todo-detail .subs li.task").click();
+      expect(await nameOfDetail()).toBe("Plan trip");
+    });
+
+    it("reads the tasks again by the clock and draws what changed", async () => {
+      await openWindow(work, { todoist_load: todoData(), ...timers({ todoWindow: 500 }) });
+      await later("Write report");
+      const data = todoData();
+      await mock("todoist_load", { ...data, tasks: data.tasks.map((t) => (t.id === "k1" ? { ...t, content: "Write the report" } : t)) });
+      await later("Write the report");
+      await expect($("#popout-name")).toHaveText("Write the report");
+    });
+
+    it("asks for the close when the task is no longer in the tasks it reads", async () => {
+      await openWindow(work, { todoist_load: todoData(), ...timers({ todoWindow: 500 }) });
+      await later("Write report");
+      await mock("orca_popout_close", null);
+      const data = todoData();
+      await mock("todoist_load", { ...data, tasks: data.tasks.filter((t) => t.id !== "k1") });
+      expect(await waitForCalls("orca_popout_close")).toHaveLength(1);
+    });
+
+    it("draws the tab again from what it holds when the screen gives it, and reads nothing again for it", async () => {
+      await openWindow(work, { todoist_load: todoData() });
+      await later("Write report");
+      await sendPopoutTab({ ...work, title: "Write the report" });
+      await later("Write report");
+      await expect($("#popout-name")).toHaveText("Write report");
+      expect(await callsOf("todoist_load")).toHaveLength(1);
+    });
+
+    it("asks the screen to put the tab back when the button at the right end is pressed", async () => {
+      await openWindow(work, { todoist_load: todoData() });
+      await later("Write report");
+      await $("#popout-restore").click();
+      expect(await waitForCalls("orca_popout_restore")).toHaveLength(1);
+    });
+
+    it("shows the failure of the read as a card with no button to the log, and keeps the window", async () => {
+      await openWindow(work, { todoist_load: rejects("Todoist に接続できません") });
+      await expect($(CARD)).toHaveText(expect.stringContaining("Todoist に接続できません"));
+      expect(await count(".error-card-log")).toBe(0);
+    });
+
+    it("is refused by Rust for a task id that Todoist does not make, or a tab that is not the task's own", async () => {
+      await browser.switchToWindow("main");
+      expect(await real("orca_popout_open", { tab: { ...work, tab: "todo:a-b", content: { kind: "todo", id: "a-b" } } })).toEqual({ refused: "タスクが正しくありません" });
+      expect(await real("orca_popout_open", { tab: { ...work, project: "proj_example-app" } })).toEqual({ refused: "タスクのタブが正しくありません" });
     });
   });
 

@@ -45,8 +45,6 @@ export function initTodoSearch() {
   input.oninput = () => {
     todoState.query = input.value;
     $("todo-search-clear").hidden = input.value === "";
-    // The results (or the list, when the text is emptied) take the screen from the open task.
-    todoState.open = null;
     // A text with a word waits for the typing to pause; an emptied field brings the list back at once.
     clearTimeout(timer);
     if (searching()) timer = setTimeout(() => void searchTodo(), SEARCH_DELAY_MS);
@@ -54,7 +52,6 @@ export function initTodoSearch() {
   };
   $("todo-search-clear").onclick = () => {
     clearSearch();
-    todoState.open = null;
     void searchTodo();
     input.focus();
   };

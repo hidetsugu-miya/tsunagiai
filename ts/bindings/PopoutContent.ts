@@ -4,8 +4,9 @@ import type { PopoutDefinition } from "./PopoutDefinition";
 import type { PopoutDiff } from "./PopoutDiff";
 import type { PopoutFile } from "./PopoutFile";
 import type { PopoutTerminal } from "./PopoutTerminal";
+import type { PopoutTodo } from "./PopoutTodo";
 
 /**
  * What a window shows, by the kind of the tab.
  */
-export type PopoutContent = { "kind": "claude" } & PopoutTerminal | { "kind": "terminal" } & PopoutTerminal | { "kind": "file" } & PopoutFile | { "kind": "diff" } & PopoutDiff | { "kind": "definition" } & PopoutDefinition | { "kind": "database" } & PopoutDatabase;
+export type PopoutContent = { "kind": "claude" } & PopoutTerminal | { "kind": "terminal" } & PopoutTerminal | { "kind": "file" } & PopoutFile | { "kind": "diff" } & PopoutDiff | { "kind": "definition" } & PopoutDefinition | { "kind": "database" } & PopoutDatabase | { "kind": "todo" } & PopoutTodo;

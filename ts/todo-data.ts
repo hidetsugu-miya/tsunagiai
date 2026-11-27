@@ -8,6 +8,7 @@ import type { Todo } from "./bindings/Todo";
 import { accountList } from "./accounts.js";
 import { $ } from "./dom.js";
 import { isoDate } from "./format.js";
+import { dropComments } from "./todo-comments.js";
 import { setNavCount } from "./view.js";
 
 // What a label created from the screen is drawn in until the reload brings Todoist's color: Todoist's default, charcoal.
@@ -20,8 +21,10 @@ export const todoState = {
   kept: false,
   // "today", "inbox", or a project's ID.
   view: "today",
-  // The ID of the task shown in the detail view, or null for the list.
-  open: null as string | null,
+  // The IDs of the tasks that have a tab in the right side (T-10), in the order of the tabs. Kept in memory only.
+  tabs: [] as string[],
+  // The ID of the selected tab (its detail is drawn under the strip), or null with no tab.
+  selected: null as string | null,
   // Only the latest of overlapping loads may draw.
   seq: 0,
   // The `seq` of the load whose data `todo` holds (whether or not it was drawn); the subtasks being created are shown until a load that began after their creation is drawn.
@@ -43,8 +46,8 @@ export const todoState = {
   // True until a load has fetched from Todoist since the start or a disconnect; an answer from the cache (`offline`) leaves it as it is.
   // Every load asks for the completed tasks (`withDone`) while it is set, so the detail, the counts and the cache the backend saves keep the done subtasks once Todoist answers.
   doneStale: true,
-  // The description being edited ({ id, value }), or null. It outlives a redraw, so a refresh keeps the mode and the text; the textarea's own caret is restored by renderDetail.
-  descEdit: null as { id: string; value: string } | null,
+  // The descriptions being edited, by the task's ID (the text typed). They outlive a redraw and another task's detail, so a refresh keeps the mode and the text; the textarea's own caret is restored by renderDetail. A task's goes when its tab closes.
+  descEdit: new Map<string, string>(),
   // The projects whose children the side list hides (all are shown at first). Kept in memory only.
   closedProjects: new Set<string>(),
   // The text in the search field (T-9). A text with no word is no search: the list shows.
@@ -68,6 +71,27 @@ export interface TaskFields {
   dueString?: string;
   // The task's whole list of label names.
   labels?: string[];
+}
+
+// Selects the tab of the task `id`, and opens one at the end of the strip when the task has none (T-10): the same task never has two.
+export function openTab(id: string) {
+  if (!todoState.tabs.includes(id)) todoState.tabs.push(id);
+  todoState.selected = id;
+}
+
+// Closes the tab of the task `id`. Closing the selected tab selects its neighbour: the one that came after it, else the one before it, else none.
+export function closeTab(id: string) {
+  const i = todoState.tabs.indexOf(id);
+  if (i < 0) return;
+  todoState.tabs.splice(i, 1);
+  todoState.descEdit.delete(id);
+  dropComments(id);
+  if (todoState.selected === id) todoState.selected = todoState.tabs[i] ?? todoState.tabs[i - 1] ?? null;
+}
+
+// Closes the tabs of the tasks that are no longer in the data (completed, deleted, moved away with a project that went): each as `closeTab` does.
+export function pruneTabs() {
+  for (const id of [...todoState.tabs]) if (!todoState.taskById.has(id)) closeTab(id);
 }
 
 // Whether the search field holds a word, so that the results take the place of the list (T-9).
@@ -99,8 +123,25 @@ export function dueTasks() {
   return counted.filter((t) => t.dueAt !== null && t.dueAt <= now);
 }
 
+// Set on the page of the window of a task (T-11), which holds the detail of one task and nothing else: the count of the side menu and of the Dock is the main page's, and the rows of the detail that open another tab, a mail or a drag have nowhere to go.
+let taskWindow = false;
+export const isTaskWindow = () => taskWindow;
+export const useTaskWindow = () => {
+  taskWindow = true;
+};
+
+// What the Orca screen gives for its Todo part and its tabs of a task (A-49, `ts/orca-todo.ts`): whether it wants the tasks read while it is shown, and what it draws from them after the screen's data was drawn.
+// The data is the Todo screen's own, read by its load (`loadTodo`) and changed by its writes, so no second reader runs.
+let orcaTodo = { wanted: () => false, draw: () => {} };
+export const useOrcaTodo = (part: typeof orcaTodo) => {
+  orcaTodo = part;
+};
+export const orcaTodoWanted = () => orcaTodo.wanted();
+export const drawOrcaTodo = () => orcaTodo.draw();
+
 // Remembers `tasks` (the open tasks, subtasks included) as what the count is made of, and counts them. An empty list clears the count.
 export function setTodoCount(tasks: TaskItem[]) {
+  if (taskWindow) return;
   counted = tasks;
   recountTodo();
 }
@@ -139,8 +180,10 @@ export const accountSet = () => new Set(accountList());
 export function editingField() {
   if (todoState.dragging) return true;
   const a = document.activeElement as HTMLElement;
-  if ($("todo-list").contains(a)) return a.matches(".row-edit");
-  return $("todo-detail").contains(a) && a.matches("textarea, input:not([type=checkbox])") && ((a.dataset.field !== "sub" && a.dataset.field !== "comment") || (a as HTMLInputElement).value !== "");
+  // The window of a task (T-11) has no list.
+  if ($("todo-list")?.contains(a)) return a.matches(".row-edit");
+  // The detail of the Todo screen, and the detail in a tab of a task of the Orca work pane (A-49).
+  return !!a.closest("#todo-detail, .orca-todo-detail") && a.matches("textarea, input:not([type=checkbox])") && ((a.dataset.field !== "sub" && a.dataset.field !== "comment") || (a as HTMLInputElement).value !== "");
 }
 
 // Only http(s) links stay: a relative link would resolve to the app's own origin, which Rust's on_navigation allows, and replace the screen.
@@ -278,12 +321,11 @@ export function moveProjectLocal(id: string, parentId: string | null) {
 }
 
 // Takes the project `id` out of the list with the projects nested under it, however deep, and their tasks: Todoist archives or deletes them together (T-8).
-// The view goes back to "今日" when it was one of them, and an open task of theirs is closed.
+// The view goes back to "今日" when it was one of them, and the tabs of their tasks are closed.
 export function dropProjectLocal(id: string) {
   const todo = todoState.todo!;
   const gone = projectTreeIds(id);
-  const open = todoState.open === null ? undefined : todoState.taskById.get(todoState.open);
-  if (open && gone.has(open.projectId)) todoState.open = null;
+  for (const tab of [...todoState.tabs]) if (gone.has(todoState.taskById.get(tab)?.projectId ?? "")) closeTab(tab);
   if (gone.has(todoState.view)) todoState.view = "today";
   todo.projects = todo.projects.filter((p) => !gone.has(p.id));
   todo.tasks = todo.tasks.filter((t) => !gone.has(t.projectId));
