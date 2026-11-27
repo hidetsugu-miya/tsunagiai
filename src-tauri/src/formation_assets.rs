@@ -1,7 +1,5 @@
-//! A-41: the files of `src-tauri/formation/` that are embedded in the binary at build time (`build.rs`), and how they are written.
+//! A-45 and #1242: the files of `src-tauri/preview-plugin/` and `src-tauri/lsp-plugin/` that are embedded in the binary at build time (`build.rs`), and how a folder is written whole (`replace_dir`, `ensure_plugin`).
 //! `PREVIEW_PLUGIN` (A-45) is the plugin of `src-tauri/preview-plugin/`, which `preview_plugin` writes with `ensure_plugin`.
-//! `LEADER_SKILL` is the leader's skill `feature-dev`, which is no longer written (#1533; `plugins` gives the leader the owner's plugins instead, and #1534 removes it).
-//! `PLUGIN` is the plugin `feature-dev`, which is no longer written either (#1535: the owner's plugins are sent to the PC of a saved environment instead, `plugins_begin`, `plugins_write` and `plugins_commit`); #1534 removes it.
 //! Each list is `(path relative to its folder with "/", contents)`.
 
 use std::{
@@ -15,15 +13,7 @@ use sha2::{Digest, Sha256};
 
 include!(concat!(env!("OUT_DIR"), "/formation_assets.rs"));
 
-/// The folder of the plugin in the config folder, which `claude --plugin-dir` is given.
-const PLUGIN_FOLDER: &str = "formation-plugin";
-
-/// `formation-plugin/` in the config directory.
-pub fn plugin_dir(config: &Path) -> PathBuf {
-    config.join(PLUGIN_FOLDER)
-}
-
-/// The file of `formation-plugin/` that holds the hash of the plugin that was written (`plugin_mark`): it is replaced with the folder, so the two cannot disagree.
+/// The file of a plugin's folder that holds the hash of the plugin that was written (`plugin_mark`): it is replaced with the folder, so the two cannot disagree.
 const MARK_FILE: &str = ".tsunagiai-plugin-hash";
 
 /// The hash of `files` (their paths and contents, in order): what tells that the folder holds this very plugin.
@@ -58,16 +48,6 @@ pub(crate) fn ensure_plugin(dir: &Path, plugin: &[(&str, &str)]) -> Result<(), S
     }
     Ok(())
 }
-
-/// Makes `formation-plugin/` of `config` hold the embedded plugin, as a whole, and answers its path (`ensure_plugin`: a child's launch does not write every file again).
-pub fn write_plugin(config: &Path) -> Result<PathBuf, String> {
-    let dir = plugin_dir(config);
-    ensure_plugin(&dir, PLUGIN)?;
-    Ok(dir)
-}
-
-/// The plugin whose Figma tools `figma_permissions` names: the embedded one, which nothing uses any more (#1534 removes it).
-const EMBEDDED_PLUGIN: &str = "feature-dev";
 
 /// The Figma tools of a plugin's server as a permission rule names them: `mcp__plugin_{plugin}_{server}__{tool}` (the server `figma` of its `.mcp.json`; Claude Code's documentation of permissions, "MCP").
 fn figma_rule_prefix(plugin: &str) -> String {
@@ -113,11 +93,6 @@ pub fn figma_permissions_of(plugins: &[String]) -> serde_json::Value {
         "allow": rules(&FIGMA_READ_TOOLS),
         "deny": rules(&FIGMA_WRITE_TOOLS),
     })
-}
-
-/// The permissions for the embedded plugin (`EMBEDDED_PLUGIN`), which nothing uses any more (#1534 removes it).
-pub fn figma_permissions() -> serde_json::Value {
-    figma_permissions_of(&[EMBEDDED_PLUGIN.to_owned()])
 }
 
 static STAGING: AtomicUsize = AtomicUsize::new(0);
@@ -546,7 +521,7 @@ mod tests {
 
     #[test]
     fn a_childs_settings_allow_the_figma_read_tools_and_deny_its_write_tools() {
-        let permissions = figma_permissions();
+        let permissions = figma_permissions_of(&["mine".to_owned()]);
         let list = |key: &str| -> Vec<String> {
             permissions[key]
                 .as_array()
@@ -559,68 +534,18 @@ mod tests {
         assert_eq!(
             allow,
             [
-                "mcp__plugin_feature-dev_figma__get_metadata",
-                "mcp__plugin_feature-dev_figma__get_design_context",
-                "mcp__plugin_feature-dev_figma__get_screenshot"
+                "mcp__plugin_mine_figma__get_metadata",
+                "mcp__plugin_mine_figma__get_design_context",
+                "mcp__plugin_mine_figma__get_screenshot"
             ]
         );
         assert_eq!(deny.len(), FIGMA_WRITE_TOOLS.len());
-        assert!(deny.contains(&"mcp__plugin_feature-dev_figma__use_figma".to_owned()));
+        assert!(deny.contains(&"mcp__plugin_mine_figma__use_figma".to_owned()));
         // A rule has no parenthesis (Claude Code skips an `mcp__` rule that has one), and no tool is in both lists.
         for rule in allow.iter().chain(&deny) {
             assert!(!rule.contains('(') && !rule.contains('*'), "{rule}");
         }
         assert!(allow.iter().all(|rule| !deny.contains(rule)));
-    }
-
-    #[test]
-    fn the_rules_name_the_server_of_the_plugin_and_figma_fetcher_lists_the_denied_tools() {
-        let file = |name: &str| PLUGIN.iter().find(|(path, _)| *path == name).unwrap().1;
-        let plugin: serde_json::Value =
-            serde_json::from_str(file(".claude-plugin/plugin.json")).unwrap();
-        let mcp: serde_json::Value = serde_json::from_str(file(".mcp.json")).unwrap();
-        let servers: Vec<&String> = mcp["mcpServers"].as_object().unwrap().keys().collect();
-        assert_eq!(servers, ["figma"]);
-        assert_eq!(
-            figma_rule_prefix(EMBEDDED_PLUGIN),
-            format!("mcp__plugin_{}_figma__", plugin["name"].as_str().unwrap())
-        );
-        let fetcher = file("agents/figma-fetcher.md");
-        let line = fetcher
-            .lines()
-            .find(|line| line.starts_with("disallowedTools:"))
-            .unwrap();
-        let listed: Vec<&str> = line["disallowedTools:".len()..]
-            .split(',')
-            .map(str::trim)
-            .collect();
-        for rule in figma_rules(EMBEDDED_PLUGIN, &FIGMA_WRITE_TOOLS) {
-            assert!(listed.contains(&rule.as_str()), "{rule}");
-        }
-    }
-
-    #[test]
-    fn the_plugin_is_embedded_with_its_manifest_and_every_path_stays_inside_its_folder() {
-        let manifest = PLUGIN
-            .iter()
-            .find(|(path, _)| *path == ".claude-plugin/plugin.json")
-            .expect("plugin.json is embedded");
-        let json: serde_json::Value = serde_json::from_str(manifest.1).unwrap();
-        assert_eq!(json["name"], "feature-dev");
-        assert!(json["description"].as_str().is_some_and(|d| !d.is_empty()));
-        for (path, _) in PLUGIN.iter().chain(LEADER_SKILL) {
-            assert!(
-                !path.is_empty()
-                    && !path.starts_with('/')
-                    && !path.split('/').any(|part| part.is_empty() || part == ".."),
-                "{path}"
-            );
-        }
-        let mut paths: Vec<&str> = PLUGIN.iter().map(|(path, _)| *path).collect();
-        let count = paths.len();
-        paths.sort_unstable();
-        paths.dedup();
-        assert_eq!(paths.len(), count);
     }
 
     #[test]
@@ -681,58 +606,59 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    const SAMPLE: &[(&str, &str)] = &[
+        (".claude-plugin/plugin.json", "{}"),
+        ("skills/x/SKILL.md", "skill"),
+    ];
+
     #[test]
-    fn the_plugin_is_written_as_a_whole_in_the_config_folder() {
+    fn a_plugin_is_written_as_a_whole_with_its_hash() {
         let config = temp_dir("plugin");
-        let dir = plugin_dir(&config);
-        assert_eq!(dir, config.join("formation-plugin"));
+        let dir = config.join("plugin");
         std::fs::create_dir_all(dir.join("skills/gone")).unwrap();
         std::fs::write(dir.join("skills/gone/SKILL.md"), "old").unwrap();
-        assert_eq!(write_plugin(&config).unwrap(), dir);
+        ensure_plugin(&dir, SAMPLE).unwrap();
         assert!(!dir.join("skills/gone").exists());
-        for (path, text) in PLUGIN {
+        for (path, text) in SAMPLE {
             assert_eq!(&std::fs::read_to_string(dir.join(path)).unwrap(), text);
         }
         assert_eq!(
             std::fs::read_to_string(dir.join(MARK_FILE)).unwrap(),
-            plugin_mark(PLUGIN)
+            plugin_mark(SAMPLE)
         );
-        assert_eq!(entries(&config), ["formation-plugin"]);
+        assert_eq!(entries(&config), ["plugin"]);
         std::fs::remove_dir_all(config).unwrap();
     }
 
     #[test]
     fn a_folder_that_holds_this_plugin_is_not_written_again_and_any_other_is() {
         let config = temp_dir("plugin-again");
-        let dir = plugin_dir(&config);
-        write_plugin(&config).unwrap();
+        let dir = config.join("plugin");
+        ensure_plugin(&dir, SAMPLE).unwrap();
         // A file that the plugin does not list stays: nothing was replaced.
         std::fs::write(dir.join("marker.txt"), "still here").unwrap();
-        assert_eq!(write_plugin(&config).unwrap(), dir);
+        ensure_plugin(&dir, SAMPLE).unwrap();
         assert!(dir.join("marker.txt").exists());
-        let (path, text) = PLUGIN
-            .iter()
-            .find(|(_, text)| !text.is_empty())
-            .expect("a plugin file with text");
+        let (path, text) = SAMPLE[1];
         // A file that a crash cut short, or left missing, makes the folder be written again.
         std::fs::write(dir.join(path), &text[..text.len() - 1]).unwrap();
-        write_plugin(&config).unwrap();
+        ensure_plugin(&dir, SAMPLE).unwrap();
         assert!(!dir.join("marker.txt").exists());
-        assert_eq!(&std::fs::read_to_string(dir.join(path)).unwrap(), text);
+        assert_eq!(std::fs::read_to_string(dir.join(path)).unwrap(), text);
         std::fs::write(dir.join("marker.txt"), "x").unwrap();
         std::fs::remove_file(dir.join(path)).unwrap();
-        write_plugin(&config).unwrap();
+        ensure_plugin(&dir, SAMPLE).unwrap();
         assert!(!dir.join("marker.txt").exists());
         // So does another mark (another plugin), and a folder with none.
         std::fs::write(dir.join("marker.txt"), "x").unwrap();
         std::fs::write(dir.join(MARK_FILE), "another").unwrap();
-        write_plugin(&config).unwrap();
+        ensure_plugin(&dir, SAMPLE).unwrap();
         assert!(!dir.join("marker.txt").exists());
         std::fs::write(dir.join("marker.txt"), "x").unwrap();
         std::fs::remove_file(dir.join(MARK_FILE)).unwrap();
-        write_plugin(&config).unwrap();
+        ensure_plugin(&dir, SAMPLE).unwrap();
         assert!(!dir.join("marker.txt").exists());
-        assert_eq!(entries(&config), ["formation-plugin"]);
+        assert_eq!(entries(&config), ["plugin"]);
         std::fs::remove_dir_all(config).unwrap();
     }
 
