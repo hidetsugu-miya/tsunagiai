@@ -1871,6 +1871,10 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-files-toggle { flex: none; margin: 0 6px 0 auto; width: var(--header-btn); height: var(--header-btn); color: var(--ink-soft); }
 .orca-files-toggle svg { width: var(--header-ic); height: var(--header-ic); }
 .orca-files-toggle[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
+.orca-tab-modes { flex: none; display: flex; align-items: center; margin-left: auto; }
+.orca-tab-modes + .orca-files-toggle { margin-left: 0; }
+.orca-tab-mode { flex: none; width: var(--header-btn); height: var(--header-btn); margin-left: 6px; color: var(--ink-soft); }
+.orca-tab-mode svg { width: var(--header-ic); height: var(--header-ic); }
 .orca-file-tab-ic { color: var(--muted); }
 .orca-file-tab-ic svg { width: 13px; height: 13px; stroke-width: 1.8; }
 .orca-tab-dirty { flex: none; width: 7px; height: 7px; margin-left: 2px; border-radius: 50%; background: var(--accent); }
