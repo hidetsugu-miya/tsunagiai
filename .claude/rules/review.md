@@ -189,7 +189,7 @@ A rebuilt diff produces new findings in the second round.
 
 ### Run CI and E2E before release-verifier, on every HEAD
 
-Unless `check-records.sh` passes on it ("Flow" above), run `.claude/tools/run-e2e.sh` on a HEAD while the reviewers read it, and hand the HEAD to release-verifier when it and the reviewers are back; its CI (`run-ci.sh`) runs beside wdio and writes the CI record (`testing.md`, `e2e.md`). `run-ci.sh` alone writes the same record where no E2E is run, such as the check of each bundle in `implement`.
+Unless `check-records.sh` passes on it ("Flow" above), run `.claude/tools/run-e2e.sh` on a HEAD while the reviewers read it, and hand the HEAD to release-verifier when it and the reviewers are back; its CI (`run-ci.sh`) runs beside wdio and writes the CI record (`testing.md`, `e2e.md`). `run-ci.sh` alone writes the same record where no E2E is run.
 release-verifier and `pre-git.sh` call `.claude/tools/check-records.sh`, which passes when `check-ci.sh` and `check-e2e.sh` find a passing, clean record for HEAD (`.claude/ci/{HEAD SHA}`, `.claude/e2e/{HEAD SHA}`) with the version of that commit, or when the diff from the newest commit with both records (or else the base) to HEAD holds only files that no check reads (`testing.md`). Without either, release-verifier fails.
 Reviewers cannot confirm screen behavior by reading the diff, and `pre-git.sh` runs none of the checks, so a push is stopped when neither the record of HEAD nor the exemption holds.
 
