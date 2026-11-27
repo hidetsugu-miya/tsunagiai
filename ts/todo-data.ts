@@ -290,7 +290,10 @@ function byDue(a: TaskItem, b: TaskItem) {
 // Between the row above (A) and the row below (B) the depths run from B's to one more than A's: at each the task is a sibling of A or of one of its parents, after it, or at the deepest a child of A.
 // Not offered: the place `t` has now, and, at the top level, a place that the list's order by due moment would not keep.
 export function placesAt(rows: string[], gap: number, t: TaskItem, root?: TaskItem): Place[] {
-  const shown = (id: string) => id !== t.id && !isUnder(todoState.taskById.get(id)!, t.id);
+  const shown = (id: string) => {
+    const x = todoState.taskById.get(id);
+    return !!x && id !== t.id && !isUnder(x, t.id);
+  };
   let above: string | undefined;
   for (const id of rows.slice(0, gap)) if (shown(id)) above = id;
   const below = rows.slice(gap).find(shown);

@@ -1156,6 +1156,7 @@ function openPlace(place: DefinitionOpen) {
 // The screen answers once the check has passed, and opens the tab after the answer: the read of the list may take longer than the wait of the bridge (5 seconds), and a tool that failed on the wait would leave a tab that opens later. A refusal after the answer is a card (A-28).
 async function openPreview(fields: Fields) {
   const [path, relative, environment] = [fields.path ?? "", fields.relative ?? "", fields.environment || null];
+  if (!screenOn("orca")) throw new Error("開発の画面がメニューで OFF になっています");
   if (view === null) throw new Error("開発の画面の一覧をまだ読めていません");
   await invoke("orca_preview_check", { path, relative, environment });
   void openCheckedPreview(path, relative, environment, true).catch((e) => showFailure("orca", e instanceof Error ? e.message : e));
