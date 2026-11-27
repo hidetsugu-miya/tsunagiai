@@ -195,6 +195,8 @@ const answers = {
   claude_code_input: null,
   claude_code_resize: null,
   claude_code_close: null,
+  // A-51: no plugin yet; a spec of the Plugins tab gives its own.
+  plugins_list: [],
   // A-37: no children yet.
   formation_children: [],
   // A-37 (#1087): no child is waiting for an answer to an instruction.

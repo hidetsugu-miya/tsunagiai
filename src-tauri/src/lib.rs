@@ -576,6 +576,8 @@ pub fn run() {
             update::check_update,
             update::install_update,
             update::restart_app,
+            plugins::plugins_list,
+            plugins::plugin_create,
             claude_code::claude_code_start,
             claude_code::claude_code_input,
             claude_code::claude_code_resize,

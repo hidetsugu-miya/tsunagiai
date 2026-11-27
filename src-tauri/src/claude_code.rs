@@ -52,6 +52,8 @@ const FORMATION_CLAUDE_MD_FILE: &str = "CLAUDE.md";
 /// The text of the orchestrator's `CLAUDE.md`: its role and its steps, with `{name}` where its own name goes. It holds nothing that comes from outside.
 const FORMATION_CLAUDE_MD: &str = include_str!("formation_claude.md");
 const FORMATION_NAME_MARK: &str = "{name}";
+/// A-51: the pane of a plugin of the Plugins tab is the pane `plugin:{folder}/{n}` (the screen names its pane so, as for `formation:`): it runs in that plugin's folder of `plugins::plugins_dir`, not in `claude-code/`. `n` tells the panes of one plugin apart.
+const PLUGIN_ID_PREFIX: &str = "plugin:";
 /// A-41: the skill that older versions wrote into `.claude/skills/` of the orchestrator's folder, which `write_formation_files` removes. The leader reads the owner's plugins (`plugins::plugins_dir`) instead.
 const LEADER_SKILL_FOLDER: &str = "feature-dev";
 /// The argument that makes `tsunagiai-mcp` offer the tools of the orchestrator (`formation_*`), which the panes' own `mcp.json` does not pass. The name of the formation follows it.
@@ -206,6 +208,29 @@ fn formation_claude_md(name: &str) -> String {
 /// The name of the formation whose orchestrator the pane `id` is, or none for any other pane.
 fn formation_of(id: &str) -> Option<&str> {
     id.strip_prefix(FORMATION_ID_PREFIX)
+}
+
+/// The folder name of the plugin whose pane the id `plugin:{folder}/{n}` is (A-51), none for any other pane. An id that starts with `plugin:` and has no folder or no number is refused, so it never runs as a pane of another folder. `folder` is a text of the screen: `plugins::plugin_dir` checks it.
+fn plugin_of(id: &str) -> Result<Option<&str>, String> {
+    let Some(rest) = id.strip_prefix(PLUGIN_ID_PREFIX) else {
+        return Ok(None);
+    };
+    match rest.rsplit_once('/') {
+        Some((folder, n))
+            if !folder.is_empty() && !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) =>
+        {
+            Ok(Some(folder))
+        }
+        _ => Err("プラグインのペインの名前が正しくありません".to_owned()),
+    }
+}
+
+/// A pane of a plugin runs Claude Code with its own tools, in the `manual` mode (A-51): without them it would have nothing to work on the plugin's files with. The `auto` modes are refused with the tools already (`check_permission_mode`).
+fn check_plugin_pane(plugin: bool, builtin_tools: bool) -> Result<(), String> {
+    if plugin && !builtin_tools {
+        return Err("プラグインのペインでは、Claude Code 自身のツールを使います".to_owned());
+    }
+    Ok(())
 }
 
 /// The arguments of `/bin/sh`: the script, then `--plugin-dir {folder}` when the pane has a skill, then the first instruction `prompt`. A pane's is given as `--append-system-prompt {prompt}` (A-36, #1293): it is the system prompt, so it is not shown in the terminal as a first message that Claude answers (measured: a value that starts with `-` stays the one value of the flag, also after `--mcp-config`). The orchestrator's (`formation`, A-37) is a work to start, so it stays the one positional argument of `claude [prompt]`, after a `--`: the script ends with `--mcp-config`, which takes several values, and would take the prompt for one of them (measured: `claude --mcp-config a.json "x"` reads `x` as a config file), and the `--` also keeps a prompt from being read as an option. The shell is not asked to read the prompt: it is one element of the list, and the script passes it on as `"$@"`.
@@ -945,12 +970,13 @@ fn pane_prompt(prompt: Option<String>) -> Result<Option<String>, String> {
         .transpose()
 }
 
-/// What a start needs: the files written, the sign-in read, the skill's plugin folder made. `formation` is the name of the formation whose orchestrator it is (A-37): its own folder and script, the built-in tools always on, and the projects saved with its formation (`formation.json`) as its first instruction.
+/// What a start needs: the files written, the sign-in read, the skill's plugin folder made. `plugin_dir` is the folder of the plugin whose pane it is (A-51), where the pane runs instead of `claude-code/`. `formation` is the name of the formation whose orchestrator it is (A-37): its own folder and script, the built-in tools always on, and the projects saved with its formation (`formation.json`) as its first instruction.
 #[allow(clippy::too_many_arguments)]
 fn prepare(
     config: &Path,
     exe: &Path,
     formation: Option<&str>,
+    plugin_dir: Option<PathBuf>,
     builtin_tools: bool,
     permission_mode: ClaudeCodePermissionMode,
     skill: Option<ClaudeCodeSkill>,
@@ -958,6 +984,7 @@ fn prepare(
     (cols, rows): (u16, u16),
 ) -> Result<(Spec, Option<CallPlugin>), String> {
     check_permission_mode(formation.is_some(), builtin_tools, permission_mode)?;
+    check_plugin_pane(plugin_dir.is_some(), builtin_tools)?;
     let mcp = checked_mcp_binary(exe)?;
     let claude = claude_path()?;
     let connection = claude_auth::load_connection(config)?;
@@ -975,7 +1002,7 @@ fn prepare(
     } else {
         (
             write_files(config, &claude, &mcp, builtin_tools, permission_mode)?,
-            claude_code_dir(config),
+            plugin_dir.unwrap_or_else(|| claude_code_dir(config)),
             prompt,
         )
     };
@@ -995,7 +1022,7 @@ fn prepare(
     Ok((spec, plugin))
 }
 
-/// Starts Claude Code in a pseudo terminal for the pane `id` (the pane `formation:{name}` is the orchestrator of the formation `name`, A-37): its output and its end go through `channel`. The orchestrator's first instruction names the projects saved with its formation, which Rust reads itself. `builtin_tools` leaves Claude Code's own tools on (the screens give it only the tools of `tsunagiai-mcp` otherwise), `permission_mode` is `manual`, `auto` (#1074: for the calendar pane, with the calendar tools only) or `auto-todo-draft` (#1148: for the pane of a Todo's draft, with that screen's tools only); every mode but `manual` with `builtin_tools`, or for the orchestrator, is refused,
+/// Starts Claude Code in a pseudo terminal for the pane `id` (the pane `formation:{name}` is the orchestrator of the formation `name`, A-37; the pane `plugin:{folder}/{n}` runs in the folder `folder` of the owner's plugins with Claude Code's own tools, A-51): its output and its end go through `channel`. The orchestrator's first instruction names the projects saved with its formation, which Rust reads itself. `builtin_tools` leaves Claude Code's own tools on (the screens give it only the tools of `tsunagiai-mcp` otherwise), `permission_mode` is `manual`, `auto` (#1074: for the calendar pane, with the calendar tools only) or `auto-todo-draft` (#1148: for the pane of a Todo's draft, with that screen's tools only); every mode but `manual` with `builtin_tools`, or for the orchestrator, is refused,
 /// `skill` is a saved skill that it is given, and `prompt` is its first instruction (A-36, #976, #1293: passed as `--append-system-prompt {prompt}`, so it is not shown in the terminal; the orchestrator takes none from the screen, and its own is passed as `claude [prompt]` after a `--`). A failure is the message the pane shows. An `id` that has a process is ended first. The answer is the number of this start, which `claude_code_close` takes with the id.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
@@ -1011,16 +1038,21 @@ pub async fn claude_code_start(
     channel: Channel<ClaudeCodeEvent>,
 ) -> Result<u64, String> {
     check_id(&id)?;
+    let plugin_folder = plugin_of(&id)?.map(str::to_owned);
     let size = check_size(viewport)?;
     let prompt = pane_prompt(prompt)?;
     let config = crate::auth::config_dir(&app)?;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let sessions = sessions.inner().clone();
     tokio::task::spawn_blocking(move || {
+        let plugin_dir = plugin_folder
+            .map(|folder| crate::plugins::plugin_dir(&crate::plugins::plugins_dir()?, &folder))
+            .transpose()?;
         let (spec, plugin) = prepare(
             &config,
             &exe,
             formation_of(&id),
+            plugin_dir,
             builtin_tools,
             permission_mode,
             skill,
@@ -1519,6 +1551,45 @@ mod tests {
         ] {
             assert_eq!(formation_of(id), None, "{id}");
         }
+    }
+
+    #[test]
+    fn a_pane_is_the_pane_of_the_plugin_its_id_names() {
+        assert_eq!(plugin_of("plugin:client-a/1"), Ok(Some("client-a")));
+        assert_eq!(plugin_of("plugin:My Plugin/12"), Ok(Some("My Plugin")));
+        // Any other pane has no plugin.
+        for id in [
+            "skill-claude",
+            "formation:plugin:a/1",
+            "x-plugin:a/1",
+            "plugins:a/1",
+        ] {
+            assert_eq!(plugin_of(id), Ok(None), "{id}");
+        }
+        // A pane that names a plugin without a folder or a number never runs as another pane.
+        for id in [
+            "plugin:",
+            "plugin:a",
+            "plugin:/1",
+            "plugin:a/",
+            "plugin:a/x",
+            "plugin:a/1b",
+        ] {
+            assert!(plugin_of(id).is_err(), "{id}");
+        }
+        // A folder that is a path stays a text for `plugins::plugin_dir` to refuse.
+        assert_eq!(plugin_of("plugin:../x/1"), Ok(Some("../x")));
+    }
+
+    #[test]
+    fn a_pane_of_a_plugin_needs_the_tools_of_claude_code() {
+        assert!(check_plugin_pane(true, true).is_ok());
+        assert!(check_plugin_pane(true, false)
+            .unwrap_err()
+            .contains("自身のツール"));
+        // The other panes are as they were.
+        assert!(check_plugin_pane(false, false).is_ok());
+        assert!(check_plugin_pane(false, true).is_ok());
     }
 
     #[test]

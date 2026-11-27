@@ -1,8 +1,8 @@
 import type { NotionAccount } from "../../ts/bindings/NotionAccount";
 import type { SentryConnection } from "../../ts/bindings/SentryConnection";
-import { account, boot, copiedTexts, logLine, skill, stubClipboard, checked, chooseAppearance, chooseOption, fontSettings, formationConsent, chooseTheme, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, emitEvent, holds, inbox, mock, rejects, onceId, release, slackLoad, socketStatus, workspace, terminalThemes, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf, CARD, CARDS, waitForLog } from "../support";
+import { account, boot, copiedTexts, logLine, skill, stubClipboard, checked, chooseAppearance, chooseOption, fontSettings, formationConsent, chooseTheme, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, emitEvent, holds, inbox, mock, rejects, onceId, release, sendClaudeCode, slackLoad, socketStatus, workspace, terminalThemes, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf, CARD, CARDS, waitForLog } from "../support";
 
-type Tab = "google" | "calendar" | "todoist" | "slack" | "notion" | "claude" | "skill" | "orca" | "menu" | "font" | "update" | "log";
+type Tab = "google" | "calendar" | "todoist" | "slack" | "notion" | "claude" | "skill" | "plugins" | "orca" | "menu" | "font" | "update" | "log";
 
 // Presses a tab of the settings screen.
 const openTab = (tab: Tab) => $(`#settings-tab-${tab}`).click();
@@ -15,7 +15,7 @@ async function openSettings(missingScopes: string[], claude: unknown = claudeMis
   if (tab !== "google") await openTab(tab);
 }
 
-const TABS: [Tab, string][] = [["google", "Google"], ["calendar", "カレンダー"], ["todoist", "Todoist"], ["slack", "Slack"], ["notion", "Notion"], ["claude", "Claude"], ["skill", "スキル"], ["orca", "開発"], ["menu", "メニュー"], ["font", "フォント"], ["update", "アップデート"], ["log", "ログ"]];
+const TABS: [Tab, string][] = [["google", "Google"], ["calendar", "カレンダー"], ["todoist", "Todoist"], ["slack", "Slack"], ["notion", "Notion"], ["claude", "Claude"], ["skill", "スキル"], ["plugins", "Plugins"], ["orca", "開発"], ["menu", "メニュー"], ["font", "フォント"], ["update", "アップデート"], ["log", "ログ"]];
 
 const unlinkButton = () => $('button[aria-label="Example Team の接続を解除"]');
 
@@ -2983,5 +2983,207 @@ describe("settings: log (the ログ tab, A-3, A-28)", () => {
     await openTab("google");
     await openTab("log");
     await waitForCount("#log-body tbody tr", 1);
+  });
+});
+
+describe("settings: plugins (the Plugins tab, A-51)", () => {
+  // A plugin as `plugins_list` answers it.
+  const plugin = (folder: string, skills: string[] = [], name = folder) => ({ folder, name, skills });
+  const rows = () => textsOf("#plugin-list .plugin-row");
+  const row = (n: number) => $(`#plugin-list .plugin-item:nth-child(${n}) .plugin-row`);
+  const tabs = () => textsOf("#plugin-tabs .orca-tab-title");
+  const term = "#plugin-term";
+
+  // The app with the plugins `list` and the Plugins tab open.
+  async function openPlugins(list = [plugin("alpha", ["review", "design"]), plugin("beta", [], "client-b")], fixtures: Record<string, unknown> = {}) {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, plugins_list: list, ...fixtures });
+    await $("#nav-settings").click();
+    await openTab("plugins");
+  }
+
+  it("reads the plugins only when the tab is shown, and again each time it is shown", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, plugins_list: [plugin("alpha")] });
+    await $("#nav-settings").click();
+    await openTab("claude");
+    await browser.pause(300);
+    expect(await callsOf("plugins_list")).toEqual([]);
+    await openTab("plugins");
+    await waitForCalls("plugins_list");
+    await openTab("google");
+    await openTab("plugins");
+    expect((await waitForCalls("plugins_list", 2)).length).toBe(2);
+  });
+
+  it("lists each plugin by its name with its skills as plugin:skill under it, and starts no pane until one is pressed", async () => {
+    await openPlugins();
+    await waitForCount("#plugin-list .plugin-row", 2);
+    expect(await rows()).toEqual(["alpha", "client-b"]);
+    expect(await textsOf("#plugin-list .plugin-skill")).toEqual(["alpha:review", "alpha:design"]);
+    expect(await count("#plugin-list [aria-current='true']")).toBe(0);
+    expect(await tabs()).toEqual([]);
+    await expect($("#plugin-tab-add")).toBeDisabled();
+    await expect($("#plugin-files")).toExist();
+    await browser.pause(300);
+    expect(await callsOf("claude_code_start")).toEqual([]);
+  });
+
+  it("says there are none when the folder holds no plugin, and writes a failed read to the log", async () => {
+    await openPlugins([]);
+    await expect($("#plugin-list .plugin-empty")).toHaveText("プラグインはまだありません");
+    await openPlugins([], { plugins_list: rejects("プラグインを読めません") });
+    await waitForLog("プラグインを読めません");
+    await expect($(CARDS)).not.toExist();
+  });
+
+  it("starts Claude Code in the plugin pressed, with its own tools, the manual mode, no skill and no first instruction", async () => {
+    await openPlugins();
+    await waitForCount("#plugin-list .plugin-row", 2);
+    await row(2).click();
+    await expect(row(2)).toHaveAttribute("aria-current", "true");
+    await expect(row(1)).toHaveAttribute("aria-current", "false");
+    const [start] = await waitForCalls("claude_code_start");
+    expect(start).toMatchObject({ id: "plugin:beta/1", builtinTools: true, permissionMode: "manual", skill: null, prompt: null });
+    expect(((start as { viewport: { cols: number } }).viewport).cols).toBeGreaterThan(20);
+    expect(await tabs()).toEqual(["Claude Code"]);
+    await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
+    await expect($("#plugin-tab-add")).toBeEnabled();
+  });
+
+  it("adds a tab with the plus, starts another pane for it, and shows a tab again without a new start", async () => {
+    await openPlugins();
+    await waitForCount("#plugin-list .plugin-row", 2);
+    await row(1).click();
+    await waitForCalls("claude_code_start");
+    await $("#plugin-tab-add").click();
+    const starts = await waitForCalls("claude_code_start", 2);
+    expect(starts.map((s) => (s as { id: string }).id)).toEqual(["plugin:alpha/1", "plugin:alpha/2"]);
+    expect(await tabs()).toEqual(["Claude Code", "Claude Code 2"]);
+    await expect($("#plugin-tabs .orca-tab:nth-child(2) .orca-tab-btn")).toHaveAttribute("aria-selected", "true");
+    await $("#plugin-tabs .orca-tab:nth-child(1) .orca-tab-btn").click();
+    await expect($("#plugin-tabs .orca-tab:nth-child(1) .orca-tab-btn")).toHaveAttribute("aria-selected", "true");
+    await browser.pause(500);
+    expect((await callsOf("claude_code_start")).length).toBe(2);
+  });
+
+  it("ends the process of a tab that is closed, and shows the tab next to it", async () => {
+    await openPlugins();
+    await waitForCount("#plugin-list .plugin-row", 2);
+    await row(1).click();
+    await waitForCalls("claude_code_start");
+    await $("#plugin-tab-add").click();
+    await waitForCalls("claude_code_start", 2);
+    const close = await mock("claude_code_close", null);
+    await $("#plugin-tabs .orca-tab:nth-child(2) .orca-tab-close").click();
+    expect(await waitForCalls(close)).toEqual([{ id: "plugin:alpha/2", launch: 1 }]);
+    expect(await tabs()).toEqual(["Claude Code"]);
+    await expect($("#plugin-tabs .orca-tab-btn")).toHaveAttribute("aria-selected", "true");
+    await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
+  });
+
+  it("drops the tab of a process that ended by itself", async () => {
+    await openPlugins();
+    await waitForCount("#plugin-list .plugin-row", 2);
+    await row(1).click();
+    await waitForCalls("claude_code_start");
+    await sendClaudeCode({ kind: "ended", message: "Claude Code が終わりました", clean: true });
+    await waitForCount("#plugin-tabs .orca-tab", 0);
+  });
+
+  it("keeps the tabs of each plugin, and a plugin that is pressed with no tab left opens its first again", async () => {
+    await openPlugins();
+    await waitForCount("#plugin-list .plugin-row", 2);
+    await row(1).click();
+    await waitForCalls("claude_code_start");
+    await $("#plugin-tab-add").click();
+    await waitForCalls("claude_code_start", 2);
+    await row(2).click();
+    expect((await waitForCalls("claude_code_start", 3)).map((s) => (s as { id: string }).id)).toEqual(["plugin:alpha/1", "plugin:alpha/2", "plugin:beta/1"]);
+    expect(await tabs()).toEqual(["Claude Code"]);
+    await row(1).click();
+    expect(await tabs()).toEqual(["Claude Code", "Claude Code 2"]);
+    await browser.pause(500);
+    expect((await callsOf("claude_code_start")).length).toBe(3);
+    // The only tab closed: pressing the plugin opens a new first one (the next number).
+    await row(2).click();
+    await $("#plugin-tabs .orca-tab-close").click();
+    expect(await tabs()).toEqual([]);
+    await row(2).click();
+    expect((await waitForCalls("claude_code_start", 4)).map((s) => (s as { id: string }).id).at(-1)).toBe("plugin:beta/2");
+  });
+
+  it("hides the terminal while another tab is shown, and starts nothing again when the tab is shown again", async () => {
+    await openPlugins();
+    await waitForCount("#plugin-list .plugin-row", 2);
+    await row(1).click();
+    await waitForCalls("claude_code_start");
+    const close = await mock("claude_code_close", null);
+    await openTab("google");
+    await expect($(term)).not.toBeDisplayed();
+    await openTab("plugins");
+    await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
+    expect(await tabs()).toEqual(["Claude Code"]);
+    await browser.pause(500);
+    expect((await callsOf("claude_code_start")).length).toBe(1);
+    expect(await callsOf(close)).toEqual([]);
+  });
+
+  it("ends the panes of a plugin that is no longer in the folder when the list is read again", async () => {
+    await openPlugins();
+    await waitForCount("#plugin-list .plugin-row", 2);
+    await row(2).click();
+    await waitForCalls("claude_code_start");
+    await mock("plugins_list", [plugin("alpha", ["review", "design"])]);
+    const close = await mock("claude_code_close", null);
+    await openTab("google");
+    await openTab("plugins");
+    expect(await waitForCalls(close)).toEqual([{ id: "plugin:beta/1", launch: 1 }]);
+    await waitForCount("#plugin-list .plugin-row", 1);
+    expect(await tabs()).toEqual([]);
+    await expect($("#plugin-tab-add")).toBeDisabled();
+  });
+
+  it("makes a plugin with the name typed, reads the list again and selects the new plugin", async () => {
+    await openPlugins([plugin("alpha")]);
+    await waitForCount("#plugin-list .plugin-row", 1);
+    await expect($("#plugin-new-row")).not.toBeDisplayed();
+    await $("#plugin-new").click();
+    await expect($("#plugin-new-name")).toBeFocused();
+    await expect($("#plugin-new-name")).not.toHaveAttribute("placeholder");
+    const create = await mock("plugin_create", plugin("client-a"));
+    await mock("plugins_list", [plugin("alpha"), plugin("client-a")]);
+    await $("#plugin-new-name").setValue("client-a");
+    await browser.keys("Enter");
+    expect(await waitForCalls(create)).toEqual([{ name: "client-a" }]);
+    await waitForCount("#plugin-list .plugin-row", 2);
+    await expect($("#plugin-new-row")).not.toBeDisplayed();
+    await expect($("#plugin-new-name")).toHaveValue("");
+    await expect(row(2)).toHaveAttribute("aria-current", "true");
+    expect((await waitForCalls("claude_code_start")).map((s) => (s as { id: string }).id)).toEqual(["plugin:client-a/1"]);
+  });
+
+  it("shows the refusal of a name on a card and keeps the name typed", async () => {
+    await openPlugins([plugin("alpha")]);
+    await waitForCount("#plugin-list .plugin-row", 1);
+    await $("#plugin-new").click();
+    await mock("plugin_create", rejects("プラグイン「alpha」はもうあります"));
+    await $("#plugin-new-name").setValue("alpha");
+    await browser.keys("Enter");
+    await expect($(CARD)).toHaveText("プラグイン「alpha」はもうあります");
+    await expect($("#plugin-new-name")).toHaveValue("alpha");
+    await expect($("#plugin-new-row")).toBeDisplayed();
+    expect(await count("#plugin-list .plugin-row")).toBe(1);
+  });
+
+  it("makes nothing for an empty name, and Escape closes the field", async () => {
+    await openPlugins([plugin("alpha")]);
+    await $("#plugin-new").click();
+    const create = await mock("plugin_create", plugin("x"));
+    await browser.keys("Enter");
+    await browser.pause(300);
+    expect(await callsOf(create)).toEqual([]);
+    await $("#plugin-new-name").setValue("abc");
+    await browser.keys("Escape");
+    await expect($("#plugin-new-row")).not.toBeDisplayed();
+    await expect($("#plugin-new-name")).toHaveValue("");
   });
 });

@@ -1,13 +1,19 @@
 //! A-41: the folder of the owner's plugins, `~/.local/share/tsunagiai/plugins/` of this PC.
 //! Each folder in it is one plugin (`.claude-plugin/plugin.json`, its skills and agents). The leader of a formation and its Claude Code children are given the folder as a whole with `claude --plugin-dir {folder}`, which loads each child folder as a plugin (`claude --help`: "a folder of plugins loads each child").
-//! The app writes none of its files into it: the owner makes the plugins. It only makes the folder when it is missing, and reads `.mcp.json` of each plugin to find the plugins that have the Figma server (`figma_permissions`).
+//! The app writes none of its files into it but the new plugin that the Plugins tab of the settings makes (A-51, `plugin_create`: `{name}/.claude-plugin/plugin.json`): the owner makes the plugins. It makes the folder when it is missing, lists the plugins and their skills for that tab (`plugins_list`), and reads `.mcp.json` of each plugin to find the plugins that have the Figma server (`figma_permissions`).
 
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
 use serde_json::Value;
+#[cfg(test)]
+use ts_rs::TS;
 
 /// The folder of the plugins in the home folder, as names of folders.
 const FOLDERS: [&str; 4] = [".local", "share", "tsunagiai", "plugins"];
+
+/// A-51: the longest name of a new plugin.
+const NAME_MAX: usize = 64;
 
 /// The server of a plugin's `.mcp.json` whose tools a child's settings allow and deny (A-41, #1162).
 const FIGMA_SERVER: &str = "figma";
@@ -82,6 +88,122 @@ fn has_figma(mcp_json: &Path) -> bool {
 /// The `permissions` of a child's `--settings` (A-41, #1162): for each plugin of `dir` that has the Figma server, the read tools allowed and the write tools denied, named `mcp__plugin_{name in plugin.json, else the folder's name}_figma__{tool}`. No plugin with the server gives empty lists.
 pub fn figma_permissions(dir: &Path) -> Value {
     crate::formation_assets::figma_permissions_of(&figma_plugins(dir))
+}
+
+/// One plugin of the folder (A-51): `folder` is its folder's name, `name` is the name Claude Code calls it by (`manifest_name`, else the folder's), and `skills` are the folders of `skills/` that hold a `SKILL.md`, by name.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct Plugin {
+    pub folder: String,
+    pub name: String,
+    pub skills: Vec<String>,
+}
+
+/// The plugins of `dir`, in order of folder name: each folder that does not start with a dot (a link to a folder counts). A folder that cannot be read has no skills.
+fn list_plugins(dir: &Path) -> Vec<Plugin> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut plugins: Vec<Plugin> = entries
+        .flatten()
+        .filter(|entry| entry.path().is_dir())
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|folder| !folder.starts_with('.'))
+        .map(|folder| {
+            let path = dir.join(&folder);
+            Plugin {
+                name: manifest_name(&path).unwrap_or_else(|| folder.clone()),
+                skills: skills_of(&path),
+                folder,
+            }
+        })
+        .collect();
+    plugins.sort_by(|a, b| a.folder.cmp(&b.folder));
+    plugins
+}
+
+/// The names of the folders of `skills/` of the plugin folder `plugin` that hold a `SKILL.md`, in order.
+fn skills_of(plugin: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(plugin.join("skills")) else {
+        return Vec::new();
+    };
+    let mut skills: Vec<String> = entries
+        .flatten()
+        .filter(|entry| entry.path().join("SKILL.md").is_file())
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect();
+    skills.sort();
+    skills
+}
+
+/// The name of a new plugin (A-51): 1 to 64 of a to z, 0 to 9 and `-`, starting with a letter or a digit. It is the folder's name, so nothing else gets through: no `/`, `.` or `..` can leave the folder of the plugins.
+fn check_name(name: &str) -> Result<(), String> {
+    let valid = (1..=NAME_MAX).contains(&name.chars().count())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && !name.starts_with('-');
+    if valid {
+        return Ok(());
+    }
+    Err(format!(
+        "プラグインの名前は、英小文字・数字・- の {NAME_MAX} 文字までで、英小文字か数字から始めてください"
+    ))
+}
+
+/// Makes the plugin `name` in `dir`: the folder and `.claude-plugin/plugin.json` with the name. A name that is taken is refused, and a half-made folder is removed.
+fn create_plugin(dir: &Path, name: &str) -> Result<Plugin, String> {
+    check_name(name)?;
+    let path = dir.join(name);
+    std::fs::create_dir(&path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
+            format!("プラグイン「{name}」はもうあります")
+        } else {
+            format!("{} を作れません: {e}", path.display())
+        }
+    })?;
+    let manifest = serde_json::to_string_pretty(&serde_json::json!({ "name": name }))
+        .map_err(|e| e.to_string())?;
+    let written = std::fs::create_dir(path.join(".claude-plugin"))
+        .and_then(|()| std::fs::write(path.join(".claude-plugin/plugin.json"), manifest + "\n"));
+    if let Err(e) = written {
+        let _ = std::fs::remove_dir_all(&path);
+        return Err(format!("プラグイン「{name}」を作れません: {e}"));
+    }
+    Ok(Plugin {
+        folder: name.to_owned(),
+        name: name.to_owned(),
+        skills: Vec::new(),
+    })
+}
+
+/// The folder of the plugin `folder` in `root` (A-51: where a Claude Code pane of the Plugins tab runs). `folder` comes from the screen, so it must be one name of a folder of `root`, not starting with a dot (as the list leaves them out), and no path: nothing with `/`, `\` or a NUL, which could lead out of `root`. A link to a folder is the owner's own and is followed.
+pub fn plugin_dir(root: &Path, folder: &str) -> Result<PathBuf, String> {
+    let one_name =
+        !folder.is_empty() && !folder.starts_with('.') && !folder.contains(['/', '\\', '\0']);
+    let path = root.join(folder);
+    if one_name && path.is_dir() {
+        return Ok(path);
+    }
+    Err(format!("プラグイン「{folder}」がありません"))
+}
+
+/// The plugins of this PC with their skills (A-51); the folder is made when it is missing.
+#[tauri::command]
+pub async fn plugins_list() -> Result<Vec<Plugin>, String> {
+    tokio::task::spawn_blocking(|| Ok(list_plugins(&prepared_dir()?)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Makes a new plugin of that name (A-51) and answers it; a name that is not valid, or that is taken, is refused in Japanese.
+#[tauri::command]
+pub async fn plugin_create(name: String) -> Result<Plugin, String> {
+    tokio::task::spawn_blocking(move || create_plugin(&prepared_dir()?, &name))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]
@@ -269,5 +391,160 @@ mod tests {
             .chain(&deny)
             .all(|rule| !rule.contains("hidden")));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn skill(dir: &Path, plugin: &str, skill: &str, file: bool) {
+        let folder = dir.join(plugin).join("skills").join(skill);
+        std::fs::create_dir_all(&folder).unwrap();
+        if file {
+            std::fs::write(folder.join("SKILL.md"), "---\nname: x\n---\n").unwrap();
+        }
+    }
+
+    #[test]
+    fn a_name_is_one_to_sixty_four_of_a_to_z_digits_and_hyphens_and_starts_with_a_letter_or_a_digit(
+    ) {
+        for good in [
+            "a",
+            "0",
+            "client-a",
+            "a-",
+            "a--b",
+            "9lives",
+            &"a".repeat(64),
+        ] {
+            assert!(check_name(good).is_ok(), "{good}");
+        }
+        for bad in [
+            "",
+            "-a",
+            "A",
+            "Client",
+            "a_b",
+            "a b",
+            "a.b",
+            ".",
+            "..",
+            "a/b",
+            "../x",
+            "a\\b",
+            "a\0b",
+            "あ",
+            &"a".repeat(65),
+        ] {
+            assert!(check_name(bad).is_err(), "{bad:?}");
+        }
+        assert!(check_name("A").unwrap_err().contains("英小文字"));
+    }
+
+    #[test]
+    fn the_list_has_each_plugin_with_the_skills_that_have_a_skill_file() {
+        let dir = temp_dir("list");
+        assert_eq!(list_plugins(&dir), []);
+        assert_eq!(list_plugins(&dir.join("missing")), []);
+        plugin(&dir, "zeta", None);
+        plugin(&dir, "alpha", None);
+        skill(&dir, "alpha", "review", true);
+        skill(&dir, "alpha", "design", true);
+        // A folder with no SKILL.md, and a file in skills/, are no skill.
+        skill(&dir, "alpha", "empty", false);
+        std::fs::write(dir.join("alpha/skills/notes.md"), "x").unwrap();
+        // The name of plugin.json is the plugin's name, and the folder's name is the fallback.
+        plugin(&dir, "folder-b", None);
+        std::fs::write(
+            dir.join("folder-b/.claude-plugin/plugin.json"),
+            r#"{"name": "client-b"}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("no-manifest")).unwrap();
+        // A hidden folder and a file are not plugins.
+        plugin(&dir, ".hidden", None);
+        std::fs::write(dir.join("file.md"), "x").unwrap();
+        let list = list_plugins(&dir);
+        let seen: Vec<(&str, &str, &[String])> = list
+            .iter()
+            .map(|p| (p.folder.as_str(), p.name.as_str(), p.skills.as_slice()))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                (
+                    "alpha",
+                    "alpha",
+                    &["design".to_owned(), "review".to_owned()][..]
+                ),
+                ("folder-b", "client-b", &[][..]),
+                ("no-manifest", "no-manifest", &[][..]),
+                ("zeta", "zeta", &[][..]),
+            ]
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_new_plugin_has_its_folder_and_a_manifest_with_its_name() {
+        let dir = temp_dir("create");
+        let made = create_plugin(&dir, "client-a").unwrap();
+        assert_eq!(
+            made,
+            Plugin {
+                folder: "client-a".to_owned(),
+                name: "client-a".to_owned(),
+                skills: Vec::new()
+            }
+        );
+        let manifest: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("client-a/.claude-plugin/plugin.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest, serde_json::json!({"name": "client-a"}));
+        // The list reads it back as the same plugin.
+        assert_eq!(list_plugins(&dir), [made]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_name_that_is_taken_or_not_valid_makes_nothing() {
+        let dir = temp_dir("create-refused");
+        std::fs::create_dir_all(dir.join("mine")).unwrap();
+        std::fs::write(dir.join("mine/keep.md"), "keep").unwrap();
+        let taken = create_plugin(&dir, "mine").unwrap_err();
+        assert!(taken.contains("もうあります"), "{taken}");
+        // The folder of the owner is left as it was: no manifest was written into it.
+        assert!(!dir.join("mine/.claude-plugin").exists());
+        assert_eq!(
+            std::fs::read_to_string(dir.join("mine/keep.md")).unwrap(),
+            "keep"
+        );
+        // A file of that name is taken too.
+        std::fs::write(dir.join("file"), "x").unwrap();
+        assert!(create_plugin(&dir, "file")
+            .unwrap_err()
+            .contains("もうあります"));
+        for bad in ["", "A", "../outside", "a/b"] {
+            assert!(create_plugin(&dir, bad).is_err(), "{bad:?}");
+        }
+        assert!(!dir.parent().unwrap().join("outside").exists());
+        // A folder that is not there cannot be written, and nothing is left behind.
+        let error = create_plugin(&dir.join("missing"), "x").unwrap_err();
+        assert!(error.contains("作れません"), "{error}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_pane_runs_only_in_one_folder_of_the_plugins() {
+        let root = temp_dir("pane-dir");
+        std::fs::create_dir_all(root.join("mine")).unwrap();
+        std::fs::create_dir_all(root.join(".hidden")).unwrap();
+        std::fs::write(root.join("file"), "x").unwrap();
+        assert_eq!(plugin_dir(&root, "mine").unwrap(), root.join("mine"));
+        for bad in [
+            "", ".", "..", ".hidden", "file", "missing", "mine/..", "../x", "/", "mine/", "a\\b",
+            "a\0b",
+        ] {
+            let error = plugin_dir(&root, bad).unwrap_err();
+            assert!(error.contains("がありません"), "{bad:?}: {error}");
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
