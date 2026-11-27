@@ -3503,7 +3503,7 @@ describe("orca: files and editor (A-18)", () => {
     await expect($(CARDS)).not.toExist();
   });
 
-  it("draws HEAD on the left, the working tree on the right and the numbers between, with a blank where a side has no line (A-24)", async () => {
+  it("draws HEAD on the left, the working tree on the right and the number of each line at the left end of its column, with a blank where a side has no line (A-24)", async () => {
     await openDiffOf();
     await waitForCount(".orca-diff-rows .odf-row", 7);
     await expect($(".orca-diff-rows")).toHaveAttribute("data-view", "side");
@@ -3513,6 +3513,12 @@ describe("orca: files and editor (A-18)", () => {
     expect(await textsOf(".orca-diff-rows .odf-row:nth-child(3) .odf-num")).toEqual(["", "3"]);
     expect(await diffCell(2, ".old")).toBe("");
     expect(await diffCell(2, ".new")).toBe("    more();");
+    const edges = await browser.execute(() => {
+      const row = document.querySelectorAll(".orca-diff-rows .odf-row")[1];
+      const left = (c: string) => row.querySelector(c)!.getBoundingClientRect().left;
+      return { oldFirst: left(".odf-num") <= left(".old"), newFirst: left(".old + .odf-num") <= left(".new"), rightOfOld: left(".old + .odf-num") >= row.querySelector(".old")!.getBoundingClientRect().right - 1 };
+    });
+    expect(edges).toEqual({ oldFirst: true, newFirst: true, rightOfOld: true });
     const kinds = await browser.execute(() => [...document.querySelectorAll<HTMLElement>(".orca-diff-rows .odf-row")].map((r) => r.dataset.kind));
     expect(kinds).toEqual(["same", "changed", "added", "same", "same", "same", "added"]);
     const colors = await browser.execute(() => {
