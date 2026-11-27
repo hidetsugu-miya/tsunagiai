@@ -480,7 +480,7 @@ describe("orca", () => {
     expect(box.plusLeft).toBeGreaterThanOrEqual(box.tabsRight - 1);
     expect(box.plusRight).toBeLessThanOrEqual(box.barRight);
     const barOrder = await browser.execute(() => [...document.querySelector(".orca-tabbar")!.children].map((e) => e.className));
-    expect(barOrder).toEqual(["icon-btn list-toggle", "orca-tabs", "icon-btn orca-plus", "icon-btn orca-files-toggle"]);
+    expect(barOrder).toEqual(["icon-btn list-toggle", "orca-tabs", "icon-btn orca-plus", "orca-tab-modes", "icon-btn orca-files-toggle"]);
     // Nothing selected: no tab, no terminal, and a line that says what to do.
     expect(await count(".orca-tabs .orca-tab")).toBe(0);
     await expect($(".orca-term")).not.toBeDisplayed();
@@ -1560,8 +1560,8 @@ describe("orca: projects", () => {
       const r = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
       const lastTab = [...document.querySelectorAll(".orca-tabs .orca-tab")].pop()!.getBoundingClientRect();
       const tabs = document.querySelector(".orca-tabs")!;
-      // The right end of the room of the strip and the plus: the button of the file pane (A-18) when the bar has it, else the bar's edge.
-      const toggle = document.querySelector(".orca-tabbar .orca-files-toggle:not([hidden])");
+      // The right end of the room of the strip and the plus: the icons of the parts of the file pane (A-18) when the bar has them, else the bar's edge.
+      const toggle = document.querySelector(".orca-tabbar .orca-tab-modes:not([hidden])");
       return { lastRight: lastTab.right, plusLeft: r(".orca-plus").left, plusRight: r(".orca-plus").right, barRight: toggle ? toggle.getBoundingClientRect().left : r(".orca-tabbar").right, scrolls: tabs.scrollWidth > tabs.clientWidth };
     });
 

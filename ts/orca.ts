@@ -44,7 +44,7 @@ import { initOrcaDatabase, lostConnection } from "./orca-database.js";
 import { closeDiff, type DiffCommit, diffsOf, hasDiffIn, openDiff as openDiffTab, refreshDiffs, showDiffs } from "./orca-diff.js";
 import { closeFile, dirtyIds, discardFiles, filesOf, goTo, hasFileIn, holdFiles, initOrcaEditor, nameOf, openedIn, openFile as openFileHere, refreshEditors, resolveServers, saveFile, showEditors } from "./orca-editor.js";
 import { ensureServer, initLsp, mayAsk, pauseLsp, syncServers } from "./orca-lsp.js";
-import { filesShown, initOrcaFiles, openFolders, refreshFiles, rereadChanges, rereadScratchpad, syncFiles, toggleFiles, treeWatch } from "./orca-files.js";
+import { type FilesMode, filesShown, initOrcaFiles, openFilesAs, openFolders, refreshFiles, rereadChanges, rereadScratchpad, syncFiles, toggleFiles, treeWatch } from "./orca-files.js";
 import { syncFileWatches, unwatched, watchReady } from "./orca-watch.js";
 import { type PaneModel, drawTree, editorHostOf, initPaneTree, type TreeModel } from "./orca-pane-tree.js";
 import { applyLocal, findTab, focusedTab, layoutOf, needsSync, type PaneTabs, panesOf, syncPanes } from "./orca-panes.js";
@@ -2058,6 +2058,13 @@ function followLsp(launched: OrcaStarted, target: string | null) {
   reread(target);
 }
 
+// An icon of the strip (A-18) opens the file pane on its part. The pressed icon is hidden by the draw, so the focus goes on to the icon of the same part in the top row of the pane.
+function openFilesAndDraw(next: FilesMode) {
+  openFilesAs(next);
+  draw();
+  document.getElementById(`orca-files-mode-${next}`)?.focus({ preventScroll: true });
+}
+
 // The button of the file pane (A-18) is in the top row of the pane while it is shown, and at the right end of the tab strip of the corner pane while it is hidden.
 // The pressed button is hidden by the draw, so the focus goes on to the button that is shown now.
 function toggleFilesAndDraw() {
@@ -2282,6 +2289,7 @@ export function initOrca() {
       void openStartMenu(anchor);
     },
     files: toggleFilesAndDraw,
+    mode: openFilesAndDraw,
     list: toggleList,
     focus: focusPane,
     move: (tab, pane, edge) => runPaneOp({ kind: "move", tab, pane, edge }),

@@ -7,8 +7,9 @@
 import type { Direction } from "./bindings/Direction";
 import type { Edge } from "./bindings/Edge";
 import { tag } from "./dom.js";
-import { FOLDER_SVG, PLUS_SVG } from "./icons.js";
+import { BRANCH_SVG, DATABASE_SVG, FILE_SVG, FOLDER_SVG, PLUS_SVG, SERVER_SVG, TICKET_SVG, TODO_SVG } from "./icons.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
+import type { FilesMode } from "./orca-files.js";
 import { MIN_SHARE } from "./orca-panes.js";
 
 // How far from an edge of a pane's body a tab dropped there splits the pane (a share of the body's size), and how far the pointer goes before a press is a drag (px).
@@ -39,6 +40,8 @@ export interface TreeHandlers {
   plus: (anchor: Element, pane: string) => void;
   // The button of the file pane was pressed.
   files: () => void;
+  // The icon of a part of the file pane was pressed in the strip while the pane is hidden: the pane opens on that part.
+  mode: (mode: FilesMode) => void;
   // The button that opens the list of projects was pressed.
   list: () => void;
   // The pane was pressed, or one of its tabs was.
@@ -57,6 +60,7 @@ interface PaneEl {
   strip: HTMLElement;
   plus: HTMLButtonElement;
   files: HTMLButtonElement;
+  modes: HTMLElement;
   list: HTMLButtonElement;
   empty: HTMLElement;
   host: HTMLElement;
@@ -77,6 +81,16 @@ let stopResize: (() => void) | null = null;
 
 const shapeOf = (tree: TreeModel): unknown => (tree.kind === "pane" ? tree.pane.id : [tree.direction, tree.children.map(shapeOf)]);
 
+// The parts of the file pane, in the order of its top row (A-18).
+const MODES: [FilesMode, string, string][] = [
+  ["files", "ファイル", FILE_SVG],
+  ["history", "履歴", BRANCH_SVG],
+  ["server", "言語サーバー", SERVER_SVG],
+  ["database", "データベース", DATABASE_SVG],
+  ["jira", "Jira", TICKET_SVG],
+  ["todo", "Todo", TODO_SVG],
+];
+
 function newPane(id: string): PaneEl {
   const el = tag("div", "orca-pane");
   el.dataset.pane = id;
@@ -96,8 +110,20 @@ function newPane(id: string): PaneEl {
   files.setAttribute("aria-label", "ファイル欄");
   files.innerHTML = FOLDER_SVG;
   files.onclick = () => handlers.files();
+  // The same icons as the top row of the file pane, left of its button: they show while the button does, and none is pressed.
+  const modes = tag("div", "orca-tab-modes");
+  for (const [mode, label, svg] of MODES) {
+    const button = tag("button", "icon-btn orca-tab-mode");
+    button.type = "button";
+    button.dataset.mode = mode;
+    button.setAttribute("aria-label", label);
+    button.setAttribute("aria-pressed", "false");
+    button.innerHTML = svg;
+    button.onclick = () => handlers.mode(mode);
+    modes.append(button);
+  }
   const list = listToggle("プロジェクト一覧", () => handlers.list());
-  tabbar.append(list, strip, plus, files);
+  tabbar.append(list, strip, plus, modes, files);
   const empty = tag("p", "orca-empty feed-empty");
   empty.hidden = true;
   const host = tag("div", "orca-term");
@@ -116,7 +142,7 @@ function newPane(id: string): PaneEl {
     e.preventDefault();
     handlers.menu(tab, tab.dataset.tab!, id);
   });
-  return { el, tabbar, strip, plus, files, list, empty, host, editor, key: null, tabCount: 0 };
+  return { el, tabbar, strip, plus, files, modes, list, empty, host, editor, key: null, tabCount: 0 };
 }
 
 // Updates a pane's own parts from its model.
@@ -137,6 +163,7 @@ function drawPane(p: PaneEl, m: PaneModel, corner: boolean, edge: boolean) {
   p.plus.disabled = m.plusDisabled;
   // While the file pane is shown, its own top row has the button (A-18), so the corner pane has none.
   p.files.hidden = !corner || m.filesShown;
+  p.modes.hidden = p.files.hidden;
   p.files.setAttribute("aria-pressed", String(m.filesShown));
   p.list.hidden = !edge || m.listOpen;
   drawListToggle(p.list, m.listOpen);
