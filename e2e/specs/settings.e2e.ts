@@ -3146,7 +3146,10 @@ describe("settings: plugins (the Plugins tab, A-51)", () => {
     await openPlugins([plugin("alpha")]);
     await waitForCount("#plugin-list .plugin-row", 1);
     await expect($("#plugin-new-row")).not.toBeDisplayed();
-    await $("#plugin-new").click();
+    // The page's own click: the driver's click focuses the button after the handler, which takes the focus off the field.
+    await browser.execute(() => {
+      document.getElementById("plugin-new")!.click();
+    });
     await expect($("#plugin-new-name")).toBeFocused();
     await expect($("#plugin-new-name")).not.toHaveAttribute("placeholder");
     const create = await mock("plugin_create", plugin("client-a"));

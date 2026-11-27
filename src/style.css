@@ -948,6 +948,22 @@ select[data-effort="max"] { --eff: var(--effort-max); --eff-bg: var(--effort-max
 .skill-actions { display: flex; justify-content: flex-end; gap: 8px; }
 /* The pane of Claude at the right of the form (A-32, A-36): the head, and the terminal of Claude Code under it. */
 #skill-chat { width: 380px; flex: none; align-self: stretch; min-height: 560px; border-left: 1px solid var(--line); }
+
+/* The Plugins tab (A-51): the plugins and their skills at the left, the Claude Code tabs of the one selected in the middle, the place of its file tree at the right. */
+.plugins-card { max-width: 1240px; }
+.plugins-body { display: flex; align-items: flex-start; border-top: 1px solid var(--line); }
+.plugins-side { box-sizing: border-box; flex: none; display: flex; flex-direction: column; align-items: stretch; gap: 8px; width: 210px; align-self: stretch; padding: 12px; border-right: 1px solid var(--line); }
+.plugins-side-head { display: flex; justify-content: flex-end; }
+#plugin-new-name { box-sizing: border-box; width: 100%; height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: 16px; font: inherit; font-size: calc(13px * var(--fs)); }
+#plugin-list { display: flex; flex-direction: column; gap: 2px; width: 100%; }
+.plugin-row { display: block; width: 100%; padding: 6px 10px; border: 0; border-radius: 8px; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.plugin-row:hover { background: var(--hover); }
+.plugin-row[aria-current="true"] { background: var(--soft); }
+.plugin-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.plugin-skill { padding: 0 10px 0 22px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plugins-main { flex: 1; min-width: 0; align-self: stretch; display: flex; flex-direction: column; min-height: 560px; }
+#plugin-term { flex: 1; min-height: 0; }
+#plugin-files { flex: none; width: 0; align-self: stretch; }
 .card-add { display: flex; gap: 8px; padding: 12px 12px 14px 20px; border-top: 1px solid var(--line); background: var(--bar); border-radius: 0 0 12px 12px; }
 .card-add input { flex: 1; min-width: 0; height: 32px; padding: 0 14px; border: 1px solid var(--chip-line); border-radius: 16px; font: inherit; background: var(--surface); }
 .card-add input:focus { outline: 2px solid var(--accent); border-color: transparent; }
