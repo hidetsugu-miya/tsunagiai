@@ -59,8 +59,8 @@ Slack のスレッドは横のペイン、Todo は詳細の下のペインに、
   <tr>
     <td width="50%" valign="top">
       <strong>Todo</strong><br />
-      Todoist のタスクを、期限が来たものから順に。メールからも、右のペインの Claude に頼んでも作れます。<br /><br />
-      <img src="docs/assets/readme/todo.png" alt="今日のタスクの一覧と、右の Claude のペイン" />
+      Todoist のタスクを、期限が来たものから順に。メールからも作れます。タスクは右のタブで開き、別ウィンドウにも出せます。<br /><br />
+      <img src="docs/assets/readme/todo.png" alt="今日のタスクの一覧。右はタスクの詳細を開くタブ" />
     </td>
     <td width="50%" valign="top">
       <strong>Slack</strong><br />
