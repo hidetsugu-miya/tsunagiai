@@ -1,14 +1,16 @@
 //! A-41: the files of `src-tauri/formation/` that are embedded in the binary at build time (`build.rs`), and how they are written.
 //! `PREVIEW_PLUGIN` (A-45) is the plugin of `src-tauri/preview-plugin/`, which `preview_plugin` writes with `ensure_plugin`.
 //! `LEADER_SKILL` is the leader's skill `feature-dev`, which is no longer written (#1533; `plugins` gives the leader the owner's plugins instead, and #1534 removes it).
-//! `PLUGIN` is the plugin `feature-dev` (the unit procedures and the agents), written into `formation-plugin/` of the config folder for a child of another PC (`formation::write_child_files`, #1535) unless the folder already holds this very plugin, and given to the child's `claude` with `--plugin-dir`.
+//! `PLUGIN` is the plugin `feature-dev`, which is no longer written either (#1535: the owner's plugins are sent to the PC of a saved environment instead, `plugins_begin`, `plugins_write` and `plugins_commit`); #1534 removes it.
 //! Each list is `(path relative to its folder with "/", contents)`.
 
 use std::{
+    io::{Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 include!(concat!(env!("OUT_DIR"), "/formation_assets.rs"));
@@ -64,7 +66,7 @@ pub fn write_plugin(config: &Path) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-/// The plugin whose Figma tools `figma_permissions` names: the embedded one, which a child of another PC still gets until the plugins of this PC are sent there (#1535).
+/// The plugin whose Figma tools `figma_permissions` names: the embedded one, which nothing uses any more (#1534 removes it).
 const EMBEDDED_PLUGIN: &str = "feature-dev";
 
 /// The Figma tools of a plugin's server as a permission rule names them: `mcp__plugin_{plugin}_{server}__{tool}` (the server `figma` of its `.mcp.json`; Claude Code's documentation of permissions, "MCP").
@@ -113,32 +115,44 @@ pub fn figma_permissions_of(plugins: &[String]) -> serde_json::Value {
     })
 }
 
-/// The permissions for the embedded plugin (`EMBEDDED_PLUGIN`), for the child of another PC (`formation::write_child_files`).
+/// The permissions for the embedded plugin (`EMBEDDED_PLUGIN`), which nothing uses any more (#1534 removes it).
 pub fn figma_permissions() -> serde_json::Value {
     figma_permissions_of(&[EMBEDDED_PLUGIN.to_owned()])
 }
 
 static STAGING: AtomicUsize = AtomicUsize::new(0);
 
+/// The folder that holds `target`.
+fn parent_of(target: &Path) -> Result<&Path, String> {
+    match (target.parent(), target.file_name()) {
+        (Some(parent), Some(_)) => Ok(parent),
+        _ => Err(format!("{} を作れません", target.display())),
+    }
+}
+
+/// A name beside `target` for the folder of the kind `kind` that is written or moved aside while `target` is replaced: it starts with a dot and holds the process and a count, so that two writers do not meet in it.
+fn beside(target: &Path, kind: &str) -> Result<PathBuf, String> {
+    let name = target.file_name().unwrap_or_default();
+    Ok(parent_of(target)?.join(format!(
+        ".{}.{kind}-{}-{}",
+        name.to_string_lossy(),
+        std::process::id(),
+        STAGING.fetch_add(1, Ordering::Relaxed)
+    )))
+}
+
 /// Makes `target` a folder that holds exactly `files` and nothing else: the files are written in a folder beside it, which then takes its place, so a file that `files` no longer lists does not stay and a failure leaves the old `target` as it was, with no half-written folder.
 /// The folder beside it has a name that starts with a dot and holds the process and a count, so that two writers do not meet in it; it is removed when the write fails.
 /// What was at `target` is moved aside by a rename and removed only after the new folder is in its place, so a reader never waits for a removal: `target` is missing for the time between two renames and no longer. The files are not synced one by one: the folder is synced before it is renamed.
 /// A link in `target`'s place is moved aside and removed, not followed. When another process has put a folder there first, its folder is kept: both wrote the same files.
-pub(crate) fn replace_dir(target: &Path, files: &[(&str, &str)]) -> Result<(), String> {
-    let (Some(parent), Some(name)) = (target.parent(), target.file_name()) else {
-        return Err(format!("{} を作れません", target.display()));
-    };
+pub(crate) fn replace_dir<T: AsRef<[u8]>>(
+    target: &Path,
+    files: &[(&str, T)],
+) -> Result<(), String> {
+    let parent = parent_of(target)?;
     std::fs::create_dir_all(parent)
         .map_err(|e| format!("{} を作れません: {e}", parent.display()))?;
-    let beside = |kind: &str| {
-        parent.join(format!(
-            ".{}.{kind}-{}-{}",
-            name.to_string_lossy(),
-            std::process::id(),
-            STAGING.fetch_add(1, Ordering::Relaxed)
-        ))
-    };
-    let (staging, old) = (beside("new"), beside("old"));
+    let (staging, old) = (beside(target, "new")?, beside(target, "old")?);
     let _ = remove_old(&staging);
     let moved = write_files(&staging, files).and_then(|()| swap(&staging, target, &old));
     let _ = remove_old(&staging);
@@ -162,7 +176,7 @@ fn swap(staging: &Path, target: &Path, old: &Path) -> Result<(), String> {
         })
 }
 
-fn write_files(dir: &Path, files: &[(&str, &str)]) -> Result<(), String> {
+fn write_files<T: AsRef<[u8]>>(dir: &Path, files: &[(&str, T)]) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("{} を作れません: {e}", dir.display()))?;
     for (relative, text) in files {
         let path = dir.join(relative);
@@ -190,6 +204,321 @@ pub(crate) fn remove_old(path: &Path) -> Result<(), String> {
         std::fs::remove_file(path)
     };
     removed.map_err(|e| format!("{} を外せません: {e}", path.display()))
+}
+
+// ---- the owner's plugins, sent to the PC of a saved environment (#1535) ----
+// The app reads the folder `~/.local/share/tsunagiai/plugins/` of this PC (`read_plugins_folder`) and sends it in three requests of the server of that PC: `plugins_begin` (the hash of the set and the files with their sizes: a PC that already holds them answers that and nothing else is sent), `plugins_write` (pieces of files, as many requests as the frame of 1 MiB needs) and `plugins_commit` (the hash of what arrived is checked, and the folder is replaced as a whole as `replace_dir` replaces one). What arrives is written in a folder beside the plugins' folder whose name holds the hash, so the old folder stays whole until the new one is complete.
+
+/// The file of the plugins' folder of the receiving PC that holds the hash of the set that was committed (`plugins_mark`): the next `plugins_begin` with the same hash sends nothing. It is replaced with the folder, so the two cannot disagree, and it is never read from the folder that is sent.
+const PLUGINS_MARK_FILE: &str = ".tsunagiai-plugins-hash";
+
+/// How many files and how many bytes of them one send holds, and how long the path of a file may be: a folder over them is refused with its reason, so that a folder that holds a checkout or a build is not sent by mistake. A request that lists the files (`plugins_begin`, `plugins_commit`) stays within the frame of 1 MiB with them.
+pub(crate) const PLUGINS_MAX_FILES: usize = 1000;
+pub(crate) const PLUGINS_MAX_BYTES: u64 = 32 * 1024 * 1024;
+const PLUGINS_MAX_PATH: usize = 300;
+
+/// A file of the set that is sent, as the requests that list the files name it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginEntry {
+    pub path: String,
+    pub size: u64,
+}
+
+/// A path of the set: relative, with `/` between its parts, and no empty part, `.`, `..`, backslash or control character, so that it names a place inside the folder and nothing else. The file that holds the hash is not a path of the set.
+fn check_plugin_path(path: &str) -> Result<(), String> {
+    let bad = path.is_empty()
+        || path.chars().count() > PLUGINS_MAX_PATH
+        || path.starts_with('/')
+        || path.chars().any(|c| c == '\\' || c.is_control())
+        || path
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+        || path == PLUGINS_MARK_FILE;
+    if bad {
+        return Err(format!(
+            "プラグインのファイルの場所が正しくありません: {path}"
+        ));
+    }
+    Ok(())
+}
+
+fn check_plugins_mark(mark: &str) -> Result<(), String> {
+    if mark.len() == 64
+        && mark
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        Ok(())
+    } else {
+        Err("プラグインのハッシュが正しくありません".to_owned())
+    }
+}
+
+/// The hash of a set of files, `files` being (path, contents) in the order of the paths: what tells that two folders hold the same plugins. The length of each file is part of it, so that no two sets share a hash by moving bytes from one file to the next.
+fn plugins_mark<'a>(files: impl IntoIterator<Item = (&'a str, &'a [u8])>) -> String {
+    let mut hash = Sha256::new();
+    for (path, bytes) in files {
+        hash.update((path.len() as u64).to_le_bytes());
+        hash.update(path.as_bytes());
+        hash.update((bytes.len() as u64).to_le_bytes());
+        hash.update(bytes);
+    }
+    hash.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The hash of `files` (as `read_plugins_folder` gives them: sorted by path).
+pub fn plugins_mark_of(files: &[(String, Vec<u8>)]) -> String {
+    plugins_mark(
+        files
+            .iter()
+            .map(|(path, bytes)| (path.as_str(), bytes.as_slice())),
+    )
+}
+
+/// The files of `files` as the requests list them.
+pub fn plugin_entries(files: &[(String, Vec<u8>)]) -> Vec<PluginEntry> {
+    files
+        .iter()
+        .map(|(path, bytes)| PluginEntry {
+            path: path.clone(),
+            size: bytes.len() as u64,
+        })
+        .collect()
+}
+
+/// The paths of the files under `dir`, relative and with `/`, appended to `out`. With `skip_noise` (the folder of the owner) a link, `.git`, `.DS_Store` and the file of the hash at the top are left out: a link is never followed, and what git or Finder keeps is not a plugin's. Without it (what arrived) every entry that is not a folder is listed, so that a link or a file that was not asked for is seen.
+fn walk_files(
+    dir: &Path,
+    relative: &str,
+    skip_noise: bool,
+    out: &mut Vec<String>,
+) -> Result<(), String> {
+    let entries =
+        std::fs::read_dir(dir).map_err(|e| format!("{} を読めません: {e}", dir.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("{} を読めません: {e}", dir.display()))?;
+        let name = entry.file_name().into_string().map_err(|_| {
+            format!(
+                "{} に、名前が文字列にならないファイルがあります",
+                dir.display()
+            )
+        })?;
+        let path = if relative.is_empty() {
+            name.clone()
+        } else {
+            format!("{relative}/{name}")
+        };
+        let meta = std::fs::symlink_metadata(entry.path())
+            .map_err(|e| format!("{} を読めません: {e}", entry.path().display()))?;
+        if skip_noise
+            && (meta.is_symlink()
+                || name == ".git"
+                || name == ".DS_Store"
+                || (relative.is_empty() && name == PLUGINS_MARK_FILE))
+        {
+            continue;
+        }
+        if meta.is_dir() {
+            walk_files(&entry.path(), &path, skip_noise, out)?;
+        } else if skip_noise && !meta.is_file() {
+            continue;
+        } else {
+            out.push(path);
+        }
+        if out.len() > PLUGINS_MAX_FILES {
+            return Err(too_large());
+        }
+    }
+    Ok(())
+}
+
+fn too_large() -> String {
+    format!(
+        "プラグインのフォルダが大きすぎます（ファイルは {PLUGINS_MAX_FILES} 個、合わせて {} MiB までです）",
+        PLUGINS_MAX_BYTES / 1024 / 1024
+    )
+}
+
+/// The files of the plugins' folder `dir`, as (path, contents) sorted by path. A folder that is not there is a folder with no file: the PC that receives it then holds no plugin. A folder over `PLUGINS_MAX_FILES` or `PLUGINS_MAX_BYTES` is refused before a file is read.
+pub fn read_plugins_folder(dir: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {
+    if !std::fs::metadata(dir).is_ok_and(|m| m.is_dir()) {
+        return Ok(Vec::new());
+    }
+    let mut paths = Vec::new();
+    walk_files(dir, "", true, &mut paths)?;
+    paths.sort();
+    let mut total = 0u64;
+    for path in &paths {
+        check_plugin_path(path)?;
+        let meta =
+            std::fs::metadata(dir.join(path)).map_err(|e| format!("{path} を読めません: {e}"))?;
+        total += meta.len();
+        if total > PLUGINS_MAX_BYTES {
+            return Err(too_large());
+        }
+    }
+    paths
+        .into_iter()
+        .map(|path| {
+            std::fs::read(dir.join(&path))
+                .map(|bytes| (path.clone(), bytes))
+                .map_err(|e| format!("{path} を読めません: {e}"))
+        })
+        .collect()
+}
+
+/// The list of a request checked, and sorted by path: at most `PLUGINS_MAX_FILES` files of `PLUGINS_MAX_BYTES` together, every path right and no path twice.
+fn check_entries(entries: &[PluginEntry]) -> Result<Vec<PluginEntry>, String> {
+    if entries.len() > PLUGINS_MAX_FILES {
+        return Err(too_large());
+    }
+    let mut sorted = entries.to_vec();
+    sorted.sort_by(|a, b| a.path.cmp(&b.path));
+    let mut total = 0u64;
+    for (i, entry) in sorted.iter().enumerate() {
+        check_plugin_path(&entry.path)?;
+        if i > 0 && sorted[i - 1].path == entry.path {
+            return Err(format!(
+                "プラグインのファイルが二つあります: {}",
+                entry.path
+            ));
+        }
+        total = total.saturating_add(entry.size);
+    }
+    if total > PLUGINS_MAX_BYTES {
+        return Err(too_large());
+    }
+    Ok(sorted)
+}
+
+/// The folder beside `target` that what arrives is written in: its name holds the start of the hash, so a send of another set does not meet it.
+fn plugins_staging(target: &Path, mark: &str) -> Result<PathBuf, String> {
+    let name = target.file_name().unwrap_or_default();
+    Ok(parent_of(target)?.join(format!(
+        ".{}.incoming-{}",
+        name.to_string_lossy(),
+        &mark[..16]
+    )))
+}
+
+/// Whether `target` holds the set: a real folder (not a link), the file of the hash with `mark`, and every file there with the size it has. The contents are not read again.
+fn plugins_held(target: &Path, mark: &str, entries: &[PluginEntry]) -> bool {
+    std::fs::symlink_metadata(target).is_ok_and(|m| m.is_dir())
+        && std::fs::read_to_string(target.join(PLUGINS_MARK_FILE)).is_ok_and(|text| text == mark)
+        && entries.iter().all(|entry| {
+            std::fs::symlink_metadata(target.join(&entry.path))
+                .is_ok_and(|m| m.is_file() && m.len() == entry.size)
+        })
+}
+
+/// The start of a send to `target`, the plugins' folder of this PC: whether it holds the set already (then nothing is sent), and otherwise an empty folder beside it for what arrives (what an earlier send of the same set left is removed). `mark` and `entries` are what the sender computed; they are checked here, and `plugins_commit` checks the contents against `mark`.
+pub(crate) fn plugins_begin(
+    target: &Path,
+    mark: &str,
+    entries: &[PluginEntry],
+) -> Result<bool, String> {
+    check_plugins_mark(mark)?;
+    let entries = check_entries(entries)?;
+    if plugins_held(target, mark, &entries) {
+        return Ok(true);
+    }
+    let staging = plugins_staging(target, mark)?;
+    remove_old(&staging)?;
+    std::fs::create_dir_all(&staging)
+        .map_err(|e| format!("{} を作れません: {e}", staging.display()))?;
+    Ok(false)
+}
+
+/// Writes pieces of files into the folder that `plugins_begin` made: each is (path, where in the file it goes, bytes). The file is made when it is not there (an empty piece makes an empty file), and a piece written twice leaves the same file.
+pub(crate) fn plugins_write(
+    target: &Path,
+    mark: &str,
+    pieces: &[(String, u64, Vec<u8>)],
+) -> Result<(), String> {
+    check_plugins_mark(mark)?;
+    let staging = plugins_staging(target, mark)?;
+    if !std::fs::symlink_metadata(&staging).is_ok_and(|m| m.is_dir()) {
+        return Err("プラグインの送り込みが始まっていません".to_owned());
+    }
+    for (path, offset, bytes) in pieces {
+        check_plugin_path(path)?;
+        if offset.saturating_add(bytes.len() as u64) > PLUGINS_MAX_BYTES {
+            return Err(too_large());
+        }
+        let file = staging.join(path);
+        if let Some(folder) = file.parent() {
+            std::fs::create_dir_all(folder)
+                .map_err(|e| format!("{} を作れません: {e}", folder.display()))?;
+        }
+        let mut out = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&file)
+            .map_err(|e| format!("{path} を書けません: {e}"))?;
+        out.seek(SeekFrom::Start(*offset))
+            .and_then(|_| out.write_all(bytes))
+            .map_err(|e| format!("{path} を書けません: {e}"))?;
+    }
+    Ok(())
+}
+
+/// The end of a send: what arrived must be exactly the files of `entries` with their sizes, and hash to `mark`; then the file of the hash is added and the folder takes the place of `target` as a whole (`swap`), so what the old folder held and the set no longer lists is gone, and a failure leaves the old folder as it was. A set that does not match is refused and its folder is removed.
+pub(crate) fn plugins_commit(
+    target: &Path,
+    mark: &str,
+    entries: &[PluginEntry],
+) -> Result<(), String> {
+    check_plugins_mark(mark)?;
+    let entries = check_entries(entries)?;
+    let staging = plugins_staging(target, mark)?;
+    if !std::fs::symlink_metadata(&staging).is_ok_and(|m| m.is_dir()) {
+        return Err("プラグインの送り込みが始まっていません".to_owned());
+    }
+    let checked = check_arrived(&staging, mark, &entries);
+    if let Err(e) = checked {
+        let _ = remove_old(&staging);
+        return Err(e);
+    }
+    let old = beside(target, "old")?;
+    let placed = std::fs::write(staging.join(PLUGINS_MARK_FILE), mark)
+        .map_err(|e| {
+            format!(
+                "{} を書けません: {e}",
+                staging.join(PLUGINS_MARK_FILE).display()
+            )
+        })
+        .and_then(|()| swap(&staging, target, &old));
+    let _ = remove_old(&staging);
+    let _ = remove_old(&old);
+    placed
+}
+
+fn check_arrived(staging: &Path, mark: &str, entries: &[PluginEntry]) -> Result<(), String> {
+    let mut arrived = Vec::new();
+    walk_files(staging, "", false, &mut arrived)?;
+    arrived.sort();
+    let listed: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
+    if arrived != listed {
+        return Err("届いたファイルが、一覧と合いません".to_owned());
+    }
+    let mut files = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let path = staging.join(&entry.path);
+        let ok =
+            std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_file() && m.len() == entry.size);
+        if !ok {
+            return Err(format!("{} が届ききっていません", entry.path));
+        }
+        let bytes =
+            std::fs::read(&path).map_err(|e| format!("{} を読めません: {e}", entry.path))?;
+        files.push((entry.path.as_str(), bytes));
+    }
+    let got = plugins_mark(files.iter().map(|(path, bytes)| (*path, bytes.as_slice())));
+    if got != mark {
+        return Err("届いたファイルが、ハッシュと合いません".to_owned());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -315,7 +644,7 @@ mod tests {
         assert_eq!(entries(&root.join("a")), ["b"]);
         replace_dir(&target, &[("only.md", "1")]).unwrap();
         assert_eq!(entries(&target), ["only.md"]);
-        replace_dir(&target, &[]).unwrap();
+        replace_dir::<&str>(&target, &[]).unwrap();
         assert!(entries(&target).is_empty());
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -448,6 +777,362 @@ mod tests {
             "kept"
         );
         assert!(!again_old.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn plugin_files(files: &[(&str, &[u8])]) -> Vec<(String, Vec<u8>)> {
+        files
+            .iter()
+            .map(|(p, b)| ((*p).to_owned(), b.to_vec()))
+            .collect()
+    }
+
+    /// A whole send into `target` (what the requests of the server do, one piece for each file).
+    fn receive(target: &Path, files: &[(String, Vec<u8>)]) -> Result<bool, String> {
+        let mark = plugins_mark_of(files);
+        let entries = plugin_entries(files);
+        if plugins_begin(target, &mark, &entries)? {
+            return Ok(false);
+        }
+        let pieces: Vec<(String, u64, Vec<u8>)> = files
+            .iter()
+            .map(|(p, b)| (p.clone(), 0, b.clone()))
+            .collect();
+        plugins_write(target, &mark, &pieces)?;
+        plugins_commit(target, &mark, &entries)?;
+        Ok(true)
+    }
+
+    #[test]
+    fn the_hash_of_a_set_changes_with_a_path_a_text_or_where_a_byte_sits() {
+        let base = plugins_mark_of(&plugin_files(&[("a.md", b"1"), ("b.md", b"2")]));
+        assert_eq!(base.len(), 64);
+        assert_eq!(
+            base,
+            plugins_mark_of(&plugin_files(&[("a.md", b"1"), ("b.md", b"2")]))
+        );
+        assert_ne!(
+            base,
+            plugins_mark_of(&plugin_files(&[("a.md", b"1"), ("b.md", b"3")]))
+        );
+        assert_ne!(
+            base,
+            plugins_mark_of(&plugin_files(&[("a.md", b"1"), ("c.md", b"2")]))
+        );
+        assert_ne!(base, plugins_mark_of(&plugin_files(&[("a.md", b"1")])));
+        // A byte moved from one file to the next, or a name that swallows a text, is another set.
+        assert_ne!(
+            plugins_mark_of(&plugin_files(&[("a", b"bc"), ("d", b"")])),
+            plugins_mark_of(&plugin_files(&[("a", b"b"), ("cd", b"")]))
+        );
+        assert_ne!(
+            plugins_mark_of(&plugin_files(&[("a", b"bc")])),
+            plugins_mark_of(&plugin_files(&[("ab", b"c")]))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_plugins_folder_is_read_sorted_without_links_git_and_the_mark() {
+        let root = temp_dir("plugins-read");
+        let dir = root.join("plugins");
+        std::fs::create_dir_all(dir.join("b/skills/x")).unwrap();
+        std::fs::create_dir_all(dir.join("a/.claude-plugin")).unwrap();
+        std::fs::create_dir_all(dir.join("a/.git")).unwrap();
+        std::fs::write(dir.join("b/skills/x/SKILL.md"), "skill").unwrap();
+        std::fs::write(dir.join("a/.claude-plugin/plugin.json"), "{}").unwrap();
+        std::fs::write(dir.join("a/.git/HEAD"), "ref").unwrap();
+        std::fs::write(dir.join("a/.DS_Store"), "x").unwrap();
+        std::fs::write(dir.join("empty"), "").unwrap();
+        std::fs::write(dir.join(PLUGINS_MARK_FILE), "mark").unwrap();
+        std::os::unix::fs::symlink(root.join("elsewhere"), dir.join("link")).unwrap();
+        std::fs::create_dir_all(root.join("elsewhere")).unwrap();
+        std::fs::write(root.join("elsewhere/secret"), "secret").unwrap();
+        std::os::unix::fs::symlink(root.join("elsewhere"), dir.join("a/dir-link")).unwrap();
+        let files = read_plugins_folder(&dir).unwrap();
+        let paths: Vec<&str> = files.iter().map(|(p, _)| p.as_str()).collect();
+        assert_eq!(
+            paths,
+            [
+                "a/.claude-plugin/plugin.json",
+                "b/skills/x/SKILL.md",
+                "empty"
+            ]
+        );
+        assert_eq!(files[2].1, b"");
+        // A folder that is not there is a folder with no file.
+        assert!(read_plugins_folder(&root.join("missing"))
+            .unwrap()
+            .is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_folder_with_too_many_files_or_bytes_or_a_wrong_name_is_refused() {
+        let root = temp_dir("plugins-limits");
+        let dir = root.join("plugins");
+        std::fs::create_dir_all(&dir).unwrap();
+        for i in 0..=PLUGINS_MAX_FILES {
+            std::fs::write(dir.join(format!("f{i}")), "").unwrap();
+        }
+        assert!(read_plugins_folder(&dir)
+            .unwrap_err()
+            .contains("大きすぎます"));
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        // A sparse file over the limit is refused by its size, before it is read.
+        let big = std::fs::File::create(dir.join("big")).unwrap();
+        big.set_len(PLUGINS_MAX_BYTES + 1).unwrap();
+        assert!(read_plugins_folder(&dir)
+            .unwrap_err()
+            .contains("大きすぎます"));
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a\\b"), "x").unwrap();
+        assert!(read_plugins_folder(&dir)
+            .unwrap_err()
+            .contains("場所が正しくありません"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_path_that_leaves_the_folder_is_refused_everywhere() {
+        let root = temp_dir("plugins-paths");
+        let target = root.join("plugins");
+        let mark = plugins_mark_of(&[]);
+        let long = "a".repeat(PLUGINS_MAX_PATH + 1);
+        for bad in [
+            "",
+            "/etc/x",
+            "../x",
+            "a/../b",
+            "a//b",
+            "./a",
+            "a/.",
+            "a/",
+            "a\\b",
+            "a\nb",
+            PLUGINS_MARK_FILE,
+            long.as_str(),
+        ] {
+            let entry = [PluginEntry {
+                path: bad.to_owned(),
+                size: 0,
+            }];
+            assert!(plugins_begin(&target, &mark, &entry).is_err(), "{bad:?}");
+            assert!(plugins_commit(&target, &mark, &entry).is_err(), "{bad:?}");
+        }
+        // A piece is checked too, after a good begin.
+        plugins_begin(&target, &mark, &[]).unwrap();
+        for bad in ["../x", "/x", "a/../../x", PLUGINS_MARK_FILE] {
+            let piece = [(bad.to_owned(), 0, b"x".to_vec())];
+            assert!(plugins_write(&target, &mark, &piece).is_err(), "{bad:?}");
+        }
+        assert_eq!(
+            entries(&root),
+            [".plugins.incoming-".to_owned() + &mark[..16]]
+        );
+        // The same path twice, a mark that is no hash, and too many files.
+        let twice = [
+            PluginEntry {
+                path: "a".into(),
+                size: 0,
+            },
+            PluginEntry {
+                path: "a".into(),
+                size: 0,
+            },
+        ];
+        assert!(plugins_begin(&target, &mark, &twice)
+            .unwrap_err()
+            .contains("二つ"));
+        for bad in ["", "abc", &"G".repeat(64), &"A".repeat(64)] {
+            assert!(plugins_begin(&target, bad, &[]).is_err(), "{bad}");
+        }
+        let many: Vec<PluginEntry> = (0..=PLUGINS_MAX_FILES)
+            .map(|i| PluginEntry {
+                path: format!("f{i}"),
+                size: 0,
+            })
+            .collect();
+        assert!(plugins_begin(&target, &mark, &many)
+            .unwrap_err()
+            .contains("大きすぎます"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_sent_folder_replaces_the_old_one_as_a_whole_and_is_not_sent_again() {
+        let root = temp_dir("plugins-replace");
+        let target = root.join("plugins");
+        std::fs::create_dir_all(target.join("old")).unwrap();
+        std::fs::write(target.join("old/stale.md"), "stale").unwrap();
+        let files = plugin_files(&[
+            ("a/.claude-plugin/plugin.json", b"{}"),
+            ("a/skills/x/SKILL.md", b"skill"),
+            ("empty", b""),
+        ]);
+        assert!(receive(&target, &files).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(target.join("a/skills/x/SKILL.md")).unwrap(),
+            "skill"
+        );
+        assert!(target.join("empty").is_file());
+        assert!(!target.join("old").exists());
+        assert_eq!(
+            std::fs::read_to_string(target.join(PLUGINS_MARK_FILE)).unwrap(),
+            plugins_mark_of(&files)
+        );
+        // Nothing of the transfer stays beside the folder.
+        assert_eq!(entries(&root), ["plugins"]);
+        // The same set is not sent again, and the file of the hash is no file of the set.
+        assert!(!receive(&target, &files).unwrap());
+        // A file that is changed, cut or taken away on that PC makes it send again; a removed file of the set is gone.
+        std::fs::write(target.join("a/skills/x/SKILL.md"), "skil").unwrap();
+        assert!(receive(&target, &files).unwrap());
+        std::fs::remove_file(target.join("empty")).unwrap();
+        assert!(receive(&target, &files).unwrap());
+        assert!(!receive(&target, &files).unwrap());
+        let fewer = plugin_files(&[("a/.claude-plugin/plugin.json", b"{}")]);
+        assert!(receive(&target, &fewer).unwrap());
+        assert!(!target.join("a/skills").exists());
+        assert_eq!(entries(&target), [PLUGINS_MARK_FILE, "a"]);
+        // An empty set empties the folder (no plugin on this PC, none on that one).
+        assert!(receive(&target, &[]).unwrap());
+        assert_eq!(entries(&target), [PLUGINS_MARK_FILE]);
+        assert!(!receive(&target, &[]).unwrap());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_file_that_comes_in_pieces_is_put_together_and_a_piece_sent_twice_changes_nothing() {
+        let root = temp_dir("plugins-pieces");
+        let target = root.join("plugins");
+        let big: Vec<u8> = (0..1000u32).map(|i| (i % 251) as u8).collect();
+        let files = vec![("big.bin".to_owned(), big.clone())];
+        let mark = plugins_mark_of(&files);
+        let entries_ = plugin_entries(&files);
+        assert!(!plugins_begin(&target, &mark, &entries_).unwrap());
+        let piece =
+            |from: usize, to: usize| ("big.bin".to_owned(), from as u64, big[from..to].to_vec());
+        // A hole in the middle of a file of the right size is caught by the hash.
+        plugins_write(&target, &mark, &[piece(600, 1000), piece(0, 300)]).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        let err = plugins_commit(&target, &mark, &entries_).unwrap_err();
+        assert!(err.contains("ハッシュと合いません"), "{err}");
+        // Pieces out of order, one of them twice, with the end missing.
+        plugins_begin(&target, &mark, &entries_).unwrap();
+        plugins_write(&target, &mark, &[piece(300, 600), piece(0, 300)]).unwrap();
+        plugins_write(&target, &mark, &[piece(0, 300)]).unwrap();
+        // Short of a piece: refused, and the folder that arrived is removed with the old one kept.
+        std::fs::write(target.join("keep.md"), "keep").unwrap();
+        let err = plugins_commit(&target, &mark, &entries_).unwrap_err();
+        assert!(err.contains("届ききっていません"), "{err}");
+        assert_eq!(entries(&root), ["plugins"]);
+        assert_eq!(
+            std::fs::read_to_string(target.join("keep.md")).unwrap(),
+            "keep"
+        );
+        // A commit with nothing begun is refused.
+        assert!(plugins_commit(&target, &mark, &entries_)
+            .unwrap_err()
+            .contains("始まっていません"));
+        assert!(plugins_write(&target, &mark, &[piece(0, 10)])
+            .unwrap_err()
+            .contains("始まっていません"));
+        // All the pieces make the file.
+        plugins_begin(&target, &mark, &entries_).unwrap();
+        plugins_write(
+            &target,
+            &mark,
+            &[piece(300, 600), piece(0, 300), piece(600, 1000)],
+        )
+        .unwrap();
+        plugins_commit(&target, &mark, &entries_).unwrap();
+        assert_eq!(std::fs::read(target.join("big.bin")).unwrap(), big);
+        assert!(!target.join("keep.md").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn what_does_not_match_the_list_or_the_hash_is_refused_and_the_old_folder_stays() {
+        let root = temp_dir("plugins-mismatch");
+        let target = root.join("plugins");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("keep.md"), "keep").unwrap();
+        let files = plugin_files(&[("a.md", b"one"), ("b.md", b"two")]);
+        let mark = plugins_mark_of(&files);
+        let listed = plugin_entries(&files);
+        let kept = |root: &Path| {
+            assert_eq!(
+                std::fs::read_to_string(root.join("plugins/keep.md")).unwrap(),
+                "keep"
+            );
+            assert_eq!(entries(root), ["plugins"]);
+        };
+        // A file that was not listed.
+        plugins_begin(&target, &mark, &listed).unwrap();
+        let mut pieces: Vec<(String, u64, Vec<u8>)> = files
+            .iter()
+            .map(|(p, b)| (p.clone(), 0, b.clone()))
+            .collect();
+        pieces.push(("extra.md".into(), 0, b"x".to_vec()));
+        plugins_write(&target, &mark, &pieces).unwrap();
+        assert!(plugins_commit(&target, &mark, &listed)
+            .unwrap_err()
+            .contains("一覧と合いません"));
+        kept(&root);
+        // The right sizes with other bytes: the hash does not match.
+        plugins_begin(&target, &mark, &listed).unwrap();
+        let wrong = [
+            ("a.md".to_owned(), 0, b"ONE".to_vec()),
+            ("b.md".to_owned(), 0, b"two".to_vec()),
+        ];
+        plugins_write(&target, &mark, &wrong).unwrap();
+        assert!(plugins_commit(&target, &mark, &listed)
+            .unwrap_err()
+            .contains("ハッシュと合いません"));
+        kept(&root);
+        // A list that says other sizes than the files that came.
+        plugins_begin(&target, &mark, &listed).unwrap();
+        let (a, b) = (&pieces[0], &pieces[1]);
+        plugins_write(&target, &mark, &[a.clone(), b.clone()]).unwrap();
+        let lied = [
+            PluginEntry {
+                path: "a.md".into(),
+                size: 99,
+            },
+            PluginEntry {
+                path: "b.md".into(),
+                size: 3,
+            },
+        ];
+        assert!(plugins_commit(&target, &mark, &lied).is_err());
+        kept(&root);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_failed_piece_leaves_the_old_folder_as_it_was() {
+        let root = temp_dir("plugins-failed-piece");
+        let target = root.join("plugins");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("keep.md"), "keep").unwrap();
+        let files = plugin_files(&[("a", b"x"), ("a/b", b"y")]);
+        let mark = plugins_mark_of(&files);
+        plugins_begin(&target, &mark, &plugin_entries(&files)).unwrap();
+        // `a` is a file, so `a/b` cannot be written.
+        let pieces = [
+            ("a".to_owned(), 0, b"x".to_vec()),
+            ("a/b".to_owned(), 0, b"y".to_vec()),
+        ];
+        assert!(plugins_write(&target, &mark, &pieces)
+            .unwrap_err()
+            .contains("作れません"));
+        assert_eq!(
+            std::fs::read_to_string(target.join("keep.md")).unwrap(),
+            "keep"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 }

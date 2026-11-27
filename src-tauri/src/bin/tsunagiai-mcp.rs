@@ -1723,7 +1723,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    // The plugin and the settings of a child that a leader on another PC launches here (#1239): it writes them for the formation and the child named, prints the plugin's folder and the settings file on two lines and serves no MCP.
+    // The settings of a child that a leader on another PC launches here (#1239): it writes them for the formation and the child named (the plugins are the owner's, sent by the app, #1535), prints the plugins' folder and the settings file on two lines and serves no MCP.
     match child_plugin_args(std::env::args().skip(1)) {
         Ok(Some((formation, name))) => {
             let written = identity::config_dir()
