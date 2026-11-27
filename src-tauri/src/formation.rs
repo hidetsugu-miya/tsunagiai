@@ -75,7 +75,7 @@ const STEP_WORKTREE: &str = "worktree の作成";
 const STEP_BRANCHES: &str = "branch の確認";
 const STEP_TERMINAL: &str = "ターミナルの作成";
 const STEP_RECORD: &str = "記録の書き込み";
-const STEP_PLUGIN: &str = "プラグインの書き出し";
+const STEP_PLUGIN: &str = "プラグインのフォルダの用意";
 const STEP_SETTINGS: &str = "子の設定の書き出し";
 const STEP_IDLE: &str = "子のエージェントの立ち上がり待ち";
 const STEP_SEND: &str = "最初の指示の送信";
@@ -1138,19 +1138,25 @@ fn child_settings_file(name: &str) -> String {
     format!("settings-{name}.json")
 }
 
-/// The settings that a Claude Code child's `--settings` takes: the `permissions` for the Figma server of its plugin (`formation_assets::figma_permissions`, A-41, #1162), because the child runs in the auto mode. No hook records its messages: they are read from the Run of Orca (#1238).
-fn child_settings() -> String {
-    serde_json::to_string_pretty(
-        &json!({"permissions": crate::formation_assets::figma_permissions()}),
-    )
-    .unwrap_or_default()
+/// The settings that a Claude Code child's `--settings` takes: the `permissions` for the Figma server of its plugins (`permissions`, A-41, #1162), because the child runs in the auto mode. No hook records its messages: they are read from the Run of Orca (#1238).
+fn child_settings(permissions: &Value) -> String {
+    serde_json::to_string_pretty(&json!({ "permissions": permissions })).unwrap_or_default()
 }
 
-/// Writes the settings of a Claude Code child in the folder of its formation and answers its path. A Codex child has none.
-fn write_child_settings(config: &Path, formation: &str, name: &str) -> Result<PathBuf, String> {
+/// Writes the settings of a Claude Code child in the folder of its formation and answers its path: the Figma permissions of each plugin of `plugins` that has the server (`plugins::figma_permissions`), made at each launch. A Codex child has none.
+fn write_child_settings(
+    config: &Path,
+    formation: &str,
+    name: &str,
+    plugins: &Path,
+) -> Result<PathBuf, String> {
     let folder = dir(config, formation);
     let file = child_settings_file(name);
-    accounts::write_atomic(&folder, &file, &child_settings())?;
+    accounts::write_atomic(
+        &folder,
+        &file,
+        &child_settings(&crate::plugins::figma_permissions(plugins)),
+    )?;
     Ok(folder.join(file))
 }
 
@@ -1160,7 +1166,7 @@ const CODEX_COMMAND: &str = "codex --sandbox workspace-write --ask-for-approval 
 /// What a Claude Code child runs at: the auto mode (it never stops to ask) at the effort `medium` (#911).
 const CLAUDE_CHILD_MODE: &str = "--permission-mode auto --effort medium";
 
-/// The command of the child's terminal: for Claude Code, Claude Code in auto mode at the effort `medium` (#911) under its name (`claude -n`), with the plugin of A-41 (`--plugin-dir`, in single quotes: the path of the config folder may hold a space) and its settings (`--settings {settings}`, the Figma permissions, #1162). The name was checked, so the rest of the command line holds nothing a shell would read.
+/// The command of the child's terminal: for Claude Code, Claude Code in auto mode at the effort `medium` (#911) under its name (`claude -n`), with the folder of the owner's plugins (`--plugin-dir`, A-41, in single quotes: the path may hold a space) and its settings (`--settings {settings}`, the Figma permissions, #1162). The name was checked, so the rest of the command line holds nothing a shell would read.
 fn child_command(agent: FormationAgent, name: &str, plugin_dir: &Path, settings: &Path) -> String {
     match agent {
         FormationAgent::Claude => format!(
@@ -1251,7 +1257,11 @@ pub fn write_child_files(
     let plugin = crate::formation_assets::write_plugin(config)?;
     let folder = config.join(CHILD_SETTINGS_FOLDER);
     let file = format!("{formation}-{name}.json");
-    accounts::write_atomic(&folder, &file, &child_settings())?;
+    accounts::write_atomic(
+        &folder,
+        &file,
+        &child_settings(&crate::formation_assets::figma_permissions()),
+    )?;
     Ok((plugin, folder.join(file)))
 }
 
@@ -2084,7 +2094,7 @@ fn make_worktree(
     })
 }
 
-/// Launches a child: a terminal with `claude -n {name}` and the plugin of A-41 (`--plugin-dir`, written first) in a worktree, the first instruction, and the record. Every command of Orca is run against that environment.
+/// Launches a child: a terminal with `claude -n {name}` and the folder of the owner's plugins (`--plugin-dir`, made first) in a worktree, the first instruction, and the record. Every command of Orca is run against that environment.
 /// With no `place.folder` the worktree is made here in the repository of the environment (`create_worktree`: Orca's RPC, not its CLI), on `place.branch` (or on the branch Orca names, when there is none): a branch that the repository has is opened as it is, one that only `origin` has is taken from there, and a new one starts from `place.base`. A step that fails after the worktree was made says which, and leaves the worktree; a worktree whose branch is not the one asked for is removed again at once.
 /// With `place.folder` nothing is made: the folder must be the repository's own folder or a worktree of it that `orca worktree ps` lists (`folder_in`), and the child works there. The record says that tsunagiai did not make it (`Launch::created`), so that no close removes it.
 #[allow(clippy::too_many_arguments)]
@@ -2111,14 +2121,15 @@ pub fn launch(
     let environment = environment.as_str();
     // A Claude Code child of another PC gets its plugin and settings from that PC's own `tsunagiai-mcp`, which its terminal's command runs (`remote_child_command`).
     let remote_claude = agent == FormationAgent::Claude && environment != LOCAL;
-    // The plugin of A-41 is written (replaced as a whole) before anything is made, so that a failure leaves no worktree. A Codex child has none: it reads the prompt alone.
+    // The folder of the owner's plugins is made when it is missing, and the settings are written, before anything is made, so that a failure leaves no worktree. A Codex child has none: it reads the prompt alone.
     let (plugin_dir, settings) = match agent {
-        FormationAgent::Claude if !remote_claude => (
-            crate::formation_assets::write_plugin(config)
-                .map_err(|e| Refusal::failed(STEP_PLUGIN, e))?,
-            write_child_settings(config, formation, name)
-                .map_err(|e| Refusal::failed(STEP_SETTINGS, e))?,
-        ),
+        FormationAgent::Claude if !remote_claude => {
+            let plugins =
+                crate::plugins::prepared_dir().map_err(|e| Refusal::failed(STEP_PLUGIN, e))?;
+            let settings = write_child_settings(config, formation, name, &plugins)
+                .map_err(|e| Refusal::failed(STEP_SETTINGS, e))?;
+            (plugins, settings)
+        }
         _ => (PathBuf::new(), PathBuf::new()),
     };
     let list = repos(environment)?;
@@ -6157,7 +6168,7 @@ mod tests {
                 "/w/a",
                 FormationAgent::Claude,
                 "web-2",
-                Path::new("/c/formation-plugin"),
+                Path::new("/c/plugins"),
                 Path::new("/c/formations/f/settings-web-2.json"),
                 "local"
             ),
@@ -6169,7 +6180,7 @@ mod tests {
                 "--title",
                 "web-2",
                 "--command",
-                "claude -n web-2 --permission-mode auto --effort medium --plugin-dir '/c/formation-plugin' --settings '/c/formations/f/settings-web-2.json'",
+                "claude -n web-2 --permission-mode auto --effort medium --plugin-dir '/c/plugins' --settings '/c/formations/f/settings-web-2.json'",
                 "--json",
                 "--environment=local"
             ]
@@ -6246,21 +6257,32 @@ mod tests {
             std::process::id(),
             now_ms()
         ));
-        let path = write_child_settings(&config, "api-work", "web-2").unwrap();
+        let plugins = config.join("plugins");
+        std::fs::create_dir_all(plugins.join("client-a")).unwrap();
+        std::fs::write(
+            plugins.join("client-a/.mcp.json"),
+            r#"{"mcpServers": {"figma": {"type": "http", "url": "https://mcp.figma.com/mcp"}}}"#,
+        )
+        .unwrap();
+        let path = write_child_settings(&config, "api-work", "web-2", &plugins).unwrap();
         assert_eq!(path, dir(&config, "api-work").join("settings-web-2.json"));
-        // Only the permissions for the Figma server: no hook records the messages (#1238).
+        // Only the permissions for the Figma server of the plugin that has it: no hook records the messages (#1238).
         let settings: Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
             settings,
-            json!({"permissions": crate::formation_assets::figma_permissions()})
+            json!({"permissions": crate::plugins::figma_permissions(&plugins)})
+        );
+        assert_eq!(
+            settings["permissions"]["allow"][0],
+            "mcp__plugin_client-a_figma__get_metadata"
         );
         std::fs::remove_dir_all(&config).unwrap();
     }
 
     #[test]
     fn a_codex_child_is_started_with_its_sandbox_and_no_plugin_or_name_flag() {
-        let plugin = Path::new("/c/formation-plugin");
+        let plugin = Path::new("/c/plugins");
         let settings = Path::new("/c/formations/f/settings-web-2.json");
         let command = child_command(FormationAgent::Codex, "web-2", plugin, settings);
         assert_eq!(
@@ -6352,20 +6374,20 @@ mod tests {
             child_command(
                 FormationAgent::Claude,
                 "web-2",
-                Path::new("/c/formation-plugin"),
+                Path::new("/c/plugins"),
                 settings
             ),
-            "claude -n web-2 --permission-mode auto --effort medium --plugin-dir '/c/formation-plugin' --settings '/c/formations/f/settings-web-2.json'"
+            "claude -n web-2 --permission-mode auto --effort medium --plugin-dir '/c/plugins' --settings '/c/formations/f/settings-web-2.json'"
         );
         // A folder with a space or a quote stays one word.
         assert!(child_command(
             FormationAgent::Claude,
             "web-2",
-            Path::new("/c/it's here/formation-plugin"),
+            Path::new("/c/it's here/plugins"),
             Path::new("/c/it's here/settings.json")
         )
         .ends_with(
-            r"--plugin-dir '/c/it'\''s here/formation-plugin' --settings '/c/it'\''s here/settings.json'"
+            r"--plugin-dir '/c/it'\''s here/plugins' --settings '/c/it'\''s here/settings.json'"
         ));
     }
 
@@ -6380,7 +6402,7 @@ mod tests {
                 "/w/a",
                 FormationAgent::Claude,
                 "web-2",
-                Path::new("/c/formation-plugin"),
+                Path::new("/c/plugins"),
                 Path::new("/c/settings.json"),
                 environment,
             ),

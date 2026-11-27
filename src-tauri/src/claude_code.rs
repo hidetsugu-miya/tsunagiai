@@ -52,7 +52,7 @@ const FORMATION_CLAUDE_MD_FILE: &str = "CLAUDE.md";
 /// The text of the orchestrator's `CLAUDE.md`: its role and its steps, with `{name}` where its own name goes. It holds nothing that comes from outside.
 const FORMATION_CLAUDE_MD: &str = include_str!("formation_claude.md");
 const FORMATION_NAME_MARK: &str = "{name}";
-/// A-41: the leader's skill is `feature-dev`, in `.claude/skills/` of the orchestrator's folder.
+/// A-41: the skill that older versions wrote into `.claude/skills/` of the orchestrator's folder, which `write_formation_files` removes. The leader reads the owner's plugins (`plugins::plugins_dir`) instead.
 const LEADER_SKILL_FOLDER: &str = "feature-dev";
 /// The argument that makes `tsunagiai-mcp` offer the tools of the orchestrator (`formation_*`), which the panes' own `mcp.json` does not pass. The name of the formation follows it.
 const FORMATION_MCP_ARG: &str = "--formation";
@@ -183,16 +183,17 @@ fn check_permission_mode(
     Ok(())
 }
 
-/// The launch script of the orchestrator (A-37): the same shape, with Claude Code's own tools (no `--tools ''`), named by its formation (`-n {name}`), in the `auto` permission mode, at the effort `high` (#911), and reading the project settings of its folder too.
-/// Only the path of the MCP config and the name that the app decided (`name` has passed `check_name`) and the fixed flags are in it.
-fn formation_script(claude: &Path, mcp_config: &Path, name: &str) -> String {
+/// The launch script of the orchestrator (A-37): the same shape, with Claude Code's own tools (no `--tools ''`), named by its formation (`-n {name}`), in the `auto` permission mode, at the effort `high` (#911), given the folder of the owner's plugins (`--plugin-dir`, A-41), and reading the project settings of its folder too.
+/// Only the paths that the app decided (the MCP config and `plugins`) and the name (`name` has passed `check_name`) and the fixed flags are in it.
+fn formation_script(claude: &Path, mcp_config: &Path, name: &str, plugins: &Path) -> String {
     format!(
         "#!/bin/sh\n\
          # Written by tsunagiai (A-37) at each start of the orchestrator; a change here is lost.\n\
          PATH=\"$PATH:/usr/local/bin:/opt/homebrew/bin\"\n\
-         exec {claude} -n {name} --permission-mode auto --effort high --setting-sources user,project --strict-mcp-config --mcp-config {config} \"$@\"\n",
+         exec {claude} -n {name} --permission-mode auto --effort high --plugin-dir {plugins} --setting-sources user,project --strict-mcp-config --mcp-config {config} \"$@\"\n",
         claude = sh_quote(&claude.to_string_lossy()),
         name = sh_quote(name),
+        plugins = sh_quote(&plugins.to_string_lossy()),
         config = sh_quote(&mcp_config.to_string_lossy()),
     )
 }
@@ -341,16 +342,18 @@ fn write_files(
     Ok(dir.join(script))
 }
 
-/// Writes `CLAUDE.md`, `mcp.json`, the launch script, an empty `.claude/settings.json` and the leader's skill `.claude/skills/feature-dev/` (A-41, replaced as a whole) in `formations/{name}/` of `config` and answers the script's path. The other files of the folder stay. `mcp.json` names the formation (`--formation {name}`), so that the tools of `tsunagiai-mcp` read and write the record of that formation only.
+/// Writes `CLAUDE.md`, `mcp.json`, the launch script (which gives the leader the folder of the owner's plugins, `plugins`, made when it is missing, A-41) and an empty `.claude/settings.json` in `formations/{name}/` of `config`, removes the skill `.claude/skills/feature-dev/` that an older version wrote, and answers the script's path. The other files of the folder stay. `mcp.json` names the formation (`--formation {name}`), so that the tools of `tsunagiai-mcp` read and write the record of that formation only.
 /// The orchestrator reads the project settings of its folder (`--setting-sources user,project`), and it can write there in auto mode: the settings are made empty at each start, so a permission or a hook it added does not stay for the next one.
 fn write_formation_files(
     config: &Path,
     name: &str,
     claude: &Path,
     mcp: &Path,
+    plugins: &Path,
 ) -> Result<PathBuf, String> {
     crate::formation::check_name(name)?;
     crate::formation::migrate_legacy(config)?;
+    crate::plugins::ensure_dir(plugins.to_path_buf())?;
     let dir = crate::formation::dir(config, name);
     let _writing = FILES.lock().unwrap_or_else(|e| e.into_inner());
     crate::accounts::write_atomic(&dir, FORMATION_CLAUDE_MD_FILE, &formation_claude_md(name))?;
@@ -358,10 +361,10 @@ fn write_formation_files(
     crate::accounts::write_atomic(
         &dir,
         SCRIPT_FILE,
-        &formation_script(claude, &dir.join(MCP_FILE), name),
+        &formation_script(claude, &dir.join(MCP_FILE), name, plugins),
     )?;
     write_empty_settings(&dir.join(".claude"))?;
-    write_leader_skill(&dir.join(".claude"))?;
+    remove_old_leader_skill(&dir.join(".claude"))?;
     Ok(dir.join(SCRIPT_FILE))
 }
 
@@ -380,7 +383,14 @@ pub fn formation_start(
     projects: &[String],
     mcp: &Path,
 ) -> Result<FormationStart, String> {
-    formation_start_with(config, name, projects, &claude_path()?, mcp)
+    formation_start_with(
+        config,
+        name,
+        projects,
+        &claude_path()?,
+        mcp,
+        &crate::plugins::plugins_dir()?,
+    )
 }
 
 fn formation_start_with(
@@ -389,9 +399,10 @@ fn formation_start_with(
     projects: &[String],
     claude: &Path,
     mcp: &Path,
+    plugins: &Path,
 ) -> Result<FormationStart, String> {
     let prompt = crate::formation::local_first_prompt(projects)?;
-    let script = write_formation_files(config, name, claude, mcp)?;
+    let script = write_formation_files(config, name, claude, mcp, plugins)?;
     Ok(FormationStart {
         program: "/bin/sh".to_owned(),
         args: launch_args(&script, None, prompt, true),
@@ -417,14 +428,11 @@ fn write_empty_settings(claude_dir: &Path) -> Result<(), String> {
     crate::accounts::write_atomic(claude_dir, "settings.json", "{}")
 }
 
-/// Replaces `skills/feature-dev/` in `claude_dir` with the leader's skill (A-41), as a whole: a file that the skill no longer has does not stay. A link in the place of `skills/` is removed first, as for the settings.
-fn write_leader_skill(claude_dir: &Path) -> Result<(), String> {
+/// Removes `skills/feature-dev/` of `claude_dir`, which an older version wrote as the leader's skill (A-41); the other skills stay, and a link is removed and never followed. A link in the place of `skills/` is removed first, as for the settings, so that what it leads to is not touched.
+fn remove_old_leader_skill(claude_dir: &Path) -> Result<(), String> {
     let skills = claude_dir.join("skills");
     drop_link(&skills)?;
-    crate::formation_assets::replace_dir(
-        &skills.join(LEADER_SKILL_FOLDER),
-        crate::formation_assets::LEADER_SKILL,
-    )
+    crate::formation_assets::remove_old(&skills.join(LEADER_SKILL_FOLDER))
 }
 
 // ---- the pseudo terminal ----
@@ -960,7 +968,7 @@ fn prepare(
         let prompt =
             crate::formation::first_prompt(&crate::formation::read_projects(config, name)?)?;
         (
-            write_formation_files(config, name, &claude, &mcp)?,
+            write_formation_files(config, name, &claude, &mcp, &crate::plugins::plugins_dir()?)?,
             crate::formation::dir(config, name),
             prompt,
         )
@@ -1386,13 +1394,14 @@ mod tests {
             Path::new("/Users/x/.local/bin/claude"),
             Path::new("/c/app/formations/formation/mcp.json"),
             "formation",
+            Path::new("/c/plugins"),
         );
         assert_eq!(
             script,
             "#!/bin/sh\n\
              # Written by tsunagiai (A-37) at each start of the orchestrator; a change here is lost.\n\
              PATH=\"$PATH:/usr/local/bin:/opt/homebrew/bin\"\n\
-             exec '/Users/x/.local/bin/claude' -n 'formation' --permission-mode auto --effort high --setting-sources user,project --strict-mcp-config --mcp-config '/c/app/formations/formation/mcp.json' \"$@\"\n"
+             exec '/Users/x/.local/bin/claude' -n 'formation' --permission-mode auto --effort high --plugin-dir '/c/plugins' --setting-sources user,project --strict-mcp-config --mcp-config '/c/app/formations/formation/mcp.json' \"$@\"\n"
         );
         assert!(!script.contains("--tools"));
         // No hook records the leader's messages: they are read from the Run of Orca (#1238).
@@ -1405,9 +1414,11 @@ mod tests {
             Path::new("/Users/o'neil/claude"),
             Path::new("/c/o'neil/mcp.json"),
             "formation",
+            Path::new("/c/o'neil/plugins"),
         );
         assert!(script.contains(r"exec '/Users/o'\''neil/claude' -n 'formation'"));
         assert!(script.contains(r"--mcp-config '/c/o'\''neil/mcp.json' "));
+        assert!(script.contains(r"--plugin-dir '/c/o'\''neil/plugins' "));
     }
 
     #[test]
@@ -1610,6 +1621,7 @@ mod tests {
                 "formation",
                 Path::new("/bin/claude"),
                 Path::new("/app/tsunagiai-mcp"),
+                &config.join("plugins"),
             )
             .unwrap()
         };
@@ -1665,11 +1677,18 @@ mod tests {
             "formation",
             Path::new("/bin/claude"),
             Path::new("/app/tsunagiai-mcp"),
+            &config.join("plugins"),
         )
         .unwrap();
         assert_eq!(script, dir.join("start.sh"));
         let script_text = std::fs::read_to_string(&script).unwrap();
         assert!(script_text.contains("-n 'formation' --permission-mode auto --effort high"));
+        // The leader is given the folder of the owner's plugins, which the write made.
+        assert!(script_text.contains(&format!(
+            "--plugin-dir '{}' ",
+            config.join("plugins").display()
+        )));
+        assert!(config.join("plugins").is_dir());
         assert!(script_text.contains(&format!(
             "--mcp-config '{}'",
             dir.join("mcp.json").display()
@@ -1699,36 +1718,60 @@ mod tests {
     }
 
     #[test]
-    fn the_leaders_skill_is_replaced_as_a_whole_at_each_write() {
+    fn the_skill_of_an_older_version_is_removed_and_the_other_skills_stay() {
         let config = temp_dir("formation-skill");
         let claude = Path::new("/bin/claude");
         let mcp = Path::new("/app/tsunagiai-mcp");
-        let skill = config.join("formations/api-work/.claude/skills/feature-dev");
-        // A file of an older skill, and a skill the owner put beside it.
-        std::fs::create_dir_all(skill.join("references")).unwrap();
-        std::fs::write(skill.join("references/removed.md"), "old").unwrap();
-        std::fs::write(skill.join("SKILL.md"), "old").unwrap();
-        std::fs::create_dir_all(config.join("formations/api-work/.claude/skills/other")).unwrap();
+        let plugins = config.join("plugins");
+        let skills = config.join("formations/api-work/.claude/skills");
+        // The skill an older version wrote, and a skill the owner put beside it.
+        std::fs::create_dir_all(skills.join("feature-dev/references")).unwrap();
+        std::fs::write(skills.join("feature-dev/references/old.md"), "old").unwrap();
+        std::fs::write(skills.join("feature-dev/SKILL.md"), "old").unwrap();
+        std::fs::create_dir_all(skills.join("other")).unwrap();
+        std::fs::write(skills.join("other/SKILL.md"), "mine").unwrap();
         for _ in 0..2 {
-            write_formation_files(&config, "api-work", claude, mcp).unwrap();
-            assert!(!skill.join("references/removed.md").exists());
-            for (path, text) in crate::formation_assets::LEADER_SKILL {
-                assert_eq!(&std::fs::read_to_string(skill.join(path)).unwrap(), text);
-            }
-            let mut names: Vec<_> = std::fs::read_dir(skill.parent().unwrap())
-                .unwrap()
-                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-                .collect();
-            names.sort();
-            // No folder of the writing stays beside the skill.
-            assert_eq!(names, ["feature-dev", "other"]);
+            write_formation_files(&config, "api-work", claude, mcp, &plugins).unwrap();
+            assert!(!skills.join("feature-dev").exists());
+            assert_eq!(
+                std::fs::read_to_string(skills.join("other/SKILL.md")).unwrap(),
+                "mine"
+            );
+            // The leader's skill is not written any more, and the folder of the plugins is made.
+            assert!(plugins.is_dir());
         }
         std::fs::remove_dir_all(config).unwrap();
     }
 
     #[cfg(unix)]
     #[test]
-    fn a_link_in_the_place_of_the_skills_folder_is_removed_and_not_written_through() {
+    fn a_link_in_the_place_of_the_old_skill_is_removed_and_not_followed() {
+        let config = temp_dir("formation-skill-feature-link");
+        let elsewhere = config.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("keep.md"), "keep").unwrap();
+        let skills = config.join("formations/api-work/.claude/skills");
+        std::fs::create_dir_all(&skills).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, skills.join("feature-dev")).unwrap();
+        write_formation_files(
+            &config,
+            "api-work",
+            Path::new("/bin/claude"),
+            Path::new("/app/tsunagiai-mcp"),
+            &config.join("plugins"),
+        )
+        .unwrap();
+        assert!(std::fs::symlink_metadata(skills.join("feature-dev")).is_err());
+        assert_eq!(
+            std::fs::read_to_string(elsewhere.join("keep.md")).unwrap(),
+            "keep"
+        );
+        std::fs::remove_dir_all(config).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_in_the_place_of_the_skills_folder_is_removed_and_not_followed() {
         let config = temp_dir("formation-skill-link");
         let elsewhere = config.join("elsewhere");
         std::fs::create_dir_all(&elsewhere).unwrap();
@@ -1740,12 +1783,11 @@ mod tests {
             "api-work",
             Path::new("/bin/claude"),
             Path::new("/app/tsunagiai-mcp"),
+            &config.join("plugins"),
         )
         .unwrap();
-        assert!(claude_dir.join("skills").is_dir());
-        assert!(!std::fs::symlink_metadata(claude_dir.join("skills"))
-            .unwrap()
-            .is_symlink());
+        // The link is gone, nothing is written in its place, and what it led to is not touched.
+        assert!(std::fs::symlink_metadata(claude_dir.join("skills")).is_err());
         assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
         std::fs::remove_dir_all(config).unwrap();
     }
@@ -1755,7 +1797,14 @@ mod tests {
         let config = temp_dir("formation-named");
         let claude = Path::new("/bin/claude");
         let mcp_binary = Path::new("/app/tsunagiai-mcp");
-        let script = write_formation_files(&config, "api-work", claude, mcp_binary).unwrap();
+        let script = write_formation_files(
+            &config,
+            "api-work",
+            claude,
+            mcp_binary,
+            &config.join("plugins"),
+        )
+        .unwrap();
         let dir = config.join("formations/api-work");
         assert_eq!(script, dir.join("start.sh"));
         let mcp: serde_json::Value =
@@ -1777,7 +1826,8 @@ mod tests {
         // A name that is not a folder name of its own writes nothing, least of all outside `formations/`.
         for bad in ["", "..", "../x", "a/b", "A", ".claude"] {
             assert!(
-                write_formation_files(&config, bad, claude, mcp_binary).is_err(),
+                write_formation_files(&config, bad, claude, mcp_binary, &config.join("plugins"))
+                    .is_err(),
                 "{bad:?}"
             );
         }
@@ -1794,6 +1844,7 @@ mod tests {
             &[],
             Path::new("/bin/claude"),
             Path::new("/app/tsunagiai-mcp"),
+            &config.join("plugins"),
         )
         .unwrap();
         let dir = config.join("formations/api-work");
@@ -1815,7 +1866,12 @@ mod tests {
         );
         assert_eq!(
             std::fs::read_to_string(dir.join("start.sh")).unwrap(),
-            formation_script("/bin/claude".as_ref(), &dir.join("mcp.json"), "api-work")
+            formation_script(
+                "/bin/claude".as_ref(),
+                &dir.join("mcp.json"),
+                "api-work",
+                &config.join("plugins")
+            )
         );
         for file in ["CLAUDE.md", ".claude/settings.json"] {
             assert!(dir.join(file).is_file(), "{file}");
@@ -1828,7 +1884,8 @@ mod tests {
             "../x",
             &[],
             Path::new("/bin/claude"),
-            Path::new("/app/tsunagiai-mcp")
+            Path::new("/app/tsunagiai-mcp"),
+            &config.join("plugins"),
         )
         .is_err());
         assert!(!config.join("x").exists());
@@ -1844,6 +1901,7 @@ mod tests {
             &["api".to_owned(), "x'; rm -rf $HOME".to_owned()],
             Path::new("/bin/claude"),
             Path::new("/app/tsunagiai-mcp"),
+            &config.join("plugins"),
         )
         .unwrap();
         let script = config.join("formations/api-work/start.sh");
@@ -1887,7 +1945,8 @@ mod tests {
                 "api-work",
                 &bad,
                 Path::new("/bin/claude"),
-                Path::new("/app/tsunagiai-mcp")
+                Path::new("/app/tsunagiai-mcp"),
+                &config.join("plugins"),
             )
             .is_err());
             assert!(!config.join("formations/api-work").exists());

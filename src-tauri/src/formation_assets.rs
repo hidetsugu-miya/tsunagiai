@@ -1,7 +1,7 @@
 //! A-41: the files of `src-tauri/formation/` that are embedded in the binary at build time (`build.rs`), and how they are written.
 //! `PREVIEW_PLUGIN` (A-45) is the plugin of `src-tauri/preview-plugin/`, which `preview_plugin` writes with `ensure_plugin`.
-//! `LEADER_SKILL` is the leader's skill `feature-dev`, written into the folder of the orchestrator of each formation (`claude_code::write_formation_files`).
-//! `PLUGIN` is the plugin `feature-dev` (the unit procedures and the agents), written into `formation-plugin/` of the config folder before a child is launched (`formation::launch`) unless the folder already holds this very plugin, and given to the child's `claude` with `--plugin-dir`.
+//! `LEADER_SKILL` is the leader's skill `feature-dev`, which is no longer written (#1533; `plugins` gives the leader the owner's plugins instead, and #1534 removes it).
+//! `PLUGIN` is the plugin `feature-dev` (the unit procedures and the agents), written into `formation-plugin/` of the config folder for a child of another PC (`formation::write_child_files`, #1535) unless the folder already holds this very plugin, and given to the child's `claude` with `--plugin-dir`.
 //! Each list is `(path relative to its folder with "/", contents)`.
 
 use std::{
@@ -64,8 +64,13 @@ pub fn write_plugin(config: &Path) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-/// The Figma tools of the plugin's server as a permission rule names them: `mcp__plugin_{plugin}_{server}__{tool}` (the plugin `feature-dev`, the server `figma` of its `.mcp.json`; Claude Code's documentation of permissions, "MCP").
-const FIGMA_RULE_PREFIX: &str = "mcp__plugin_feature-dev_figma__";
+/// The plugin whose Figma tools `figma_permissions` names: the embedded one, which a child of another PC still gets until the plugins of this PC are sent there (#1535).
+const EMBEDDED_PLUGIN: &str = "feature-dev";
+
+/// The Figma tools of a plugin's server as a permission rule names them: `mcp__plugin_{plugin}_{server}__{tool}` (the server `figma` of its `.mcp.json`; Claude Code's documentation of permissions, "MCP").
+fn figma_rule_prefix(plugin: &str) -> String {
+    format!("mcp__plugin_{plugin}_figma__")
+}
 
 /// The tools of the Figma server that only read, and that `figma-fetcher` uses: the only ones a child's settings allow.
 const FIGMA_READ_TOOLS: [&str; 3] = ["get_metadata", "get_design_context", "get_screenshot"];
@@ -89,19 +94,28 @@ const FIGMA_WRITE_TOOLS: [&str; 15] = [
     "use_figma",
 ];
 
-fn figma_rules(tools: &[&str]) -> Vec<String> {
-    tools
-        .iter()
-        .map(|tool| format!("{FIGMA_RULE_PREFIX}{tool}"))
-        .collect()
+fn figma_rules(plugin: &str, tools: &[&str]) -> Vec<String> {
+    let prefix = figma_rule_prefix(plugin);
+    tools.iter().map(|tool| format!("{prefix}{tool}")).collect()
 }
 
-/// The `permissions` of a child's `--settings` (A-41, #1162): the read tools of the Figma server are allowed and its write tools are denied, because the child runs in the auto mode and a write would run with no question to the owner. A deny rule wins over every other.
-pub fn figma_permissions() -> serde_json::Value {
+/// The `permissions` of a child's `--settings` (A-41, #1162) for the plugins `plugins`, each of which has the Figma server: the read tools of the server are allowed and its write tools are denied, because the child runs in the auto mode and a write would run with no question to the owner. A deny rule wins over every other.
+pub fn figma_permissions_of(plugins: &[String]) -> serde_json::Value {
+    let rules = |tools: &[&str]| -> Vec<String> {
+        plugins
+            .iter()
+            .flat_map(|plugin| figma_rules(plugin, tools))
+            .collect()
+    };
     serde_json::json!({
-        "allow": figma_rules(&FIGMA_READ_TOOLS),
-        "deny": figma_rules(&FIGMA_WRITE_TOOLS),
+        "allow": rules(&FIGMA_READ_TOOLS),
+        "deny": rules(&FIGMA_WRITE_TOOLS),
     })
+}
+
+/// The permissions for the embedded plugin (`EMBEDDED_PLUGIN`), for the child of another PC (`formation::write_child_files`).
+pub fn figma_permissions() -> serde_json::Value {
+    figma_permissions_of(&[EMBEDDED_PLUGIN.to_owned()])
 }
 
 static STAGING: AtomicUsize = AtomicUsize::new(0);
@@ -166,7 +180,7 @@ fn write_files(dir: &Path, files: &[(&str, &str)]) -> Result<(), String> {
 }
 
 /// Removes what is at `path` (a folder with its contents, a file, or a link, which is not followed). Nothing there is fine.
-fn remove_old(path: &Path) -> Result<(), String> {
+pub(crate) fn remove_old(path: &Path) -> Result<(), String> {
     let Ok(meta) = std::fs::symlink_metadata(path) else {
         return Ok(());
     };
@@ -239,7 +253,7 @@ mod tests {
         let servers: Vec<&String> = mcp["mcpServers"].as_object().unwrap().keys().collect();
         assert_eq!(servers, ["figma"]);
         assert_eq!(
-            FIGMA_RULE_PREFIX,
+            figma_rule_prefix(EMBEDDED_PLUGIN),
             format!("mcp__plugin_{}_figma__", plugin["name"].as_str().unwrap())
         );
         let fetcher = file("agents/figma-fetcher.md");
@@ -251,7 +265,7 @@ mod tests {
             .split(',')
             .map(str::trim)
             .collect();
-        for rule in figma_rules(&FIGMA_WRITE_TOOLS) {
+        for rule in figma_rules(EMBEDDED_PLUGIN, &FIGMA_WRITE_TOOLS) {
             assert!(listed.contains(&rule.as_str()), "{rule}");
         }
     }

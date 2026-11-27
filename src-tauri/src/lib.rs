@@ -49,6 +49,7 @@ pub mod orca_preview;
 pub mod orca_stream;
 pub mod orca_theme;
 pub mod orca_titles;
+pub mod plugins;
 pub mod preview_plugin;
 pub mod screen_bridge;
 pub mod sentry;
