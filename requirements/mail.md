@@ -28,6 +28,8 @@ Mark a thread read or unread with the checkbox in the list. The button "すべ�
 
 Sync the inbox with Gmail about every 10 seconds. A round that fails shows nothing on the screen: the third round in a row that fails writes one line to the log (A-28), 「自動同期に失敗しています: …」, and the count starts again when a round works
 
+Off in the menu (A-50, #680). The inbox cannot be turned off, so auto sync does not depend on the menu. The new-mail popup (M-9) is retired and has no code to stop.
+
 ## M-8 AI summary
 
 In the mail detail, an icon summarizes the thread with the Claude Code CLI (`claude -p`, the model and effort of A-2 with sonnet and medium as the default, no tools, no MCP, no settings) and shows a short list of points, in Japanese, on a card under the subject. Only pressing the icon sends the subject and, of each message, the sender, the date and the text (newest first, up to 10,000 characters, the oldest dropped first). The summary is kept in memory per thread (and its latest message), never saved, and shown again without sending when the card is closed and reopened. The icon is shown only while Claude can be used (logged in, or an API key that is not refused, A-4). A summary that fails is told by a card (A-28, #1485: `setNotice`, the key `mail-summary:failed`) with the text "要約できませんでした: {the error}" and the button "やり直す" (`.error-card-action`), which sends again; the card under the subject is not drawn for it, and pressing the icon sends again too. The card follows the thread on screen: it goes when the thread is left or another one is opened (with its ×), and is drawn again when the thread is opened while its failure is kept; a card closed with its × is not drawn again until then, and it goes when a summary is asked for again

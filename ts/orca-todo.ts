@@ -4,6 +4,7 @@
 // The tab (`task:{n}`, in memory only, by target and project as a Jira ticket's tab is, J-2) draws the detail of the Todo screen (`renderDetail` of `todo-detail.ts`) in a box of its own: it writes through the same `todoist_*` commands, and the screen's tabs and these show a change after the next read. A task that the data no longer has (completed, deleted, moved away with its project) closes its tab.
 import type { TaskItem } from "./bindings/TaskItem";
 import { $, span, tag } from "./dom.js";
+import { screenOn, whileOn } from "./menu-state.js";
 import { currentScreen } from "./nav.js";
 import { dueLabel, inboxOf, projectName, todoState, useOrcaTodo, viewTasks } from "./todo-data.js";
 import { dropComments, fitCommentInput } from "./todo-comments.js";
@@ -174,7 +175,19 @@ export function showTodoTabs(placements: { id: string; host: HTMLElement }[]) {
 export function initOrcaTodo(screen: { open: (id: string) => void; changed: () => void }) {
   openTask = screen.open;
   changed = screen.changed;
-  useOrcaTodo({ wanted: () => currentScreen() === "orca" && (on || tabs.size > 0), draw: drawFollow });
+  // Todo off in the menu (A-50): the part reads nothing, and the tabs of tasks are closed (they show the data of the Todo screen, which is no longer read).
+  useOrcaTodo({ wanted: () => screenOn("todo") && currentScreen() === "orca" && (on || tabs.size > 0), draw: drawFollow });
+  whileOn(
+    "todo",
+    () => {},
+    () => {
+      for (const id of [...tabs.keys()]) closeTodoTab(id);
+      if (drawnTabs !== "") {
+        drawnTabs = "";
+        changed();
+      }
+    },
+  );
   $<HTMLSelectElement>("orca-todo-project").onchange = (e) => {
     pick = (e.target as HTMLSelectElement).value;
     drawList();

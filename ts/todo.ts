@@ -8,6 +8,7 @@ import { pad2 } from "./format.js";
 import { CLOSE_SVG, COPY_SVG, DELETE_SVG, LINK_SVG, POPOUT_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
+import { whileOn } from "./menu-state.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { HandoffPane } from "./orca-handoff.js";
 import { focusPopout, hasTodoPopouts, initTodoPopout, noticeTodoPopouts, popOut, syncTodoPopouts } from "./orca-popout.js";
@@ -556,10 +557,24 @@ export function initTodo() {
     // Only a rejected token says so; a failed load (network, 5xx) shows its own error.
     if (await loadTodo()) showFailure("todo", "トークンを確認できませんでした。もう一度入力してください");
   };
-  showKeptTodo();
-  loadTodoCount();
-  setInterval(refreshTodo, TODO_REFRESH_MS);
-  // A due moment passes with no fetch: count again from the tasks last given. Not held back while the window is hidden or a field is typed in; it draws only the count.
-  setInterval(recountTodo, TODO_REFRESH_MS);
-  document.addEventListener("visibilitychange", refreshTodo);
+  // The reads run while Todo is on in the menu (A-50): the kept content and the first read for the count, the two clocks and the return of the window. Turning it off stops them, and turning it on starts them again.
+  let clocks: number[] = [];
+  whileOn(
+    "todo",
+    () => {
+      showKeptTodo();
+      loadTodoCount();
+      clocks = [
+        window.setInterval(refreshTodo, TODO_REFRESH_MS),
+        // A due moment passes with no fetch: count again from the tasks last given. Not held back while the window is hidden or a field is typed in; it draws only the count.
+        window.setInterval(recountTodo, TODO_REFRESH_MS),
+      ];
+      document.addEventListener("visibilitychange", refreshTodo);
+    },
+    () => {
+      for (const clock of clocks) window.clearInterval(clock);
+      clocks = [];
+      document.removeEventListener("visibilitychange", refreshTodo);
+    },
+  );
 }

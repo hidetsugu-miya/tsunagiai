@@ -113,6 +113,30 @@ pub fn load_settings(dir: &Path) -> MenuSettings {
     mended(saved.as_ref())
 }
 
+/// Whether the sidebar shows `screen` (A-50). What a connection reads in the background, and what Rust keeps connected for it, runs only while its screen is on (#680).
+pub fn is_on(settings: &MenuSettings, screen: MenuScreen) -> bool {
+    settings
+        .items
+        .iter()
+        .any(|entry| entry.screen == screen && entry.enabled)
+}
+
+/// Whether the saved settings show `screen`.
+pub fn screen_on(dir: &Path, screen: MenuScreen) -> bool {
+    is_on(&load_settings(dir), screen)
+}
+
+/// The screens that `after` turns on or off against `before`, each with its new state, in the order of the six screens.
+fn switched(before: &MenuSettings, after: &MenuSettings) -> Vec<(MenuScreen, bool)> {
+    SCREENS
+        .iter()
+        .filter_map(|&screen| {
+            let now = is_on(after, screen);
+            (is_on(before, screen) != now).then_some((screen, now))
+        })
+        .collect()
+}
+
 fn save_settings(dir: &Path, settings: &MenuSettings) -> Result<(), String> {
     let text = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
     write_atomic(dir, FILE, &text)
@@ -146,19 +170,43 @@ pub async fn side_menu_settings(app: AppHandle) -> Result<MenuSettings, String> 
 }
 
 /// Saves the whole list and answers the settings saved (#676). A list that is not each screen once, or that turns the mail screen off, is an error and nothing is written.
+/// What Rust keeps connected for a screen follows the change at once (#680): Slack's Socket Mode is stopped when Slack is turned off and connected again when it is turned on, and the connections of pushes of the development screen are set again (they are ended while it is off).
 #[tauri::command]
 pub async fn side_menu_settings_set(
     app: AppHandle,
     items: Vec<MenuEntry>,
 ) -> Result<MenuSettings, String> {
     let dir = config_dir(&app)?;
-    tokio::task::spawn_blocking(move || {
+    let saved_in = dir.clone();
+    let (before, settings) = tokio::task::spawn_blocking(move || {
         let settings = checked(items)?;
-        save_settings(&dir, &settings)?;
-        Ok(settings)
+        let before = load_settings(&saved_in);
+        save_settings(&saved_in, &settings)?;
+        Ok::<_, String>((before, settings))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    for (screen, now) in switched(&before, &settings) {
+        match (screen, now) {
+            (MenuScreen::Slack, true) => {
+                tauri::async_runtime::spawn(crate::slack::socket::start_all(app.clone()));
+            }
+            (MenuScreen::Slack, false) => crate::slack::socket::stop_all(&app),
+            #[cfg(not(feature = "e2e"))]
+            (MenuScreen::Orca, _) => {
+                let (app, dir) = (app.clone(), dir.clone());
+                tauri::async_runtime::spawn(async move {
+                    let version = app.package_info().version.to_string();
+                    if let Err(e) = crate::formation_remote::sync_pushes(&app, &dir, &version).await
+                    {
+                        crate::gmail::log_failure("formation_pushes", "-", e);
+                    }
+                });
+            }
+            _ => {}
+        }
+    }
+    Ok(settings)
 }
 
 #[cfg(test)]
@@ -337,6 +385,58 @@ mod tests {
         assert!(checked(items).is_err());
         assert_eq!(load_settings(&dir), saved);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_screen_is_on_when_its_entry_is_enabled() {
+        let mut settings = MenuSettings::default();
+        settings.items[2].enabled = false;
+        assert!(is_on(&settings, MenuScreen::Slack));
+        assert!(!is_on(&settings, MenuScreen::Todo));
+        // A list with no entry for a screen shows none of it.
+        assert!(!is_on(
+            &MenuSettings { items: Vec::new() },
+            MenuScreen::Mail
+        ));
+    }
+
+    #[test]
+    fn the_saved_file_decides_whether_a_screen_is_on() {
+        let dir = temp_dir("on");
+        // No file: every screen is on.
+        assert!(screen_on(&dir, MenuScreen::Slack));
+        let mut settings = MenuSettings::default();
+        settings.items[3].enabled = false;
+        save_settings(&dir, &settings).unwrap();
+        assert!(!screen_on(&dir, MenuScreen::Slack));
+        assert!(screen_on(&dir, MenuScreen::Orca));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_save_names_the_screens_it_turns_on_or_off_and_only_those() {
+        let all_on = MenuSettings::default();
+        let mut slack_off = all_on.clone();
+        slack_off.items[3].enabled = false;
+        let mut orca_off_too = slack_off.clone();
+        orca_off_too.items[4].enabled = false;
+        assert_eq!(
+            switched(&all_on, &slack_off),
+            vec![(MenuScreen::Slack, false)]
+        );
+        assert_eq!(
+            switched(&slack_off, &orca_off_too),
+            vec![(MenuScreen::Orca, false)]
+        );
+        assert_eq!(
+            switched(&orca_off_too, &all_on),
+            vec![(MenuScreen::Slack, true), (MenuScreen::Orca, true)]
+        );
+        // A new order with the same screens on turns nothing on or off.
+        let mut moved = slack_off.clone();
+        moved.items.reverse();
+        assert!(switched(&slack_off, &moved).is_empty());
+        assert!(switched(&all_on, &all_on).is_empty());
     }
 
     #[test]

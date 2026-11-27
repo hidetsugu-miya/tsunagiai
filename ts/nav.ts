@@ -15,6 +15,7 @@ import { closeHint, confirmDiscardChanges } from "./hint.js";
 import { invoke } from "./ipc.js";
 import { pauseLsp } from "./orca-lsp.js";
 import { showOrca, watchFiles } from "./orca.js";
+import { applyMenu, everyScreenOn } from "./menu-state.js";
 import { loadSettings, selectSettingsTab, type SettingsTab } from "./settings.js";
 import { hideSkillClaude } from "./skill-settings.js";
 import { showSlackList } from "./slack-list.js";
@@ -139,6 +140,8 @@ let shown: MenuScreen[] = ["mail", "calendar", "todo", "slack", "orca", "databas
 
 // Puts the screens in the saved order above the bottom group, takes off the ones that are off, and gives each shown button its number for the tooltip and the keys.
 export function drawMenu(items: MenuEntry[]) {
+  // The work of a screen that is off stops, and that of a screen that is on starts (A-50, #680).
+  applyMenu(items);
   shown = items.filter((entry) => entry.enabled).map((entry) => entry.screen);
   for (const { screen, enabled } of items) {
     const button = $(MENU_BUTTONS[screen]);
@@ -175,5 +178,12 @@ export function initNav() {
   closePopup();
   $("nav-settings").onclick = () => setScreen("settings");
   initMenuKeys();
-  invoke("side_menu_settings").then((settings) => drawMenu(settings.items), (e) => logError("side-menu", e));
+  // A list that cannot be read leaves every screen on, as the first values are, so no screen's work waits for it.
+  invoke("side_menu_settings").then(
+    (settings) => drawMenu(settings.items),
+    (e) => {
+      logError("side-menu", e);
+      drawMenu(everyScreenOn());
+    },
+  );
 }

@@ -10,6 +10,7 @@ import { periodMs } from "./e2e-timers.js";
 import { card, logError } from "./error-card.js";
 import { addDays, hhmm, isoDate } from "./format.js";
 import { invoke } from "./ipc.js";
+import { screenOn, whileOn } from "./menu-state.js";
 import { setNavCount } from "./view.js";
 
 const TICK_MS = 60_000;
@@ -101,6 +102,7 @@ async function nextTimed() {
 
 // Draws the cards and the number from what Rust says is to be told of now.
 async function draw() {
+  if (!screenOn("calendar")) return;
   const seq = ++drawSeq;
   const accounts = accountList();
   const events = [...(week?.timed ?? []), ...(await nextTimed())].filter((e) => accounts.includes(e.account));
@@ -140,7 +142,9 @@ async function read(accounts: string) {
   readDay = isoDate(new Date());
   nextFor = "";
   try {
-    week = await invoke("calendar_week", { date: readDay, firstDay: await calendarFirstDay(), refresh: false });
+    const fetched = await invoke("calendar_week", { date: readDay, firstDay: await calendarFirstDay(), refresh: false });
+    // The calendar was turned off while the week was being read: the answer is dropped.
+    if (screenOn("calendar")) week = fetched;
   } catch (e) {
     logError("calendar-notice", e);
   } finally {
@@ -161,6 +165,8 @@ export function weekDrawn(w: Week) {
 // Reads the week when it has not been read for these accounts, today or in the last 5 ticks, and draws. With no account there is nothing to read: what was drawn goes.
 // While the window is hidden nothing is read, and the cards go on being drawn from the week held; `visibilitychange` brings the read that is due.
 export function syncCalendarNotice() {
+  // Nothing is read for a calendar that is off in the menu (A-50).
+  if (!screenOn("calendar")) return;
   const accounts = accountList();
   if (accounts.length === 0) {
     week = null;
@@ -175,7 +181,31 @@ export function syncCalendarNotice() {
   void draw();
 }
 
+const onVisible = () => !document.hidden && syncCalendarNotice();
+
+// The clock and the read of the week run while the calendar is on in the menu, and begin with a read when it is turned on. Turning it off takes the cards and the count away and forgets the week, so a late answer draws nothing.
 export function initCalendarNotice() {
-  setInterval(syncCalendarNotice, tickMs());
-  document.addEventListener("visibilitychange", () => !document.hidden && syncCalendarNotice());
+  let timer: number | null = null;
+  whileOn(
+    "calendar",
+    () => {
+      timer = window.setInterval(syncCalendarNotice, tickMs());
+      document.addEventListener("visibilitychange", onVisible);
+      syncCalendarNotice();
+    },
+    () => {
+      if (timer !== null) window.clearInterval(timer);
+      timer = null;
+      document.removeEventListener("visibilitychange", onVisible);
+      drawSeq++;
+      week = null;
+      nextWeek = null;
+      readFor = "";
+      nextFor = "";
+      readAt = 0;
+      for (const c of cards.values()) c.root.remove();
+      cards.clear();
+      showCount();
+    },
+  );
 }

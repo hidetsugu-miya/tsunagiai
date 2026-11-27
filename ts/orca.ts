@@ -32,6 +32,7 @@ import { AGENT_SVG, CHEVRON_SVG, CLAUDE_SVG, CLOSE_SVG, COLUMNS_SVG, COPY_PATH_S
 import { invoke } from "./ipc.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
 import { closeMenu, type MenuItem, openMenu, showMenu } from "./menu.js";
+import { screenOn, whileOn } from "./menu-state.js";
 import { confirmCloseDraft } from "./hint.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { closeDefinition, type DefinitionOpen, type DefinitionQuery, definitionsOf, hasDefinitionIn, initDefinition, openDefinition, showDefinitions } from "./orca-definition.js";
@@ -1455,6 +1456,7 @@ async function readPairing() {
 
 // The pairing of this machine's Orca was saved or revoked in the settings.
 export function pairingChanged() {
+  if (!screenOn("orca")) return;
   void readPairing();
 }
 
@@ -1462,7 +1464,7 @@ export function pairingChanged() {
 // The stream tries a lost connection again by itself.
 function syncStream() {
   const want = new Set<string | null>();
-  if (view !== null && view.state !== "missing") {
+  if (view !== null && view.state !== "missing" && screenOn("orca")) {
     if (paired === null && pairingSeq === 0) void readPairing();
     if (view.target !== null && view.environments.includes(view.target)) want.add(view.target);
     if (paired) want.add(null);
@@ -2262,13 +2264,36 @@ export function initOrca() {
       };
     },
   });
-  setInterval(refresh, (1000 * shownMs()) / SHOWN_MS);
-  document.addEventListener("visibilitychange", () => {
+  // The clock and the first read of the list run while the development screen is on in the menu (A-50). Turning it off stops them and ends the streams; turning it on reads the list again.
+  let clock: number | null = null;
+  const onVisible = () => {
     // A session shown again after the window was hidden is seen.
     drawBadge();
     refresh();
     watchFiles();
-  });
+  };
+  whileOn(
+    "orca",
+    () => {
+      clock = window.setInterval(refresh, (1000 * shownMs()) / SHOWN_MS);
+      document.addEventListener("visibilitychange", onVisible);
+      load("full");
+    },
+    () => {
+      if (clock !== null) window.clearInterval(clock);
+      clock = null;
+      document.removeEventListener("visibilitychange", onVisible);
+      // The read on its way is dropped, the connections of the streams are closed, and the count goes.
+      loadSeq++;
+      loading = false;
+      syncStream();
+      workingCount = 0;
+      hereWorking = 0;
+      waitingCount = 0;
+      notified.clear();
+      drawBadge();
+    },
+  );
   // The files and the history of the file pane are read again when the app is activated (A-18, A-27), and by the clock (`refresh`), as nothing watches the disk.
   window.addEventListener("focus", () => shown() && refreshFiles());
   initSearch();
@@ -2301,5 +2326,4 @@ export function initOrca() {
     menu: openTabMenu,
   });
   void loadTitles();
-  load("full");
 }

@@ -15,6 +15,7 @@ import { confirmDelete, confirmDeleteMany, confirmRevert } from "./hint.js";
 import { BRANCH_SVG, CHEVRON_SVG, COPY_PATH_SVG, DATABASE_SVG, DELETE_SVG, DIFF_SVG, DOWNLOAD_SVG, FILE_SVG, FOLDER_SVG, MINUS_CIRCLE_SVG, MOVE_SVG, OPEN_SVG, PLUS_SVG, RETURN_SVG, SERVER_SVG, TICKET_SVG, TODO_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { openMenu } from "./menu.js";
+import { whileOn } from "./menu-state.js";
 import { closeBranchDialog, openBranchDialog } from "./orca-branch.js";
 import type { DiffCommit } from "./orca-diff.js";
 import { checkHistory, initHistory, refreshHistory, reloadHistory, syncHistory } from "./orca-history.js";
@@ -1283,5 +1284,14 @@ export function initOrcaFiles(on: { open: (relative: string) => void; jira: (key
   $("orca-files-mode-jira").onclick = () => chooseMode("jira");
   $("orca-files-mode-todo").innerHTML = TODO_SVG;
   $("orca-files-mode-todo").onclick = () => chooseMode("todo");
+  // The Todo part and its icon (here and in the tab strip, by `menu-todo-off` of the style) are there while Todo is on in the menu (A-49, A-50).
+  whileOn(
+    "todo",
+    () => document.body.classList.remove("menu-todo-off"),
+    () => {
+      document.body.classList.add("menu-todo-off");
+      if (mode === "todo") chooseMode("files");
+    },
+  );
   initOrcaJira({ open: on.jira, create: on.newJira });
 }

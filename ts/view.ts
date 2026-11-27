@@ -1,10 +1,12 @@
 // Which part of the window is shown, and the counts on the sidebar buttons (and their sum on the Dock).
+import type { MenuScreen } from "./bindings/MenuScreen";
 import { $ } from "./dom.js";
 import { setFooterCount } from "./footer.js";
 import { showFailure } from "./error-card.js";
 import { invoke } from "./ipc.js";
 import { syncMailClaude } from "./mail-claude.js";
 import { mailSlackOpen } from "./mail-slack.js";
+import { screenOn, whileOn } from "./menu-state.js";
 import { toast } from "./toast.js";
 
 // Whether `claude` can be used: the AI summary button is shown only then, in a thread.
@@ -87,10 +89,32 @@ let sentToDock = "0:";
 // The buttons whose counts the footer's bell adds up.
 const FOOTER_IDS = ["nav-mail", "nav-slack", "nav-calendar", "nav-todo"];
 
+// The screen of the menu that each count belongs to. The inbox is always on, so its count is not here.
+const NAV_SCREEN: Record<string, MenuScreen> = { "nav-calendar": "calendar", "nav-todo": "todo", "nav-slack": "slack", "nav-orca": "orca" };
+// What each button's count was last set to, so that turning its screen off sets it to 0 with the same name.
+const lastCounts = new Map<string, { count: number; name: string; kind: string; ahead?: number[]; cap: number }>();
+for (const [id, screen] of Object.entries(NAV_SCREEN)) {
+  whileOn(
+    screen,
+    () => {},
+    () => {
+      const last = lastCounts.get(id);
+      if (last) setNavCount(id, 0, last.name, last.kind, id === "nav-todo" ? [] : undefined, last.cap);
+    },
+  );
+}
+
 // The count on a sidebar button (99+ from 100, or `cap`+ above `cap`; none for 0). The label carries it too: the tooltip shows the label, e.g. "受信トレイ（未読 3 件）".
 // The Dock badge shows the sum of the buttons' counts (the numbers themselves, not what a button shows above its cap), and Rust adds the `upcoming` moments as the clock passes them (they are the Todo button's; the mail button leaves them as they are).
 // The call is skipped when neither the sum nor the moments changed.
 export function setNavCount(id: string, count: number, name: string, kind: string, ahead?: number[], cap = 99) {
+  lastCounts.set(id, { count, name, kind, ahead, cap });
+  // The count of a screen that is off is 0, whoever sets it (#680): the footer's bell and the Dock badge add up the counts of the screens that are on only.
+  const screen = NAV_SCREEN[id];
+  if (screen !== undefined && !screenOn(screen)) {
+    count = 0;
+    if (ahead) ahead = [];
+  }
   navCounts[id] = count;
   if (ahead) upcoming = ahead.sort((a, b) => a - b);
   const sum = Object.values(navCounts).reduce((a, b) => a + b, 0);

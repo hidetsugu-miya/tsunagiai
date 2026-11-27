@@ -1668,6 +1668,8 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-files-mode:first-child { margin-left: 12px; }
 .orca-files-mode svg { width: var(--header-ic); height: var(--header-ic); }
 .orca-files-mode[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
+/* Todo is off in the menu (A-50): the Todo part of the file pane has no icon. */
+.menu-todo-off #orca-files-mode-todo, .menu-todo-off .orca-tab-mode[data-mode="todo"] { display: none; }
 #orca-history { flex: 1; min-height: 0; display: grid; grid-template-rows: minmax(0, 1.2fr) minmax(0, 1fr); }
 #orca-history-list, #orca-history-files { min-height: 0; overflow: auto; padding: 4px 4px 8px; }
 #orca-history-files { border-top: 1px solid var(--line); }

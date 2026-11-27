@@ -8,6 +8,7 @@ import type { Todo } from "./bindings/Todo";
 import { accountList } from "./accounts.js";
 import { $ } from "./dom.js";
 import { isoDate } from "./format.js";
+import { screenOn } from "./menu-state.js";
 import { dropComments } from "./todo-comments.js";
 import { setNavCount } from "./view.js";
 
@@ -119,6 +120,8 @@ export function recountTodo() {
 
 // The open tasks whose due moment has come: the ones the count above is made of, for the rows of the pane of the notices (A-35).
 export function dueTasks() {
+  // None while Todo is off in the menu (A-50).
+  if (!screenOn("todo")) return [];
   const now = Date.now();
   return counted.filter((t) => t.dueAt !== null && t.dueAt <= now);
 }

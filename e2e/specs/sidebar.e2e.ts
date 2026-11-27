@@ -1,4 +1,4 @@
-import { boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, dueToday, holds, inbox, mock, onceId, orcaOverview, orcaRow, rejects, release, rowOf, setClock, slackLoad, slackTs, task, threadDetail, threadLoaded, timeline, timelineMessage, today, todoData, waitForCalls, waitForCount, weekOfToday, CARD } from "../support";
+import { boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, dueToday, emitEvent, holds, inbox, mock, onceId, orcaOverview, orcaRow, rejects, release, rowOf, setClock, slackLoad, slackTs, socketStatus, task, threadDetail, threadLoaded, timeline, timelineMessage, timers, today, todoData, waitForCalls, waitForCount, waitForText, weekOfToday, CARD } from "../support";
 
 // The ids of what the sidebar's bottom group shows, top to bottom.
 const bottomGroup = () =>
@@ -356,6 +356,156 @@ describe("sidebar: the saved order and the number keys (A-5)", () => {
     await press("2");
     await press("3");
     await browser.waitUntil(async () => (await current()) === "nav-todo");
+  });
+});
+
+// A-50, #680: a screen that is off in the menu reads nothing in the background. The reads are the commands of the screens' clocks and first reads; Rust's side (Slack's Socket Mode, the pushes of the development screen) is a unit test (`side_menu.rs`).
+describe("sidebar: the reads of a screen that is off (A-50)", () => {
+  const SCREENS = ["mail", "calendar", "todo", "slack", "orca", "database"];
+  // The list with the screens named in `on` shown (the inbox is always shown).
+  const list = (on: string[]) => ({ items: SCREENS.map((screen) => ({ screen, enabled: screen === "mail" || on.includes(screen) })) });
+  const TICK = 300;
+  // What each of the four screens reads in the background, and the commands that show it: the calendar's notice (C-8), Todo's count (T-5), Slack's list (S-5) and Orca's list and its stream (A-6, A-12).
+  const reads = { calendar: ["calendar_week", "calendar_notices"], todo: ["todoist_cached", "todoist_load"], slack: ["slack_load"], orca: ["orca_overview", "orca_stream_open"] };
+  const data = (extra: Record<string, unknown> = {}) => ({
+    inbox: inbox(),
+    claude_status: claudeReady,
+    calendar_week: weekOfToday(),
+    calendar_notices: [],
+    todoist_load: todoData(),
+    slack_load: slackLoad,
+    orca_overview: orcaOverview([], []),
+    orca_pairing_status: { paired: true },
+    ...timers({ calendarNotice: TICK }),
+    ...extra,
+  });
+  const callsOfAll = async (screens: (keyof typeof reads)[]) => Object.fromEntries(await Promise.all(screens.flatMap((s) => reads[s]).map(async (c) => [c, (await callsOf(c)).length])));
+  const switchOf = (screen: string) => $(`#menu-items [data-screen="${screen}"] .switch`);
+  // The settings screen on the メニュー tab. `saved` is what `side_menu_settings_set` answers to the next press.
+  async function openMenu() {
+    await $("#nav-settings").click();
+    await $("#settings-tab-menu").click();
+    await waitForCount("#menu-items .menu-row", 6);
+  }
+  const press = async (screen: string, saved: unknown) => {
+    await mock("side_menu_settings_set", saved);
+    await switchOf(screen).click();
+    await waitForCalls("side_menu_settings_set");
+  };
+  const visibilityChange = () => browser.execute((once) => window.__e2e_once__(once) && document.dispatchEvent(new Event("visibilitychange")), onceId());
+
+  it("calls none of the reads of the screens that are off at the start, and the inbox still loads", async () => {
+    await boot(data({ side_menu_settings: list([]) }));
+    await waitForCalls("side_menu_settings");
+    await waitForCalls("inbox");
+    // The notice's clock would have read by now.
+    await browser.pause(TICK * 4);
+    expect(await callsOfAll(["calendar", "todo", "slack", "orca"])).toEqual({ calendar_week: 0, calendar_notices: 0, todoist_cached: 0, todoist_load: 0, slack_load: 0, orca_overview: 0, orca_stream_open: 0 });
+    await expect($("#nav-todo .nav-count")).not.toBeDisplayed();
+  });
+
+  it("reads each of them when every screen is on, as it did before the menu", async () => {
+    await boot(data({ side_menu_settings: list(SCREENS) }));
+    await waitForCalls("calendar_week");
+    await waitForCalls("calendar_notices");
+    await waitForCalls("todoist_cached");
+    await waitForCalls("todoist_load");
+    await waitForCalls("slack_load");
+    await waitForCalls("orca_overview");
+    await waitForCalls("orca_stream_open");
+  });
+
+  it("reads again when a screen is turned on in the メニュー tab, one screen at a time", async () => {
+    await boot(data({ side_menu_settings: list([]) }));
+    await waitForCalls("inbox");
+    await openMenu();
+    await press("todo", list(["todo"]));
+    await waitForCalls("todoist_load");
+    // The settings screen reads the workspaces itself (`slack_load`), so Slack's own read is told by the list.
+    expect(await callsOfAll(["calendar", "orca"])).toEqual({ calendar_week: 0, calendar_notices: 0, orca_overview: 0, orca_stream_open: 0 });
+    expect(await callsOf("slack_timeline")).toEqual([]);
+    await press("slack", list(["todo", "slack"]));
+    await waitForCalls("slack_timeline");
+    expect(await callsOfAll(["calendar", "orca"])).toEqual({ calendar_week: 0, calendar_notices: 0, orca_overview: 0, orca_stream_open: 0 });
+    await press("calendar", list(["todo", "slack", "calendar"]));
+    await waitForCalls("calendar_week");
+    await waitForCalls("calendar_notices");
+    expect(await callsOfAll(["orca"])).toEqual({ orca_overview: 0, orca_stream_open: 0 });
+    await press("orca", list(["todo", "slack", "calendar", "orca"]));
+    await waitForCalls("orca_overview");
+    await waitForCalls("orca_stream_open");
+  });
+
+  it("stops the notice's clock when the calendar is turned off, and takes the cards and the count away", async () => {
+    const week = weekOfToday();
+    await boot(data({ side_menu_settings: list(SCREENS), calendar_week: week }));
+    await waitForCalls("calendar_notices", 2);
+    await openMenu();
+    await press("calendar", list(SCREENS.filter((s) => s !== "calendar")));
+    await mock("calendar_notices", []);
+    await mock("calendar_week", week);
+    await browser.pause(TICK * 4);
+    expect(await callsOfAll(["calendar"])).toEqual({ calendar_week: 0, calendar_notices: 0 });
+    await expect($("#nav-calendar")).not.toBeDisplayed();
+  });
+
+  it("takes the Todo count out of the sidebar, the bell and the Dock badge when Todo is turned off, and reads no more", async () => {
+    await boot(data({ side_menu_settings: list(SCREENS) }));
+    // Two unread mails and the one task that is due.
+    await waitForText("#nav-todo .nav-count", "1");
+    await waitForText("#footer-bell .footer-count", "3");
+    await openMenu();
+    await press("todo", list(SCREENS.filter((s) => s !== "todo")));
+    await expect($("#nav-todo .nav-count")).not.toBeDisplayed();
+    await waitForText("#footer-bell .footer-count", "2");
+    const badges = (await callsOf("set_badge")) as { count: number; upcoming: number[] }[];
+    expect(badges[badges.length - 1]).toEqual({ count: 2, upcoming: [] });
+    // The return of the window and the clocks read for the count while Todo is on; now they read nothing.
+    await mock("todoist_load", todoData());
+    await mock("todoist_cached", null);
+    await visibilityChange();
+    await browser.pause(300);
+    expect(await callsOfAll(["todo"])).toEqual({ todoist_cached: 0, todoist_load: 0 });
+    // Turned on again, it reads and counts again.
+    await press("todo", list(SCREENS));
+    await waitForCalls("todoist_load");
+    await waitForText("#nav-todo .nav-count", "1");
+    await waitForText("#footer-bell .footer-count", "3");
+  });
+
+  it("answers no event of Socket Mode and reads no list while Slack is off", async () => {
+    await boot(data({ side_menu_settings: list(SCREENS) }));
+    await waitForCalls("slack_load");
+    const timelineCalls = await mock("slack_timeline", timeline([]));
+    await emitEvent("slack-timeline-dirty");
+    await waitForCalls(timelineCalls);
+    await openMenu();
+    await press("slack", list(SCREENS.filter((s) => s !== "slack")));
+    const off = await mock("slack_timeline", timeline([]));
+    await emitEvent("slack-timeline-dirty");
+    await emitEvent("slack-socket-status", socketStatus("connected"));
+    await browser.pause(500);
+    expect(await callsOf(off)).toEqual([]);
+    // Turned on again, the workspaces and the list are read again.
+    const loaded = await mock("slack_load", slackLoad);
+    await press("slack", list(SCREENS));
+    await waitForCalls(loaded);
+    await waitForCalls(off);
+  });
+
+  it("closes the connections of the development screen's streams when it is turned off", async () => {
+    await boot(data({ side_menu_settings: list(SCREENS) }));
+    await waitForCalls("orca_stream_open");
+    await openMenu();
+    expect(await callsOf("orca_stream_close")).toEqual([]);
+    await press("orca", list(SCREENS.filter((s) => s !== "orca")));
+    expect(await waitForCalls("orca_stream_close")).toEqual([{ environment: null }]);
+    // Turned on again, the list is read and the stream is opened again.
+    const overview = await mock("orca_overview", orcaOverview([], []));
+    const open = await mock("orca_stream_open", null);
+    await press("orca", list(SCREENS));
+    await waitForCalls(overview);
+    await waitForCalls(open);
   });
 });
 
