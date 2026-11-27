@@ -511,30 +511,37 @@ describe("orca: the window of a tab (A-46)", () => {
       expect(await nameOfDetail()).toBe("Plan trip");
     });
 
-    it("reads the tasks again by the clock and draws what changed", async () => {
-      await openWindow(work, { todoist_load: todoData(), ...timers({ todoWindow: 500 }) });
+    it("reads what the screen's read kept when the screen gives the tab again, and draws what changed, with no call to Todoist", async () => {
+      await openWindow(work, { todoist_load: todoData() });
       await later("Write report");
       const data = todoData();
-      await mock("todoist_load", { ...data, tasks: data.tasks.map((t) => (t.id === "k1" ? { ...t, content: "Write the report" } : t)) });
+      const kept = await mock("todoist_cached", { ...data, tasks: data.tasks.map((t) => (t.id === "k1" ? { ...t, content: "Write the report" } : t)) });
+      await sendPopoutTab(work);
+      expect(await waitForCalls(kept)).toHaveLength(1);
       await later("Write the report");
       await expect($("#popout-name")).toHaveText("Write the report");
+      expect(await callsOf("todoist_load")).toHaveLength(1);
     });
 
-    it("asks for the close when the task is no longer in the tasks it reads", async () => {
-      await openWindow(work, { todoist_load: todoData(), ...timers({ todoWindow: 500 }) });
+    it("asks for the close when the tasks the screen kept no longer have the task", async () => {
+      await openWindow(work, { todoist_load: todoData() });
       await later("Write report");
       await mock("orca_popout_close", null);
       const data = todoData();
-      await mock("todoist_load", { ...data, tasks: data.tasks.filter((t) => t.id !== "k1") });
+      await mock("todoist_cached", { ...data, tasks: data.tasks.filter((t) => t.id !== "k1") });
+      await sendPopoutTab(work);
       expect(await waitForCalls("orca_popout_close")).toHaveLength(1);
+      expect(await callsOf("todoist_load")).toHaveLength(1);
     });
 
-    it("draws the tab again from what it holds when the screen gives it, and reads nothing again for it", async () => {
+    it("draws the name the screen gives, and keeps the detail it holds when nothing was kept", async () => {
       await openWindow(work, { todoist_load: todoData() });
       await later("Write report");
+      const kept = await mock("todoist_cached", null);
       await sendPopoutTab({ ...work, title: "Write the report" });
-      await later("Write report");
-      await expect($("#popout-name")).toHaveText("Write report");
+      expect(await waitForCalls(kept)).toHaveLength(1);
+      await expect($("#popout-name")).toHaveText("Write the report");
+      expect(await nameOfDetail()).toBe("Write report");
       expect(await callsOf("todoist_load")).toHaveLength(1);
     });
 

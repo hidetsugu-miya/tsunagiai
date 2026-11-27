@@ -134,6 +134,16 @@ export const syncPopouts = (look: (entry: PopoutTab) => PopoutTab | null | undef
 // The same for the windows of the tasks (T-11), which the Todo screen gives as it has the data: a task that is gone (completed, deleted, its project archived) ends its window, and a new name is given to it.
 export const syncTodoPopouts = (look: (entry: PopoutTab) => PopoutTab | null | undefined) => sync(true, look);
 
+// Whether a task has a window now (T-11): the Todo screen then keeps reading the tasks while it is hidden or another screen is shown, for the windows.
+export const hasTodoPopouts = () => [...windows.values()].some((entry) => entry.content.kind === "todo");
+
+// Tells each window of a task that the screen has read the tasks (T-11), by giving it its tab again: the page reads what the read kept (`todoist_cached`) and asks Todoist nothing, so the calls to Todoist stay one a period whatever the number of windows.
+export function noticeTodoPopouts() {
+  for (const [id, entry] of windows) {
+    if (entry.content.kind === "todo") invoke("orca_popout_update", { was: id, tab: entry }).catch(todoHost.failed);
+  }
+}
+
 function sync(todo: boolean, look: (entry: PopoutTab) => PopoutTab | null | undefined) {
   for (const [id, entry] of [...windows]) {
     if ((entry.content.kind === "todo") !== todo) continue;
