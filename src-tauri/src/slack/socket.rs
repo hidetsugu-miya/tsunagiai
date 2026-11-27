@@ -4,6 +4,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    path::Path,
     sync::{Mutex, Once},
     time::{Duration, Instant},
 };
@@ -483,16 +484,21 @@ impl SocketHub {
             })
     }
 
-    /// Starts the workspace's task with `spawn` (which is given the task's generation), in place of the one it has.
+    /// Starts the workspace's task with `spawn` (which is given the task's generation), in place of the one it has, unless `allowed` says no.
+    /// `allowed` is asked under the lock that `stop_all` takes, so a connection that Slack's being turned off has just stopped is not made again by a start that began earlier (A-50).
     fn start(
         &self,
         app: &AppHandle,
         team_id: &str,
+        allowed: impl FnOnce() -> bool,
         spawn: impl FnOnce(u64) -> tauri::async_runtime::JoinHandle<()>,
     ) {
         {
             // The lock is held through the spawn, so that the task finds its entry when it first sets its state.
             let mut inner = self.inner.lock().unwrap();
+            if !allowed() {
+                return;
+            }
             if let Some(old) = inner.entries.remove(team_id) {
                 if let Some(handle) = old.handle {
                     handle.abort();
@@ -977,10 +983,11 @@ async fn run(app: AppHandle, team_id: String, generation: u64) {
     );
 }
 
-/// Starts (or restarts) the workspace's connection.
-fn start(app: &AppHandle, team_id: &str) {
+/// Starts (or restarts) the workspace's connection, unless Slack is off in the menu at this moment (A-50, #680).
+fn start(app: &AppHandle, dir: &Path, team_id: &str) {
     let state = app.state::<SlackState>();
-    state.sockets.start(app, team_id, |generation| {
+    let on = || crate::side_menu::screen_on(dir, crate::side_menu::MenuScreen::Slack);
+    state.sockets.start(app, team_id, on, |generation| {
         tauri::async_runtime::spawn(run(app.clone(), team_id.to_owned(), generation))
     });
 }
@@ -1014,7 +1021,7 @@ pub async fn start_all(app: AppHandle) {
             continue;
         };
         match read_app_secret(team_id.clone()).await {
-            Ok(Some(_)) => start(&app, &team_id),
+            Ok(Some(_)) => start(&app, &dir, &team_id),
             Ok(None) => {}
             Err(e) => {
                 log_failure("slack_socket", &team_id, e);
@@ -1063,9 +1070,7 @@ pub async fn slack_app_token_set(
         .await
         .map_err(|e| log_failure(command, &team_id, e))?;
     // The token is kept, but nothing connects while Slack is off in the menu (A-50); turning it on connects.
-    if crate::side_menu::screen_on(&dir, crate::side_menu::MenuScreen::Slack) {
-        start(&app, &team_id);
-    }
+    start(&app, &dir, &team_id);
     Ok(state.sockets.statuses())
 }
 

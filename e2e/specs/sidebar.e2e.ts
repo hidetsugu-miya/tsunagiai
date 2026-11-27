@@ -1,4 +1,4 @@
-import { boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, dueToday, emitEvent, holds, inbox, mock, onceId, orcaOverview, orcaRow, rejects, release, rowOf, setClock, slackLoad, slackTs, socketStatus, task, threadDetail, threadLoaded, timeline, timelineMessage, timers, today, todoData, waitForCalls, waitForCount, waitForText, weekOfToday, CARD } from "../support";
+import { askScreen, boot, callsOf, claudeLoggedOut, claudeMissing, claudeReady, dueToday, emitEvent, holds, inbox, mock, onceId, orcaOverview, orcaRow, rejects, release, rowOf, setClock, slackLoad, slackTs, socketStatus, task, threadDetail, threadLoaded, timeline, timelineMessage, timers, today, todoData, waitForCalls, waitForCount, waitForText, weekOfToday, CARD } from "../support";
 
 // The ids of what the sidebar's bottom group shows, top to bottom.
 const bottomGroup = () =>
@@ -491,6 +491,13 @@ describe("sidebar: the reads of a screen that is off (A-50)", () => {
     await press("slack", list(SCREENS));
     await waitForCalls(loaded);
     await waitForCalls(off);
+  });
+
+  it("refuses a request to open a preview (A-45) while the development screen is off, and checks nothing in Rust", async () => {
+    await boot(data({ side_menu_settings: list([]), orca_preview_check: null }));
+    await waitForCalls("inbox");
+    expect(await askScreen("write", "preview-open", { path: "/work/example-app", relative: "page.html" })).toEqual({ ok: false, error: "開発の画面がメニューで OFF になっています" });
+    expect(await callsOf("orca_preview_check")).toEqual([]);
   });
 
   it("closes the connections of the development screen's streams when it is turned off", async () => {

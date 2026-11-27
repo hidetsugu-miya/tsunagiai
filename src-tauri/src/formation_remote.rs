@@ -1153,12 +1153,19 @@ pub async fn sync_pushes(
     config: &Path,
     app_version: &str,
 ) -> Result<(), String> {
+    // One run at a time, so that the run that reads the menu last also sets the connections last: the saved setting wins however the switches of the menu are ordered.
+    static ONE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _one = ONE_AT_A_TIME.lock().await;
     // While the development screen is off in the menu (A-50, #680) no connection is kept: the list of Orca is not even asked, and every one that is open is ended.
-    let saved = if crate::side_menu::screen_on(config, crate::side_menu::MenuScreen::Orca) {
+    let mut saved = if crate::side_menu::screen_on(config, crate::side_menu::MenuScreen::Orca) {
         orca::blocking(formation::saved_environment_names).await??
     } else {
         Vec::new()
     };
+    // The list took time to read: the menu is read again right before the connections are set.
+    if !crate::side_menu::screen_on(config, crate::side_menu::MenuScreen::Orca) {
+        saved.clear();
+    }
     keep_pushes_to(app, config, app_version, &saved)
 }
 
