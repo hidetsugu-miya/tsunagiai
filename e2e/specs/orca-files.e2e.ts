@@ -2059,11 +2059,11 @@ describe("orca: files and editor (A-18)", () => {
     await stubClipboard();
     expect(await rightClickRow("a.rs")).toBe(true);
     await expect($('.menu[role="menu"]')).toBeDisplayed();
-    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示", "移動・名前の変更", "削除"]);
-    expect(await count('.menu[role="menu"] button svg')).toBe(6);
+    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー", "差分を表示", "移動・名前の変更", "削除"]);
+    expect(await count('.menu[role="menu"] button svg')).toBe(5);
     expect(await count('.menu[role="menu"] .pdot')).toBe(0);
     // One line, before the move and the delete, which is last and in red.
-    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示", "", "移動・名前の変更", "削除"]);
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["パスのコピー", "相対パスをコピー", "差分を表示", "", "移動・名前の変更", "削除"]);
     expect(await count('.menu[role="menu"] > [role="separator"]')).toBe(1);
     expect(await deleteItemIsRed()).toBe(true);
     await pickItem("パスのコピー");
@@ -2270,7 +2270,7 @@ describe("orca: files and editor (A-18)", () => {
     await openFiles();
     await waitForCount("#orca-files-tree .orca-file", 4);
     expect(await rightClickRow("a.rs")).toBe(true);
-    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示", "移動・名前の変更", "削除"]);
+    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー", "差分を表示", "移動・名前の変更", "削除"]);
     await browser.keys("Escape");
     await expect($(".menu")).not.toExist();
     await rightClickEmpty();
@@ -2407,9 +2407,9 @@ describe("orca: files and editor (A-18)", () => {
     await git();
     await waitForCount(".orca-file[data-change]", 4);
     expect(await rightClickRow("a.rs")).toBe(true);
-    expect(await menuButtons()).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示", "ステージ", "ステージ解除", "変更を元に戻す", "移動・名前の変更", "削除"]);
-    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示", "", "ステージ", "ステージ解除", "変更を元に戻す", "", "移動・名前の変更", "削除"]);
-    expect(await count('.menu[role="menu"] button svg')).toBe(9);
+    expect(await menuButtons()).toEqual(["パスのコピー", "相対パスをコピー", "差分を表示", "ステージ", "ステージ解除", "変更を元に戻す", "移動・名前の変更", "削除"]);
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["パスのコピー", "相対パスをコピー", "差分を表示", "", "ステージ", "ステージ解除", "変更を元に戻す", "", "移動・名前の変更", "削除"]);
+    expect(await count('.menu[role="menu"] button svg')).toBe(8);
     expect(await count('.menu[role="menu"] button.danger')).toBe(2);
     expect(await textsOf('.menu[role="menu"] button.danger')).toEqual(["変更を元に戻す", "削除"]);
     expect(await deleteItemIsRed()).toBe(true);
@@ -2425,7 +2425,7 @@ describe("orca: files and editor (A-18)", () => {
     await openFiles({ orca_files_changes: [change("a.rs", "changed")] });
     await waitForCount(".orca-file[data-change]", 1);
     expect(await rightClickRow("b.log")).toBe(true);
-    expect(await menuButtons()).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示", "移動・名前の変更", "削除"]);
+    expect(await menuButtons()).toEqual(["パスのコピー", "相対パスをコピー", "差分を表示", "移動・名前の変更", "削除"]);
     await browser.keys("Escape");
     expect(await rightClickRow("target")).toBe(true);
     expect(await menuButtons()).toEqual(["新規ファイル", "新規フォルダー", "パスのコピー", "相対パスをコピー", "移動・名前の変更", "削除"]);
@@ -3143,34 +3143,52 @@ describe("orca: files and editor (A-18)", () => {
     expect(await tabTitles()).toEqual(["Write the docs", "main.rs"]);
   });
 
-  // A-22: the download of a file. Rust opens the save dialog and writes where it says; the page sends the worktree, the path from it and the target, and never a place to save.
-  it("downloads a file from the menu with the worktree, its path and no place to save, and says the name of the file saved", async () => {
+  // A-22: the download of a file of a saved environment. Rust opens the save dialog and writes where it says; the page sends the worktree, the path from it and the saved environment, and never a place to save. A file of this machine has no such item.
+  const STUDIO = "Studio";
+  const openStudioFiles = async () => {
+    await openOrca(orcaOverview(sample(), worktrees(), studio), { orca_terminal_read: ["$"], orca_files_list: root(), orca_files_ignored: rootIgnored });
+    await project("example-app").click();
+    await filesToggle().click();
+    await waitForCount("#orca-files-tree .orca-file", 4);
+  };
+
+  it("has 「ダウンロード」 as the third item of the menu of a file of a saved environment, and not on a file of this machine (A-22)", async () => {
+    await openStudioFiles();
+    expect(await rightClickRow("a.rs")).toBe(true);
+    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示", "移動・名前の変更", "削除"]);
+    expect(await count('.menu[role="menu"] button svg')).toBe(6);
+    await browser.keys("Escape");
+    await expect($(".menu")).not.toExist();
     await openFiles();
     await waitForCount("#orca-files-tree .orca-file", 4);
+    expect(await rightClickRow("a.rs")).toBe(true);
+    expect(await textsOf('.menu[role="menu"] button')).not.toContain("ダウンロード");
+  });
+
+  it("downloads a file from the menu with the worktree, its path and the saved environment and no place to save, and says the name of the file saved", async () => {
+    await openStudioFiles();
     const download = await mock("orca_file_download", "a.rs");
     expect(await rightClickRow("a.rs")).toBe(true);
     await pickItem("ダウンロード");
-    expect(await waitForCalls(download)).toEqual([{ path: "/work/example-app", relative: "a.rs", environment: null }]);
+    expect(await waitForCalls(download)).toEqual([{ path: "/work/example-app", relative: "a.rs", environment: STUDIO }]);
     await expect($(".toast")).toHaveText(expect.stringContaining("a.rs をダウンロードしました"));
     await expect($(".menu")).not.toExist();
     await expect($(CARDS)).not.toExist();
   });
 
   it("sends the path from the worktree of a file in an open folder", async () => {
-    await openFiles();
-    await waitForCount("#orca-files-tree .orca-file", 4);
+    await openStudioFiles();
     await mock("orca_files_list", dirOf("src", [["lib", true], ["main.rs", false]]));
     await row("src").click();
     await waitForCount("#orca-files-tree .orca-file", 6);
     const download = await mock("orca_file_download", "main.rs");
     expect(await rightClickRow("src/main.rs")).toBe(true);
     await pickItem("ダウンロード");
-    expect(await waitForCalls(download)).toEqual([{ path: "/work/example-app", relative: "src/main.rs", environment: null }]);
+    expect(await waitForCalls(download)).toEqual([{ path: "/work/example-app", relative: "src/main.rs", environment: STUDIO }]);
   });
 
   it("shows nothing when the save dialog is cancelled", async () => {
-    await openFiles();
-    await waitForCount("#orca-files-tree .orca-file", 4);
+    await openStudioFiles();
     const download = await mock("orca_file_download", null);
     expect(await rightClickRow("a.rs")).toBe(true);
     await pickItem("ダウンロード");
@@ -3181,8 +3199,7 @@ describe("orca: files and editor (A-18)", () => {
   });
 
   it("shows the message of a download that failed, and no toast", async () => {
-    await openFiles();
-    await waitForCount("#orca-files-tree .orca-file", 4);
+    await openStudioFiles();
     const download = await mock("orca_file_download", rejects("この PC にファイルを書けません: Permission denied"));
     expect(await rightClickRow("a.rs")).toBe(true);
     await pickItem("ダウンロード");
@@ -3204,9 +3221,9 @@ describe("orca: files and editor (A-18)", () => {
     await openFiles({ orca_files_list: withPage() });
     await waitForCount("#orca-files-tree .orca-file", 4);
     expect(await rightClickRow("page.html")).toBe(true);
-    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示", "ブラウザで開く", "移動・名前の変更", "削除"]);
-    expect(await count('.menu[role="menu"] button svg')).toBe(7);
-    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示", "ブラウザで開く", "", "移動・名前の変更", "削除"]);
+    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー", "差分を表示", "ブラウザで開く", "移動・名前の変更", "削除"]);
+    expect(await count('.menu[role="menu"] button svg')).toBe(6);
+    expect(await textsOf('.menu[role="menu"] > *')).toEqual(["パスのコピー", "相対パスをコピー", "差分を表示", "ブラウザで開く", "", "移動・名前の変更", "削除"]);
     await browser.keys("Escape");
     await expect($(".menu")).not.toExist();
     expect(await rightClickRow("INDEX.HTML")).toBe(true);
@@ -3214,7 +3231,7 @@ describe("orca: files and editor (A-18)", () => {
     await browser.keys("Escape");
     await expect($(".menu")).not.toExist();
     expect(await rightClickRow("a.rs")).toBe(true);
-    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー", "ダウンロード", "差分を表示", "移動・名前の変更", "削除"]);
+    expect(await textsOf('.menu[role="menu"] button')).toEqual(["パスのコピー", "相対パスをコピー", "差分を表示", "移動・名前の変更", "削除"]);
     await browser.keys("Escape");
     await expect($(".menu")).not.toExist();
     // A folder whose name ends with .html is a folder.
