@@ -1,4 +1,4 @@
-// The settings screen: a tab each for Google, the calendar (the day the week starts on), Todoist (whether it is connected), Slack, Notion (`ts/notion-settings.ts`), Claude, the skills (`ts/skill-settings.ts`), 開発 (the tab `orca`: the card of the terminal colors `ts/orca-theme.ts`, that of Ghostty's settings `ts/ghostty.ts`, that of the PCs with the server of A-37 `ts/formation-consent-settings.ts`, that of the pairing of this machine's Orca `ts/orca-pairing-settings.ts`), the fonts (`ts/font-settings.ts`), the updater and the log (`ts/log-settings.ts`), each with its card.
+// The settings screen: a tab each for Google, the calendar (the day the week starts on), Todoist (whether it is connected), Slack, Notion (`ts/notion-settings.ts`), Claude, the skills (`ts/skill-settings.ts`), 開発 (the tab `orca`: the card of the terminal colors `ts/orca-theme.ts`, that of Ghostty's settings `ts/ghostty.ts`, that of the PCs with the server of A-37 `ts/formation-consent-settings.ts`, that of the pairing of this machine's Orca `ts/orca-pairing-settings.ts`), the menu (`ts/settings-menu.ts`: the order and the on and off of the sidebar's screens), the fonts (`ts/font-settings.ts`), the updater and the log (`ts/log-settings.ts`), each with its card.
 // The heading and the tabs stay at the top while a card scrolls. A token is never shown; Rust keeps it in the keychain.
 import type { HiddenChannel } from "./bindings/HiddenChannel";
 import type { SlackLoad } from "./bindings/SlackLoad";
@@ -27,7 +27,7 @@ import { logError, showFailure } from "./error-card.js";
 
 let settingsSeq = 0;
 
-export const SETTINGS_TABS = ["google", "calendar", "todoist", "slack", "notion", "claude", "skill", "orca", "font", "update", "log"] as const;
+export const SETTINGS_TABS = ["google", "calendar", "todoist", "slack", "notion", "claude", "skill", "orca", "menu", "font", "update", "log"] as const;
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 // The tab shown; the settings screen opens on Google unless the way in names another.

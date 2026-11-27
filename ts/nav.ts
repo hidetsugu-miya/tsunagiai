@@ -138,7 +138,7 @@ const MENU_BUTTONS: Record<MenuScreen, string> = {
 let shown: MenuScreen[] = ["mail", "calendar", "todo", "slack", "orca", "database"];
 
 // Puts the screens in the saved order above the bottom group, takes off the ones that are off, and gives each shown button its number for the tooltip and the keys.
-function drawMenu(items: MenuEntry[]) {
+export function drawMenu(items: MenuEntry[]) {
   shown = items.filter((entry) => entry.enabled).map((entry) => entry.screen);
   for (const { screen, enabled } of items) {
     const button = $(MENU_BUTTONS[screen]);
