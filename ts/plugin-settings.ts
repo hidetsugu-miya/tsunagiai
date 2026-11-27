@@ -1,5 +1,5 @@
 // The Plugins tab of the settings screen (A-51): at the left the plugins of the owner (`~/.local/share/tsunagiai/plugins/` of this PC) with their skills as `plugin:skill`, and a plus that makes a new plugin;
-// in the middle the tabs of the selected plugin, each a pane of Claude Code (A-36, `ts/claude-code.ts`) that runs in the plugin's folder with Claude Code's own tools and the `manual` permission mode, and a plus that adds a tab; at the right (`plugin-files`) the place of the file tree of the plugin's folder.
+// in the middle the tabs of the selected plugin, each a pane of Claude Code (A-36, `ts/claude-code.ts`) that runs in the plugin's folder with Claude Code's own tools and the `manual` permission mode, and a plus that adds a tab, and a file tab for each file opened from the tree (its path and a ✕; the editor is `ts/plugin-files.ts`, A-51, #1537); at the right (`plugin-files`) the file tree of the plugin's folder.
 // Rust reads the folder and makes a plugin (`plugins_list`, `plugin_create`, `src-tauri/src/plugins.rs`) and starts the pane in the plugin's folder: the pane's id is `plugin:{folder}/{n}`, and Rust takes the folder out of it and checks it (`claude_code_start`); no path comes from here.
 // The tabs belong to the plugin: another plugin shows its own tabs, and the processes of the others go on. The first pane of a plugin starts when the plugin is selected and the tab is in view.
 // The terminal is hidden while the tab or the settings are left (the processes go on), and a plugin that left the folder takes its panes with it.
@@ -9,10 +9,13 @@ import { $, onEnter, tag } from "./dom.js";
 import { logError, showFailure } from "./error-card.js";
 import { CLOSE_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
+import { closeEditor, dropPlugin, initPluginFiles, isDirty, openEditor, rereadFiles, showEditor, showTree, watchFiles } from "./plugin-files.js";
 
+// A tab of Claude Code, or (`file`: the path from the plugin's folder) the editor of a file.
 interface PaneTab {
   id: string;
   title: string;
+  file?: string;
 }
 
 // The tabs a plugin has open, the one shown, and how many it has opened (the number in the id of the next pane).
@@ -46,26 +49,51 @@ function openTab(folder: string) {
   open.set(folder, o);
 }
 
-// Ends the pane `id` of the plugin `folder` and takes its tab away; the tab next to it is shown in its place.
-function closeTab(folder: string, id: string) {
+// Opens the file `relative` of the plugin `folder` in a tab of its own, or shows its tab when it is open.
+function openFile(folder: string, relative: string) {
+  const o = open.get(folder);
+  if (!o) return;
+  const id = `file:${relative}`;
+  if (!o.tabs.some((t) => t.id === id)) o.tabs.push({ id, title: relative, file: relative });
+  o.active = id;
+  openEditor(folder, relative);
+  if (folder === selected) drawTabs();
+  syncPane();
+}
+
+// Ends the pane `id` of the plugin `folder` (for a file, closes its editor, which saves the typing first and stays when that fails) and takes its tab away; the tab next to it is shown in its place.
+async function closeTab(folder: string, id: string) {
+  const tab = open.get(folder)?.tabs.find((t) => t.id === id);
+  if (!tab) return;
+  if (tab.file !== undefined) {
+    if (!(await closeEditor(folder, tab.file))) return;
+  } else {
+    closeClaudeCode(id, OWNER);
+  }
+  // The tabs may have changed while the editor saved.
   const o = open.get(folder);
   const at = o?.tabs.findIndex((t) => t.id === id) ?? -1;
   if (!o || at < 0) return;
-  closeClaudeCode(id, OWNER);
   o.tabs.splice(at, 1);
   if (o.active === id) o.active = (o.tabs[at] ?? o.tabs[at - 1])?.id ?? "";
   if (folder === selected) drawTabs();
   syncPane();
 }
 
-// Shows the terminal of the tab shown while the tab of the settings is in view, and hides them (the processes go on) while it is not: another tab or screen is shown, or the window is hidden. The first show of a pane starts Claude Code.
+// Shows the editor of the file tab that is shown, or the terminal of the Claude Code tab that is shown, while the tab of the settings is in view, and hides them (the processes go on) while it is not: another tab or screen is shown, or the window is hidden. The first show of a pane starts Claude Code. The clock that reads the files again runs only while the tab is in view and a plugin is selected.
 function syncPane() {
   const host = $("plugin-term");
   const folder = selected;
   const o = folder === null ? undefined : open.get(folder);
-  if (folder === null || !o?.active || document.hidden || host.getClientRects().length === 0) return hideClaudeCode(OWNER);
+  const file = o?.tabs.find((t) => t.id === o.active)?.file;
+  // The terminal gives its place to the editor of a file tab.
+  host.hidden = file !== undefined;
+  const inView = folder !== null && !document.hidden && $("plugin-files").getClientRects().length > 0;
+  watchFiles(inView);
+  showEditor(inView ? folder : null, file ?? null);
+  if (folder === null || !o?.active || file !== undefined || !inView || host.getClientRects().length === 0) return hideClaudeCode(OWNER);
   const id = o.active;
-  if (!isClaudeCodeShowing(host, id, OWNER)) showClaudeCode(host, { id, builtinTools: true, onEnd: () => closeTab(folder, id) }, OWNER);
+  if (!isClaudeCodeShowing(host, id, OWNER)) showClaudeCode(host, { id, builtinTools: true, onEnd: () => void closeTab(folder, id) }, OWNER);
 }
 
 // The tabs of the plugin selected, marked as the tabs of the Orca work pane are, and the plus that adds one.
@@ -81,18 +109,21 @@ function drawTabs() {
       select.setAttribute("role", "tab");
       select.setAttribute("aria-selected", String(t.id === o?.active));
       select.append(tag("span", "orca-tab-title", t.title));
+      if (folder !== null && t.file !== undefined && isDirty(folder, t.file)) select.append(tag("span", "orca-tab-dirty"));
       select.onclick = () => {
         if (!o) return;
         o.active = t.id;
         drawTabs();
         syncPane();
+        // A tab shown again may hold what Claude Code of another tab wrote meanwhile.
+        rereadFiles();
       };
       // The close button is beside the tab, not in it, so that pressing it never selects the tab.
       const close = tag("button", "icon-btn orca-tab-close");
       close.type = "button";
       close.setAttribute("aria-label", "閉じる");
       close.innerHTML = CLOSE_SVG;
-      close.onclick = () => folder !== null && closeTab(folder, t.id);
+      close.onclick = () => folder !== null && void closeTab(folder, t.id);
       wrap.append(select, close);
       return wrap;
     }),
@@ -122,6 +153,7 @@ function selectPlugin(folder: string) {
   if (!open.get(folder)?.tabs.length) openTab(folder);
   drawList();
   drawTabs();
+  showTree(plugins.find((p) => p.folder === folder) ?? null);
   syncPane();
 }
 
@@ -138,12 +170,14 @@ async function loadPlugins() {
   // A plugin that left the folder takes its panes (and their processes) with it.
   for (const [folder, o] of [...open]) {
     if (list.some((p) => p.folder === folder)) continue;
-    for (const t of o.tabs) closeClaudeCode(t.id, OWNER);
+    for (const t of o.tabs) if (t.file === undefined) closeClaudeCode(t.id, OWNER);
     open.delete(folder);
+    dropPlugin(folder);
     if (selected === folder) selected = null;
   }
   drawList();
   drawTabs();
+  showTree(plugins.find((p) => p.folder === selected) ?? null);
   syncPane();
 }
 
@@ -154,7 +188,10 @@ export function showPluginsTab() {
 }
 
 // The tab or the settings are left.
-export const hidePluginClaude = () => hideClaudeCode(OWNER);
+export function hidePluginClaude() {
+  hideClaudeCode(OWNER);
+  watchFiles(false);
+}
 
 async function createPlugin() {
   const input = $<HTMLInputElement>("plugin-new-name");
@@ -198,7 +235,23 @@ export function initPluginSettings() {
     drawTabs();
     syncPane();
   };
+  initPluginFiles({
+    open: openFile,
+    changed: () => drawTabs(),
+    // A file that cannot be read is given back: its tab goes.
+    failed: (folder, relative) => {
+      const o = open.get(folder);
+      const at = o?.tabs.findIndex((t) => t.file === relative) ?? -1;
+      if (!o || at < 0) return;
+      const [gone] = o.tabs.splice(at, 1);
+      if (o.active === gone.id) o.active = (o.tabs[at] ?? o.tabs[at - 1])?.id ?? "";
+      if (folder === selected) drawTabs();
+      syncPane();
+    },
+  });
   document.addEventListener("visibilitychange", syncPane);
   // Another screen leaves through `ts/nav.ts`, which this tab is not in: the host loses its size then, and gets it back when the settings are shown on this tab again.
   new ResizeObserver(syncPane).observe($("plugin-term"));
+  // The terminal's host has no size while a file tab holds its place, so the tree's is watched too.
+  new ResizeObserver(syncPane).observe($("plugin-files"));
 }

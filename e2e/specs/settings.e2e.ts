@@ -1,5 +1,6 @@
 import type { NotionAccount } from "../../ts/bindings/NotionAccount";
 import type { SentryConnection } from "../../ts/bindings/SentryConnection";
+import { typeIn } from "../orca-support";
 import { account, boot, copiedTexts, logLine, skill, stubClipboard, checked, chooseAppearance, chooseOption, fontSettings, formationConsent, chooseTheme, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, emitEvent, holds, inbox, mock, rejects, onceId, release, sendClaudeCode, slackLoad, socketStatus, workspace, terminalThemes, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf, CARD, CARDS, waitForLog } from "../support";
 
 type Tab = "google" | "calendar" | "todoist" | "slack" | "notion" | "claude" | "skill" | "plugins" | "orca" | "menu" | "font" | "update" | "log";
@@ -2988,7 +2989,7 @@ describe("settings: log (the ログ tab, A-3, A-28)", () => {
 
 describe("settings: plugins (the Plugins tab, A-51)", () => {
   // A plugin as `plugins_list` answers it.
-  const plugin = (folder: string, skills: string[] = [], name = folder) => ({ folder, name, skills });
+  const plugin = (folder: string, skills: string[] = [], name = folder) => ({ folder, name, path: `~/.local/share/tsunagiai/plugins/${folder}`, skills });
   const rows = () => textsOf("#plugin-list .plugin-row");
   const row = (n: number) => $(`#plugin-list .plugin-item:nth-child(${n}) .plugin-row`);
   const tabs = () => textsOf("#plugin-tabs .orca-tab-title");
@@ -3188,5 +3189,215 @@ describe("settings: plugins (the Plugins tab, A-51)", () => {
     await browser.keys("Escape");
     await expect($("#plugin-new-row")).not.toBeDisplayed();
     await expect($("#plugin-new-name")).toHaveValue("");
+  });
+
+  // A-51 (#1537): the file tree at the right and the editors of its files in the tabs.
+  const entry = (name: string, folder = false) => ({ name, folder });
+  const TREE = { "": [entry(".claude-plugin", true), entry("skills", true), entry(".mcp.json"), entry("README.md")], skills: [entry("review", true)], "skills/review": [entry("SKILL.md")] };
+  const names = () => textsOf("#plugin-tree .orca-file-name");
+  const treeRow = (path: string) => $(`#plugin-tree .orca-file[data-path="${path}"]`);
+  const text = (content: string, signature = "sig-1", language = "markdown") => ({ content, crlf: false, signature, language });
+  const saved = (signature: string) => ({ state: "saved", signature });
+  // The page's own double press: the driver's cannot be told from two presses in a row.
+  const doublePress = (path: string) =>
+    browser.execute((p) => {
+      document.querySelector(`#plugin-tree .orca-file[data-path="${p}"]`)!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+    }, path);
+  // The text of the editor that is shown, all of it (the page draws only the lines near the window).
+  const shownText = () =>
+    browser.execute(() => {
+      const dom = document.querySelector("#plugin-editors .orca-edit:not([hidden]) .cm-editor");
+      return window.__e2e_editors__.find((editor) => editor.dom === dom)?.text() ?? "";
+    });
+  const waitForShown = (content: string) => browser.waitUntil(async () => (await shownText()) === content, { timeoutMsg: `the editor never held ${JSON.stringify(content)}` });
+  const COMMAND = "\u{E03D}";
+  const tabClose = (n: number) => $(`#plugin-tabs .orca-tab:nth-child(${n}) .orca-tab-close`);
+
+  // The app with the plugin alpha selected and its tree read.
+  async function openTree(dirs: Record<string, unknown> = TREE) {
+    await openPlugins([plugin("alpha", ["review"]), plugin("beta")], { plugin_dirs: dirs });
+    await waitForCount("#plugin-list .plugin-row", 2);
+    await row(1).click();
+    await waitForCount("#plugin-tree .orca-file", (dirs[""] as unknown[]).length);
+  }
+
+  // The app with README.md opened as a tab.
+  async function openReadme(content = "# Readme\n") {
+    await openTree();
+    await mock("plugin_file_read", text(content));
+    await doublePress("README.md");
+    await waitForShown(content);
+  }
+
+  it("draws the tree of the plugin selected, with the path of its folder, and none before one is selected", async () => {
+    await openPlugins([plugin("alpha"), plugin("beta")], { plugin_dirs: TREE });
+    await waitForCount("#plugin-list .plugin-row", 2);
+    expect(await count("#plugin-tree .orca-file")).toBe(0);
+    await expect($("#plugin-files-reload")).toBeDisabled();
+    await row(1).click();
+    await waitForCount("#plugin-tree .orca-file", 4);
+    expect(await names()).toEqual([".claude-plugin", "skills", ".mcp.json", "README.md"]);
+    expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#plugin-tree .orca-file")].map((r) => r.dataset.kind))).toEqual(["dir", "dir", "file", "file"]);
+    expect(await textsOf("#plugin-files-path")).toEqual(["~/.local/share/tsunagiai/plugins/alpha"]);
+    await expect($("#plugin-files-reload")).toBeEnabled();
+    await expect($("#plugin-files-reload")).toHaveAttribute("aria-label", "読み直す");
+    expect(await callsOf("plugin_files")).toEqual([{ folder: "alpha", dir: "" }]);
+    // Another plugin has its own tree.
+    await mock("plugin_files", [entry("agents", true)]);
+    await row(2).click();
+    await waitForCount("#plugin-tree .orca-file", 1);
+    expect(await names()).toEqual(["agents"]);
+    expect(await textsOf("#plugin-files-path")).toEqual(["~/.local/share/tsunagiai/plugins/beta"]);
+    expect(await callsOf("plugin_files")).toEqual([{ folder: "beta", dir: "" }]);
+  });
+
+  it("opens a folder with a press and reads it, closes it with no read, and reads the open folders again with the button", async () => {
+    await openTree();
+    await treeRow("skills").click();
+    await waitForCount("#plugin-tree .orca-file", 5);
+    expect(await names()).toEqual([".claude-plugin", "skills", "review", ".mcp.json", "README.md"]);
+    await expect(treeRow("skills")).toHaveAttribute("aria-expanded", "true");
+    expect(await browser.execute(() => document.querySelector<HTMLElement>('#plugin-tree .orca-file[data-path="skills/review"]')!.style.getPropertyValue("--depth"))).toBe("1");
+    expect(await callsOf("plugin_files")).toEqual([{ folder: "alpha", dir: "" }, { folder: "alpha", dir: "skills" }]);
+    await treeRow("skills/review").click();
+    await waitForCount("#plugin-tree .orca-file", 6);
+    await treeRow("skills").click();
+    await waitForCount("#plugin-tree .orca-file", 4);
+    await expect(treeRow("skills")).toHaveAttribute("aria-expanded", "false");
+    expect((await callsOf("plugin_files")).length).toBe(3);
+    // Open again, then the button reads the plugin's folder and each open one once more.
+    await treeRow("skills").click();
+    await waitForCount("#plugin-tree .orca-file", 6);
+    const again = await mock("plugin_files", [entry("skills", true), entry("NEW.md")]);
+    await browser.execute(() => document.getElementById("plugin-files-reload")!.click());
+    await waitForCalls(again, 3);
+    expect((await callsOf(again)).map((c) => (c as { dir: string }).dir).sort()).toEqual(["", "skills", "skills/review"]);
+  });
+
+  it("opens a file on a double press as a tab with its text, and a single press only selects it", async () => {
+    await openTree();
+    const read = await mock("plugin_file_read", text("# Readme\n"));
+    await treeRow("README.md").click();
+    await expect(treeRow("README.md")).toHaveAttribute("data-selected", "true");
+    await browser.pause(300);
+    expect(await callsOf(read)).toEqual([]);
+    await doublePress("README.md");
+    expect(await waitForCalls(read)).toEqual([{ folder: "alpha", path: "README.md" }]);
+    await waitForShown("# Readme\n");
+    expect(await tabs()).toEqual(["Claude Code", "README.md"]);
+    await expect($("#plugin-tabs .orca-tab:nth-child(2) .orca-tab-btn")).toHaveAttribute("aria-selected", "true");
+    await expect($(term)).not.toBeDisplayed();
+    await expect(treeRow("README.md")).toHaveAttribute("data-open", "true");
+    expect(await textsOf("#plugin-editors .orca-edit:not([hidden]) .orca-edit-path")).toEqual(["README.md"]);
+    // The tab of Claude Code shows its terminal again, with no new start, and the editor is kept.
+    await $("#plugin-tabs .orca-tab:nth-child(1) .orca-tab-btn").click();
+    await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
+    await expect($("#plugin-editors")).not.toBeDisplayed();
+    // The same file again shows its tab: no second tab and no second read.
+    await doublePress("README.md");
+    await waitForShown("# Readme\n");
+    expect(await tabs()).toEqual(["Claude Code", "README.md"]);
+    expect(await count("#plugin-editors .orca-edit")).toBe(1);
+    expect((await callsOf("claude_code_start")).length).toBe(1);
+  });
+
+  it("shows the file that cannot be read as a card and gives its tab back", async () => {
+    await openTree();
+    await mock("plugin_file_read", rejects("バイナリのファイルは開けません"));
+    await doublePress("README.md");
+    await expect($(CARD)).toHaveText("バイナリのファイルは開けません");
+    await waitForCount("#plugin-tabs .orca-tab", 1);
+    expect(await tabs()).toEqual(["Claude Code"]);
+    await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
+    expect(await count("#plugin-editors .orca-edit")).toBe(0);
+  });
+
+  it("saves with Command and S, with the signature that was read and never by itself, and marks the tab until then", async () => {
+    await openReadme();
+    const write = await mock("plugin_file_write", saved("sig-2"));
+    await typeIn("x");
+    await waitForCount("#plugin-tabs .orca-tab-dirty", 1);
+    await expect($("#plugin-editors .orca-edit:not([hidden]) .orca-edit-state")).toHaveText("未保存");
+    await browser.pause(1500);
+    expect(await callsOf(write)).toEqual([]);
+    await browser.keys([COMMAND, "s"]);
+    expect(await waitForCalls(write)).toEqual([{ folder: "alpha", path: "README.md", content: "# Readme\nx", crlf: false, signature: "sig-1" }]);
+    await waitForCount("#plugin-tabs .orca-tab-dirty", 0);
+    await expect($("#plugin-editors .orca-edit:not([hidden]) .orca-edit-state")).toHaveText("保存しました");
+    // The signature the save answered is the next save's.
+    await typeIn("y");
+    await browser.keys([COMMAND, "s"]);
+    expect(((await waitForCalls(write, 2))[1] as { signature: string; content: string })).toMatchObject({ signature: "sig-2", content: "# Readme\nxy" });
+  });
+
+  it("says a refused save on a card, writes nothing more and keeps the typing, and closes the tab with it", async () => {
+    await openReadme();
+    const write = await mock("plugin_file_write", { state: "changed", signature: "sig-1" });
+    await typeIn("x");
+    await browser.keys([COMMAND, "s"]);
+    await waitForCalls(write);
+    await waitForText(CARD, "ディスクのファイルが変わっています");
+    await expect($("#plugin-editors .orca-edit:not([hidden]) .orca-edit-state")).toHaveText("ディスクのファイルが変わっています");
+    expect(await shownText()).toBe("# Readme\nx");
+    expect(await count("#plugin-tabs .orca-tab-dirty")).toBe(1);
+    // The tab goes with the typing: the refusal stands and nothing is tried again.
+    await tabClose(2).click();
+    await waitForCount("#plugin-tabs .orca-tab", 1);
+    expect((await callsOf(write)).length).toBe(1);
+    expect(await count("#plugin-editors .orca-edit")).toBe(0);
+  });
+
+  it("saves the typing when its tab is closed, and keeps the tab when that save fails", async () => {
+    await openReadme();
+    const write = await mock("plugin_file_write", rejects("README.md を保存できません"));
+    await typeIn("x");
+    await tabClose(2).click();
+    await waitForCalls(write);
+    await waitForText(CARD, "README.md を保存できません");
+    expect(await tabs()).toEqual(["Claude Code", "README.md"]);
+    expect(await shownText()).toBe("# Readme\nx");
+    // Saved by hand, the tab closes at once with nothing more to write.
+    await mock("plugin_file_write", saved("sig-2"));
+    await browser.keys([COMMAND, "s"]);
+    await waitForCalls(write);
+    await waitForCount("#plugin-tabs .orca-tab-dirty", 0);
+    await tabClose(2).click();
+    await waitForCount("#plugin-tabs .orca-tab", 1);
+    expect(await callsOf(write)).toEqual([{ folder: "alpha", path: "README.md", content: "# Readme\nx", crlf: false, signature: "sig-1" }]);
+  });
+
+  it("saves the typing of a file when its tab is closed", async () => {
+    await openReadme();
+    const write = await mock("plugin_file_write", saved("sig-2"));
+    await typeIn("x");
+    await tabClose(2).click();
+    await waitForCount("#plugin-tabs .orca-tab", 1);
+    expect(await callsOf(write)).toEqual([{ folder: "alpha", path: "README.md", content: "# Readme\nx", crlf: false, signature: "sig-1" }]);
+    expect(await count("#plugin-editors .orca-edit")).toBe(0);
+  });
+
+  it("reads the tree and an open file again by the clock, and never puts a text over typing", async () => {
+    await openReadme();
+    await mock("plugin_file_read", text("# Changed\n", "sig-2"));
+    await mock("plugin_files", [entry("NEW.md")]);
+    await waitForShown("# Changed\n");
+    await waitForCount("#plugin-tree .orca-file", 1);
+    expect(await names()).toEqual(["NEW.md"]);
+    // Typing is not replaced, whatever the disk holds.
+    await typeIn("x");
+    const read = await mock("plugin_file_read", text("# Third\n", "sig-3"));
+    await browser.pause(4500);
+    expect(await shownText()).toBe("# Changed\nx");
+    expect(await callsOf(read)).toEqual([]);
+  });
+
+  it("reads nothing while the tab of the settings is left, and again when it is shown", async () => {
+    await openTree();
+    const files = await mock("plugin_files", TREE[""]);
+    await openTab("google");
+    await browser.pause(4500);
+    expect(await callsOf(files)).toEqual([]);
+    await openTab("plugins");
+    await waitForCalls(files);
   });
 });

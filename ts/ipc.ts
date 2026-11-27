@@ -71,6 +71,7 @@ import type { HandoffKind } from "./bindings/HandoffKind";
 import type { HandoffSummary } from "./bindings/HandoffSummary";
 import type { ScreenAnswer } from "./bindings/ScreenAnswer";
 import type { Plugin } from "./bindings/Plugin";
+import type { PluginEntry } from "./bindings/PluginEntry";
 import type { Skill } from "./bindings/Skill";
 import type { ClaudeCodePermissionMode } from "./bindings/ClaudeCodePermissionMode";
 import type { SkillScreen } from "./bindings/SkillScreen";
@@ -634,6 +635,12 @@ export interface Commands {
   plugins_list: { args: undefined; result: Plugin[] };
   // A-51: makes a plugin of that name (1 to 64 of a to z, 0 to 9 and `-`, starting with a letter or a digit) with `.claude-plugin/plugin.json`, and answers it. A name that is not valid or is taken is an error in Japanese.
   plugin_create: { args: { name: string }; result: Plugin };
+  // A-51: the entries of the folder `dir` of the plugin `folder` (`dir` is from the plugin's folder; "" is that folder), the folders first, with `.git` and `.DS_Store` left out. A path that leaves the plugin's folder (also by a link) is an error in Japanese.
+  plugin_files: { args: { folder: string; dir: string }; result: PluginEntry[] };
+  // A-51: the text of the file `path` of the plugin `folder` for the editor (LF line ends, `crlf` says the file has CRLF), its language and its signature. A file over 2 MiB, one that is not UTF-8 or binary, and one with mixed line ends are errors in Japanese.
+  plugin_file_read: { args: { folder: string; path: string }; result: OrcaFileText };
+  // A-51: saves `content` over the file only when the disk still holds the text whose `signature` is given; the state says whether it was written (`saved`, with the new signature) or why not (`changed`, `missing`, `not-utf8`).
+  plugin_file_write: { args: { folder: string; path: string; content: string; crlf: boolean; signature: string }; result: OrcaSaved };
   // A-28: adds a line to the app's log (`app-log.jsonl` in the config folder): the weight, the place and a few words of what happened, never a token, a mail, a message, what a terminal printed or what was typed. The text is cut to 500 characters and a word shaped like a token is masked. An empty text is an error in Japanese. Answers null.
   log_write: { args: { level: LogLevel; source: string; message: string }; result: null };
   // A-28: the lines of the log of the last 30 days, the newest first.

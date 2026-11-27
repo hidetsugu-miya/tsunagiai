@@ -1,19 +1,31 @@
 //! A-41: the folder of the owner's plugins, `~/.local/share/tsunagiai/plugins/` of this PC.
 //! Each folder in it is one plugin (`.claude-plugin/plugin.json`, its skills and agents). The leader of a formation and its Claude Code children are given the folder as a whole with `claude --plugin-dir {folder}`, which loads each child folder as a plugin (`claude --help`: "a folder of plugins loads each child").
-//! The app writes none of its files into it but the new plugin that the Plugins tab of the settings makes (A-51, `plugin_create`: `{name}/.claude-plugin/plugin.json`): the owner makes the plugins. It makes the folder when it is missing, lists the plugins and their skills for that tab (`plugins_list`), and reads `.mcp.json` of each plugin to find the plugins that have the Figma server (`figma_permissions`).
+//! The app writes none of its files into it but the new plugin that the Plugins tab of the settings makes (A-51, `plugin_create`: `{name}/.claude-plugin/plugin.json`) and the file that the owner saves in the editor of that tab (`plugin_file_write`): the owner makes the plugins. It makes the folder when it is missing, lists the plugins and their skills for that tab (`plugins_list`), and reads `.mcp.json` of each plugin to find the plugins that have the Figma server (`figma_permissions`).
+//! The file tree and the editor of that tab (A-51) read and write the files of one plugin's folder only (`plugin_files`, `plugin_file_read`, `plugin_file_write`; `resolve` keeps every path inside the folder, a link that leads out included).
 
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 #[cfg(test)]
 use ts_rs::TS;
+
+use crate::orca_files::{
+    check_written, disk_text, editor_text, OrcaFileText, OrcaSaveState, OrcaSaved, NOT_UTF8,
+};
 
 /// The folder of the plugins in the home folder, as names of folders.
 const FOLDERS: [&str; 4] = [".local", "share", "tsunagiai", "plugins"];
 
 /// A-51: the longest name of a new plugin.
 const NAME_MAX: usize = 64;
+
+/// A-51: the largest file of a plugin that the editor opens and saves.
+const FILE_MAX: usize = 2 * 1024 * 1024;
+
+/// A-51: the names that the file tree leaves out.
+const TREE_HIDDEN: [&str; 2] = [".git", ".DS_Store"];
 
 /// The server of a plugin's `.mcp.json` whose tools a child's settings allow and deny (A-41, #1162).
 const FIGMA_SERVER: &str = "figma";
@@ -90,7 +102,7 @@ pub fn figma_permissions(dir: &Path) -> Value {
     crate::formation_assets::figma_permissions_of(&figma_plugins(dir))
 }
 
-/// One plugin of the folder (A-51): `folder` is its folder's name, `name` is the name Claude Code calls it by (`manifest_name`, else the folder's), and `skills` are the folders of `skills/` that hold a `SKILL.md`, by name.
+/// One plugin of the folder (A-51): `folder` is its folder's name, `name` is the name Claude Code calls it by (`manifest_name`, else the folder's), `path` is where the folder is, for the head of the file tree (`~/.local/share/tsunagiai/plugins/{folder}`), and `skills` are the folders of `skills/` that hold a `SKILL.md`, by name.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -98,7 +110,13 @@ pub fn figma_permissions(dir: &Path) -> Value {
 pub struct Plugin {
     pub folder: String,
     pub name: String,
+    pub path: String,
     pub skills: Vec<String>,
+}
+
+/// `~/.local/share/tsunagiai/plugins/{folder}`, as the head of the file tree shows it.
+fn shown_path(folder: &str) -> String {
+    format!("~/{}/{folder}", FOLDERS.join("/"))
 }
 
 /// The plugins of `dir`, in order of folder name: each folder that does not start with a dot (a link to a folder counts). A folder that cannot be read has no skills.
@@ -116,6 +134,7 @@ fn list_plugins(dir: &Path) -> Vec<Plugin> {
             Plugin {
                 name: manifest_name(&path).unwrap_or_else(|| folder.clone()),
                 skills: skills_of(&path),
+                path: shown_path(&folder),
                 folder,
             }
         })
@@ -175,6 +194,7 @@ fn create_plugin(dir: &Path, name: &str) -> Result<Plugin, String> {
     Ok(Plugin {
         folder: name.to_owned(),
         name: name.to_owned(),
+        path: shown_path(name),
         skills: Vec::new(),
     })
 }
@@ -188,6 +208,149 @@ pub fn plugin_dir(root: &Path, folder: &str) -> Result<PathBuf, String> {
         return Ok(path);
     }
     Err(format!("プラグイン「{folder}」がありません"))
+}
+
+/// One entry of a folder of a plugin (A-51): its name, and whether it is a folder (a link to a folder is one).
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+pub struct PluginEntry {
+    pub name: String,
+    pub folder: bool,
+}
+
+/// The real path of `relative` (from the plugin folder `root`; `allow_empty`: the empty one is `root` itself), kept inside `root`. `relative` comes from the screen, so it is checked as a path of the worktrees is (`check_written`: no empty part, `.`, `..`, `\`, control character such as NUL, and no absolute path, whose first part is empty), and the path that is found after the links are followed must still be under the real path of `root`: a link that leads out is refused, whatever it points at. `None` is a path that is not there (a link that leads nowhere too).
+fn resolve(root: &Path, relative: &str, allow_empty: bool) -> Result<Option<PathBuf>, String> {
+    check_written(relative, allow_empty)?;
+    let root = root
+        .canonicalize()
+        .map_err(|e| format!("プラグインのフォルダを開けません: {e}"))?;
+    let real = match root.join(relative).canonicalize() {
+        Ok(real) => real,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("{relative} を開けません: {e}")),
+    };
+    if !real.starts_with(&root) {
+        return Err("プラグインのフォルダの外は開けません".to_owned());
+    }
+    Ok(Some(real))
+}
+
+/// The entries of the folder `relative` of the plugin folder `root` (the empty one is the plugin's own folder): the folders first and then the files, each by name (the case of a letter breaks a tie last). `.git` and `.DS_Store` are left out and the other dot names are shown (`.claude-plugin`, `.mcp.json`).
+fn list_dir(root: &Path, relative: &str) -> Result<Vec<PluginEntry>, String> {
+    let dir = resolve(root, relative, true)?.ok_or("フォルダが見つかりません")?;
+    if !dir.is_dir() {
+        return Err(format!("{relative} はフォルダではありません"));
+    }
+    let entries = std::fs::read_dir(&dir).map_err(|e| format!("フォルダを読めません: {e}"))?;
+    let mut list: Vec<PluginEntry> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            (!TREE_HIDDEN.contains(&name.as_str())).then(|| PluginEntry {
+                folder: entry.path().is_dir(),
+                name,
+            })
+        })
+        .collect();
+    list.sort_by(|a, b| {
+        b.folder
+            .cmp(&a.folder)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    Ok(list)
+}
+
+/// The signature of a text: SHA-256 of it, in hex. The save compares it with the file on the disk, so a file that another process changed is never overwritten.
+fn signature_of(text: &str) -> String {
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn too_large() -> String {
+    format!(
+        "{} MiB を超えるファイルは開けません",
+        FILE_MAX / 1024 / 1024
+    )
+}
+
+/// The text of the file `relative` for the editor: the whole file as UTF-8 up to `FILE_MAX`, with LF line ends (`crlf` says it has CRLF), its language and its signature. A file that is too large, is not UTF-8 or holds a NUL (a binary file), and one whose line ends are mixed, is refused in Japanese.
+fn read_file(root: &Path, relative: &str) -> Result<OrcaFileText, String> {
+    let path = resolve(root, relative, false)?.ok_or("ファイルが見つかりません")?;
+    let meta = std::fs::metadata(&path).map_err(|e| format!("{relative} を読めません: {e}"))?;
+    if !meta.is_file() {
+        return Err(format!("{relative} はファイルではありません"));
+    }
+    if meta.len() > FILE_MAX as u64 {
+        return Err(too_large());
+    }
+    let bytes = std::fs::read(&path).map_err(|e| format!("{relative} を読めません: {e}"))?;
+    let text = String::from_utf8(bytes).map_err(|_| NOT_UTF8.to_owned())?;
+    if text.contains('\0') {
+        return Err("バイナリのファイルは開けません".to_owned());
+    }
+    editor_text(&text, relative, signature_of(&text))
+}
+
+/// Saves `content` (LF line ends; `crlf` brings the file's own back) over the file `relative` when the disk still holds the text whose signature is `signature`: else nothing is written and the state says why (`changed`: another text, `missing`: no file, `not-utf8`). The text goes to a temporary file beside the file and is renamed over it, so a failed write leaves the file as it was, and the file keeps its mode.
+fn write_file(
+    root: &Path,
+    relative: &str,
+    content: &str,
+    crlf: bool,
+    signature: &str,
+) -> Result<OrcaSaved, String> {
+    if content.len() > FILE_MAX {
+        return Err(too_large());
+    }
+    let refused = |state| {
+        Ok(OrcaSaved {
+            state,
+            signature: signature.to_owned(),
+        })
+    };
+    let Some(path) = resolve(root, relative, false)? else {
+        return refused(OrcaSaveState::Missing);
+    };
+    let current = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return refused(OrcaSaveState::Missing)
+        }
+        Err(e) => return Err(format!("{relative} を読めません: {e}")),
+    };
+    let Ok(current) = String::from_utf8(current) else {
+        return refused(OrcaSaveState::NotUtf8);
+    };
+    if signature_of(&current) != signature {
+        return refused(OrcaSaveState::Changed);
+    }
+    let text = disk_text(content, crlf);
+    replace_file(&path, text.as_bytes())
+        .map_err(|e| format!("{relative} を保存できません: {e}"))?;
+    Ok(OrcaSaved {
+        state: OrcaSaveState::Saved,
+        signature: signature_of(&text),
+    })
+}
+
+/// Writes `bytes` to a temporary file beside `path`, gives it the mode of `path` and renames it over `path`; the temporary file is removed when a step fails.
+fn replace_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let temp = path.with_file_name(format!(".{name}.tsunagiai-{}.tmp", std::process::id()));
+    let written = std::fs::write(&temp, bytes)
+        .and_then(|()| std::fs::set_permissions(&temp, std::fs::metadata(path)?.permissions()))
+        .and_then(|()| std::fs::rename(&temp, path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    written
 }
 
 /// The plugins of this PC with their skills (A-51); the folder is made when it is missing.
@@ -204,6 +367,43 @@ pub async fn plugin_create(name: String) -> Result<Plugin, String> {
     tokio::task::spawn_blocking(move || create_plugin(&prepared_dir()?, &name))
         .await
         .map_err(|e| e.to_string())?
+}
+
+/// The folder of the plugin `folder` of this PC (A-51), checked as one folder name of the plugins' folder.
+fn plugin_root(folder: &str) -> Result<PathBuf, String> {
+    plugin_dir(&plugins_dir()?, folder)
+}
+
+/// The entries of the folder `dir` of the plugin `folder` (A-51; `dir` is from the plugin's folder, the empty one is that folder), the folders first. A path that leaves the plugin's folder is refused.
+#[tauri::command]
+pub async fn plugin_files(folder: String, dir: String) -> Result<Vec<PluginEntry>, String> {
+    tokio::task::spawn_blocking(move || list_dir(&plugin_root(&folder)?, &dir))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// The text of the file `path` of the plugin `folder` (A-51) for the editor, with its signature; a file that is too large or is not text is refused in Japanese.
+#[tauri::command]
+pub async fn plugin_file_read(folder: String, path: String) -> Result<OrcaFileText, String> {
+    tokio::task::spawn_blocking(move || read_file(&plugin_root(&folder)?, &path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Saves `content` over the file `path` of the plugin `folder` (A-51) when the disk still holds the text whose `signature` is given, and answers what happened. It is not tried again: a refusal is a state, and a failure carries its message.
+#[tauri::command]
+pub async fn plugin_file_write(
+    folder: String,
+    path: String,
+    content: String,
+    crlf: bool,
+    signature: String,
+) -> Result<OrcaSaved, String> {
+    tokio::task::spawn_blocking(move || {
+        write_file(&plugin_root(&folder)?, &path, &content, crlf, &signature)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]
@@ -490,6 +690,7 @@ mod tests {
             Plugin {
                 folder: "client-a".to_owned(),
                 name: "client-a".to_owned(),
+                path: "~/.local/share/tsunagiai/plugins/client-a".to_owned(),
                 skills: Vec::new()
             }
         );
@@ -545,6 +746,296 @@ mod tests {
             let error = plugin_dir(&root, bad).unwrap_err();
             assert!(error.contains("がありません"), "{bad:?}: {error}");
         }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A plugin folder with the files `files` (relative path, text).
+    fn plugin_with(name: &str, files: &[(&str, &str)]) -> PathBuf {
+        let root = temp_dir(name);
+        for (relative, text) in files {
+            let path = root.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        root
+    }
+
+    fn names(entries: &[PluginEntry]) -> Vec<(&str, bool)> {
+        entries
+            .iter()
+            .map(|e| (e.name.as_str(), e.folder))
+            .collect()
+    }
+
+    #[test]
+    fn a_path_of_the_screen_stays_inside_the_plugin_folder() {
+        let root = plugin_with("resolve", &[("a/b.md", "x"), ("c.md", "y")]);
+        let real = root.canonicalize().unwrap();
+        assert_eq!(resolve(&root, "", true).unwrap(), Some(real.clone()));
+        assert_eq!(resolve(&root, "a", true).unwrap(), Some(real.join("a")));
+        assert_eq!(
+            resolve(&root, "a/b.md", false).unwrap(),
+            Some(real.join("a/b.md"))
+        );
+        // A path that is not there is none, and is no error.
+        assert_eq!(resolve(&root, "a/none.md", false).unwrap(), None);
+        // The empty path is the folder only where it is allowed.
+        assert!(resolve(&root, "", false).is_err());
+        for bad in [
+            "..",
+            "../x",
+            "a/../c.md",
+            ".",
+            "./c.md",
+            "/etc/passwd",
+            "/c.md",
+            "a//b.md",
+            "a/",
+            "a\\b.md",
+            "a\0b.md",
+            "a\nb.md",
+        ] {
+            assert!(resolve(&root, bad, true).is_err(), "{bad:?}");
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_that_leads_out_of_the_plugin_folder_is_refused_and_one_that_stays_is_followed() {
+        let outer = temp_dir("link");
+        let root = outer.join("plugin");
+        std::fs::create_dir_all(root.join("inner")).unwrap();
+        std::fs::write(root.join("inner/in.md"), "in").unwrap();
+        std::fs::create_dir_all(outer.join("other")).unwrap();
+        std::fs::write(outer.join("secret.md"), "secret").unwrap();
+        std::fs::write(outer.join("other/o.md"), "o").unwrap();
+        std::os::unix::fs::symlink(outer.join("secret.md"), root.join("file-out")).unwrap();
+        std::os::unix::fs::symlink(outer.join("other"), root.join("dir-out")).unwrap();
+        std::os::unix::fs::symlink("inner/in.md", root.join("file-in")).unwrap();
+        std::os::unix::fs::symlink(root.join("inner"), root.join("dir-in")).unwrap();
+        std::os::unix::fs::symlink("nowhere", root.join("dangling")).unwrap();
+        // Out: read, list and write are all refused, and the file outside is left as it was.
+        assert!(read_file(&root, "file-out").unwrap_err().contains("の外"));
+        assert!(read_file(&root, "dir-out/o.md")
+            .unwrap_err()
+            .contains("の外"));
+        assert!(list_dir(&root, "dir-out").unwrap_err().contains("の外"));
+        assert!(
+            write_file(&root, "file-out", "x", false, &signature_of("secret"))
+                .unwrap_err()
+                .contains("の外")
+        );
+        assert_eq!(
+            std::fs::read_to_string(outer.join("secret.md")).unwrap(),
+            "secret"
+        );
+        // In: followed.
+        assert_eq!(read_file(&root, "file-in").unwrap().content, "in");
+        assert_eq!(read_file(&root, "dir-in/in.md").unwrap().content, "in");
+        // A link that leads nowhere is no file.
+        assert!(read_file(&root, "dangling")
+            .unwrap_err()
+            .contains("見つかりません"));
+        // The list shows each link as what it leads to, and a link that leaves is still listed (it cannot be opened).
+        let listed = list_dir(&root, "").unwrap();
+        assert_eq!(
+            names(&listed),
+            [
+                ("dir-in", true),
+                ("dir-out", true),
+                ("inner", true),
+                ("dangling", false),
+                ("file-in", false),
+                ("file-out", false)
+            ]
+        );
+        std::fs::remove_dir_all(outer).unwrap();
+    }
+
+    #[test]
+    fn a_folder_is_listed_with_its_folders_first_by_name_and_without_git_and_ds_store() {
+        let root = plugin_with(
+            "list-dir",
+            &[
+                (".claude-plugin/plugin.json", "{}"),
+                (".git/HEAD", "x"),
+                (".DS_Store", "x"),
+                (".mcp.json", "{}"),
+                ("skills/review/SKILL.md", "x"),
+                ("agents/a.md", "x"),
+                ("README.md", "x"),
+                ("alpha.md", "x"),
+                ("Beta.md", "x"),
+            ],
+        );
+        assert_eq!(
+            names(&list_dir(&root, "").unwrap()),
+            [
+                (".claude-plugin", true),
+                ("agents", true),
+                ("skills", true),
+                (".mcp.json", false),
+                ("alpha.md", false),
+                ("Beta.md", false),
+                ("README.md", false),
+            ]
+        );
+        assert_eq!(
+            names(&list_dir(&root, "skills/review").unwrap()),
+            [("SKILL.md", false)]
+        );
+        // A file is no folder, and a folder that is not there is refused.
+        assert!(list_dir(&root, "alpha.md")
+            .unwrap_err()
+            .contains("フォルダではありません"));
+        assert!(list_dir(&root, "none")
+            .unwrap_err()
+            .contains("見つかりません"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_file_is_read_as_text_with_its_language_and_a_signature_of_the_disk() {
+        let root = plugin_with(
+            "read",
+            &[
+                ("skills/x/SKILL.md", "---\nname: x\n---\n"),
+                (".mcp.json", "{}\n"),
+                ("crlf.md", "a\r\nb\r\n"),
+                ("empty.md", ""),
+            ],
+        );
+        let skill = read_file(&root, "skills/x/SKILL.md").unwrap();
+        assert_eq!(skill.content, "---\nname: x\n---\n");
+        assert_eq!(skill.language, "markdown");
+        assert!(!skill.crlf);
+        assert_eq!(skill.signature, signature_of("---\nname: x\n---\n"));
+        assert_eq!(read_file(&root, ".mcp.json").unwrap().language, "json");
+        // CRLF is given as LF, and the signature is the disk's.
+        let crlf = read_file(&root, "crlf.md").unwrap();
+        assert_eq!((crlf.content.as_str(), crlf.crlf), ("a\nb\n", true));
+        assert_eq!(crlf.signature, signature_of("a\r\nb\r\n"));
+        assert_eq!(read_file(&root, "empty.md").unwrap().content, "");
+        // SHA-256 of "abc".
+        assert_eq!(
+            signature_of("abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_file_that_is_not_text_or_too_large_or_not_there_is_refused_in_japanese() {
+        let root = plugin_with(
+            "read-refused",
+            &[("dir/x.md", "x"), ("mixed.md", "a\r\nb\n")],
+        );
+        std::fs::write(root.join("latin.md"), [0x66, 0x6f, 0x80, 0x6f]).unwrap();
+        std::fs::write(root.join("bin.dat"), b"a\0b").unwrap();
+        std::fs::write(root.join("big.md"), vec![b'a'; FILE_MAX + 1]).unwrap();
+        std::fs::write(root.join("limit.md"), vec![b'a'; FILE_MAX]).unwrap();
+        assert!(read_file(&root, "latin.md").unwrap_err().contains("UTF-8"));
+        assert!(read_file(&root, "bin.dat")
+            .unwrap_err()
+            .contains("バイナリ"));
+        assert!(read_file(&root, "big.md").unwrap_err().contains("2 MiB"));
+        assert_eq!(
+            read_file(&root, "limit.md").unwrap().content.len(),
+            FILE_MAX
+        );
+        assert!(read_file(&root, "mixed.md")
+            .unwrap_err()
+            .contains("改行コード"));
+        assert!(read_file(&root, "dir")
+            .unwrap_err()
+            .contains("ファイルではありません"));
+        assert!(read_file(&root, "none.md")
+            .unwrap_err()
+            .contains("見つかりません"));
+        assert!(read_file(&root, "../x").is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_save_writes_the_text_when_the_disk_is_as_it_was_read() {
+        let root = plugin_with("write", &[("a.md", "one\n"), ("crlf.md", "a\r\nb\r\n")]);
+        let read = read_file(&root, "a.md").unwrap();
+        let saved = write_file(&root, "a.md", "two\n", false, &read.signature).unwrap();
+        assert_eq!(saved.state, OrcaSaveState::Saved);
+        assert_eq!(std::fs::read_to_string(root.join("a.md")).unwrap(), "two\n");
+        assert_eq!(saved.signature, signature_of("two\n"));
+        // The signature that the save answers is the one of the next save.
+        let again = write_file(&root, "a.md", "three\n", false, &saved.signature).unwrap();
+        assert_eq!(again.state, OrcaSaveState::Saved);
+        // The line ends of the file come back.
+        let crlf = read_file(&root, "crlf.md").unwrap();
+        let saved = write_file(&root, "crlf.md", "a\nb\nc\n", crlf.crlf, &crlf.signature).unwrap();
+        assert_eq!(saved.state, OrcaSaveState::Saved);
+        assert_eq!(
+            std::fs::read_to_string(root.join("crlf.md")).unwrap(),
+            "a\r\nb\r\nc\r\n"
+        );
+        // No temporary file is left beside it.
+        let left: Vec<String> = std::fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().into_string().unwrap())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_save_is_refused_and_writes_nothing_when_the_disk_changed_or_the_file_is_gone() {
+        let root = plugin_with("write-refused", &[("a.md", "one\n"), ("x/b.md", "b")]);
+        let stale = read_file(&root, "a.md").unwrap().signature;
+        std::fs::write(root.join("a.md"), "changed elsewhere\n").unwrap();
+        let refused = write_file(&root, "a.md", "mine\n", false, &stale).unwrap();
+        assert_eq!(refused.state, OrcaSaveState::Changed);
+        assert_eq!(refused.signature, stale);
+        assert_eq!(
+            std::fs::read_to_string(root.join("a.md")).unwrap(),
+            "changed elsewhere\n"
+        );
+        // A file that is not there, and a file that is not UTF-8 now.
+        assert_eq!(
+            write_file(&root, "none.md", "x", false, &stale)
+                .unwrap()
+                .state,
+            OrcaSaveState::Missing
+        );
+        std::fs::write(root.join("a.md"), [0xff, 0xfe]).unwrap();
+        assert_eq!(
+            write_file(&root, "a.md", "x", false, &stale).unwrap().state,
+            OrcaSaveState::NotUtf8
+        );
+        assert_eq!(std::fs::read(root.join("a.md")).unwrap(), [0xff, 0xfe]);
+        // A path out of the folder and a text over the limit are errors.
+        assert!(write_file(&root, "../a.md", "x", false, &stale).is_err());
+        let big = "a".repeat(FILE_MAX + 1);
+        assert!(write_file(&root, "x/b.md", &big, false, &signature_of("b"))
+            .unwrap_err()
+            .contains("2 MiB"));
+        assert_eq!(std::fs::read_to_string(root.join("x/b.md")).unwrap(), "b");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_save_keeps_the_mode_of_the_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = plugin_with("write-mode", &[("run.sh", "echo 1\n")]);
+        std::fs::set_permissions(root.join("run.sh"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+        let read = read_file(&root, "run.sh").unwrap();
+        write_file(&root, "run.sh", "echo 2\n", false, &read.signature).unwrap();
+        let mode = std::fs::metadata(root.join("run.sh"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o755);
         std::fs::remove_dir_all(root).unwrap();
     }
 }
