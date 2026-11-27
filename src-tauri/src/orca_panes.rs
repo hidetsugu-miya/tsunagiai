@@ -646,6 +646,25 @@ fn save(dir: &Path, store: &Store) -> Result<(), String> {
     write_atomic(dir, FILE, &text)
 }
 
+/// Mends the layout against `live`. A tab that `op` places at the right end (`PlaceRight`) and that no pane has is left out of what it is mended against, because mending puts a tab that no pane has in the focused pane, and `apply` would then find it in a pane and move nothing.
+fn reconcile_for(followed: PaneLayout, live: &[String], op: Option<&PaneOp>) -> PaneLayout {
+    if let Some(PaneOp::PlaceRight { tab }) = op {
+        let new = followed
+            .root
+            .as_ref()
+            .is_some_and(|r| pane_of(r, tab).is_none());
+        if new {
+            let rest: Vec<String> = live.iter().filter(|t| *t != tab).cloned().collect();
+            let mended = reconcile(followed.clone(), &rest);
+            // With no pane left to place it beside, the tab is mended in like any other.
+            if mended.root.is_some() {
+                return mended;
+            }
+        }
+    }
+    reconcile(followed, live)
+}
+
 /// The layout of the project `project` of `environment`, with the terminals that changed kind followed, mended against `live` and `away` (the tabs the screen has in a window of its own, which the layout keeps) and changed by `op`, saved when it differs from the saved one (a project with no tab leaves no entry).
 /// The answer is that layout without the `away` tabs (`visible`), which is not saved.
 fn update(
@@ -672,7 +691,7 @@ fn update(
         .cloned()
         .collect();
     let followed = follow_kind_switches(held.clone().unwrap_or_default(), &all, handles);
-    let mut layout = reconcile(followed, &all);
+    let mut layout = reconcile_for(followed, &all, op);
     if let Some(op) = op {
         layout = apply(layout, op);
     }
@@ -1871,6 +1890,72 @@ mod tests {
                 "p1"
             )
         );
+    }
+
+    /// Saves `saved` as the layout of `proj` on this machine, as an earlier call would have.
+    fn save_layout(dir: &Path, saved: PaneLayout) {
+        let store = Store {
+            version: VERSION,
+            entries: vec![Entry {
+                environment: None,
+                project: "proj".into(),
+                layout: saved,
+            }],
+        };
+        save(dir, &store).unwrap();
+    }
+
+    #[test]
+    fn a_new_tab_placed_right_splits_the_one_pane_though_the_tabs_list_it() {
+        let no = Handles::default();
+        let dir = temp_dir("place-one");
+        save_layout(&dir, layout(pane("p1", &["a"], "a"), "p1"));
+        let live = ids(&["a", "new"]);
+        let op = place_right("new");
+        let got = update(&dir, None, "proj", &live, &[], &no, Some(&op)).unwrap();
+        let want = layout(split_of(&["a"], "a", &["new"], "new"), "p1");
+        assert_eq!(got, want);
+        assert_eq!(load(&dir).entries[0].layout, want);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_new_tab_placed_right_is_stacked_on_the_rightmost_of_two_panes() {
+        let no = Handles::default();
+        let dir = temp_dir("place-two");
+        save_layout(&dir, layout(split_of(&["a"], "a", &["b"], "b"), "p1"));
+        let live = ids(&["a", "b", "new"]);
+        let op = place_right("new");
+        let got = update(&dir, None, "proj", &live, &[], &no, Some(&op)).unwrap();
+        let want = layout(split_of(&["a"], "a", &["b", "new"], "new"), "p1");
+        assert_eq!(got, want);
+        assert_eq!(load(&dir).entries[0].layout, want);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_tab_placed_right_that_a_pane_has_stays_where_it_is_through_update() {
+        let no = Handles::default();
+        let dir = temp_dir("place-held");
+        let saved = layout(split_of(&["a", "b"], "a", &["c"], "c"), "p1");
+        save_layout(&dir, saved.clone());
+        let live = ids(&["a", "b", "c"]);
+        let op = place_right("b");
+        let got = update(&dir, None, "proj", &live, &[], &no, Some(&op)).unwrap();
+        assert_eq!(got, saved);
+        assert_eq!(load(&dir).entries[0].layout, saved);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_tab_placed_right_with_no_saved_layout_gets_the_one_pane_with_the_others() {
+        let no = Handles::default();
+        let dir = temp_dir("place-none");
+        let live = ids(&["a", "new"]);
+        let op = place_right("new");
+        let got = update(&dir, None, "proj", &live, &[], &no, Some(&op)).unwrap();
+        assert_eq!(got, layout(pane("p1", &["a", "new"], "a"), "p1"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

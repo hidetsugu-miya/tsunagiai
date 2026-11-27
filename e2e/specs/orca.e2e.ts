@@ -480,7 +480,7 @@ describe("orca", () => {
     expect(box.plusLeft).toBeGreaterThanOrEqual(box.tabsRight - 1);
     expect(box.plusRight).toBeLessThanOrEqual(box.barRight);
     const barOrder = await browser.execute(() => [...document.querySelector(".orca-tabbar")!.children].map((e) => e.className));
-    expect(barOrder).toEqual(["icon-btn list-toggle", "orca-tabs", "icon-btn orca-plus", "icon-btn orca-files-toggle"]);
+    expect(barOrder).toEqual(["icon-btn list-toggle", "orca-tabs", "icon-btn orca-plus", "orca-tab-modes", "icon-btn orca-files-toggle"]);
     // Nothing selected: no tab, no terminal, and a line that says what to do.
     expect(await count(".orca-tabs .orca-tab")).toBe(0);
     await expect($(".orca-term")).not.toBeDisplayed();
@@ -1560,8 +1560,8 @@ describe("orca: projects", () => {
       const r = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
       const lastTab = [...document.querySelectorAll(".orca-tabs .orca-tab")].pop()!.getBoundingClientRect();
       const tabs = document.querySelector(".orca-tabs")!;
-      // The right end of the room of the strip and the plus: the button of the file pane (A-18) when the bar has it, else the bar's edge.
-      const toggle = document.querySelector(".orca-tabbar .orca-files-toggle:not([hidden])");
+      // The right end of the room of the strip and the plus: the icons of the parts of the file pane (A-18) when the bar has them, else the bar's edge.
+      const toggle = document.querySelector(".orca-tabbar .orca-tab-modes:not([hidden])");
       return { lastRight: lastTab.right, plusLeft: r(".orca-plus").left, plusRight: r(".orca-plus").right, barRight: toggle ? toggle.getBoundingClientRect().left : r(".orca-tabbar").right, scrolls: tabs.scrollWidth > tabs.clientWidth };
     });
 
@@ -5714,18 +5714,68 @@ describe("orca: Claude Code opens an HTML preview (A-45)", () => {
   // The screen open with the answers of the file that is opened and of the check that Rust makes again.
   const ready = () => openOrca(orcaOverview(sample(), worktrees()), { orca_files_list: { entries: [], total: 0 }, orca_files_ignored: [], orca_file_read: page, orca_file_preview_url: PREVIEW_URL, orca_preview_check: null });
   const read = () => callsOf("orca_file_read");
+  // The layouts that `orca_panes` answers: Rust decides where `placeRight` puts the tab (unit tests), the screen is checked for what it asks and how it draws the answer.
+  const claude = claudeTab("example-app");
+  const zsh = "orca:term_example-app_zsh";
+  const tab = "file:1";
+  const pane = (id: string, tabs: string[], selected = tabs[0]): PaneNode => ({ kind: "pane", id, tabs, selected });
+  const row = (...children: PaneNode[]): PaneNode => ({ kind: "split", direction: "row", children, sizes: children.map(() => 1 / children.length) });
+  const layout = (root: PaneNode, focus: string): PaneLayout => ({ root, focus });
+  const callsWith = async (kind: string) => (await callsOf("orca_panes")).filter((c) => (c as { op: { kind: string } | null }).op?.kind === kind);
+  const focusedPane = () => browser.execute(() => document.querySelector(".orca-pane[data-focused='true']")?.getAttribute("data-pane") ?? null);
+  const paneTitles = (id: string) => textsOf(`.orca-pane[data-pane="${id}"] .orca-tab-title`);
 
-  it("opens the file as a preview tab of the project that has the worktree and selects it, after the check of Rust again", async () => {
+  it("opens the file as a preview tab of the project that has the worktree, after the check of Rust again, and splits the one pane to the right with it", async () => {
     await ready();
     await pickProject("example-app");
+    const panes = await mock("orca_panes", layout(row(pane("p1", [claude]), pane("p2", [tab])), "p1"));
     const answer = await askScreen("write", "preview-open", request);
     expect(answer).toEqual({ ok: true });
     expect(await callsOf("orca_preview_check")).toEqual([checkArgs]);
     await waitForCount(".orca-edit-preview iframe", 1);
-    expect(await tabTitles()).toContain("page.html");
-    await expect(selectedTab()).toHaveText(expect.stringContaining("page.html"));
+    await waitForCount(".orca-pane", 2);
+    expect(await paneTitles("p2")).toEqual(["page.html"]);
+    // The call that places the tab gives it with the others: Rust places a tab that no pane has before it mends it into the focused pane.
+    expect(await callsWith("placeRight")).toMatchObject([{ project: "proj_example-app", tabs: [claude, tab], op: { kind: "placeRight", tab } }]);
+    expect(await callsWith("select")).toEqual([]);
+    expect(await callsOf(panes)).not.toEqual([]);
+    expect(await focusedPane()).toBe("p1");
     expect(await callsOf("orca_file_preview_url")).toEqual([checkArgs]);
     await expect($(".orca-edit-preview")).toBeDisplayed();
+  });
+
+  it("stacks the tab on the rightmost of two panes, and leaves the focus on the pane that asked", async () => {
+    const two = layout(row(pane("p1", [claude]), pane("p2", [zsh])), "p1");
+    await openOrca(orcaOverview(sample(), worktrees(), { terminals: [orcaTerminal("example-app", "zsh")] }), { orca_panes: two, orca_terminal_read: ["$"], orca_files_list: { entries: [], total: 0 }, orca_files_ignored: [], orca_file_read: page, orca_file_preview_url: PREVIEW_URL, orca_preview_check: null });
+    await pickProject("example-app");
+    await waitForCount(".orca-pane", 2);
+    await mock("orca_panes", layout(row(pane("p1", [claude]), pane("p2", [zsh, tab], tab)), "p1"));
+    expect(await askScreen("write", "preview-open", request)).toEqual({ ok: true });
+    await waitForCount(".orca-edit-preview iframe", 1);
+    expect(await callsWith("placeRight")).toMatchObject([{ tabs: [claude, zsh, tab], op: { kind: "placeRight", tab } }]);
+    expect(await callsWith("move")).toEqual([]);
+    expect(await callsWith("select")).toEqual([]);
+    expect(await paneTitles("p2")).toEqual(expect.arrayContaining(["page.html"]));
+    expect(await paneTitles("p1")).not.toContain("page.html");
+    await waitForCount(".orca-pane", 2);
+    expect(await focusedPane()).toBe("p1");
+  });
+
+  it("does not move a file that is open already: its tab is selected where it is, and nothing is placed again", async () => {
+    await ready();
+    await pickProject("example-app");
+    await mock("orca_panes", layout(row(pane("p1", [claude]), pane("p2", [tab])), "p1"));
+    expect(await askScreen("write", "preview-open", request)).toEqual({ ok: true });
+    await waitForCount(".orca-edit-preview iframe", 1);
+    expect(await callsWith("placeRight")).toHaveLength(1);
+    expect(await askScreen("write", "preview-open", request)).toEqual({ ok: true });
+    await waitForCalls("orca_preview_check", 2);
+    await browser.waitUntil(async () => (await callsWith("select")).length > 0);
+    expect(await callsWith("placeRight")).toHaveLength(1);
+    expect(await callsWith("select")).toMatchObject([{ op: { kind: "select", tab } }]);
+    expect(await callsWith("move")).toEqual([]);
+    expect(await tabTitles()).toEqual(expect.arrayContaining(["page.html"]));
+    expect((await tabTitles()).filter((t) => t === "page.html")).toHaveLength(1);
   });
 
   it("takes the environment of a request as it is for the check, and does not open a worktree that the list lacks", async () => {
@@ -5756,6 +5806,8 @@ describe("orca: Claude Code opens an HTML preview (A-45)", () => {
     await ready();
     await pickProject("example-app");
     const made = orcaWorktree("example-app", "feat/b", { path: "/work/example-app-b" });
+    // The layout that Rust answers to the placing of the tab: the base answer of the fixture does not place it, and a tab that no pane shows draws no frame.
+    await mock("orca_panes", layout(row(pane("p1", [claude]), pane("p2", [tab])), "p1"));
     const overview = await mock("orca_overview", holds);
     const answer = await askScreen("write", "preview-open", { path: "/work/example-app-b", relative: "page.html" });
     expect(answer).toEqual({ ok: true });
@@ -5782,6 +5834,9 @@ describe("orca: Claude Code opens an HTML preview (A-45)", () => {
     await pickProject("example-api");
     const answer = await askScreen("write", "preview-open", request);
     expect(answer).toEqual({ ok: true });
+    // The tab is placed in the layout of the project that has the worktree, not of the selected one, and the screen stays where it is.
+    await browser.waitUntil(async () => (await callsWith("placeRight")).length > 0);
+    expect(await callsWith("placeRight")).toMatchObject([{ project: "proj_example-app", op: { kind: "placeRight", tab } }]);
     await expect($('#orca-feed .orca-project[data-key="proj_example-api"]')).toHaveAttribute("aria-pressed", "true");
     expect(await tabTitles()).not.toContain("page.html");
     await pickProject("example-app");
@@ -5791,6 +5846,7 @@ describe("orca: Claude Code opens an HTML preview (A-45)", () => {
   it("opens the tab while the screen is not shown, and has it ready when the screen is shown again", async () => {
     await ready();
     await pickProject("example-app");
+    await mock("orca_panes", layout(row(pane("p1", [claude]), pane("p2", [tab])), "p1"));
     await $("#nav-mail").click();
     await expect($("#orca")).not.toBeDisplayed();
     expect(await askScreen("write", "preview-open", request)).toEqual({ ok: true });

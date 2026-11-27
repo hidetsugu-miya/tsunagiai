@@ -1153,7 +1153,12 @@ pub async fn sync_pushes(
     config: &Path,
     app_version: &str,
 ) -> Result<(), String> {
-    let saved = orca::blocking(formation::saved_environment_names).await??;
+    // While the development screen is off in the menu (A-50, #680) no connection is kept: the list of Orca is not even asked, and every one that is open is ended.
+    let saved = if crate::side_menu::screen_on(config, crate::side_menu::MenuScreen::Orca) {
+        orca::blocking(formation::saved_environment_names).await??
+    } else {
+        Vec::new()
+    };
     keep_pushes_to(app, config, app_version, &saved)
 }
 

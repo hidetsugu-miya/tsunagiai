@@ -1,7 +1,7 @@
 // Changing a task: the screen is changed first, then Todoist, and the reload brings back what Todoist has.
 import { invoke, type Commands } from "./ipc.js";
 import { loadTodo, renderTodo } from "./todo.js";
-import { addLabelLocal, closedChain, dropProjectLocal, editingField, moveLocal, moveProjectLocal, moveUnderLocal, patchTask, setTodoCount, settleLocal, todoState, type TaskFields } from "./todo-data.js";
+import { addLabelLocal, closedChain, dropProjectLocal, editingField, moveLocal, moveProjectLocal, moveUnderLocal, patchTask, placeLocal, setTodoCount, settleLocal, todoState, type TaskFields } from "./todo-data.js";
 import { showFailure } from "./error-card.js";
 
 // Reloads shortly after the last call, so a run of changes costs one load. Completed tasks are fetched again only when asked for by one of them.
@@ -25,7 +25,7 @@ export function scheduleTodoReload(withDone: boolean) {
 }
 
 // The commands todoCall sends: they answer true or false, or null when a token is needed.
-type Write = "todoist_add" | "todoist_add_task" | "todoist_add_subtask" | "todoist_set_done" | "todoist_update" | "todoist_create_label" | "todoist_move" | "todoist_move_under" | "todoist_delete" | "todoist_archive_project" | "todoist_delete_project" | "todoist_move_project";
+type Write = "todoist_add" | "todoist_add_task" | "todoist_add_subtask" | "todoist_set_done" | "todoist_update" | "todoist_create_label" | "todoist_move" | "todoist_move_under" | "todoist_place" | "todoist_delete" | "todoist_archive_project" | "todoist_delete_project" | "todoist_move_project";
 const send = invoke as (command: Write, args: unknown) => Promise<boolean | null>;
 
 // Runs a change, then reloads whether it worked or not, so the screen shows what Todoist has.
@@ -84,6 +84,13 @@ export async function moveUnder(id: string, parentId: string) {
   const wasOpen = todoState.openTasks.has(parentId);
   const answer = await todoCall("todoist_move_under", { id, parentId }, null, () => moveUnderLocal(id, parentId));
   if (answer === null && !wasOpen) todoState.openTasks.delete(parentId);
+  return answer;
+}
+// T-2: puts the task under `parentId` (null: the top level of `projectId`) before the sibling `beforeId` (null: last). The local move opens the parent so the moved row shows: a failed call closes it again if it was closed.
+export async function placeTask(id: string, parentId: string | null, projectId: string | null, beforeId: string | null) {
+  const wasOpen = parentId !== null && todoState.openTasks.has(parentId);
+  const answer = await todoCall("todoist_place", { id, parentId, projectId, beforeId }, null, () => placeLocal(id, parentId, projectId, beforeId));
+  if (answer === null && parentId !== null && !wasOpen) todoState.openTasks.delete(parentId);
   return answer;
 }
 // T-8: the project and what is nested under it go from the list at once; the reload brings them back if Todoist refused.

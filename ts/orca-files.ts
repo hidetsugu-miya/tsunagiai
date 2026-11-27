@@ -15,6 +15,7 @@ import { confirmDelete, confirmDeleteMany, confirmRevert } from "./hint.js";
 import { BRANCH_SVG, CHEVRON_SVG, COPY_PATH_SVG, DATABASE_SVG, DELETE_SVG, DIFF_SVG, DOWNLOAD_SVG, FILE_SVG, FOLDER_SVG, MINUS_CIRCLE_SVG, MOVE_SVG, OPEN_SVG, PLUS_SVG, RETURN_SVG, SERVER_SVG, TICKET_SVG, TODO_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { openMenu } from "./menu.js";
+import { whileOn } from "./menu-state.js";
 import { closeBranchDialog, openBranchDialog } from "./orca-branch.js";
 import type { DiffCommit } from "./orca-diff.js";
 import { checkHistory, initHistory, refreshHistory, reloadHistory, syncHistory } from "./orca-history.js";
@@ -45,7 +46,7 @@ interface Listing {
 
 let shown = false;
 // What the pane shows under the heading.
-let mode: "files" | "history" | "server" | "database" | "jira" | "todo" = "files";
+let mode: FilesMode = "files";
 let context: FilesContext | null = null;
 // A new tree (another worktree) ends the reads of the old one.
 let generation = 0;
@@ -116,6 +117,8 @@ let drawnTitle = "";
 // The files open in the worktree, which the last drawing colored.
 let opened = new Set<string>();
 
+export type FilesMode = "files" | "history" | "server" | "database" | "jira" | "todo";
+
 export const filesShown = () => shown;
 
 export function toggleFiles() {
@@ -149,11 +152,17 @@ function syncModes() {
 const shownPart = () => mode;
 const showsHistory = () => shownPart() === "history";
 
-function chooseMode(next: "files" | "history" | "server" | "database" | "jira" | "todo") {
+function chooseMode(next: FilesMode) {
   if (mode === next) return;
   mode = next;
   syncModes();
   modeChanged();
+}
+
+// The pane opens on the part `next` (the icons of the strip, A-18): the part is chosen first, so that the pane starts only the reads of that part. The pane that is shown already is left shown.
+export function openFilesAs(next: FilesMode) {
+  chooseMode(next);
+  if (!shown) toggleFiles();
 }
 
 // Whether the list marked the folder `dir` as ignored (what it holds is ignored then, and Rust does not ask git).
@@ -1275,5 +1284,14 @@ export function initOrcaFiles(on: { open: (relative: string) => void; jira: (key
   $("orca-files-mode-jira").onclick = () => chooseMode("jira");
   $("orca-files-mode-todo").innerHTML = TODO_SVG;
   $("orca-files-mode-todo").onclick = () => chooseMode("todo");
+  // The Todo part and its icon (here and in the tab strip, by `menu-todo-off` of the style) are there while Todo is on in the menu (A-49, A-50).
+  whileOn(
+    "todo",
+    () => document.body.classList.remove("menu-todo-off"),
+    () => {
+      document.body.classList.add("menu-todo-off");
+      if (mode === "todo") chooseMode("files");
+    },
+  );
   initOrcaJira({ open: on.jira, create: on.newJira });
 }

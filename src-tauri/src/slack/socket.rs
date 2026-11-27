@@ -524,6 +524,14 @@ impl SocketHub {
         }
     }
 
+    /// Stops every workspace's task.
+    fn stop_all(&self, app: &AppHandle) {
+        let team_ids: Vec<String> = self.inner.lock().unwrap().entries.keys().cloned().collect();
+        for team_id in team_ids {
+            self.stop(app, &team_id);
+        }
+    }
+
     /// The task of `generation` ended by itself: its entry goes, unless a newer task has taken its place.
     fn finish(&self, app: &AppHandle, team_id: &str, generation: u64) {
         let gone = {
@@ -977,7 +985,12 @@ fn start(app: &AppHandle, team_id: &str) {
     });
 }
 
-/// Connects the workspaces that have an App-Level Token. Run once at startup; the list is read in full by the screen as it starts.
+/// Stops the connection of every workspace, and keeps the App-Level Tokens: Slack was turned off in the menu (A-50, #680). `start_all` connects them again.
+pub fn stop_all(app: &AppHandle) {
+    app.state::<SlackState>().sockets.stop_all(app);
+}
+
+/// Connects the workspaces that have an App-Level Token. Run at startup, and when Slack is turned on in the menu (A-50); the list is read in full by the screen as it starts. Nothing is connected while Slack is off in the menu (#680).
 pub async fn start_all(app: AppHandle) {
     let dir = match config_dir(&app) {
         Ok(dir) => dir,
@@ -986,6 +999,9 @@ pub async fn start_all(app: AppHandle) {
             return;
         }
     };
+    if !crate::side_menu::screen_on(&dir, crate::side_menu::MenuScreen::Slack) {
+        return;
+    }
     let workspaces = match load_workspaces(&dir).await {
         Ok(list) => list,
         Err(e) => {
@@ -1046,7 +1062,10 @@ pub async fn slack_app_token_set(
     write_app_secret(user, token)
         .await
         .map_err(|e| log_failure(command, &team_id, e))?;
-    start(&app, &team_id);
+    // The token is kept, but nothing connects while Slack is off in the menu (A-50); turning it on connects.
+    if crate::side_menu::screen_on(&dir, crate::side_menu::MenuScreen::Slack) {
+        start(&app, &team_id);
+    }
     Ok(state.sockets.statuses())
 }
 

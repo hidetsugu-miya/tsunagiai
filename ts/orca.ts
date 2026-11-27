@@ -32,6 +32,7 @@ import { AGENT_SVG, CHEVRON_SVG, CLAUDE_SVG, CLOSE_SVG, COLUMNS_SVG, COPY_PATH_S
 import { invoke } from "./ipc.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
 import { closeMenu, type MenuItem, openMenu, showMenu } from "./menu.js";
+import { screenOn, whileOn } from "./menu-state.js";
 import { confirmCloseDraft } from "./hint.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { closeDefinition, type DefinitionOpen, type DefinitionQuery, definitionsOf, hasDefinitionIn, initDefinition, openDefinition, showDefinitions } from "./orca-definition.js";
@@ -44,7 +45,7 @@ import { initOrcaDatabase, lostConnection } from "./orca-database.js";
 import { closeDiff, type DiffCommit, diffsOf, hasDiffIn, openDiff as openDiffTab, refreshDiffs, showDiffs } from "./orca-diff.js";
 import { closeFile, dirtyIds, discardFiles, filesOf, goTo, hasFileIn, holdFiles, initOrcaEditor, nameOf, openedIn, openFile as openFileHere, refreshEditors, resolveServers, saveFile, showEditors } from "./orca-editor.js";
 import { ensureServer, initLsp, mayAsk, pauseLsp, syncServers } from "./orca-lsp.js";
-import { filesShown, initOrcaFiles, openFolders, refreshFiles, rereadChanges, rereadScratchpad, syncFiles, toggleFiles, treeWatch } from "./orca-files.js";
+import { type FilesMode, filesShown, initOrcaFiles, openFilesAs, openFolders, refreshFiles, rereadChanges, rereadScratchpad, syncFiles, toggleFiles, treeWatch } from "./orca-files.js";
 import { syncFileWatches, unwatched, watchReady } from "./orca-watch.js";
 import { type PaneModel, drawTree, editorHostOf, initPaneTree, type TreeModel } from "./orca-pane-tree.js";
 import { applyLocal, findTab, focusedTab, layoutOf, needsSync, type PaneTabs, panesOf, syncPanes } from "./orca-panes.js";
@@ -1150,16 +1151,17 @@ function openPlace(place: DefinitionOpen) {
   goTo(id, line, character);
 }
 
-// A request to open an HTML preview (A-45, #985), from a Claude Code through the app (a push of a saved environment's PC, or the screen bridge of this PC): the file is a tab of the project that has the worktree, in the preview, and the tab is selected when that project is the one selected. The request is data from outside, so Rust checks it again (`orca_preview_check`: the file A-31 opens, a worktree of the list read just now), and the list held here must have the worktree (it is read again once when it lacks it, for a worktree that was made a moment ago). The screen is not switched and no project is selected for it: another project, or a formation selected, only gets the tab; a screen that is not shown has it ready when it is shown again.
+// A request to open an HTML preview (A-45, #985), from a Claude Code through the app (a push of a saved environment's PC, or the screen bridge of this PC): the file is a tab of the project that has the worktree, in the preview (a new tab is placed at the right end, below; a file that is open already is selected when that project is the one selected). The request is data from outside, so Rust checks it again (`orca_preview_check`: the file A-31 opens, a worktree of the list read just now), and the list held here must have the worktree (it is read again once when it lacks it, for a worktree that was made a moment ago). The screen is not switched and no project is selected for it: another project, or a formation selected, only gets the tab; a screen that is not shown has it ready when it is shown again.
+// A tab that is new is placed in the pane at the right end of that project's layout, whichever project is selected, and no pane takes the focus: with one pane that pane is split to the right, and with more the tab is stacked on the rightmost pane (A-17, `placeRight`). A file that is open already stays where it is and is selected there (as it is when it is opened from the file list).
 // The screen answers once the check has passed, and opens the tab after the answer: the read of the list may take longer than the wait of the bridge (5 seconds), and a tool that failed on the wait would leave a tab that opens later. A refusal after the answer is a card (A-28).
 async function openPreview(fields: Fields) {
   const [path, relative, environment] = [fields.path ?? "", fields.relative ?? "", fields.environment || null];
   if (view === null) throw new Error("開発の画面の一覧をまだ読めていません");
   await invoke("orca_preview_check", { path, relative, environment });
-  void openCheckedPreview(path, relative, environment).catch((e) => showFailure("orca", e instanceof Error ? e.message : e));
+  void openCheckedPreview(path, relative, environment, true).catch((e) => showFailure("orca", e instanceof Error ? e.message : e));
 }
 
-async function openCheckedPreview(path: string, relative: string, environment: string | null) {
+async function openCheckedPreview(path: string, relative: string, environment: string | null, right = false) {
   const find = () => mix.worktrees.find((w) => w.path === path && placeOf(w) === environment);
   let worktree = find();
   if (worktree === undefined) {
@@ -1167,8 +1169,12 @@ async function openCheckedPreview(path: string, relative: string, environment: s
     worktree = find();
   }
   if (worktree === undefined) throw new Error("そのフォルダは、一覧のプロジェクトにありません");
-  const id = openEditorFile(environment, worktree.projectKey, path, relative);
-  if (currentFormation() === null && worktree.projectKey === projectKey) chooseTab(id);
+  const { projectKey: key } = worktree;
+  const open = new Set(filesOf(environment, key).map((f) => f.id));
+  const id = openEditorFile(environment, key, path, relative);
+  // A tab that is new (not a file open here, and not one in a window of its own) goes to the right end; the focus stays where it is.
+  if (right && !open.has(id) && !isAway(id)) runPaneOp({ kind: "placeRight", tab: id }, key);
+  else if (currentFormation() === null && key === projectKey) chooseTab(id);
   draw();
 }
 
@@ -1450,6 +1456,7 @@ async function readPairing() {
 
 // The pairing of this machine's Orca was saved or revoked in the settings.
 export function pairingChanged() {
+  if (!screenOn("orca")) return;
   void readPairing();
 }
 
@@ -1457,7 +1464,7 @@ export function pairingChanged() {
 // The stream tries a lost connection again by itself.
 function syncStream() {
   const want = new Set<string | null>();
-  if (view !== null && view.state !== "missing") {
+  if (view !== null && view.state !== "missing" && screenOn("orca")) {
     if (paired === null && pairingSeq === 0) void readPairing();
     if (view.target !== null && view.environments.includes(view.target)) want.add(view.target);
     if (paired) want.add(null);
@@ -1732,9 +1739,8 @@ function selectTab(id: string) {
   draw();
 }
 
-// Asks Rust for the layout of the selected project, with `op` when the user did something to it; the screen is drawn again once it answers. A failure shows its message.
-function runPaneOp(op: PaneOp | null) {
-  const key = projectKey;
+// Asks Rust for the layout of the selected project (or of the project `key`), with `op` when the user did something to it; the screen is drawn again once it answers. A failure shows its message.
+function runPaneOp(op: PaneOp | null, key = projectKey) {
   if (key === null || view === null) return;
   const [target, place] = [view.target, projectPlace(key)];
   const tabs = (): PaneTabs | null => {
@@ -2054,6 +2060,13 @@ function followLsp(launched: OrcaStarted, target: string | null) {
   reread(target);
 }
 
+// An icon of the strip (A-18) opens the file pane on its part. The pressed icon is hidden by the draw, so the focus goes on to the icon of the same part in the top row of the pane.
+function openFilesAndDraw(next: FilesMode) {
+  openFilesAs(next);
+  draw();
+  document.getElementById(`orca-files-mode-${next}`)?.focus({ preventScroll: true });
+}
+
 // The button of the file pane (A-18) is in the top row of the pane while it is shown, and at the right end of the tab strip of the corner pane while it is hidden.
 // The pressed button is hidden by the draw, so the focus goes on to the button that is shown now.
 function toggleFilesAndDraw() {
@@ -2251,13 +2264,36 @@ export function initOrca() {
       };
     },
   });
-  setInterval(refresh, (1000 * shownMs()) / SHOWN_MS);
-  document.addEventListener("visibilitychange", () => {
+  // The clock and the first read of the list run while the development screen is on in the menu (A-50). Turning it off stops them and ends the streams; turning it on reads the list again.
+  let clock: number | null = null;
+  const onVisible = () => {
     // A session shown again after the window was hidden is seen.
     drawBadge();
     refresh();
     watchFiles();
-  });
+  };
+  whileOn(
+    "orca",
+    () => {
+      clock = window.setInterval(refresh, (1000 * shownMs()) / SHOWN_MS);
+      document.addEventListener("visibilitychange", onVisible);
+      load("full");
+    },
+    () => {
+      if (clock !== null) window.clearInterval(clock);
+      clock = null;
+      document.removeEventListener("visibilitychange", onVisible);
+      // The read on its way is dropped, the connections of the streams are closed, and the count goes.
+      loadSeq++;
+      loading = false;
+      syncStream();
+      workingCount = 0;
+      hereWorking = 0;
+      waitingCount = 0;
+      notified.clear();
+      drawBadge();
+    },
+  );
   // The files and the history of the file pane are read again when the app is activated (A-18, A-27), and by the clock (`refresh`), as nothing watches the disk.
   window.addEventListener("focus", () => shown() && refreshFiles());
   initSearch();
@@ -2278,6 +2314,7 @@ export function initOrca() {
       void openStartMenu(anchor);
     },
     files: toggleFilesAndDraw,
+    mode: openFilesAndDraw,
     list: toggleList,
     focus: focusPane,
     move: (tab, pane, edge) => runPaneOp({ kind: "move", tab, pane, edge }),
@@ -2289,5 +2326,4 @@ export function initOrca() {
     menu: openTabMenu,
   });
   void loadTitles();
-  load("full");
 }

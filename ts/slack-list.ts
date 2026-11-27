@@ -17,6 +17,7 @@ import { $, tag } from "./dom.js";
 import { formatDate, formatDay } from "./format.js";
 import { BOOKMARK_SVG, CHECK_ALL_SVG, CHEVRON_SVG, DOT_SVG, HASH_SVG, LOCK_SVG, MINUS_CIRCLE_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
+import { screenOn, whileOn } from "./menu-state.js";
 import { setScreen } from "./nav.js";
 import { closeSlackChannel, openSlackChannel, redrawSlackChannel, revealSlackChannel, selectedChannel } from "./slack-channel.js";
 import { drawSlackSide, type SlackSection } from "./slack-side.js";
@@ -335,7 +336,8 @@ function rowOf(m: TimelineMessage, key: string, grouped: boolean, open?: (m: Tim
 }
 
 // The unread messages held, for the pane of the footer (A-35).
-export const unreadMessages = () => (timeline?.messages ?? []).filter((m) => m.unread);
+// None while Slack is off in the menu (A-50).
+export const unreadMessages = () => (screenOn("slack") ? (timeline?.messages ?? []).filter((m) => m.unread) : []);
 
 // What the buttons of a row of the pane of the footer do (A-35): "既読にする" (`readOne`) and "ウォッチ" (`watchThread`), and whether "既読にする" changes something (`readable`).
 export const readableMessage = (m: TimelineMessage) => readable(m);
@@ -946,20 +948,36 @@ async function start() {
 
 export function initSlackList() {
   foldsRead = loadFolded();
-  start();
-  setInterval(refresh, 1000);
-  document.addEventListener("visibilitychange", refresh);
+  // The first read and the clock run while Slack is on in the menu (A-50); turning it off stops them and forgets the list held, and turning it on reads again.
+  let clock: number | null = null;
+  whileOn(
+    "slack",
+    () => {
+      void start();
+      clock = window.setInterval(refresh, 1000);
+      document.addEventListener("visibilitychange", refresh);
+    },
+    () => {
+      if (clock !== null) window.clearInterval(clock);
+      clock = null;
+      document.removeEventListener("visibilitychange", refresh);
+      timeline = null;
+      unreadCount = 0;
+      lastTry = 0;
+      drawBadge();
+    },
+  );
   // Socket Mode (S-16), by what Rust tells. An event it read again is in its cache: the list is made again from there, with no call to Slack.
   // A connection that was made reads the list in full (what came while there was none is not sent again); when a read or a save is on its way, once it is done.
   // A change of a connection makes the list again too, so that `refreshSecs` follows it (it is longer only while every workspace is connected).
   const { listen } = window.__TAURI__.event;
-  listen("slack-timeline-dirty", () => workspaces?.length && load(true));
+  listen("slack-timeline-dirty", () => screenOn("slack") && workspaces?.length && load(true));
   listen("slack-socket-resync", () => {
-    if (!workspaces?.length) return;
+    if (!screenOn("slack") || !workspaces?.length) return;
     resyncPending = true;
     runPendingResync();
   });
-  listen("slack-socket-status", () => workspaces?.length && load(true));
+  listen("slack-socket-status", () => screenOn("slack") && workspaces?.length && load(true));
   feed().addEventListener("scroll", () => {
     if (!$("slack-list").hidden) listScroll = feed().scrollTop;
   });

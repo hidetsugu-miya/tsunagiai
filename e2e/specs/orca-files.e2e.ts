@@ -1096,6 +1096,49 @@ describe("orca: files and editor (A-18)", () => {
     expect(hidden).toEqual({ files: false, tabs: true, toggle: true });
   });
 
+  it("has the six icons of the parts in the tab strip, left of the button, while the file pane is hidden, and opens the pane on the part that one names (A-18)", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()), { orca_terminal_read: ["$"], orca_files_list: root(), orca_files_ignored: rootIgnored, ...historyFixtures() });
+    await project("example-app").click();
+    await expect(selectedTab()).toBeDisplayed();
+    const icons = () =>
+      browser.execute(() =>
+        [...document.querySelectorAll<HTMLElement>(".orca-tabbar .orca-tab-mode")].filter((b) => b.getClientRects().length > 0).map((b) => [b.getAttribute("aria-label"), b.getAttribute("aria-pressed"), b.querySelector("svg") !== null]),
+      );
+    const names = ["ファイル", "履歴", "言語サーバー", "データベース", "Jira", "Todo"];
+    expect(await icons()).toEqual(names.map((n) => [n, "false", true]));
+    const place = await browser.execute(() => {
+      const r = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+      const all = [...document.querySelectorAll(".orca-tabbar .orca-tab-mode")].map((b) => b.getBoundingClientRect());
+      return { plusRight: r(".orca-plus").right, first: all[0].left, last: all[all.length - 1].right, toggleLeft: r(".orca-tabbar .orca-files-toggle").left, barRight: r(".orca-tabbar").right };
+    });
+    expect(place.first).toBeGreaterThanOrEqual(place.plusRight);
+    expect(place.last).toBeLessThanOrEqual(place.toggleLeft);
+    expect(place.toggleLeft).toBeLessThanOrEqual(place.barRight);
+    await expect($("#orca-files")).not.toBeDisplayed();
+    // The press opens the pane on that part, the icons go, and the focus goes to the icon of the same part in the top row.
+    await $('.orca-tabbar .orca-tab-mode[aria-label="履歴"]').click();
+    await expect($("#orca-files")).toBeDisplayed();
+    await expect(paneMode("履歴")).toHaveAttribute("aria-pressed", "true");
+    await expect(paneMode("ファイル")).toHaveAttribute("aria-pressed", "false");
+    await expect($("#orca-history")).toBeDisplayed();
+    await expect($("#orca-files-tree")).not.toBeDisplayed();
+    expect(await icons()).toEqual([]);
+    expect(await browser.execute(() => document.activeElement?.id)).toBe("orca-files-mode-history");
+    // The part that is chosen already still opens the pane.
+    await filesToggle().click();
+    await expect($("#orca-files")).not.toBeDisplayed();
+    expect(await icons()).toHaveLength(6);
+    await $('.orca-tabbar .orca-tab-mode[aria-label="履歴"]').click();
+    await expect($("#orca-files")).toBeDisplayed();
+    await expect($("#orca-history")).toBeDisplayed();
+    await filesToggle().click();
+    await $('.orca-tabbar .orca-tab-mode[aria-label="ファイル"]').click();
+    await expect($("#orca-files")).toBeDisplayed();
+    await expect(paneMode("ファイル")).toHaveAttribute("aria-pressed", "true");
+    await expect($("#orca-files-tree")).toBeDisplayed();
+    await expect($("#orca-history")).not.toBeDisplayed();
+  });
+
   it("puts the button in the pane in the top right corner only", async () => {
     const two = orcaOverview(sample(), worktrees(), { terminals: [orcaTerminal("example-app", "zsh")] });
     const side = layout({ kind: "split", direction: "row", children: [pane("p1", [claude]), pane("p2", [zsh])], sizes: [0.5, 0.5] }, "p1");
@@ -1105,6 +1148,8 @@ describe("orca: files and editor (A-18)", () => {
     await expect($('.orca-pane[data-pane="p1"] .orca-files-toggle')).not.toBeDisplayed();
     await expect($('.orca-pane[data-pane="p2"] .orca-files-toggle')).toBeDisplayed();
     expect(await toggleBoxes()).toHaveLength(1);
+    await expect($('.orca-pane[data-pane="p1"] .orca-tab-modes')).not.toBeDisplayed();
+    await expect($('.orca-pane[data-pane="p2"] .orca-tab-modes')).toBeDisplayed();
     const stacked = layout({ kind: "split", direction: "column", children: [pane("p1", [claude]), pane("p2", [zsh])], sizes: [0.5, 0.5] }, "p1");
     await openOrca(two, { orca_terminal_read: ["$"], orca_panes: stacked });
     await project("example-app").click();
@@ -1112,6 +1157,8 @@ describe("orca: files and editor (A-18)", () => {
     await expect($('.orca-pane[data-pane="p1"] .orca-files-toggle')).toBeDisplayed();
     await expect($('.orca-pane[data-pane="p2"] .orca-files-toggle')).not.toBeDisplayed();
     expect(await toggleBoxes()).toHaveLength(1);
+    await expect($('.orca-pane[data-pane="p1"] .orca-tab-modes')).toBeDisplayed();
+    await expect($('.orca-pane[data-pane="p2"] .orca-tab-modes')).not.toBeDisplayed();
   });
 
   it("shows the heading of the selected session's worktree, reads its root, and draws the folders first, with the ignored ones in italics once git has answered", async () => {

@@ -14,6 +14,7 @@ import { forgetCalendarChoices, initCalendarSide, loadCalendarChoices } from "./
 import { $, el } from "./dom.js";
 import { addDays, avatarColor, hhmm, isoDate, pad2, WEEKDAYS } from "./format.js";
 import { invoke } from "./ipc.js";
+import { everyWhileOn } from "./menu-state.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { logError, setNotice, setRelogin } from "./error-card.js";
 import { onScreenChanged } from "./screen-bridge.js";
@@ -385,10 +386,15 @@ export function initCalendar() {
   $("cal-next").onclick = () => moveWeek(isoDate(addDays(calDate, 7)));
   $("cal-today").onclick = () => moveWeek(isoDate(new Date()));
   $("calendar").style.setProperty("--hour", `${HOUR_PX}px`);
-  setInterval(() => currentScreen() === "calendar" && !document.hidden && loadCalendar(true), CAL_REFRESH_MS);
-  setInterval(() => {
-    if (currentScreen() !== "calendar") return;
-    drawNow();
-    refreshCalendarDay();
-  }, 60000);
+  // The clocks run only while the calendar is on in the menu (A-50).
+  everyWhileOn("calendar", () => currentScreen() === "calendar" && !document.hidden && loadCalendar(true), CAL_REFRESH_MS);
+  everyWhileOn(
+    "calendar",
+    () => {
+      if (currentScreen() !== "calendar") return;
+      drawNow();
+      refreshCalendarDay();
+    },
+    60000,
+  );
 }

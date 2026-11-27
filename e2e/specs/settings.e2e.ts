@@ -2,7 +2,7 @@ import type { NotionAccount } from "../../ts/bindings/NotionAccount";
 import type { SentryConnection } from "../../ts/bindings/SentryConnection";
 import { account, boot, copiedTexts, logLine, skill, stubClipboard, checked, chooseAppearance, chooseOption, fontSettings, formationConsent, chooseTheme, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, emitEvent, holds, inbox, mock, rejects, onceId, release, slackLoad, socketStatus, workspace, terminalThemes, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf, CARD, CARDS, waitForLog } from "../support";
 
-type Tab = "google" | "calendar" | "todoist" | "slack" | "notion" | "claude" | "skill" | "orca" | "font" | "update" | "log";
+type Tab = "google" | "calendar" | "todoist" | "slack" | "notion" | "claude" | "skill" | "orca" | "menu" | "font" | "update" | "log";
 
 // Presses a tab of the settings screen.
 const openTab = (tab: Tab) => $(`#settings-tab-${tab}`).click();
@@ -15,7 +15,7 @@ async function openSettings(missingScopes: string[], claude: unknown = claudeMis
   if (tab !== "google") await openTab(tab);
 }
 
-const TABS: [Tab, string][] = [["google", "Google"], ["calendar", "カレンダー"], ["todoist", "Todoist"], ["slack", "Slack"], ["notion", "Notion"], ["claude", "Claude"], ["skill", "スキル"], ["orca", "開発"], ["font", "フォント"], ["update", "アップデート"], ["log", "ログ"]];
+const TABS: [Tab, string][] = [["google", "Google"], ["calendar", "カレンダー"], ["todoist", "Todoist"], ["slack", "Slack"], ["notion", "Notion"], ["claude", "Claude"], ["skill", "スキル"], ["orca", "開発"], ["menu", "メニュー"], ["font", "フォント"], ["update", "アップデート"], ["log", "ログ"]];
 
 const unlinkButton = () => $('button[aria-label="Example Team の接続を解除"]');
 
@@ -2171,6 +2171,184 @@ describe("settings: fonts (the Font tab, A-20)", () => {
   });
 });
 
+describe("settings: menu (the メニュー tab, A-50)", () => {
+  type Entry = [string, boolean];
+  const list = (...entries: Entry[]) => ({ items: entries.map(([screen, enabled]) => ({ screen, enabled })) });
+  const FIRST: Entry[] = [["mail", true], ["calendar", true], ["todo", true], ["slack", true], ["orca", true], ["database", true]];
+  // Slack, the inbox, the database and Todo are on, the calendar and 開発 are off.
+  const SAVED: Entry[] = [["slack", true], ["mail", true], ["database", true], ["calendar", false], ["todo", true], ["orca", false]];
+
+  async function openMenuTab(fixtures: Record<string, unknown> = {}) {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, ...fixtures });
+    await $("#nav-settings").click();
+    await openTab("menu");
+    await expect($("#settings-panel-menu")).toBeDisplayed();
+  }
+
+  // What each row shows, top to bottom: the screen, the name, the key, the switch (null when there is none), and whether the row is dimmed.
+  const rows = () =>
+    browser.execute(() =>
+      [...document.querySelectorAll<HTMLElement>("#menu-items .menu-row")].map((r) => ({
+        screen: r.dataset.screen,
+        name: r.querySelector(".item-name")!.textContent,
+        key: r.querySelector(".menu-key")!.textContent,
+        on: r.querySelector(".switch")?.getAttribute("aria-checked") ?? null,
+        dimmed: r.classList.contains("menu-row-off"),
+      })),
+    );
+  const order = async () => (await rows()).map((r) => r.screen);
+  // The sidebar's shown buttons above the bottom group, top to bottom, with the key each carries.
+  const sidebar = () =>
+    browser.execute(() =>
+      [...document.querySelectorAll<HTMLElement>("#sidebar > .nav-item")].filter((e) => e.offsetParent !== null).map((e) => [e.id, e.dataset.shortcut]),
+    );
+  // The pointer on the grip of the row `from`, as the page gets it (WebDriver's click sends no pointerdown): it presses, moves to the top (before) or the bottom (after) of the row `to`, and is released when `release`.
+  const drag = (from: string, to: string, place: "before" | "after", release = true) =>
+    browser.execute(
+      (a, b, p, up, once) => {
+        if (!window.__e2e_once__(once)) return;
+        const rowOf = (s: string) => document.querySelector<HTMLElement>(`#menu-items [data-screen="${s}"]`)!;
+        const grip = rowOf(a).querySelector<HTMLElement>(".menu-grip")!;
+        const g = grip.getBoundingClientRect();
+        const x = g.left + g.width / 2;
+        const init = (y: number, buttons: number) => ({ bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, buttons, pointerId: 6, isPrimary: true });
+        grip.dispatchEvent(new PointerEvent("pointerdown", init(g.top + g.height / 2, 1)));
+        const t = rowOf(b).getBoundingClientRect();
+        const y = p === "before" ? t.top + 2 : t.bottom - 2;
+        document.dispatchEvent(new PointerEvent("pointermove", init(y, 1)));
+        if (up) document.dispatchEvent(new PointerEvent("pointerup", init(y, 0)));
+      },
+      from,
+      to,
+      place,
+      release,
+      onceId(),
+    );
+  const sw = (screen: string) => $(`#menu-items [data-screen="${screen}"] .switch`);
+
+  it("draws a row for each screen in the saved order, with its key, and the switch of each but the inbox", async () => {
+    await openMenuTab({ side_menu_settings: list(...SAVED) });
+    await waitForCount("#menu-items .menu-row", 6);
+    expect(await rows()).toEqual([
+      { screen: "slack", name: "Slack", key: "⌘1", on: "true", dimmed: false },
+      { screen: "mail", name: "受信トレイ", key: "⌘2", on: null, dimmed: false },
+      { screen: "database", name: "データベース", key: "⌘3", on: "true", dimmed: false },
+      { screen: "calendar", name: "カレンダー", key: "—", on: "false", dimmed: true },
+      { screen: "todo", name: "Todo", key: "⌘4", on: "true", dimmed: false },
+      { screen: "orca", name: "開発", key: "—", on: "false", dimmed: true },
+    ]);
+    // The inbox has no switch, and says it is always shown.
+    await expect($('#menu-items [data-screen="mail"] .menu-always')).toHaveText("常に表示");
+    expect(await count("#menu-items .switch")).toBe(5);
+    expect(await count("#menu-items .menu-icon svg")).toBe(6);
+    expect(await callsOf("side_menu_settings_set")).toEqual([]);
+  });
+
+  it("saves the whole list in the new order when a row is dragged, and the sidebar and the keys follow", async () => {
+    await openMenuTab();
+    await waitForCount("#menu-items .menu-row", 6);
+    const saved = list(["slack", true], ["mail", true], ["calendar", true], ["todo", true], ["orca", true], ["database", true]);
+    const set = await mock("side_menu_settings_set", saved);
+    await drag("slack", "mail", "before");
+    expect(await waitForCalls(set)).toEqual([{ items: saved.items }]);
+    await browser.waitUntil(async () => (await order()).join() === "slack,mail,calendar,todo,orca,database");
+    expect((await rows()).map((r) => r.key)).toEqual(["⌘1", "⌘2", "⌘3", "⌘4", "⌘5", "⌘6"]);
+    expect(await sidebar()).toEqual([["nav-slack", "⌘1"], ["nav-mail", "⌘2"], ["nav-calendar", "⌘3"], ["nav-todo", "⌘4"], ["nav-orca", "⌘5"], ["nav-database", "⌘6"]]);
+  });
+
+  it("drags a row to the end of the list, and keeps each row's switch as it was", async () => {
+    await openMenuTab({ side_menu_settings: list(...SAVED) });
+    await waitForCount("#menu-items .menu-row", 6);
+    const saved = list(["mail", true], ["database", true], ["calendar", false], ["todo", true], ["orca", false], ["slack", true]);
+    const set = await mock("side_menu_settings_set", saved);
+    await drag("slack", "orca", "after");
+    expect(await waitForCalls(set)).toEqual([{ items: saved.items }]);
+    await browser.waitUntil(async () => (await sidebar()).map(([id]) => id).join() === "nav-mail,nav-database,nav-todo,nav-slack");
+    expect((await rows()).map((r) => r.key)).toEqual(["⌘1", "⌘2", "—", "⌘3", "—", "⌘4"]);
+  });
+
+  it("saves nothing for a drop where the row was, and for an Escape", async () => {
+    await openMenuTab();
+    await waitForCount("#menu-items .menu-row", 6);
+    const set = await mock("side_menu_settings_set", list(...FIRST));
+    // Released on its own row: the order is the same.
+    await drag("todo", "todo", "before");
+    // Moved, then Escape: the rows are as saved.
+    await drag("todo", "mail", "before", false);
+    await browser.waitUntil(async () => (await order())[0] === "todo");
+    await browser.execute((once) => window.__e2e_once__(once) && document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })), onceId());
+    await browser.waitUntil(async () => (await order()).join() === "mail,calendar,todo,slack,orca,database");
+    // The pointer released after that goes nowhere.
+    await browser.execute((once) => window.__e2e_once__(once) && document.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 6 })), onceId());
+    expect(await callsOf(set)).toEqual([]);
+    expect(await order()).toEqual(["mail", "calendar", "todo", "slack", "orca", "database"]);
+  });
+
+  it("saves the list with the screen off when its switch is pressed, and the sidebar drops it and renumbers the keys", async () => {
+    await openMenuTab();
+    await waitForCount("#menu-items .menu-row", 6);
+    const saved = list(["mail", true], ["calendar", false], ["todo", true], ["slack", true], ["orca", true], ["database", true]);
+    const set = await mock("side_menu_settings_set", saved);
+    await sw("calendar").click();
+    expect(await waitForCalls(set)).toEqual([{ items: saved.items }]);
+    await browser.waitUntil(async () => (await rows())[1]!.dimmed);
+    expect((await rows()).map((r) => [r.key, r.on])).toEqual([["⌘1", null], ["—", "false"], ["⌘2", "true"], ["⌘3", "true"], ["⌘4", "true"], ["⌘5", "true"]]);
+    await expect($("#nav-calendar")).not.toBeDisplayed();
+    expect(await sidebar()).toEqual([["nav-mail", "⌘1"], ["nav-todo", "⌘2"], ["nav-slack", "⌘3"], ["nav-orca", "⌘4"], ["nav-database", "⌘5"]]);
+    await expect(sw("calendar")).toBeEnabled();
+  });
+
+  it("saves the list with the screen on when the switch of an off screen is pressed", async () => {
+    await openMenuTab({ side_menu_settings: list(...SAVED) });
+    await waitForCount("#menu-items .menu-row", 6);
+    const saved = list(["slack", true], ["mail", true], ["database", true], ["calendar", true], ["todo", true], ["orca", false]);
+    const set = await mock("side_menu_settings_set", saved);
+    await sw("calendar").click();
+    expect(await waitForCalls(set)).toEqual([{ items: saved.items }]);
+    await browser.waitUntil(async () => (await rows())[3]!.key === "⌘4");
+    await expect($("#nav-calendar")).toBeDisplayed();
+    expect((await rows()).map((r) => r.key)).toEqual(["⌘1", "⌘2", "⌘3", "⌘4", "⌘5", "—"]);
+    expect(await sidebar()).toEqual([["nav-slack", "⌘1"], ["nav-mail", "⌘2"], ["nav-database", "⌘3"], ["nav-calendar", "⌘4"], ["nav-todo", "⌘5"]]);
+  });
+
+  it("shows the message of a failed save of a switch, and puts the rows and the sidebar back as saved", async () => {
+    await openMenuTab();
+    await waitForCount("#menu-items .menu-row", 6);
+    const set = await mock("side_menu_settings_set", rejects("side-menu.json を書けません"));
+    await sw("todo").click();
+    await waitForCalls(set);
+    await expect($(CARD)).toHaveText("side-menu.json を書けません");
+    await browser.waitUntil(async () => (await rows())[2]!.on === "true");
+    expect((await rows()).map((r) => [r.dimmed, r.key])).toEqual([[false, "⌘1"], [false, "⌘2"], [false, "⌘3"], [false, "⌘4"], [false, "⌘5"], [false, "⌘6"]]);
+    await expect($("#nav-todo")).toBeDisplayed();
+    await expect(sw("todo")).toBeEnabled();
+  });
+
+  it("shows the message of a failed save of a drag, and puts the rows back in the saved order", async () => {
+    await openMenuTab();
+    await waitForCount("#menu-items .menu-row", 6);
+    const set = await mock("side_menu_settings_set", rejects("side-menu.json を書けません"));
+    await drag("database", "mail", "before");
+    await waitForCalls(set);
+    await expect($(CARD)).toHaveText("side-menu.json を書けません");
+    await browser.waitUntil(async () => (await order()).join() === "mail,calendar,todo,slack,orca,database");
+    expect((await sidebar()).map(([id]) => id)).toEqual(["nav-mail", "nav-calendar", "nav-todo", "nav-slack", "nav-orca", "nav-database"]);
+  });
+
+  it("writes the message of a failed read to the log, and draws no row", async () => {
+    await openMenuTab({ side_menu_settings: rejects("side-menu.json を読めません") });
+    await waitForLog("side-menu.json を読めません");
+    expect(await count("#menu-items .menu-row")).toBe(0);
+  });
+
+  it("opens a hint from the ? of the card", async () => {
+    await openMenuTab();
+    await $("#menu-help").click();
+    await expect($('.pop[aria-label="メニュー"]')).toBeDisplayed();
+    await expect($("#menu-help")).toHaveAttribute("aria-expanded", "true");
+  });
+});
+
 describe("settings: tabs", () => {
   const tab = (name: Tab) => $(`#settings-tab-${name}`);
   const panel = (name: Tab) => $(`#settings-panel-${name}`);
@@ -2187,7 +2365,7 @@ describe("settings: tabs", () => {
       key,
     );
 
-  it("has the eleven tabs in order, in a tablist, each controlling the card it names", async () => {
+  it("has the twelve tabs in order, in a tablist, each controlling the card it names", async () => {
     await openSettings([]);
     await expect($("#settings-tabs")).toHaveAttribute("role", "tablist");
     expect(await textsOf('#settings-tabs [role="tab"]')).toEqual(TABS.map(([, label]) => label));
@@ -2207,7 +2385,7 @@ describe("settings: tabs", () => {
 
   it("shows only the card of the pressed tab", async () => {
     await openSettings([]);
-    // One script reads every card, so a press costs two WebDriver commands and not one lookup for each of the eleven cards (the lookups timed out under load).
+    // One script reads every card, so a press costs two WebDriver commands and not one lookup for each of the twelve cards (the lookups timed out under load).
     const shown = () =>
       browser.execute(() =>
         [...document.querySelectorAll('[role="tabpanel"][id^="settings-panel-"]')]

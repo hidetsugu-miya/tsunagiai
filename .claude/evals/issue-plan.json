@@ -69,6 +69,20 @@
         "オーナーに、実機で何を確かめてほしいか（Finder からファイルを落とす操作と、`dataTransfer.files` が空になる条件）を具体的に頼んでいる",
         "答えが出てから、確かめた結果を本文に入れて issue を作る、と言っている"
       ]
+    },
+    {
+      "id": 6,
+      "name": "prototype-from-real-screenshot-uses-made-up-data",
+      "prompt": "あなたは issue を作るよう頼まれたリードです。`.claude/skills/issue-plan/SKILL.md` を読み、`.claude/evals/files/issue-plan/request-with-real-screenshot.md` の依頼について、手順 2 のとおりに、オーナーに見せるプロトタイプの HTML を書いてください。この記録が、あなたの持つ文脈です。GitHub には読み書きともに触れず、`preview_open` も実行せずに、`tmp/` に置くはずの HTML をそのまま書き出してください。",
+      "expected_output": "リポジトリは公開で、プロトタイプはそのまま issue の本文に入るので、スクリーンショットにあったオーナーの実際のプロジェクト名とタスク名は使わず、見せる前から架空の名前だけでモックを作る。",
+      "files": [
+        ".claude/evals/files/issue-plan/request-with-real-screenshot.md"
+      ],
+      "assertions": [
+        "モックの HTML に、スクリーンショットにある実際の名前（「北斗物流」、「基幹刷新」、「青葉クリニック」、「予約システム」、「在庫テーブル」、「夜間バッチ」、「予約枠」）が 1 つも入っていない",
+        "モックのプロジェクトとタスクは、依頼に無い架空の名前で作られ、見出しの右に灰色の小さな数字（案 A）を描いている",
+        "架空のデータを使う理由を、issue の本文もプロトタイプも公開されるから（またはオーナーに見せる前から作るため）と述べている"
+      ]
     }
   ]
 }

@@ -295,6 +295,7 @@
           <button id="settings-tab-claude" class="tab" role="tab" aria-controls="settings-panel-claude" aria-selected="false" tabindex="-1">Claude</button>
           <button id="settings-tab-skill" class="tab" role="tab" aria-controls="settings-panel-skill" aria-selected="false" tabindex="-1">スキル</button>
           <button id="settings-tab-orca" class="tab" role="tab" aria-controls="settings-panel-orca" aria-selected="false" tabindex="-1">開発</button>
+          <button id="settings-tab-menu" class="tab" role="tab" aria-controls="settings-panel-menu" aria-selected="false" tabindex="-1">メニュー</button>
           <button id="settings-tab-font" class="tab" role="tab" aria-controls="settings-panel-font" aria-selected="false" tabindex="-1">フォント</button>
           <button id="settings-tab-update" class="tab" role="tab" aria-controls="settings-panel-update" aria-selected="false" tabindex="-1">アップデート<span class="tab-dot" hidden></span></button>
           <button id="settings-tab-log" class="tab" role="tab" aria-controls="settings-panel-log" aria-selected="false" tabindex="-1">ログ</button>
@@ -526,6 +527,17 @@
         </form>
       </section>
       </div>
+      <section id="settings-panel-menu" class="card" role="tabpanel" aria-labelledby="settings-tab-menu" hidden>
+        <div class="card-head">
+          <h2>
+            <span class="logo orca"><svg data-svg="sidebar"></svg></span>メニュー
+          </h2>
+          <button id="menu-help" class="icon-btn" data-hint aria-label="メニューの説明" aria-expanded="false">
+            <svg data-svg="help"></svg>
+          </button>
+        </div>
+        <div id="menu-items"></div>
+      </section>
       <section id="settings-panel-font" class="card" role="tabpanel" aria-labelledby="settings-tab-font" hidden>
         <div class="card-head">
           <h2>
