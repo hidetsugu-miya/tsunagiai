@@ -3217,7 +3217,7 @@ describe("orca: files and editor (A-18)", () => {
       ["page.html", false],
     ]);
 
-  it("has 「ブラウザで開く」 as the fifth item of the menu of a file whose name ends with .html, whatever the case, before the line, and not on another file or on a folder (A-31)", async () => {
+  it("has 「ブラウザで開く」 as the fourth item of the menu of a file on this machine whose name ends with .html, whatever the case, before the line, and not on another file or on a folder (A-31)", async () => {
     await openFiles({ orca_files_list: withPage() });
     await waitForCount("#orca-files-tree .orca-file", 4);
     expect(await rightClickRow("page.html")).toBe(true);
@@ -3227,7 +3227,7 @@ describe("orca: files and editor (A-18)", () => {
     await browser.keys("Escape");
     await expect($(".menu")).not.toExist();
     expect(await rightClickRow("INDEX.HTML")).toBe(true);
-    expect((await textsOf('.menu[role="menu"] button'))[4]).toBe("ブラウザで開く");
+    expect((await textsOf('.menu[role="menu"] button'))[3]).toBe("ブラウザで開く");
     await browser.keys("Escape");
     await expect($(".menu")).not.toExist();
     expect(await rightClickRow("a.rs")).toBe(true);
@@ -3244,7 +3244,7 @@ describe("orca: files and editor (A-18)", () => {
     await waitForCount("#orca-files-tree .orca-file", 4);
     const open = await mock("orca_file_open_in_browser", null);
     expect(await rightClickRow("OLD.HTM")).toBe(true);
-    expect((await textsOf('.menu[role="menu"] button'))[4]).toBe("ブラウザで開く");
+    expect((await textsOf('.menu[role="menu"] button'))[3]).toBe("ブラウザで開く");
     await browser.keys("Escape");
     await expect($(".menu")).not.toExist();
     expect(await rightClickRow("a.htmx")).toBe(true);
