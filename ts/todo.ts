@@ -18,7 +18,7 @@ import { initSplit, type SplitHandle } from "./split.js";
 import { renderDetail } from "./todo-detail.js";
 import { discardDraft, draftOpen } from "./todo-draft.js";
 import { clearCommentNotices, loadedComments } from "./todo-comments.js";
-import { closeTab, editingField, openTab, projectName, projectOf, pruneTabs, recountTodo, searching, setTodoCount, settleLocal, todoState } from "./todo-data.js";
+import { closeTab, drawOrcaTodo, editingField, openTab, orcaTodoWanted, projectName, projectOf, pruneTabs, recountTodo, searching, setTodoCount, settleLocal, todoState } from "./todo-data.js";
 import { renderList, renderProjects } from "./todo-list.js";
 import { clearSearch, initTodoSearch, searchTodo } from "./todo-search.js";
 import { cancelTodoReload, scheduleTodoReload, todoCall } from "./todo-write.js";
@@ -247,6 +247,12 @@ function lookTask(entry: PopoutTab): PopoutTab | null | undefined {
 export function renderTodo() {
   if (owner) return owner.render();
   todoState.undrawn = false;
+  // Another screen is shown (the Orca screen draws the tasks too, A-49): the screen is drawn when it is shown again, by the load that comes with it.
+  if (currentScreen() !== "todo") {
+    pruneTabs();
+    syncTodoPopouts(lookTask);
+    return drawOrcaTodo();
+  }
   if (!projectOf(todoState.view) && todoState.view !== "today" && todoState.view !== "inbox") todoState.view = "today";
   // A task that is gone from the data (completed, deleted) loses its tab.
   pruneTabs();
@@ -260,6 +266,7 @@ export function renderTodo() {
     renderSide();
   }
   syncTodoPopouts(lookTask);
+  drawOrcaTodo();
 }
 
 // The card that says the list is the last one fetched (A-28, `setNotice`): a warning, drawn while the Todo screen is shown.
@@ -294,8 +301,9 @@ export async function loadTodo(quiet = false, withDone = true) {
     const data = await invoke("todoist_load", { withDone: withDone || todoState.doneStale });
     quietFails = 0;
     if (data && !data.offline) todoState.doneStale = false;
-    // Not while a change is in flight: the reload after the last one draws.
-    if (seq !== todoState.seq || currentScreen() !== "todo" || todoState.writes) return false;
+    // Not while a change is in flight: the reload after the last one draws. The Orca screen reads the tasks as the Todo screen does while it shows them (A-49).
+    const here = currentScreen() === "todo";
+    if (seq !== todoState.seq || (!here && !orcaTodoWanted()) || todoState.writes) return false;
     if (data === null) {
       showTokenForm();
       return true;
@@ -311,7 +319,7 @@ export async function loadTodo(quiet = false, withDone = true) {
     setTodoCount(data.tasks);
     todoState.projectById = new Map(data.projects.map((p) => [p.id, p]));
     todoState.taskById = new Map(data.tasks.map((t) => [t.id, t]));
-    drawTodoNotice(data.offline);
+    if (here) drawTodoNotice(data.offline);
     // A field being typed in keeps what was typed; the detail is drawn after the focus leaves, by the next save's load or the next refresh.
     if (editingField()) {
       todoState.undrawn = true;
@@ -319,7 +327,7 @@ export async function loadTodo(quiet = false, withDone = true) {
     }
     if (quiet && same && !todoState.undrawn) return false;
     // A search is made again on the new data, so its results follow the tasks.
-    if (searching()) await searchTodo();
+    if (here && searching()) await searchTodo();
     else renderTodo();
   } catch (e) {
     if (!quiet || ++quietFails === 3) logError("todo", e);
@@ -455,9 +463,11 @@ async function refreshTodo() {
   if (refreshingTodo || document.hidden) return;
   refreshingTodo = true;
   try {
-    if (currentScreen() !== "todo") await loadTodoCount();
     // Not while the token form is up: a load would read the keychain and draw the form again, dropping what is typed in it.
-    else if ($("todo-token").hidden) await loadTodo(true, false);
+    // Another screen than Todo reads the tasks for the count only, except the Orca screen while it shows them (A-49).
+    if (currentScreen() === "todo" || orcaTodoWanted()) {
+      if ($("todo-token").hidden) await loadTodo(true, false);
+    } else await loadTodoCount();
   } finally {
     refreshingTodo = false;
   }

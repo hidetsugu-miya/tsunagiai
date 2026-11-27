@@ -2,7 +2,7 @@
 // A folder is read the first time it is opened and drawn from what was read after that, and the root and then the open folders are read again, side by side (at most `reads()` at a time), when the window gets the focus back and, while the pane is shown, by the clock of the Orca screen (`refreshFiles`, called by orca.ts), after the app's own create, delete and move, and after a switch of the branch, the app's own or one the list of Orca shows (`syncFiles`). A read by the clock or for a branch that changed outside the app says nothing when it fails (what is shown stays). Where the Orca screen streams (A-12), the disk is watched (`orca-watch.ts`, Orca's `files.watch`) and the folders that hold a path that changed or lie above it (read ones, not in an ignored folder) are read again at once (`rereadTree`), and the clock does not read the tree while its worktree is watched, unless a folder of `node_modules` or `.git` is open (Orca does not watch them), but it still asks the marks of the folders that were read (`rereadChanges`), because a commit is no change that Orca tells; elsewhere nothing watches the disk. A press on a row selects it (with ⌘ it adds the row to the selection or takes it off, with Shift it selects the rows from the one pressed before), and the selected rows are drawn in the accent color. A file opens in the editor on a double press, and the right button on a row opens the menu that copies its path (and, on a file, downloads it; on a folder, first makes a new file or folder in it, as the right button on the empty part of the tree does in the root; on a row that differs from HEAD, after a line, stages it, unstages it and puts it back, which asks first, A-44; last, after a line, 「移動・名前の変更」, which turns the row into a field with its path from the worktree, and the delete, which asks first and deletes for good, A-18; on several selected rows the menu is the delete alone, as the Delete key is, A-18). A row is also moved by dragging it onto a folder's row or onto the empty part of the tree (the root of the worktree). The pane is shown or hidden by the button in its top row while it is shown, and by the button at the right end of the tab strip of the corner pane while it is hidden.
 // A file or folder dragged in from outside is put in the folder under the pointer (A-47, `putDropped`): the tree is a drop zone of `orca-attach.ts`, marks the folder with `data-drop` as a dragged row does, asks about each name that is taken, and shows the progress above the tree.
 // The tree belongs to one worktree of one target: another tab's worktree gives a new tree (nothing is kept of the old one, and an answer that comes late for the old one is dropped).
-// The top row also has the three buttons that choose what the pane shows under the heading, the files, the history of the worktree (A-27, orca-history.ts) or the language server of the worktree (A-34, orca-lsp.ts), a fourth for the connections of the database screen (A-43, orca-database.ts) and a fifth for the tickets of Jira (J-2, orca-jira.ts), which belong to no worktree and hide the heading; the choice is kept in memory only, and the heading serves the files, the history and the language server, and so do the reads at the return of the focus and by the clock (`refreshFiles`), which the language server and the connections have none of, and the tickets have none by the clock (the focus tries again a first read that failed).
+// The top row also has the three buttons that choose what the pane shows under the heading, the files, the history of the worktree (A-27, orca-history.ts) or the language server of the worktree (A-34, orca-lsp.ts), a fourth for the connections of the database screen (A-43, orca-database.ts) a fifth for the tickets of Jira (J-2, orca-jira.ts) and a sixth for the tasks of Todoist (A-49, orca-todo.ts), which belong to no worktree and hide the heading; the choice is kept in memory only, and the heading serves the files, the history and the language server, and so do the reads at the return of the focus and by the clock (`refreshFiles`), which the language server and the connections have none of, and the tickets have none by the clock (the focus tries again a first read that failed) and the tasks are read by the clock of the Todo screen.
 import type { OrcaDeleteEntry } from "./bindings/OrcaDeleteEntry";
 import type { OrcaDeleted } from "./bindings/OrcaDeleted";
 import type { OrcaDir } from "./bindings/OrcaDir";
@@ -12,7 +12,7 @@ import type { OrcaGitMark } from "./bindings/OrcaGitMark";
 import type { OrcaGitWorktree } from "./bindings/OrcaGitWorktree";
 import { $, composing, tag } from "./dom.js";
 import { confirmDelete, confirmDeleteMany, confirmRevert } from "./hint.js";
-import { BRANCH_SVG, CHEVRON_SVG, COPY_PATH_SVG, DATABASE_SVG, DELETE_SVG, DIFF_SVG, DOWNLOAD_SVG, FILE_SVG, FOLDER_SVG, MINUS_CIRCLE_SVG, MOVE_SVG, OPEN_SVG, PLUS_SVG, RETURN_SVG, SERVER_SVG, TICKET_SVG } from "./icons.js";
+import { BRANCH_SVG, CHEVRON_SVG, COPY_PATH_SVG, DATABASE_SVG, DELETE_SVG, DIFF_SVG, DOWNLOAD_SVG, FILE_SVG, FOLDER_SVG, MINUS_CIRCLE_SVG, MOVE_SVG, OPEN_SVG, PLUS_SVG, RETURN_SVG, SERVER_SVG, TICKET_SVG, TODO_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { openMenu } from "./menu.js";
 import { closeBranchDialog, openBranchDialog } from "./orca-branch.js";
@@ -20,6 +20,7 @@ import type { DiffCommit } from "./orca-diff.js";
 import { checkHistory, initHistory, refreshHistory, reloadHistory, syncHistory } from "./orca-history.js";
 import { syncOrcaDatabase } from "./orca-database.js";
 import { initOrcaJira, refreshOrcaJira, syncOrcaJira } from "./orca-jira.js";
+import { syncOrcaTodo } from "./orca-todo.js";
 import { syncLsp } from "./orca-lsp.js";
 import { type Dropped, fileBase64, listenForDrops } from "./orca-attach.js";
 import { toast } from "./toast.js";
@@ -44,7 +45,7 @@ interface Listing {
 
 let shown = false;
 // What the pane shows under the heading.
-let mode: "files" | "history" | "server" | "database" | "jira" = "files";
+let mode: "files" | "history" | "server" | "database" | "jira" | "todo" = "files";
 let context: FilesContext | null = null;
 // A new tree (another worktree) ends the reads of the old one.
 let generation = 0;
@@ -132,12 +133,14 @@ function syncModes() {
   $("orca-server").hidden = part !== "server";
   $("orca-database").hidden = part !== "database";
   $("orca-jira").hidden = part !== "jira";
-  $("orca-files-head").hidden = part === "database" || part === "jira";
-  for (const [name, button] of [["files", "orca-files-mode-files"], ["history", "orca-files-mode-history"], ["server", "orca-files-mode-server"], ["database", "orca-files-mode-database"], ["jira", "orca-files-mode-jira"]] as const) $(button).setAttribute("aria-pressed", String(part === name));
+  $("orca-todo").hidden = part !== "todo";
+  $("orca-files-head").hidden = part === "database" || part === "jira" || part === "todo";
+  for (const [name, button] of [["files", "orca-files-mode-files"], ["history", "orca-files-mode-history"], ["server", "orca-files-mode-server"], ["database", "orca-files-mode-database"], ["jira", "orca-files-mode-jira"], ["todo", "orca-files-mode-todo"]] as const) $(button).setAttribute("aria-pressed", String(part === name));
   syncHistory(context === null ? null : { target: context.target, path: context.path }, shown && part === "history");
   syncLsp(context === null ? null : { target: context.target, project: context.project, path: context.path }, shown && part === "server");
   syncOrcaDatabase(shown && part === "database");
   syncOrcaJira(shown && part === "jira", context === null ? null : { environment: context.target, project: context.project });
+  syncOrcaTodo(shown && part === "todo");
   drawDrop();
   if (shown && part === "files" && context !== null && !listings.has("")) void readDir("");
 }
@@ -146,7 +149,7 @@ function syncModes() {
 const shownPart = () => mode;
 const showsHistory = () => shownPart() === "history";
 
-function chooseMode(next: "files" | "history" | "server" | "database" | "jira") {
+function chooseMode(next: "files" | "history" | "server" | "database" | "jira" | "todo") {
   if (mode === next) return;
   mode = next;
   syncModes();
@@ -342,7 +345,8 @@ export function refreshFiles(clock = false) {
     if (!clock) refreshOrcaJira();
     return;
   }
-  if (shownPart() === "server" || shownPart() === "database") return;
+  // The tasks are read by the clock of the Todo screen (A-49), which reads them for the part while it is shown.
+  if (shownPart() === "server" || shownPart() === "database" || shownPart() === "todo") return;
   if (showsHistory()) {
     if (clock) void checkHistory();
     else refreshHistory();
@@ -1269,5 +1273,7 @@ export function initOrcaFiles(on: { open: (relative: string) => void; jira: (key
   $("orca-files-mode-database").onclick = () => chooseMode("database");
   $("orca-files-mode-jira").innerHTML = TICKET_SVG;
   $("orca-files-mode-jira").onclick = () => chooseMode("jira");
+  $("orca-files-mode-todo").innerHTML = TODO_SVG;
+  $("orca-files-mode-todo").onclick = () => chooseMode("todo");
   initOrcaJira({ open: on.jira, create: on.newJira });
 }

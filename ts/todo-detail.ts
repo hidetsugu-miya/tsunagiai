@@ -319,7 +319,18 @@ function creatingRow(job: Creating) {
   return li;
 }
 
+// Where the detail being drawn is (T-10, T-11, A-49): `open` opens another task (a subtask row, the parent chip), and `plain` leaves out what needs the Todo screen: the linked mail and the grip of a subtask.
+// The window of a task opens nothing (it has no strip); the tab of the Orca work pane opens a tab beside it.
+export interface DetailHost {
+  open: (id: string) => void;
+  plain: boolean;
+}
+const SCREEN: DetailHost = { open: (id) => openTodoTab(id), get plain() { return isTaskWindow(); } };
+// The host of the detail that renderDetail is drawing; its rows take it while they are made.
+let host: DetailHost = SCREEN;
+
 function subtaskRow(s: TaskItem["subtasks"][number]) {
+  const { open, plain } = host;
   const li = tag("li", `task single${s.done ? " done" : ""}`);
   const box = checkBox(PRIORITY_COLORS[4], s.done, s.done ? "未完了に戻す" : "完了にする");
   box.onchange = () => {
@@ -330,7 +341,7 @@ function subtaskRow(s: TaskItem["subtasks"][number]) {
   const t = todoState.taskById.get(s.id);
   if (t) {
     li.dataset.id = s.id;
-    li.onclick = () => openTodoTab(s.id);
+    li.onclick = () => open(s.id);
     box.onclick = (e) => e.stopPropagation();
   }
   const body = tag("div", "body");
@@ -347,7 +358,7 @@ function subtaskRow(s: TaskItem["subtasks"][number]) {
     );
     trail.append(actions);
     // The grip drags onto a project of the list or a row of tasks, which the window of a task has none of (T-11).
-    if (!isTaskWindow()) li.append(gripOf(li, t));
+    if (!plain) li.append(gripOf(li, t));
   }
   li.append(trail);
   return li;
@@ -538,10 +549,11 @@ function parentDescPanel(parentId: string) {
   return panel;
 }
 
-// Draws the detail of the task `id` into `box` (T-1, T-10): the Todo screen draws its selected tab into `#todo-detail`. Does nothing for a task that is not in the data.
-export function renderDetail(box: HTMLElement, id: string) {
+// Draws the detail of the task `id` into `box` (T-1, T-10): the Todo screen draws its selected tab into `#todo-detail`, and a tab of the Orca work pane into its own box (A-49, `at`). Does nothing for a task that is not in the data.
+export function renderDetail(box: HTMLElement, id: string, at: DetailHost = SCREEN) {
   const t = todoState.taskById.get(id);
   if (!t) return;
+  host = at;
   // A reload redraws the whole detail; the field being typed in keeps the focus and the caret.
   const active = document.activeElement as HTMLInputElement;
   const field = box.contains(active) ? active.dataset.field : null;
@@ -591,7 +603,7 @@ export function renderDetail(box: HTMLElement, id: string) {
     const link = tag("button", "parent-link");
     link.insertAdjacentHTML("beforeend", RETURN_SVG);
     link.append(tag("span", "pl-label", "親タスク"));
-    link.onclick = () => openTodoTab(parent.id);
+    link.onclick = () => at.open(parent.id);
     // The name is plain text; the parent's description, when it has one, is always under the chip.
     const name = tag("span", "parent-name");
     name.append(tag("span", "pl-name", parent.content));
@@ -601,7 +613,7 @@ export function renderDetail(box: HTMLElement, id: string) {
     parts.unshift(...below);
   }
   // The mail is opened on the mail screen, which the window of a task has not (T-11).
-  const mail = isTaskWindow() ? null : linkedMail(t, accountSet());
+  const mail = at.plain ? null : linkedMail(t, accountSet());
   if (mail) {
     const card = tag("div", "mail-link");
     card.insertAdjacentHTML("beforeend", MAIL_SVG);

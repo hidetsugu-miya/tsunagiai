@@ -37,7 +37,7 @@ function draftOf(taskId: string) {
   return draft;
 }
 
-// The parts of the section drawn last, which an answer redraws. It is the section of the open task, or of one that was open; `redraw` checks.
+// The parts of the section drawn last for each task, which an answer redraws: the detail of the Todo screen, the window of a task and a tab of the Orca work pane (A-49) each draw one, and a task drawn in two of them keeps the later.
 interface View {
   taskId: string;
   count: HTMLElement;
@@ -48,7 +48,9 @@ interface View {
   clip: HTMLButtonElement;
   chip: HTMLElement;
 }
-let view: View | null = null;
+const views = new Map<string, View>();
+// The task whose 「ファイルを添付」 was pressed last: the file the picker gives is for it.
+let pickedFor: string | null = null;
 
 function commentRow(c: Comment) {
   const row = tag("div", "c-row");
@@ -94,7 +96,8 @@ export const clearCommentNotices = () => drawFailureCard(null);
 function drawList(v: View) {
   const comments = held.get(v.taskId);
   const failure = failures.get(v.taskId);
-  drawFailureCard(v.taskId);
+  // Only a section that is in the page takes the card: a section that a redraw replaced leaves the card as it is.
+  if (v.list.isConnected) drawFailureCard(v.taskId);
   const open = !folded.has(v.taskId);
   v.head.setAttribute("aria-expanded", String(open));
   v.count.textContent = comments?.length ? String(comments.length) : "";
@@ -134,11 +137,12 @@ function drawComposer(v: View) {
   v.chip.replaceChildren(tag("span", "c-chip-name", draft.file.name), remove);
 }
 
-// Draws what changed for `taskId`, the field's controls only when the comments did not change (the list is not drawn again under a selection or a press); nothing when its section is not the one on screen.
+// Draws what changed for `taskId`, the field's controls only when the comments did not change (the list is not drawn again under a selection or a press); nothing when no section was drawn for it.
 function redraw(taskId: string, composerOnly = false) {
-  if (!view || view.taskId !== taskId || todoState.selected !== taskId) return;
-  if (!composerOnly) drawList(view);
-  drawComposer(view);
+  const v = views.get(taskId);
+  if (!v) return;
+  if (!composerOnly) drawList(v);
+  drawComposer(v);
 }
 
 // The field is one line high and grows with its text, up to 6 lines (the `max-height` of `.chat-input`; then it scrolls).
@@ -149,7 +153,7 @@ function growInput(input: HTMLTextAreaElement) {
 
 // A detached field has no height to read, so the detail calls this once the section is in the page.
 export function fitCommentInput() {
-  if (view) growInput(view.input);
+  for (const v of views.values()) if (v.input.isConnected) growInput(v.input);
 }
 
 // The one file picker, outside the detail, which a redraw replaces: a redraw while the panel is open would drop the chosen file.
@@ -164,7 +168,9 @@ function filePicker() {
     const file = input!.files?.[0];
     // Emptied so that the same file can be picked again.
     input!.value = "";
-    const taskId = todoState.selected;
+    // The task whose clip was pressed; a file that arrives without a press goes to the open task.
+    const taskId = pickedFor ?? todoState.selected;
+    pickedFor = null;
     if (!file || !taskId) return;
     if (file.size > MAX_FILE_BYTES) return showFailure("todo-comments", "ファイルが大きすぎます（100 MB まで）");
     const draft = draftOf(taskId);
@@ -232,14 +238,16 @@ async function send(taskId: string) {
       draft.file = null;
       draft.uploaded = null;
       // The redraw below puts the empty draft in the field; one already drawn is emptied here, since the field is not rebuilt by an answer.
-      if (view?.taskId === taskId) view.input.value = "";
+      const v = views.get(taskId);
+      if (v) v.input.value = "";
     }
   } catch (e) {
     showFailure("todo-comments", e);
   }
   sending.delete(taskId);
   redraw(taskId);
-  if (view?.taskId === taskId) growInput(view.input);
+  const v = views.get(taskId);
+  if (v) growInput(v.input);
   if (tokenNeeded) loadTodo();
 }
 
@@ -283,7 +291,10 @@ export function commentsSection(taskId: string, projectId: string, fresh: boolea
   clip.innerHTML = CLIP_SVG;
   clip.setAttribute("aria-label", "ファイルを添付");
   const picker = filePicker();
-  clip.onclick = () => picker.click();
+  clip.onclick = () => {
+    pickedFor = taskId;
+    picker.click();
+  };
   const sendButton = tag("button", "icon-btn c-send");
   sendButton.type = "submit";
   sendButton.setAttribute("aria-label", isMac ? "送信（⌘↩）" : "送信（Ctrl+Enter）");
@@ -296,7 +307,8 @@ export function commentsSection(taskId: string, projectId: string, fresh: boolea
   };
 
   root.append(head, list, form);
-  view = { taskId, count, head, list, input, send: sendButton, clip, chip };
+  const view: View = { taskId, count, head, list, input, send: sendButton, clip, chip };
+  views.set(taskId, view);
   drawList(view);
   drawComposer(view);
   if (fresh) load(taskId, projectId);

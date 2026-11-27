@@ -128,6 +128,15 @@ export const useTaskWindow = () => {
   taskWindow = true;
 };
 
+// What the Orca screen gives for its Todo part and its tabs of a task (A-49, `ts/orca-todo.ts`): whether it wants the tasks read while it is shown, and what it draws from them after the screen's data was drawn.
+// The data is the Todo screen's own, read by its load (`loadTodo`) and changed by its writes, so no second reader runs.
+let orcaTodo = { wanted: () => false, draw: () => {} };
+export const useOrcaTodo = (part: typeof orcaTodo) => {
+  orcaTodo = part;
+};
+export const orcaTodoWanted = () => orcaTodo.wanted();
+export const drawOrcaTodo = () => orcaTodo.draw();
+
 // Remembers `tasks` (the open tasks, subtasks included) as what the count is made of, and counts them. An empty list clears the count.
 export function setTodoCount(tasks: TaskItem[]) {
   if (taskWindow) return;
@@ -171,7 +180,8 @@ export function editingField() {
   const a = document.activeElement as HTMLElement;
   // The window of a task (T-11) has no list.
   if ($("todo-list")?.contains(a)) return a.matches(".row-edit");
-  return $("todo-detail").contains(a) && a.matches("textarea, input:not([type=checkbox])") && ((a.dataset.field !== "sub" && a.dataset.field !== "comment") || (a as HTMLInputElement).value !== "");
+  // The detail of the Todo screen, and the detail in a tab of a task of the Orca work pane (A-49).
+  return !!a.closest("#todo-detail, .orca-todo-detail") && a.matches("textarea, input:not([type=checkbox])") && ((a.dataset.field !== "sub" && a.dataset.field !== "comment") || (a as HTMLInputElement).value !== "");
 }
 
 // Only http(s) links stay: a relative link would resolve to the app's own origin, which Rust's on_navigation allows, and replace the screen.

@@ -36,6 +36,8 @@ import { confirmCloseDraft } from "./hint.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { closeDefinition, type DefinitionOpen, type DefinitionQuery, definitionsOf, hasDefinitionIn, initDefinition, openDefinition, showDefinitions } from "./orca-definition.js";
 import { openAddProject } from "./orca-add.js";
+import { closeTodoTab, initOrcaTodo, openTodoTab as openTaskTab, showTodoTabs, todoTabsOf, todoTitleOf } from "./orca-todo.js";
+import { todoState } from "./todo-data.js";
 import { closeJiraTab, hasJiraDraft, initJiraTab, jiraTabsOf, jiraTitleOf, openJiraTab, openNewJiraTab, showJiraTabs } from "./orca-jira-tab.js";
 import { closeConnectionTabs, closeDatabaseTab, conditionOf, databaseTabsOf, initDatabaseTabs, openQuery, openTable, showDatabaseTabs } from "./orca-database-tabs.js";
 import { initOrcaDatabase, lostConnection } from "./orca-database.js";
@@ -47,8 +49,8 @@ import { syncFileWatches, unwatched, watchReady } from "./orca-watch.js";
 import { type PaneModel, drawTree, editorHostOf, initPaneTree, type TreeModel } from "./orca-pane-tree.js";
 import { applyLocal, findTab, focusedTab, layoutOf, needsSync, type PaneTabs, panesOf, syncPanes } from "./orca-panes.js";
 import { closePeek, drawPeek, initPeek, openPeek, peeking } from "./orca-peek.js";
-import { awayFile, awayFileIn, awayIn, focusPopout, initPopout, isAway, popOut, syncPopouts } from "./orca-popout.js";
-import { databaseIcon, definitionIcon, diffIcon, fileIcon, lockIcon, STATUS_LABELS, statusIcon, ticketIcon } from "./orca-status.js";
+import { awayFile, awayFileIn, awayIn, focusPopout, initPopout, initWorkTodoPopout, isAway, popOut, syncPopouts } from "./orca-popout.js";
+import { databaseIcon, definitionIcon, diffIcon, fileIcon, lockIcon, STATUS_LABELS, statusIcon, ticketIcon, todoIcon } from "./orca-status.js";
 import { openScratchpad } from "./orca-scratchpad.js";
 import { hideTerminals, initOrcaTerminal, type Placement, pruneTerminals, showTerminals, type TermSource } from "./orca-terminal.js";
 import { type Fields, registerDraftTarget } from "./screen-bridge.js";
@@ -230,10 +232,10 @@ function forgetNotices() {
 
 // ---- tabs ----
 
-// A tab of the work pane: a Claude session, or a plain terminal of Orca (both are terminals), or a file open in the editor (A-18), or the difference of a file from HEAD (A-24), or the definition of a name of the editor (A-34), or a table or the SQL of a database (A-43), or a ticket of Jira or the form of a new one (J-2).
+// A tab of the work pane: a Claude session, or a plain terminal of Orca (both are terminals), or a file open in the editor (A-18), or the difference of a file from HEAD (A-24), or the definition of a name of the editor (A-34), or a table or the SQL of a database (A-43), or a ticket of Jira or the form of a new one (J-2), or a task of Todoist (A-49).
 interface Tab {
   id: string;
-  kind: "claude" | "plain" | "file" | "diff" | "definition" | "database" | "jira";
+  kind: "claude" | "plain" | "file" | "diff" | "definition" | "database" | "jira" | "todo";
   status: OrcaStatus;
   label: string;
   title: string;
@@ -258,8 +260,8 @@ interface Tab {
   gem?: boolean;
 }
 
-// A tab with no terminal, whose page is a document of the worktree: a file in the editor, the difference of a file, or the definition of a name; or the page of a database or of a Jira ticket (they have the main worktree of their project, so the file pane keeps its worktree).
-const isDocument = (t: Tab) => t.kind === "file" || t.kind === "diff" || t.kind === "definition" || t.kind === "database" || t.kind === "jira";
+// A tab with no terminal, whose page is a document of the worktree: a file in the editor, the difference of a file, or the definition of a name; or the page of a database, of a Jira ticket or of a task of Todoist (they have the main worktree of their project, so the file pane keeps its worktree).
+const isDocument = (t: Tab) => t.kind === "file" || t.kind === "diff" || t.kind === "definition" || t.kind === "database" || t.kind === "jira" || t.kind === "todo";
 
 // Where an item of a list is (A-6): the saved environment's name, null for this machine (an item with no `environment` is this machine's).
 const placeOf = (item: { environment?: string | null }) => item.environment ?? null;
@@ -356,6 +358,9 @@ function tabsOf(key: string): Tab[] {
   }
   for (const j of jiraTabsOf(place, key)) {
     tabs.push({ id: j.id, kind: "jira", status: "done", label: "", title: jiraTitleOf(j), latest: null, handle: null, path: main?.path ?? "", where: main === undefined ? "" : worktreeLabel(main), environment: j.target });
+  }
+  for (const k of todoTabsOf(place, key)) {
+    tabs.push({ id: k.id, kind: "todo", status: "done", label: "", title: todoTitleOf(k), latest: null, handle: null, path: main?.path ?? "", where: main === undefined ? "" : worktreeLabel(main), environment: k.target });
   }
   // A Claude row that got its handle after it was first seen keeps the place it had under its id.
   for (const t of tabs) if (!seen.has(keyOfTab(t))) seen.set(keyOfTab(t), seen.get(t.id) ?? seen.size);
@@ -916,7 +921,7 @@ function tabNode(t: Tab, selected: boolean) {
   select.type = "button";
   select.setAttribute("role", "tab");
   select.setAttribute("aria-selected", String(selected));
-  select.append(t.outside ? lockIcon() : t.kind === "file" ? fileIcon() : t.kind === "diff" ? diffIcon() : t.kind === "definition" ? definitionIcon() : t.kind === "database" ? databaseIcon() : t.kind === "jira" ? ticketIcon() : statusIcon(t.status, t.label), tag("span", "orca-tab-title", t.title));
+  select.append(t.outside ? lockIcon() : t.kind === "file" ? fileIcon() : t.kind === "diff" ? diffIcon() : t.kind === "definition" ? definitionIcon() : t.kind === "database" ? databaseIcon() : t.kind === "jira" ? ticketIcon() : t.kind === "todo" ? todoIcon() : statusIcon(t.status, t.label), tag("span", "orca-tab-title", t.title));
   if (t.kind === "definition") wrap.dataset.definition = "true";
   if (t.kind === "database") wrap.dataset.database = "true";
   if (t.kind === "jira") wrap.dataset.jira = "true";
@@ -1046,6 +1051,18 @@ function syncDatabase(tabs: Tab[]) {
     if (tab?.kind === "database" && host) placements.push({ id: tab.id, host });
   }
   showDatabaseTabs(placements);
+}
+
+// Shows the detail of the task of the Todo tab selected in each pane while the screen is shown (in the host of the editor, which a pane shows one of, A-49).
+function syncTodo(tabs: Tab[]) {
+  const layout = shown() ? currentLayout() : null;
+  const placements: { id: string; host: HTMLElement }[] = [];
+  for (const pane of panesOf(layout?.root ?? null)) {
+    const tab = tabOfId(tabs, pane.selected);
+    const host = editorHostOf(pane.id);
+    if (tab?.kind === "todo" && host) placements.push({ id: tab.id, host });
+  }
+  showTodoTabs(placements);
 }
 
 // Shows the ticket of the Jira tab selected in each pane while the screen is shown (in the host of the editor, which a pane shows one of).
@@ -1203,6 +1220,15 @@ function openJiraIssue(key: string, boardId: number) {
   draw();
 }
 
+// A task of the Todo part of the file pane was pressed, or a subtask or the parent of a task's detail (A-49): it opens as a tab in the focused pane and is selected; one that is open already is selected. A task that has a window of its own (T-11) brings the window to the front instead.
+function openTodoTask(id: string) {
+  if (focusPopout(`todo:${id}`)) return;
+  if (projectKey === null || view === null) return;
+  started = null;
+  chooseTab(openTaskTab(projectPlace(projectKey), projectKey, id).id);
+  draw();
+}
+
 // 「＋」 of the Jira part was pressed (J-2, #874): the tab of a new ticket opens as a tab in the focused pane and is selected; one that is open already is selected and read again.
 function openNewJiraTicket(boardId: number, sprintId: number | null) {
   if (projectKey === null || view === null) return;
@@ -1319,7 +1345,7 @@ function claimStarted() {
 
 // The order of tabs that are no longer anywhere is dropped, so it does not pile up.
 function forgetGone() {
-  const live = new Set<string>([...mix.rows.flatMap((r) => (r.paneKey === null ? [] : [r.handle ?? claudeTabId(r.paneKey)])), ...mix.terminals.map((t) => t.handle), ...filesOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((f) => f.id), ...awayIn(projectKey ?? "", []), ...diffsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id), ...definitionsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id), ...databaseTabsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id), ...jiraTabsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((j) => j.id)]);
+  const live = new Set<string>([...mix.rows.flatMap((r) => (r.paneKey === null ? [] : [r.handle ?? claudeTabId(r.paneKey)])), ...mix.terminals.map((t) => t.handle), ...filesOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((f) => f.id), ...awayIn(projectKey ?? "", []), ...diffsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id), ...definitionsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id), ...databaseTabsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((d) => d.id), ...jiraTabsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((j) => j.id), ...todoTabsOf(projectPlace(projectKey ?? ""), projectKey ?? "").map((k) => k.id)]);
   for (const key of seen.keys()) if (!live.has(key)) seen.delete(key);
   for (const handle of endedHandles) if (!live.has(handle)) endedHandles.delete(handle);
 }
@@ -1391,6 +1417,7 @@ function drawScreen() {
   syncDefinition(tabs);
   syncDatabase(tabs);
   syncJira(tabs);
+  syncTodo(tabs);
 }
 
 // ---- the stream of the list ----
@@ -1771,8 +1798,8 @@ async function closeTab(tab: Tab): Promise<boolean> {
     draw();
     return false;
   }
-  if (tab.kind === "diff" || tab.kind === "definition" || tab.kind === "database" || tab.kind === "jira") {
-    (tab.kind === "diff" ? closeDiff : tab.kind === "definition" ? closeDefinition : tab.kind === "jira" ? closeJiraTab : closeDatabaseTab)(tab.id);
+  if (tab.kind === "diff" || tab.kind === "definition" || tab.kind === "database" || tab.kind === "jira" || tab.kind === "todo") {
+    (tab.kind === "diff" ? closeDiff : tab.kind === "definition" ? closeDefinition : tab.kind === "jira" ? closeJiraTab : tab.kind === "todo" ? closeTodoTab : closeDatabaseTab)(tab.id);
     closing.delete(tab.id);
     draw();
     return true;
@@ -1802,7 +1829,7 @@ function openTabMenu(anchor: Element, tab: string, pane: string) {
   const items: MenuItem[] = split ? [item("右に分割", COLUMNS_SVG, () => runPaneOp({ kind: "move", tab, pane, edge: "right" })), item("下に分割", ROWS_SVG, () => runPaneOp({ kind: "move", tab, pane, edge: "bottom" }))] : [];
   const found = projectKey === null ? undefined : tabsOf(projectKey).find((t) => t.id === tab);
   const entry = found === undefined ? null : popoutTab(found, projectKey!);
-  if (entry !== null) items.push(item("別ウィンドウで開く", POPOUT_SVG, () => void popOutTab(entry)));
+  if (entry !== null && found !== undefined) items.push(item("別ウィンドウで開く", POPOUT_SVG, () => void popOutTab(entry, found)));
   if (file !== undefined && !file.outside) {
     const [path, from] = [`${file.path.replace(/\/+$/, "")}/${file.relative}`, file.relative];
     items.push({ ...item("パスのコピー", COPY_PATH_SVG, () => void copyText(path, "パスをコピーしました")), divider: items.length > 0 }, item("相対パスをコピー", COPY_PATH_SVG, () => void copyText(from, "相対パスをコピーしました")));
@@ -1825,6 +1852,11 @@ function popoutTab(t: Tab, project: string): PopoutTab | null {
     if (d === undefined) return null;
     const { tab: _asked, ...query } = d.query;
     return { ...doc, content: { kind: "definition", ...query } };
+  }
+  // A task's tab is the Todo screen's kind of window (T-11): its id, its project `todo` and its place are fixed, and it shows the task as Todoist has it.
+  if (t.kind === "todo") {
+    const k = todoTabsOf(place, project).find((x) => x.id === t.id);
+    return k === undefined ? null : { tab: `todo:${k.taskId}`, project: "todo", title: t.title, status: "done", label: "", environment: null, content: { kind: "todo", id: k.taskId } };
   }
   if (t.kind === "database") {
     const d = databaseTabsOf(place, project).find((x) => x.id === t.id);
@@ -1854,7 +1886,13 @@ function lookPopout(entry: PopoutTab): PopoutTab | null | undefined {
 }
 
 // Puts the tab in a window. A file is saved first, as a close saves it, and leaves the editor of this page (the page of the window opens it again, A-46): a save that failed or was refused keeps the tab in its pane.
-async function popOutTab(entry: PopoutTab) {
+async function popOutTab(entry: PopoutTab, tab: Tab) {
+  // A task that has a window already, from either screen, brings it to the front and keeps the tab; else the tab leaves the pane and the window shows the task (A-49).
+  if (entry.content.kind === "todo") {
+    if (focusPopout(entry.tab)) return;
+    await closeTab(tab);
+    return popOut(entry, true);
+  }
   if (entry.content.kind === "file" && !((await saveFile(entry.tab)) && (await closeFile(entry.tab)))) return;
   await popOut(entry);
 }
@@ -2151,6 +2189,10 @@ function initSearch() {
 export function initOrca() {
   initOrcaTerminal((e) => showFailure("orca", e), (source, uri) => void openTerminalLink(source, uri).catch((e) => showFailure("orca", e)));
   initPeek(statusIcon, selectSession);
+  initWorkTodoPopout((id) => {
+    if (todoState.taskById.has(id)) openTodoTask(id);
+  });
+  initOrcaTodo({ open: openTodoTask, changed: draw });
   initPopout({ changed: draw, close: closeWindowTab, reopen: reopenFile, definition: askPopoutDefinition, place: openPopoutPlace, lost: (id, error) => void lostConnection(id, error), failed: (e) => showFailure("orca", e) });
   initSplit($("orca"), $("orca-split"), { side: "left", min: 0.15, max: 0.5, initial: 0.19, property: "--list-w" });
   initSplit($("orca"), $("orca-files-split"), { side: "right", min: 0.15, max: 0.4, initial: 0.22, property: "--files-w" });

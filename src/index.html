@@ -752,6 +752,7 @@
           <button id="orca-files-mode-server" class="icon-btn orca-files-mode" type="button" aria-label="言語サーバー" aria-pressed="false"></button>
           <button id="orca-files-mode-database" class="icon-btn orca-files-mode" type="button" aria-label="データベース" aria-pressed="false"></button>
           <button id="orca-files-mode-jira" class="icon-btn orca-files-mode" type="button" aria-label="Jira" aria-pressed="false"></button>
+          <button id="orca-files-mode-todo" class="icon-btn orca-files-mode" type="button" aria-label="Todo" aria-pressed="false"></button>
           <button id="orca-files-toggle" class="icon-btn orca-files-toggle" type="button" aria-label="ファイル欄" aria-pressed="true"></button>
         </div>
         <header id="orca-files-head">
@@ -790,6 +791,12 @@
             <div id="orca-jira-conn-state" hidden><span id="orca-jira-conn-status" class="status"></span><span id="orca-jira-conn-user" class="orca-file-note"></span></div>
           </form>
           <div id="orca-jira-list"></div>
+        </div>
+        <div id="orca-todo" hidden>
+          <div id="orca-todo-bar">
+            <select id="orca-todo-project" aria-label="プロジェクト"></select>
+          </div>
+          <div id="orca-todo-list"></div>
         </div>
         <div id="orca-server" hidden>
           <section id="orca-lsp" aria-label="言語サーバー" hidden>
