@@ -41,6 +41,9 @@ const TOKEN_BYTES: usize = 16;
 /// The headers every answer carries.
 const COMMON_HEADERS: &str = "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n";
 const NOT_HTML: &str = "HTML のファイルだけをブラウザで開けます";
+const HIDDEN_PART: &str = "名前が . で始まるフォルダーやファイルは開けません";
+/// The place of the worktrees that Claude Code makes inside a project (A-31): a path that starts with it and a name is read from what follows the name.
+const WORKTREES: &str = ".claude/worktrees/";
 const NOT_OPENED: &str = "ブラウザで開けません";
 
 // ---- the request ----
@@ -117,9 +120,14 @@ fn percent_encode(relative: &str) -> String {
     encoded
 }
 
-/// Whether a part of `relative` starts with `.` (`.env`, `.git/config`, `a/.b/c`). Such a file is not served, so that the script of an opened page cannot fetch the settings and the secrets a worktree keeps under those names.
+/// Whether a part of `relative` starts with `.` (`.env`, `.git/config`, `a/.b/c`). Such a file is not served, so that the script of an opened page cannot fetch the settings and the secrets a worktree keeps under those names. A path that starts with `.claude/worktrees/{name}/` is a worktree of the same repository, so those two parts and the name are left out of the look, and the rest of the path is looked at as before; a `{name}` that starts with `.` is not left out.
 fn has_hidden_part(relative: &str) -> bool {
-    relative.split('/').any(|part| part.starts_with('.'))
+    let inside = relative
+        .strip_prefix(WORKTREES)
+        .and_then(|rest| rest.split_once('/'))
+        .filter(|(name, _)| !name.is_empty() && !name.starts_with('.'))
+        .map_or(relative, |(_, rest)| rest);
+    inside.split('/').any(|part| part.starts_with('.'))
 }
 
 /// The token and the path from the worktree that a target names: `/{token}/{path}`, without what follows a `?` or a `#`. The path has its percent escapes taken out and is then held to the checks of A-18 (`check_relative`), so an escaped `..` or `/` is seen as what it is, and to `has_hidden_part`, so an escaped `.` at the start of a part is too.
@@ -480,15 +488,17 @@ pub(crate) fn is_issued_token(token: &str) -> bool {
 
 // ---- the command ----
 
-/// The path of a file the browser is opened on: a path inside the worktree (the checks of A-18) whose name ends with `.html` or `.htm`, whatever the case, and that has no part starting with `.` (the server would answer it 404).
+/// The path of a file the browser is opened on: a path inside the worktree (the checks of A-18) whose name ends with `.html` or `.htm`, whatever the case (else `NOT_HTML`), and that has no part starting with `.` (the server would answer it 404; else `HIDDEN_PART`), `has_hidden_part` leaving out a worktree under `.claude/worktrees/`.
 fn check_html(relative: &str) -> Result<(), String> {
     check_relative(relative, false)?;
     let name = relative.rsplit('/').next().unwrap_or(relative);
     let name = name.to_ascii_lowercase();
-    if (name.ends_with(".html") || name.ends_with(".htm")) && !has_hidden_part(relative) {
-        Ok(())
-    } else {
+    if !(name.ends_with(".html") || name.ends_with(".htm")) {
         Err(NOT_HTML.into())
+    } else if has_hidden_part(relative) {
+        Err(HIDDEN_PART.into())
+    } else {
+        Ok(())
     }
 }
 
@@ -544,7 +554,7 @@ pub struct OpenParams {
     pub relative: String,
 }
 
-/// The checks of the tool before anything is sent: the worktree is an absolute path with no control character (the app checks it against the list of the target, as for A-31), and the file is the one A-31 opens (`check_html`: inside the worktree, `.html` or `.htm`, no part that starts with `.`) that the editor shows as a preview (A-42), which is a `.html` name alone.
+/// The checks of the tool before anything is sent: the worktree is an absolute path with no control character (the app checks it against the list of the target, as for A-31), and the file is the one A-31 opens (`check_html`: inside the worktree, `.html` or `.htm`, no part that starts with `.` but for a worktree under `.claude/worktrees/`) that the editor shows as a preview (A-42), which is a `.html` name alone.
 fn check_open(path: &str, relative: &str) -> Result<(), String> {
     if !path.starts_with('/')
         || path.len() > crate::orca_files::MAX_PATH
@@ -745,7 +755,7 @@ mod tests {
         ] {
             assert_eq!(split_target(bad), None, "{bad:?}");
         }
-        // A part that starts with `.` is not served, escaped or not.
+        // A part that starts with `.` is not served, escaped or not, but for the worktrees under `.claude/worktrees/`.
         for hidden in [
             "/tok/.env",
             "/tok/.git/config",
@@ -754,12 +764,28 @@ mod tests {
             "/tok/docs/.a.html",
             "/tok/%2Egit/config",
             "/tok/a/%2eb/c.html",
+            "/tok/.claude/rules/a.html",
+            "/tok/.claude/worktrees/x/.env",
+            "/tok/.claude/worktrees/x/.git/config",
+            "/tok/.claude/worktrees/.x/a.html",
+            "/tok/.claude/worktrees/x/.claude/worktrees/y/.env",
+            "/tok/.claude/worktrees/x",
+            "/tok/.claude/worktrees/x/%2Eenv",
         ] {
             assert_eq!(split_target(hidden), None, "{hidden:?}");
         }
         assert_eq!(
             split_target("/tok/a.b/c.d.html"),
             Some(("tok", "a.b/c.d.html".to_owned()))
+        );
+        // A worktree under `.claude/worktrees/` is served, but for its own parts that start with `.`.
+        assert_eq!(
+            split_target("/tok/.claude/worktrees/x/tmp/a%20b.html"),
+            Some(("tok", ".claude/worktrees/x/tmp/a b.html".to_owned()))
+        );
+        assert_eq!(
+            split_target("/tok/.claude/worktrees/feat-a.b/a.css"),
+            Some(("tok", ".claude/worktrees/feat-a.b/a.css".to_owned()))
         );
     }
 
@@ -895,6 +921,8 @@ mod tests {
             "a.htm",
             "docs/Report.HTM",
             "a b/あ.Htm",
+            ".claude/worktrees/issue/tmp/diff-numbers-mock.html",
+            ".claude/worktrees/x/a.HTM",
         ] {
             assert_eq!(check_html(good), Ok(()), "{good}");
         }
@@ -910,7 +938,11 @@ mod tests {
         ] {
             assert_eq!(check_html(bad), Err(NOT_HTML.into()), "{bad}");
         }
-        // A part that starts with `.` would be answered 404, so it is not opened.
+        // The name says why: a name that is not HTML is `NOT_HTML`, also under a worktree.
+        for bad in [".claude/rules/a.md", ".claude/worktrees/x/tmp/a.md"] {
+            assert_eq!(check_html(bad), Err(NOT_HTML.into()), "{bad}");
+        }
+        // A part that starts with `.` would be answered 404, so it is not opened, and the refusal says so.
         for hidden in [
             ".html",
             ".htm",
@@ -918,11 +950,31 @@ mod tests {
             ".a.html",
             ".git/a.html",
             "a/.b/c.htm",
+            ".claude/a.html",
+            ".claude/rules/a.html",
+            ".claude/worktrees/a.html",
+            ".claude/worktrees/x/.env.html",
+            ".claude/worktrees/x/.claude/a.html",
+            ".claude/worktrees/.x/a.html",
         ] {
-            assert_eq!(check_html(hidden), Err(NOT_HTML.into()), "{hidden}");
+            assert_eq!(check_html(hidden), Err(HIDDEN_PART.into()), "{hidden}");
         }
-        for bad in ["", "../a.html", "/a.html", "a//b.html", "a/./b.html"] {
-            assert!(check_html(bad).is_err_and(|e| e != NOT_HTML), "{bad:?}");
+        assert!(has_hidden_part(".claude/worktrees/x/.env"));
+        assert!(!has_hidden_part(".claude/worktrees/x/tmp/a.html"));
+        assert!(has_hidden_part("a/.claude/worktrees/x/a.html"));
+        for bad in [
+            "",
+            "../a.html",
+            "/a.html",
+            "a//b.html",
+            "a/./b.html",
+            ".claude/worktrees//a.html",
+            ".claude/worktrees/../a.html",
+        ] {
+            assert!(
+                check_html(bad).is_err_and(|e| e != NOT_HTML && e != HIDDEN_PART),
+                "{bad:?}"
+            );
         }
     }
 
@@ -953,12 +1005,36 @@ mod tests {
     #[test]
     fn a_request_to_open_a_preview_is_checked_as_a_file_is_opened_in_the_browser() {
         let good = "/Users/a/ws/app";
-        for relative in ["a.html", "docs/Report.HTML", "a b/あ.Html"] {
+        for relative in [
+            "a.html",
+            "docs/Report.HTML",
+            "a b/あ.Html",
+            ".claude/worktrees/x/tmp/a.html",
+        ] {
             assert!(open_push(good, relative).is_ok(), "{relative}");
             assert!(open_fields(good, relative).is_ok(), "{relative}");
         }
-        // Not an HTML file, or a part that starts with `.`: the message says preview, not browser.
-        for relative in ["a.htm", "a.md", ".a.html", ".git/a.html", "a/.b/c.html"] {
+        // A part that starts with `.` has its own message, the one of the browser.
+        for relative in [
+            ".a.html",
+            ".git/a.html",
+            "a/.b/c.html",
+            ".claude/rules/a.html",
+            ".claude/worktrees/x/.env.html",
+        ] {
+            assert_eq!(
+                open_push(good, relative).unwrap_err(),
+                HIDDEN_PART,
+                "{relative}"
+            );
+            assert_eq!(
+                open_fields(good, relative).unwrap_err(),
+                HIDDEN_PART,
+                "{relative}"
+            );
+        }
+        // Not an HTML file: the message says preview, not browser.
+        for relative in ["a.htm", "a.md"] {
             assert_eq!(
                 open_push(good, relative).unwrap_err(),
                 NOT_HTML_PREVIEW,
