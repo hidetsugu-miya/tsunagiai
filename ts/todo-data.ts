@@ -266,6 +266,89 @@ export function moveUnderLocal(id: string, parentId: string) {
   todoState.openTasks.add(parentId);
 }
 
+// Where a drop puts a task (T-2): under the task `parentId` (null: the top level), before its sibling `beforeId` (null: last), drawn at `depth`.
+export interface Place {
+  parentId: string | null;
+  beforeId: string | null;
+  depth: number;
+}
+
+// How Rust orders the top-level tasks of a list: by due date, then time (none first), a task with no due date last (`build_todo`); tasks of the same moment keep Todoist's order.
+const dueKey = (t: TaskItem) => (t.due ? `${t.due.date} ${t.due.time ?? ""}` : null);
+function byDue(a: TaskItem, b: TaskItem) {
+  const [x, y] = [dueKey(a), dueKey(b)];
+  if (x === y) return 0;
+  return x === null ? 1 : y === null ? -1 : x < y ? -1 : 1;
+}
+
+// The places the task `t` may be dropped at, in the gap before `rows[gap]` (the IDs of the rows of the open list of a project, top to bottom; `rows.length` is the gap after the last), by depth, the shallowest first (T-2).
+// The rows of `t` and of its subtasks are left out, as they leave when it moves: the row above the gap and the row below it are the ones that remain, so a place under `t` itself or under one of its subtasks is never offered.
+// Between the row above (A) and the row below (B) the depths run from B's to one more than A's: at each the task is a sibling of A or of one of its parents, after it, or at the deepest a child of A.
+// Not offered: the place `t` has now, and, at the top level, a place that the list's order by due moment would not keep.
+export function placesAt(rows: string[], gap: number, t: TaskItem): Place[] {
+  const shown = (id: string) => id !== t.id && !isUnder(todoState.taskById.get(id)!, t.id);
+  let above: string | undefined;
+  for (const id of rows.slice(0, gap)) if (shown(id)) above = id;
+  const below = rows.slice(gap).find(shown);
+  const ancestry = (id: string) => {
+    const chain: TaskItem[] = [];
+    for (let x = todoState.taskById.get(id); x; x = x.parent ? todoState.taskById.get(x.parent.id) : undefined) chain.unshift(x);
+    return chain;
+  };
+  const chain = above ? ancestry(above) : [];
+  const siblings = (parent: TaskItem | null) => (parent ? subRows(parent) : viewTasks(todoState.view)).filter((s) => s.id !== t.id);
+  const nextOf = (list: TaskItem[], x: TaskItem) => list[list.findIndex((s) => s.id === x.id) + 1]?.id ?? null;
+  // The sibling that follows `t` where it is now.
+  const now = t.parent ? todoState.taskById.get(t.parent.id) ?? null : null;
+  const own = now ? subRows(now) : viewTasks(todoState.view);
+  const nowBefore = own[own.findIndex((s) => s.id === t.id) + 1]?.id ?? null;
+  const places: Place[] = [];
+  for (let depth = below ? ancestry(below).length - 1 : 0; depth <= chain.length; depth++) {
+    const parent = depth > 0 ? chain[depth - 1] : null;
+    // Under the row above: before its first subtask when they are shown, else last. Elsewhere: before the sibling that follows the row above or its parent at this depth.
+    const beforeId = depth < chain.length ? nextOf(siblings(parent), chain[depth]) : !parent || todoState.openTasks.has(parent.id) ? siblings(parent)[0]?.id ?? null : null;
+    if ((parent?.id ?? null) === (t.parent?.id ?? null) && beforeId === nowBefore) continue;
+    if (!parent) {
+      const next = beforeId === null ? undefined : todoState.taskById.get(beforeId);
+      if ((chain[0] && byDue(chain[0], t) > 0) || (next && byDue(t, next) > 0)) continue;
+    }
+    places.push({ parentId: parent?.id ?? null, beforeId, depth });
+  }
+  return places;
+}
+
+// Puts a task, with its subtasks, under the task `parentId` or at the top level of the project `projectId` (null: where it is), before the sibling `beforeId` (null: last) (T-2).
+// A parent is opened so the moved row shows. At the top level the task goes before `beforeId` in the list's order, which the redraw keeps for tasks of the same due moment.
+export function placeLocal(id: string, parentId: string | null, projectId: string | null, beforeId: string | null) {
+  const todo = todoState.todo!;
+  const t = todoState.taskById.get(id);
+  const parent = parentId === null ? null : todoState.taskById.get(parentId);
+  if (!t || parent === undefined) return;
+  leaveParent(t);
+  const project = parent?.projectId ?? projectId ?? t.projectId;
+  for (const x of todo.tasks) if (x.id === id || isUnder(x, id)) x.projectId = project;
+  if (parent) {
+    t.parent = { id: parent.id, content: parent.content };
+    const at = parent.subtasks.findIndex((s) => s.id === beforeId);
+    // Active subtasks first, then the completed ones: last among the active ones.
+    const end = parent.subtasks.findIndex((s) => s.done);
+    parent.subtasks.splice(at >= 0 ? at : end >= 0 ? end : parent.subtasks.length, 0, { id: t.id, content: t.content, done: false, due: t.due });
+    recount(parent);
+    todoState.openTasks.add(parent.id);
+    return;
+  }
+  const tasks = todo.tasks;
+  tasks.splice(tasks.indexOf(t), 1);
+  let at = tasks.findIndex((x) => x.id === beforeId);
+  if (at < 0) {
+    at = 0;
+    tasks.forEach((x, i) => {
+      if (!x.parent && x.projectId === project) at = i + 1;
+    });
+  }
+  tasks.splice(at, 0, t);
+}
+
 // The IDs of the project `id` and of the projects nested under it, however deep.
 function projectTreeIds(id: string) {
   const ids = new Set([id]);

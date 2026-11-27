@@ -14,9 +14,9 @@ import { setScreen } from "./nav.js";
 import { openThread } from "./thread.js";
 import { updateAddMode } from "./todo-add.js";
 import { openDuePop, openProjectMenu } from "./todo-detail.js";
-import { accountSet, canMoveUnder, dueLabel, editingField, inboxOf, isDueToday, linkedMail, moveTargets, PRIORITY_COLORS, projectName, projectOf, searching, setTodoCount, subRows, TODO_GROUPS, todoState, viewProjectId, viewTasks } from "./todo-data.js";
+import { accountSet, canMoveUnder, dueLabel, editingField, inboxOf, isDueToday, linkedMail, moveTargets, type Place, placesAt, PRIORITY_COLORS, projectName, projectOf, searching, setTodoCount, subRows, TODO_GROUPS, todoState, viewProjectId, viewTasks } from "./todo-data.js";
 import { clearSearch } from "./todo-search.js";
-import { archiveProject, deleteProject, moveProject, moveTask, moveUnder, saveTask, setTaskDone } from "./todo-write.js";
+import { archiveProject, deleteProject, moveProject, moveTask, moveUnder, placeTask, saveTask, setTaskDone } from "./todo-write.js";
 import { openTodoTab, renderTodo, todoMode } from "./todo.js";
 import { showFailure } from "./error-card.js";
 
@@ -135,6 +135,8 @@ function toggleButton(id: string, label: string, expanded: boolean, toggle: () =
   return b;
 }
 
+// The indent of a subtask row, and of the line that shows a drop at that depth.
+const INDENT = 28;
 const SLIDE = { duration: 180, easing: "ease" };
 // Clips the row to its shrinking height but not on the left, where a row's own toggle sits outside it (overflow: hidden would cut the toggle).
 const CLIP = "inset(0 0 0 -30px)";
@@ -199,7 +201,7 @@ export function checkBox(color: string, checked: boolean, label: string) {
 // The row of `t`, and under it, while `t` is open, the rows of its subtasks, each indented one step more. The "today" list is flat.
 function taskRows(t: TaskItem, showProject: boolean, accounts: Set<string | undefined>, under: string[] = []): HTMLElement[] {
   const li = taskRow(t, showProject, accounts);
-  li.style.marginLeft = `${under.length * 28}px`;
+  li.style.marginLeft = `${under.length * INDENT}px`;
   li.dataset.under = under.join(" ");
   const subs = showProject ? [] : subRows(t);
   if (subs.length === 0) return [li];
@@ -317,25 +319,46 @@ function taskRow(t: TaskItem, showProject: boolean, accounts: Set<string | undef
   return li;
 }
 
-// What the task `t` may be dropped on at `el`: a project in the side list (not "today"; the project it is in only when it is a subtask, which then stands alone),
+// The project of the side list at `el` that the task `t` may be dropped on (not "today"; the project it is in only when it is a subtask, which then stands alone): null when it may not, undefined when `el` is not in the side list.
+function projectTarget(el: Element | null | undefined, t: TaskItem) {
+  const proj = el?.closest<HTMLElement>("#projects .proj");
+  if (!proj) return undefined;
+  return proj.dataset.view !== "today" && (viewProjectId(proj.dataset.view!) !== t.projectId || t.parent) ? proj : null;
+}
+
+// What the task `t` may be dropped on at `el` when the list draws no line (the flat "今日" list, a search, the detail): a project in the side list (not "today"; the project it is in only when it is a subtask, which then stands alone),
 // or the row of another task it may become a subtask of: a row of the list, or a subtask row of the open task's detail.
 function dropTarget(el: Element | null | undefined, t: TaskItem) {
-  const proj = el?.closest<HTMLElement>("#projects .proj");
-  if (proj) return proj.dataset.view !== "today" && (viewProjectId(proj.dataset.view!) !== t.projectId || t.parent) ? proj : null;
+  const proj = projectTarget(el, t);
+  if (proj !== undefined) return proj;
   const row = el?.closest<HTMLElement>("#todo-list li.task, #todo-detail .subs li.task[data-id]");
   return row && canMoveUnder(t, row.dataset.id!) ? row : null;
 }
 
+// The default mark of what a drop may land on: an element gets `drop`.
+const markDrop = (next: object | null, prev: object | null) => {
+  (prev as HTMLElement | null)?.classList.remove("drop");
+  (next as HTMLElement | null)?.classList.add("drop");
+};
+
 // A drag that the press `e` on `anchor` may become, by pointer events, not HTML5 drag and drop, which clashes with the window's file drop (T-2, T-8).
-// `row` is the row dragged (it gets `dragging`), `find` says what a drop may land on at an element (it gets `drop` while the pointer is over it), and `drop` runs once when the drag ends: with the element the pointer was released over, or null.
+// `row` is the row dragged (it gets `dragging`), `find` says what a drop may land on at an element and the pointer (null: nothing), `show` marks it while the pointer is over it (by default an element gets `drop`), and `drop` runs once when the drag ends: with what the pointer was released over, or null.
 // A press that hardly moves is not a drag: `drop` does not run, and the click goes on as it was.
-function pressDrag(e: PointerEvent, anchor: HTMLElement, label: string, row: HTMLElement, find: (el: Element | null | undefined) => HTMLElement | null, drop: (target: HTMLElement | null) => void) {
+function pressDrag<T extends object>(
+  e: PointerEvent,
+  anchor: HTMLElement,
+  label: string,
+  row: HTMLElement,
+  find: (el: Element | null | undefined, e: PointerEvent) => T | null,
+  drop: (target: T | null) => void,
+  show: (next: T | null, prev: T | null) => void = markDrop,
+) {
   const pointer = e.pointerId;
   // Keeps the events coming outside the window; if a redraw takes the anchor out, they still reach the document.
   anchor.setPointerCapture(pointer);
   const [x0, y0] = [e.clientX, e.clientY];
   let ghost: HTMLElement | null = null;
-  let over: HTMLElement | null = null;
+  let over: T | null = null;
   // On the document, not the anchor: a redraw during the drag takes the anchor out, and its events would stop.
   const mine = (f: (e: PointerEvent) => void) => (e: PointerEvent) => e.pointerId === pointer && f(e);
   const move = mine((e) => {
@@ -349,11 +372,10 @@ function pressDrag(e: PointerEvent, anchor: HTMLElement, label: string, row: HTM
       document.body.classList.add("dragging-task");
     }
     // Read before the ghost moves, so the move does not force a style recalculation each time.
-    const next = find(document.elementFromPoint(e.clientX, e.clientY));
+    const next = find(document.elementFromPoint(e.clientX, e.clientY), e);
     ghost.style.transform = `translate(${e.clientX + 12}px, ${e.clientY + 12}px)`;
     if (next === over) return;
-    over?.classList.remove("drop");
-    next?.classList.add("drop");
+    show(next, over);
     over = next;
   });
   const up = mine(() => end(true));
@@ -365,10 +387,10 @@ function pressDrag(e: PointerEvent, anchor: HTMLElement, label: string, row: HTM
     document.removeEventListener("pointercancel", cancel, true);
     document.removeEventListener("keydown", onKey);
     if (!ghost) return;
-    const target = release ? (over as HTMLElement | null) : null;
+    const target = release ? over : null;
     (ghost as HTMLElement).remove();
     ghost = null;
-    (over as HTMLElement | null)?.classList.remove("drop");
+    show(null, over);
     row.classList.remove("dragging");
     document.body.classList.remove("dragging-task");
     todoState.dragging = false;
@@ -384,7 +406,46 @@ function pressDrag(e: PointerEvent, anchor: HTMLElement, label: string, row: HTM
   document.addEventListener("keydown", onKey);
 }
 
-// The grip at a row's left edge: drag it onto a project in the side list to move the task there, or onto another task's row to make it that task's subtask.
+// What a drag of the task `t` in a project's list lands on: a project of the side list, or a place of the list, with where its line is drawn (T-2).
+type ListDrop = HTMLElement | (Place & { left: number; right: number; top: number });
+
+// The place of the list at the pointer `e` over `el`: the gap at the nearer edge of the row under it (or at its height, over the indent left of it), at the depth that its x is nearest to among the depths the gap offers (`placesAt`).
+// Its line starts at the indent of that depth, from the left of the list.
+function placeAt(el: Element | null | undefined, e: PointerEvent, t: TaskItem): ListDrop | null {
+  const rows = [...document.querySelectorAll<HTMLElement>("#todo-list li.task")];
+  // Over the indent left of a subtask row there is no row: the row at the pointer's height counts, so the pointer can go left to a shallower depth.
+  const row = el?.closest<HTMLElement>("#todo-list li.task") ?? (el?.closest("#todo-list") ? rows.find((r) => r.getBoundingClientRect().top <= e.clientY && e.clientY < r.getBoundingClientRect().bottom) : undefined);
+  if (!row) return null;
+  const box = row.getBoundingClientRect();
+  const lower = e.clientY > box.top + box.height / 2;
+  const places = placesAt(rows.map((r) => r.dataset.id!), rows.indexOf(row) + (lower ? 1 : 0), t);
+  const list = row.parentElement!.getBoundingClientRect();
+  const want = (e.clientX - list.left) / INDENT;
+  let best: Place | undefined;
+  for (const p of places) if (!best || Math.abs(p.depth - want) < Math.abs(best.depth - want)) best = p;
+  return best ? { ...best, left: list.left + best.depth * INDENT, right: list.right, top: lower ? box.bottom : box.top } : null;
+}
+
+// The line of the place a drop would land at (T-2), in the page, not in the list, which a redraw would empty.
+let dropLine: HTMLElement | null = null;
+
+// Marks what a drag of a row of the list lands on: the project gets `drop`, a place gets the line.
+function showListDrop(next: ListDrop | null, prev: ListDrop | null) {
+  if (prev instanceof HTMLElement) prev.classList.remove("drop");
+  if (next instanceof HTMLElement) next.classList.add("drop");
+  if (!next || next instanceof HTMLElement) {
+    dropLine?.remove();
+    dropLine = null;
+    return;
+  }
+  dropLine ??= document.body.appendChild(tag("div", "drop-line"));
+  dropLine.style.left = `${next.left}px`;
+  dropLine.style.top = `${next.top - 1}px`;
+  dropLine.style.width = `${next.right - next.left}px`;
+}
+
+// The grip at a row's left edge: drag it onto a project in the side list to move the task there, or, in a project's list, to a line between rows, which puts it there (T-2).
+// The flat "今日" list and a search have no order of a project to draw, and the detail has its own rows: there the row under the pointer is marked, and a drop makes the task its subtask.
 export function gripOf(li: HTMLElement, t: TaskItem) {
   const grip = tag("span", "grip");
   grip.setAttribute("role", "img");
@@ -395,6 +456,27 @@ export function gripOf(li: HTMLElement, t: TaskItem) {
   grip.onpointerdown = (e) => {
     if (e.button !== 0) return;
     e.preventDefault();
+    if (li.closest("#todo-list") && todoState.view !== "today" && !searching()) {
+      let last: ListDrop | null = null;
+      // The same place gives the same object, so a move that does not change it draws nothing.
+      const find = (el: Element | null | undefined, ev: PointerEvent) => {
+        const next = projectTarget(el, t) ?? placeAt(el, ev, t);
+        const same = last && next && !(next instanceof HTMLElement) && !(last instanceof HTMLElement) && next.parentId === last.parentId && next.beforeId === last.beforeId && next.top === last.top && next.left === last.left;
+        if (!same) last = next;
+        return last;
+      };
+      pressDrag(e, grip, t.content, li, find, (target) => {
+        last = null;
+        // A project of the side list has a `data-view`.
+        if (target instanceof HTMLElement) {
+          const projectId = viewProjectId(target.dataset.view!);
+          if (projectId) moveTask(t.id, projectId);
+        } else if (target) void placeTask(t.id, target.parentId, target.parentId === null ? t.projectId : null, target.beforeId);
+        // Only a redraw held back during the drag; the next refresh fetches.
+        else if (todoState.undrawn) renderTodo();
+      }, showListDrop);
+      return;
+    }
     pressDrag(e, grip, t.content, li, (el) => dropTarget(el, t), (target) => {
       // A project of the side list has a `data-view`, a task's row a `data-id`.
       const projectId = target?.dataset.view && viewProjectId(target.dataset.view);

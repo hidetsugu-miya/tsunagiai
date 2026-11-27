@@ -1037,12 +1037,28 @@ const showGrips = () =>
     for (const g of document.querySelectorAll<HTMLElement>("#todo-list .grip, #todo-detail .grip")) g.style.visibility = "visible";
   });
 
+// A point of a row for the pointer to move to, `dx` and `dy` from the centre of the row (the edge a line is drawn at is the nearer one, and the depth follows the x).
+class Spot {
+  constructor(
+    readonly el: ChainablePromiseElement,
+    readonly dx: number,
+    readonly dy: number,
+  ) {}
+}
+
+// The point of the row `el` that is `fromLeft`px from its left edge, in its upper or lower half.
+async function spot(el: ChainablePromiseElement, fromLeft: number, half: "upper" | "lower") {
+  const { width, height } = await el.getSize();
+  return new Spot(el, Math.round(fromLeft - width / 2), Math.round(((half === "upper" ? -1 : 1) * height) / 4));
+}
+
 // Drags the grip of the row that `source` finds with the pointer (press, move over each of `over`, release).
-async function dragFrom(source: () => ChainablePromiseElement, ...over: ChainablePromiseElement[]) {
+async function dragFrom(source: () => ChainablePromiseElement, ...over: (ChainablePromiseElement | Spot)[]) {
   const drag = async () => {
     await showGrips();
     let action = browser.action("pointer").move({ origin: source().$(".grip") }).down();
-    for (const target of over) action = action.move({ origin: target });
+    // A pause after a move to a spot lets the page draw the line there before the next move (the moves would otherwise come as one).
+    for (const target of over) action = target instanceof Spot ? action.move({ origin: target.el, x: target.dx, y: target.dy }).pause(150) : action.move({ origin: target });
     await action.up().perform();
   };
   try {
@@ -1057,7 +1073,7 @@ async function dragFrom(source: () => ChainablePromiseElement, ...over: Chainabl
 }
 
 // Drags the grip of the row `name` in the task list.
-const dragRow = (name: string, ...over: ChainablePromiseElement[]) => dragFrom(() => rowOf(name), ...over);
+const dragRow = (name: string, ...over: (ChainablePromiseElement | Spot)[]) => dragFrom(() => rowOf(name), ...over);
 
 // Records every row and project that gets the drop mark from now on (a task's ID or a project's view), since the mark is gone when the drag ends.
 const watchDrops = () =>
@@ -1073,6 +1089,35 @@ const watchDrops = () =>
     }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ["class"] });
   }, onceId());
 const dropsSeen = () => browser.execute(() => (window as unknown as { __drops__: string[] }).__drops__);
+
+// Records where the line of a drop (T-2) is each time it moves, from now on: the line is gone when the drag ends.
+type Line = { left: number; top: number };
+const watchLines = () =>
+  browser.execute((id) => {
+    if (!window.__e2e_once__(id)) return;
+    const w = window as unknown as { __lines__: Line[]; __lineWatch__?: boolean };
+    w.__lines__ = [];
+    if (w.__lineWatch__) return;
+    w.__lineWatch__ = true;
+    new MutationObserver(() => {
+      const line = document.querySelector<HTMLElement>(".drop-line");
+      if (!line) return;
+      const { left, top } = line.getBoundingClientRect();
+      const last = w.__lines__.at(-1);
+      if (!last || last.left !== left || last.top !== top) w.__lines__.push({ left, top });
+    }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["style"] });
+  }, onceId());
+const linesSeen = () => browser.execute(() => (window as unknown as { __lines__: Line[] }).__lines__);
+// The left edge and the top and bottom of the row `name` in the list.
+const boxOf = (name: string) =>
+  browser.execute((n) => {
+    const li = [...document.querySelectorAll<HTMLElement>("#todo-list li.task")].find((l) => l.textContent!.includes(n))!;
+    const { left, top, bottom } = li.getBoundingClientRect();
+    return { left, top, bottom };
+  }, name);
+// The left edge of the rows at the top level.
+const listLeft = async () => (await boxOf("Write report")).left;
+const INDENT = 28;
 const marginsOf = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>("#todo-list li.task")].map((l) => l.style.marginLeft));
 const projectOf = (id: string) => $(`#projects .proj[data-view="${id}"]`);
 
@@ -1329,21 +1374,117 @@ describe("todo: moving a task by its grip", () => {
     await waitForCount(ROWS, 2);
   }
 
-  it("makes the task a subtask of the row it is dropped on, marking that row on the way, and shows it under that task", async () => {
+  // The Work project with "Plan trip" and "Book flights" open: "Write report", "Plan trip", "Book flights" and "Pick seat" (the last three at depths 0, 1 and 2).
+  async function openAll() {
     await openWork();
-    const moveUnder = await mock("todoist_move_under", true);
+    await rowOf("Plan trip").$(".toggle").click();
+    await waitForCount(ROWS, 3);
+    await rowOf("Book flights").$(".toggle").click();
+    await waitForCount(ROWS, 4);
+    // The rows that the toggles opened are still sliding open, and a spot is measured from their size.
+    await showGrips();
+  }
+
+  it("draws a line under a closed task, at the depth of its subtasks, and puts the task there as its last subtask, opening it", async () => {
+    await openWork();
+    const place = await mock("todoist_place", true);
     await mock("todoist_load", reportUnderTrip());
-    await watchDrops();
-    await dragRow("Write report", rowOf("Plan trip"));
-    expect(await waitForCalls(moveUnder)).toEqual([{ id: "k1", parentId: "k2" }]);
-    expect(await dropsSeen()).toEqual(["k2"]);
+    await watchLines();
+    // Measured before the drop, which redraws the list.
+    const [trip, left] = [await boxOf("Plan trip"), await listLeft()];
+    await dragRow("Write report", await spot(rowOf("Plan trip"), 10, "lower"));
+    expect(await waitForCalls(place)).toEqual([{ id: "k1", parentId: "k2", projectId: null, beforeId: null }]);
+    // Only the depth of a subtask is offered below "Plan trip": its top level would break the order by due moment ("今日" before no due date).
+    const line = (await linesSeen()).at(-1)!;
+    expect(line.left).toBeCloseTo(left + INDENT, 0);
+    expect(line.top + 1).toBeCloseTo(trip.bottom, 0);
     // "Plan trip" opens to show it, last among its subtasks, and the count follows.
     await waitForCount(ROWS, 3);
     expect(await textsOf(ROWS)).toEqual([expect.stringContaining("Plan trip"), expect.stringContaining("Book flights"), expect.stringContaining("Write report")]);
     expect(await marginsOf()).toEqual(["0px", "28px", "28px"]);
     await expect(rowOf("Plan trip")).toHaveText(expect.stringContaining("0/2"));
     await expect(rowOf("Plan trip").$(".toggle")).toHaveAttribute("aria-expanded", "true");
-    await expect($(".dragging, .drop")).not.toExist();
+    await expect($(".dragging, .drop, .drop-line")).not.toExist();
+  });
+
+  it("moves the line to the depth of the pointer's x, among the depths a gap offers, and puts the task under the task of that depth", async () => {
+    await openAll();
+    const place = await mock("todoist_place", true);
+    await watchLines();
+    const seat = rowOf("Pick seat");
+    const [bottom, left] = [(await boxOf("Pick seat")).bottom, await listLeft()];
+    // Below "Pick seat" the depths are 1 to 3 (the top level would break the order by due moment): the pointer at the left edge gets the nearest, 1.
+    // The spots are measured from the left of "Pick seat", which is 2 steps in from the left of the list.
+    const x = (fromList: number) => fromList - 2 * INDENT;
+    await dragRow("Write report", await spot(seat, x(4), "lower"), await spot(seat, x(2 * INDENT + 4), "lower"), await spot(seat, x(6 * INDENT), "lower"));
+    const lines = (await linesSeen()).slice(-3);
+    expect(lines.map((l) => Math.round(l.left - left))).toEqual([INDENT, 2 * INDENT, 3 * INDENT]);
+    for (const l of lines) expect(l.top + 1).toBeCloseTo(bottom, 0);
+    // Released at depth 3: the last subtask of "Pick seat".
+    expect(await waitForCalls(place)).toEqual([{ id: "k1", parentId: "k4", projectId: null, beforeId: null }]);
+  });
+
+  it("draws the line between two rows at the depth of the lower row, and puts the task before it", async () => {
+    await openAll();
+    const place = await mock("todoist_place", true);
+    await watchLines();
+    // Between "Book flights" and "Pick seat" only the depth 2 is offered, whatever the x: the first subtask of "Book flights" is "Pick seat".
+    const [seat, left] = [await boxOf("Pick seat"), await listLeft()];
+    await dragRow("Write report", await spot(rowOf("Pick seat"), 4, "upper"));
+    const line = (await linesSeen()).at(-1)!;
+    expect(line.left).toBeCloseTo(left + 2 * INDENT, 0);
+    expect(line.top + 1).toBeCloseTo(seat.top, 0);
+    expect(await waitForCalls(place)).toEqual([{ id: "k1", parentId: "k3", projectId: null, beforeId: "k4" }]);
+  });
+
+  it("draws no line under the task itself or its own subtasks, and none where nothing would change or the order by due moment would break", async () => {
+    await openAll();
+    const place = await mock("todoist_place", true);
+    await watchLines();
+    // "Plan trip" below its own last subtask: the rows of its own block do not count, so only the subtask of "Write report" is offered, at depth 1 whatever the x.
+    const [seat, left] = [await boxOf("Pick seat"), await listLeft()];
+    await dragRow("Plan trip", await spot(rowOf("Pick seat"), 5 * INDENT, "lower"));
+    const line = (await linesSeen()).at(-1)!;
+    expect(line.left).toBeCloseTo(left + INDENT, 0);
+    expect(line.top + 1).toBeCloseTo(seat.bottom, 0);
+    expect(await waitForCalls(place)).toEqual([{ id: "k2", parentId: "k1", projectId: null, beforeId: null }]);
+    // The reload puts "Plan trip" back at the top level.
+    await browser.waitUntil(async () => (await marginsOf()).join() === "0px,0px,28px,56px", { timeoutMsg: "the list did not come back" });
+    // Above "Write report": "Plan trip" has no due date, which sorts after "Write report"'s, so no top-level place is there, and no line.
+    await watchLines();
+    const again = await mock("todoist_place", true);
+    await dragRow("Plan trip", await spot(rowOf("Write report"), 4, "upper"));
+    expect(await linesSeen()).toEqual([]);
+    expect(await callsOf(again)).toEqual([]);
+    await expect($(".dragging, .drop, .drop-line")).not.toExist();
+  });
+
+  it("puts a task before a task of the same due moment at the top level, with the project, and keeps it there on the screen", async () => {
+    // "Buy milk" has no due date, as "Plan trip" has not.
+    const data = todoData();
+    data.tasks.push(task("k7", "Buy milk", "p1", "none"));
+    await boot({ inbox: inbox(), todoist_load: data, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await $('#projects .proj[data-view="p1"]').click();
+    await waitForCount(ROWS, 3);
+    const place = await mock("todoist_place", true);
+    const after = todoData();
+    after.tasks.splice(1, 0, task("k7", "Buy milk", "p1", "none"));
+    await mock("todoist_load", after);
+    await watchLines();
+    const [trip, left] = [await boxOf("Plan trip"), await listLeft()];
+    await dragRow("Buy milk", await spot(rowOf("Plan trip"), 4, "upper"));
+    const line = (await linesSeen()).at(-1)!;
+    expect(line.left).toBeCloseTo(left, 0);
+    expect(line.top + 1).toBeCloseTo(trip.top, 0);
+    expect(await waitForCalls(place)).toEqual([{ id: "k7", parentId: null, projectId: "p1", beforeId: "k2" }]);
+    expect(await textsOf(ROWS)).toEqual([expect.stringContaining("Write report"), expect.stringContaining("Buy milk"), expect.stringContaining("Plan trip")]);
+    // Above "Write report" (due today) it would sort after, so there is no line.
+    await watchLines();
+    const again = await mock("todoist_place", true);
+    await dragRow("Buy milk", await spot(rowOf("Write report"), 4, "upper"));
+    expect(await linesSeen()).toEqual([]);
+    expect(await callsOf(again)).toEqual([]);
   });
 
   it("does the same in the 今日 list, where the subtask names its parent", async () => {
@@ -1359,23 +1500,6 @@ describe("todo: moving a task by its grip", () => {
     await dragRow("Write report", rowOf("Plan trip"));
     expect(await waitForCalls(moveUnder)).toEqual([{ id: "k1", parentId: "k2" }]);
     await expect(rowOf("Write report").$(".parent")).toHaveText("Plan trip");
-  });
-
-  it("does not mark or accept the task itself, a task below it or its parent", async () => {
-    await openWork();
-    await rowOf("Plan trip").$(".toggle").click();
-    await waitForCount(ROWS, 3);
-    await rowOf("Book flights").$(".toggle").click();
-    await waitForCount(ROWS, 4);
-    const moveUnder = await mock("todoist_move_under", true);
-    await watchDrops();
-    // "Plan trip" over its subtask, that one's subtask and itself.
-    await dragRow("Plan trip", rowOf("Book flights"), rowOf("Pick seat"), rowOf("Plan trip"));
-    // "Book flights" over its parent and its own subtask.
-    await dragRow("Book flights", rowOf("Plan trip"), rowOf("Pick seat"));
-    expect(await dropsSeen()).toEqual([]);
-    expect(await callsOf(moveUnder)).toEqual([]);
-    await expect($(".dragging, .drop")).not.toExist();
   });
 
   it("takes a subtask out of its parent with 親タスクから外す, which moves it to its own project, and shows it at the top level", async () => {
@@ -1438,11 +1562,11 @@ describe("todo: moving a task by its grip", () => {
     expect(await count(`${ROWS} .unparent-row`)).toBe(0);
   });
 
-  it("puts the row back, closed again, and shows the error when making it a subtask fails", async () => {
+  it("puts the row back, closed again, and shows the error when placing it fails", async () => {
     await openWork();
-    const moveUnder = await mock("todoist_move_under", rejects("Todoist に接続できません"));
-    await dragRow("Write report", rowOf("Plan trip"));
-    await waitForCalls(moveUnder);
+    const place = await mock("todoist_place", rejects("Todoist に接続できません"));
+    await dragRow("Write report", await spot(rowOf("Plan trip"), 10, "lower"));
+    await waitForCalls(place);
     // The reload brings back what Todoist has: "Write report" at the top level and "Plan trip" closed.
     await waitForCount(ROWS, 2);
     await expect($(CARD)).toHaveText(expect.stringContaining("Todoist に接続できません"));
