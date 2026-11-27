@@ -17,7 +17,7 @@ git init -q "$main" || exit 2
 git -C "$main" checkout -q -b main
 mkdir -p "$main/src-tauri" "$main/.claude/tools" "$main/.claude/hooks" "$main/ts"
 printf '[package]\nname = "x"\nversion = "0.0.0"\n' > "$main/src-tauri/Cargo.toml"
-cp "$tools/range-check.sh" "$tools/check-ci.sh" "$tools/check-e2e.sh" "$main/.claude/tools/"
+cp "$tools/range-check.sh" "$tools/check-ci.sh" "$tools/check-e2e.sh" "$tools/check-records.sh" "$tools/release-only-diff.sh" "$main/.claude/tools/"
 cp "$tools/../hooks/record-review.sh" "$main/.claude/hooks/"
 echo one > "$main/ts/a.ts"
 echo one > "$main/ts/b.ts"
@@ -31,10 +31,11 @@ mkdir -p "$main/.claude/ci" "$main/.claude/e2e" "$main/.claude/reviews"
 # commit <ファイル>...: 渡したファイルを書き換えてコミットし、新しい HEAD に CI と E2E の合格記録を書く
 commit() {
   local f sha
-  for f in "$@"; do echo "$RANDOM" >> "$work/$f"; done
+  for f in "$@"; do mkdir -p "$work/$(dirname "$f")"; echo "$RANDOM" >> "$work/$f"; done
   git -C "$work" add -A
   git -C "$work" commit -q -m "change $*"
   sha=$(git -C "$work" rev-parse HEAD)
+  [ -z "${norec:-}" ] || return 0
   jq -n --arg sha "$sha" '{sha: $sha, clean: true, passed: true, version: "0.0.0"}' > "$main/.claude/ci/$sha"
   jq -n --arg sha "$sha" '{sha: $sha, clean: true, passed: true, version: "0.0.0", tests: {passed: 1, total: 1}}' > "$main/.claude/e2e/$sha"
 }
@@ -91,6 +92,28 @@ jq -n --arg sha "$head" '{sha: $sha, clean: true, passed: false, version: "0.0.0
 run 1 "HEAD の E2E の記録が不合格" "$base" "ts/a.ts" "E2E の記録"
 mv "$tmp/e2e.keep" "$main/.claude/e2e/$head"
 run 0 "記録を戻すと通る" "$base" "ts/a.ts"
+
+# 検査の読まないファイルだけの差分は、HEAD に CI と E2E の記録がなくても通る。読むファイルが 1 つでもあれば止まる（#1502）
+reset_to "$base"
+norec=1 commit .claude/rules/r.md
+run 0 "検査の読まないファイルだけ（記録なし）" "$base" ".claude/rules/r.md"
+if grep -q -F "CI: 不要" "$main/.claude/reviews/$(git -C "$work" rev-parse HEAD)"; then echo "ok   合格記録に「CI: 不要」が残る"; else echo "FAIL 合格記録に「CI: 不要」が残る"; fail=1; fi
+norec=1 commit requirements/m.md AGENTS.md .claude/tools/watch-ci.sh
+run 0 "requirements、AGENTS.md、.claude/tools/watch-ci.sh も免除（記録なし）" "$base" $'.claude/rules/r.md\nrequirements/m.md\nAGENTS.md\n.claude/tools/watch-ci.sh'
+reset_to "$base"
+norec=1 commit .claude/rules/r.md ts/a.ts
+run 1 ".claude/rules と ts/ が同じ差分（記録なし）" "$base" $'.claude/rules/r.md\nts/a.ts' "ts/a.ts"
+for f in .claude/skills/readme-product/shots/s.ts .claude/tools/run-ci.sh .claude/tools/run-e2e.sh .claude/tools/check-icons.sh .claude/tools/ensure-deps.sh; do
+  reset_to "$base"
+  norec=1 commit "$f"
+  run 1 "$f は免除されない（記録なし）" "$base" "$f" "$f"
+done
+reset_to "$base"
+commit ts/a.ts
+norec=1 commit .claude/agents/a.md
+run 0 "記録のあるコードのコミットの上に .claude/agents だけのコミット（記録なし）" "$base" $'ts/a.ts\n.claude/agents/a.md'
+norec=1 commit ts/b.ts
+run 1 "記録のあるコミットの上に ts/ を含むコミット（記録なし）" "$base" $'ts/a.ts\n.claude/agents/a.md\nts/b.ts' "ts/b.ts"
 
 # 止める: 合格したコミットの問題
 reset_to "$base"

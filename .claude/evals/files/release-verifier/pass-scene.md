@@ -16,8 +16,9 @@
 
 ## 記録の様子
 
-- `check-ci.sh` の出力: `CI の記録あり: 3f9a1c2（合格、clean）`
-- `check-e2e.sh` の出力: `E2E の記録あり: 3f9a1c2（合格、clean、52/52）`
+- `check-records.sh` の出力（exit 0）:
+  - `CI: CI の記録あり: 3f9a1c2（合格、clean）`
+  - `E2E: E2E の記録あり: 3f9a1c2（合格、clean、52/52）`
 
 ## あなたが確かめたこと
 

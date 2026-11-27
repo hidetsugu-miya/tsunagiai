@@ -3,7 +3,7 @@
 # 使い方: range-check.sh {合格したコミット} {指摘の一覧のファイル}（通常は range-check.sh origin/main {一覧}）
 # 一覧のファイルは 1 行 1 件で、各行に直した指摘の `path` か `path:line` を含む（行の残りは自由。例: `[L-1] ts/slack.ts:120 空の返事を描かない`）。
 # 指摘の修正に伴うテスト・説明のファイルは、元の指摘の ID を付けた行として一覧に書いてよい（例: `[L-1] e2e/specs/inbox.e2e.ts 指摘 L-1 の修正に伴うテスト`）。指摘と関係のない変更を書いてはいけない。
-# 確かめる順: 作業ツリーがクリーン、合格したコミットが合格記録を持つか origin/main の祖先か同じ（main のコミットは main に入るときゲートを通っている。マージ済みの版の指摘だけを直す PR は `range-check.sh origin/main {一覧}` で通す）、そのコミットが HEAD の祖先で HEAD と異なる、HEAD の CI と E2E の記録が合格、
+# 確かめる順: 作業ツリーがクリーン、合格したコミットが合格記録を持つか origin/main の祖先か同じ（main のコミットは main に入るときゲートを通っている。マージ済みの版の指摘だけを直す PR は `range-check.sh origin/main {一覧}` で通す）、そのコミットが HEAD の祖先で HEAD と異なる、HEAD の CI と E2E の記録が合格（合格したコミットから HEAD までが検査の読まないファイルだけなら、記録は要らない。check-records.sh）、
 # 合格したコミットから HEAD までの変更のパスがすべて一覧のパスのどれかに一致する。すべて通れば record-review.sh で HEAD の合格記録を書く。
 # 記録は main の checkout の .claude/reviews/{SHA} に書かれる。どのチェックアウトから呼んでもよく、呼んだ場所の HEAD を見る。
 # 終了コード: 0 は合格（記録を書いた）、1 は止めた（理由を標準エラーに出す）、2 は使い方の誤り。
@@ -27,8 +27,8 @@ stop() {
 [ -f "$main/.claude/reviews/$passed" ] || git merge-base --is-ancestor "$passed" origin/main 2>/dev/null || stop "${passed:0:7} の合格記録がなく、origin/main の祖先でもありません。合格したコミットを渡してください"
 [ "$passed" != "$head" ] || stop "合格したコミットと HEAD が同じです。範囲確認は合格のあとに直したコミットに対して行います"
 git merge-base --is-ancestor "$passed" "$head" || stop "${passed:0:7} は HEAD の祖先ではありません"
-ci=$("$tools/check-ci.sh" 2>&1) || stop "$ci"
-e2e=$("$tools/check-e2e.sh" 2>&1) || stop "$e2e"
+# CI と E2E は、HEAD の記録か、合格したコミットから HEAD までが静的検査と E2E の読まないファイルだけであること（check-records.sh、#1502）
+records=$("$tools/check-records.sh" "$passed" 2>&1) || stop "$records"
 
 # 変更のパスが一覧の行のどれかに、パスの区切りで現れるか（`foo/a.ts` は `foo/a.ts:12` に一致し、`xfoo/a.ts` と `foo/a.tsx` には一致しない）
 listed() {
@@ -60,8 +60,7 @@ done < <(git diff --name-only --no-renames -z "$passed" HEAD)
 CLAUDE_PROJECT_DIR="$top" "$tools/../hooks/record-review.sh" <<EOF || stop "合格記録を書けませんでした"
 判定: 合格（range-check.sh）
 範囲: ${passed:0:7}..${head:0:7}
-CI: $ci
-E2E: $e2e
+$records
 一覧:
 $(cat "$list")
 EOF

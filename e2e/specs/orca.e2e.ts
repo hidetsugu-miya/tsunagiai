@@ -3897,6 +3897,25 @@ describe("orca: split panes (A-17)", () => {
     await expect($('.orca-pane[data-pane="p2"] [aria-selected="true"]')).toHaveText(expect.stringContaining("zsh"));
   });
 
+  it("draws the line of the focused pane down its whole left edge, and none on the other pane or with one pane", async () => {
+    await openSplit(overview(), layout(row(pane("p1", [claude, bash], bash), pane("p2", [zsh])), "p2"));
+    const line = (id: string) =>
+      browser.execute((paneId) => {
+        const pane = document.querySelector(`.orca-pane[data-pane="${paneId}"]`)!;
+        const after = getComputedStyle(pane, "::after");
+        return { content: after.content, width: after.width, height: parseFloat(after.height), paneHeight: pane.getBoundingClientRect().height, left: after.left, pointerEvents: after.pointerEvents };
+      }, id);
+    const focused = await line("p2");
+    expect(focused).toMatchObject({ content: '""', width: "3px", left: "0px", pointerEvents: "none" });
+    expect(focused.height).toBeCloseTo(focused.paneHeight, 0);
+    expect((await line("p1")).content).toBe("none");
+    // With one pane, the pane has the focus and shows no line.
+    await mock("orca_panes", layout(pane("p1", [claude, bash]), "p1"));
+    await tabOf(bash).$(".orca-tab-btn").click();
+    await waitForCount(".orca-pane", 1);
+    expect((await line("p1")).content).toBe("none");
+  });
+
   it("mirrors the terminal selected in each pane, each in its own pane", async () => {
     await openSplit();
     await browser.waitUntil(async () => new Set((await callsOf("orca_terminal_read")).map((c) => (c as { handle: string }).handle)).size === 2, { timeoutMsg: "the two terminals were not both read" });

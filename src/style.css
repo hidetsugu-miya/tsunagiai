@@ -75,9 +75,10 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .stat-num { font-weight: bold; }
 .stat-num.hot { color: var(--warn); }
 .stat-sep { width: 1px; height: 16px; background: var(--chip-line); }
-.stat-dot { display: inline-block; width: 8px; height: 8px; margin-right: 5px; border-radius: 50%; }
-.stat-dot[data-ai="claude"] { background: var(--claude); }
-.stat-dot[data-ai="antigravity"] { background: var(--google); }
+.stat-icon { display: inline-flex; margin-right: 4px; }
+.stat-icon svg { width: 13px; height: 13px; stroke-width: 2.4; }
+.stat-icon[data-ai="claude"] { color: var(--claude); }
+.stat-icon[data-ai="antigravity"] { color: var(--google); }
 /* A-35: the pane of the unread opens from the right over the screen, down to the footer. */
 #unread-pane, #resource-pane { position: fixed; z-index: 11; top: 0; right: 0; bottom: var(--footer-h); box-sizing: border-box; width: 380px; max-width: 100%; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--surface); box-shadow: -8px 0 24px rgba(0, 0, 0, .12); }
 #unread-pane header, #resource-pane header { box-sizing: border-box; min-height: var(--header-h); padding: 0 12px 0 20px; background: var(--bar); border-bottom: 1px solid var(--line); }
@@ -1520,7 +1521,7 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 /* A-33: the name of the saved environment a project of the list is in (not a session), at the right end of its row. */
 .orca-env { flex: none; margin-left: auto; max-width: 9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; box-sizing: border-box; padding: 0 7px; border: 1px solid var(--chip-line); border-radius: 9px; background: var(--surface); color: var(--muted); font-size: calc(11px * var(--fs)); font-weight: 400; line-height: 16px; }
 #orca-work { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-/* A-12, A-16, A-17: the work pane is a tree of splits and panes. The bar of a pane (the height of every header) has the tab strip, as wide as its tabs and scrolling when they overflow, with the plus right after it; the terminal of the selected tab is under it. The pane that has the focus shows an accent line on its bar while there are several panes. A tab has the status icon, the title and the close button; the selected one joins the terminal. */
+/* A-12, A-16, A-17: the work pane is a tree of splits and panes. The bar of a pane (the height of every header) has the tab strip, as wide as its tabs and scrolling when they overflow, with the plus right after it; the terminal of the selected tab is under it. The pane that has the focus shows an accent line, 3px wide, down its left edge from the top of its bar to its bottom while there are several panes. A tab has the status icon, the title and the close button; the selected one joins the terminal. */
 #orca-panes { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; }
 #orca-panes > * { flex: 1; min-width: 0; min-height: 0; }
 .orca-split-node { display: flex; min-width: 0; min-height: 0; }
@@ -1539,8 +1540,8 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 #orca-panes[data-resizing] { user-select: none; -webkit-user-select: none; }
 #orca-panes[data-resizing="row"], #orca-panes[data-resizing="row"] * { cursor: col-resize !important; }
 #orca-panes[data-resizing="column"], #orca-panes[data-resizing="column"] * { cursor: row-resize !important; }
-.orca-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-#orca-panes[data-multi="true"] .orca-pane[data-focused="true"] .orca-tabbar { box-shadow: inset 2px 0 0 var(--accent); }
+.orca-pane { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+#orca-panes[data-multi="true"] .orca-pane[data-focused="true"]::after { content: ""; position: absolute; z-index: 2; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent); pointer-events: none; }
 .orca-tabbar { flex: none; display: flex; align-items: center; min-height: max(var(--header-h), calc(32px * var(--fs))); box-sizing: border-box; border-bottom: 1px solid var(--line); background: var(--bar); }
 .orca-tabs { flex: 0 1 auto; min-width: 0; align-self: stretch; display: flex; align-items: flex-end; gap: 2px; padding: 0 0 0 6px; overflow-x: auto; overflow-y: hidden; }
 .orca-plus { flex: none; width: var(--header-btn); height: var(--header-btn); margin: 0 6px 0 2px; color: var(--ink-soft); }
@@ -1927,13 +1928,12 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-diff-btn { flex: none; width: calc(24px * var(--fs)); height: calc(24px * var(--fs)); }
 .orca-diff-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .orca-diff-rows { flex: 1; min-height: 0; overflow: auto; font-family: var(--editor-family, ui-monospace, Menlo, monospace); font-size: var(--editor-size, 12.5px); line-height: 1.6; tab-size: 2; }
-.odf-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto minmax(0, 1fr); min-height: 1.6em; }
+.odf-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr); min-height: 1.6em; }
 .odf-row.odf-inline { grid-template-columns: auto auto 1.5em minmax(0, 1fr); }
 .odf-code { min-width: 0; padding: 0 12px; white-space: pre-wrap; overflow-wrap: anywhere; color: CanvasText; }
 .odf-code.blank { background: var(--diff-blank-bg); }
-.odf-num { min-width: 4ch; padding: 0 6px; box-sizing: content-box; text-align: right; color: var(--muted); background: var(--surface); border-left: 1px solid var(--line); user-select: none; -webkit-user-select: none; }
-.odf-num + .odf-num { border-left: 0; }
-.odf-inline .odf-num:first-child { border-left: 0; }
+.odf-num { min-width: 4ch; padding: 0 6px; box-sizing: content-box; text-align: right; color: var(--muted); background: var(--surface); user-select: none; -webkit-user-select: none; }
+.odf-code.old + .odf-num { border-left: 1px solid var(--line); }
 .odf-mark { text-align: center; color: var(--muted); user-select: none; -webkit-user-select: none; }
 .odf-row[data-kind="changed"] .old, .odf-row[data-kind="removed"] .old { background: var(--diff-del-bg); }
 .odf-row[data-kind="changed"] .new, .odf-row[data-kind="added"] .new { background: var(--diff-ins-bg); }

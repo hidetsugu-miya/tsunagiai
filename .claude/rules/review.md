@@ -23,20 +23,22 @@ Bad:  launch release-verifier only to check that a fix of a merged version's Low
 ### Start E2E and the reviewers together on the HEAD to be reviewed, and launch release-verifier when both are back
 
 Start `.claude/tools/run-e2e.sh` (in the background; `e2e.md`) and the reviewers in the same message, and launch `release-verifier` only when both have come back (at the owner's instruction, 2026-11-12; #485. It replaces "E2E passes before the reviewers start", under which the reviewers waited for E2E).
-E2E runs on the HEAD of every branch (at the owner's instruction, 2026-11-21; #1207. It undoes #1023 of 2026-11-19, which ran E2E once, when the Release PR was prepared).
+E2E runs on the HEAD of every branch (at the owner's instruction, 2026-11-21; #1207. It undoes #1023 of 2026-11-19, which ran E2E once, when the Release PR was prepared), except one where `.claude/tools/check-records.sh` passes: its diff holds only files that no static check or E2E reads (`testing.md`), so run neither `run-e2e.sh` nor `run-ci.sh`, start the reviewers alone, and launch `release-verifier` when they are back. The review is never exempt this way (at the owner's instruction, 2026-11-27; #1502).
 After `e2e:build`, `run-e2e.sh` runs `.claude/tools/run-ci.sh` (static checks and unit tests; it stops at the first failing check) beside the wdio run, unless HEAD already has a passing CI record (`check-ci.sh`), and both write their records as before (#420).
 The CI runs beside E2E and not before it because it never failed in its 113 records since 2026-11-09, so waiting for it only added its time (median 24 seconds) to every HEAD. Measured on 2026-11-14 (#420), a run of E2E took 159 to 161 seconds alone and 159 to 160 seconds with clippy and `cargo test` beside it, with no failure and no `script_timeouts` in either.
-`release-verifier` checks the CI and E2E records of HEAD, so it is not launched on a HEAD whose CI or E2E failed. In the first round, the reviewers' replies and the CI or E2E failure go straight to the fix, and the release-verifier that follows the second round rates them.
+`release-verifier` checks CI and E2E of HEAD through `check-records.sh` (the records, or the exemption), so it is not launched on a HEAD whose CI or E2E failed. In the first round, the reviewers' replies and the CI or E2E failure go straight to the fix, and the release-verifier that follows the second round rates them.
 A failed CI or E2E is handled as a blocking finding of the first round: find the cause (the log of the failed gate in `.claude/ci/{HEAD SHA}.log`; `run-e2e.sh --only {spec}` runs a failed E2E spec alone, `e2e.md`), fix it, and put the fix into the diff of the second round with the other blocking fixes.
 A failure that passes when run again (an E2E spec that passes alone with `run-e2e.sh --only` or in a second full run, or a CI check) is flaky: its cause is not in the diff under review. When the reviewers had no blocking finding and the failure was flaky, run `run-e2e.sh` again (it runs CI again only when HEAD has no passing CI record), and launch release-verifier when it passes; the rerun is not a round. A code fix for an E2E-only failure is read in the second round.
 A flaky failure is never left as chance (at the owner's instruction, 2026-11-21; #1212): the run that meets it files a `bug` issue through `issue-plan` for each spec, or each CI check, with the title 「flaky: {spec name}」 or 「flaky: {check name}」, the labels `importance:low` and `point:2` or `point:3`, no prototype (`issues.md`), and in the body the failure (the test and its error), the path of its log, what was ruled out and the diagnostics (the verification), and the fix to try (the design); when that spec or check already has an open issue, the failure goes there as a comment. The fix step before the next Release PR takes it, never the run that filed it ("Turn the Lows of a merged pull request into one issue…" below).
 
 ```text
 Good: commit -> run-e2e.sh (background, with run-ci.sh beside wdio) and the reviewers together -> release-verifier
+Good: the diff holds only `.claude/rules/` and `requirements/` -> check-records.sh passes -> the reviewers alone, no run-e2e.sh and no run-ci.sh -> release-verifier
 Good: E2E fails in the first round -> no release-verifier -> fix with the reviewers' blocking findings -> run-e2e.sh and code-reviewer together -> release-verifier
 Good: E2E alone fails and the spec passes with run-e2e.sh --only -> run-e2e.sh again passes (CI is not run again) -> release-verifier, and the flaky test is filed as an issue
 Bad:  run-ci.sh and then run-e2e.sh, one after the other, on the HEAD to be reviewed
 Bad:  launch release-verifier while run-e2e.sh is still running
+Bad:  check-records.sh passes, so the review is skipped too (it frees CI and E2E only)
 Bad:  launch release-verifier on a HEAD whose CI or E2E failed, only to rate the findings
 Bad:  a spec fails once and passes alone -> it is called chance, and no issue is filed
 ```
@@ -162,9 +164,9 @@ A pull request that holds only fixes of non-blocking findings of an already merg
 Its normal route is step 6 of `implement`, which takes the findings from the issues of the section above. A branch of that step that also holds a flaky fix, a retrospective fix or any path outside the list goes through the first round instead, because such a fix may change the product or the harness (decided by the agent, 2026-11-21, at the owner's leave; #1212). A finding of the branch under review is not fixed this way ("Fix blocking findings inside the review…" above).
 Write the fixed findings in a file outside the tracked tree, one to a line (`tmp/` of the worktree, which is gitignored, because `range-check.sh` needs a clean tree), each line holding the `path` or `path:line` of the finding (for example `[L-1] ts/slack.ts:120 no empty reply`).
 A file that goes with the fix of a finding (a test, a spec, a requirement or a rule that describes the behavior) may be written as a line with the ID of the original finding (for example `[L-1] e2e/specs/inbox.e2e.ts test that goes with the fix of L-1`). A change that has nothing to do with a finding must not be written in the list.
-Commit the fix, run `run-e2e.sh` (the CI and E2E records of the new HEAD are needed), and run `range-check.sh origin/main {list file}` by the main checkout's path, from the worktree (`worktree.md`).
+Commit the fix, run `run-e2e.sh` unless `check-records.sh` passes (the CI and E2E records of the new HEAD, or a diff of files that no check reads only, are needed), and run `range-check.sh origin/main {list file}` by the main checkout's path, from the worktree (`worktree.md`).
 The passed commit is `origin/main`, which needs no pass record because a commit of main passed this gate when it entered main.
-`range-check.sh` stops, with the reason on stderr and exit 1, unless all of these hold: the working tree is clean, the passed commit has a pass record or is `origin/main` or its ancestor, it is an ancestor of HEAD and not HEAD, HEAD has passing CI and E2E records (`check-ci.sh`, `check-e2e.sh`), and every path of `git diff --name-only --no-renames {passed HEAD} HEAD` appears in the list. It prints each path outside the list, and that diff goes through the first-round flow. It does not review the content of the findings.
+`range-check.sh` stops, with the reason on stderr and exit 1, unless all of these hold: the working tree is clean, the passed commit has a pass record or is `origin/main` or its ancestor, it is an ancestor of HEAD and not HEAD, `check-records.sh` passes on HEAD from the passed commit (HEAD's CI and E2E records, or a diff of files that no check reads only), and every path of `git diff --name-only --no-renames {passed HEAD} HEAD` appears in the list. It prints each path outside the list, and that diff goes through the first-round flow. It does not review the content of the findings.
 When all hold, it writes the pass record for the new HEAD with `.claude/hooks/record-review.sh`.
 A fix made inside a failed round is not this: it is part of the blocking fix, and the second round reads it.
 At the owner's instruction (2026-10-29). Running a review for every small fix produced too many reviews. Since 2026-11-19 (#1012) it serves only a merged version's findings, because a pass is no longer followed by a fix on the same branch.
@@ -187,19 +189,19 @@ A rebuilt diff produces new findings in the second round.
 
 ### Run CI and E2E before release-verifier, on every HEAD
 
-Run `.claude/tools/run-e2e.sh` on a HEAD while the reviewers read it, and hand the HEAD to release-verifier when it and the reviewers are back; its CI (`run-ci.sh`) runs beside wdio and writes the CI record (`testing.md`, `e2e.md`). `run-ci.sh` alone writes the same record where no E2E is run, such as the check of each bundle in `implement`.
-release-verifier and `pre-git.sh` call `.claude/tools/check-ci.sh` and `.claude/tools/check-e2e.sh`, which require a passing, clean record for HEAD (`.claude/ci/{HEAD SHA}`, `.claude/e2e/{HEAD SHA}`) with the version of that commit. Without either, release-verifier fails.
-Reviewers cannot confirm screen behavior by reading the diff, and `pre-git.sh` runs none of the checks, so a push is stopped when the record of HEAD is missing.
+Unless `check-records.sh` passes on it ("Flow" above), run `.claude/tools/run-e2e.sh` on a HEAD while the reviewers read it, and hand the HEAD to release-verifier when it and the reviewers are back; its CI (`run-ci.sh`) runs beside wdio and writes the CI record (`testing.md`, `e2e.md`). `run-ci.sh` alone writes the same record where no E2E is run, such as the check of each bundle in `implement`.
+release-verifier and `pre-git.sh` call `.claude/tools/check-records.sh`, which passes when `check-ci.sh` and `check-e2e.sh` find a passing, clean record for HEAD (`.claude/ci/{HEAD SHA}`, `.claude/e2e/{HEAD SHA}`) with the version of that commit, or when the diff from the newest commit with both records (or else the base) to HEAD holds only files that no check reads (`testing.md`). Without either, release-verifier fails.
+Reviewers cannot confirm screen behavior by reading the diff, and `pre-git.sh` runs none of the checks, so a push is stopped when neither the record of HEAD nor the exemption holds.
 
 ```text
 Good: commit -> run-e2e.sh (its CI beside wdio) and the reviewers together -> fix High -> run-e2e.sh and the second-round review together -> release-verifier -> pass
-Bad:  launch release-verifier without running CI or E2E
+Bad:  launch release-verifier without running CI or E2E, where check-records.sh does not pass
 Bad:  start run-ci.sh after the reviewers have read the code, and fix its failure under them
 ```
 
 ### Rerun CI and E2E every time a commit is added
 
-A commit that fixes a non-blocking finding (Medium or Low) is also a new HEAD, so rerun `run-e2e.sh` (and with it `run-ci.sh`) before handing it to release-verifier, or to `range-check.sh` for a fix of a merged version's findings.
+A commit that fixes a non-blocking finding (Medium or Low) is also a new HEAD, so rerun `run-e2e.sh` (and with it `run-ci.sh`), unless `check-records.sh` passes, before handing it to release-verifier, or to `range-check.sh` for a fix of a merged version's findings.
 The records are per HEAD SHA, and the previous HEAD's record cannot be used for the new HEAD.
 
 ```text
@@ -213,7 +215,7 @@ Bad:  after a fix of a Low, push with the previous HEAD's CI or E2E record
 ### Let a release-only commit keep the pass
 
 The commits of the Release PR make a new HEAD (at the owner's instruction, 2026-11-09; Discussion #293: the source holds no version, so no version line is exempt). They need no review pass record and no release-verifier launch (an Opus launch for a mechanical check), and no CI or E2E record either, because the diff holds nothing that the static checks or E2E read (at the owner's instruction, 2026-11-18; #931. Before it, the records were needed on that HEAD, because they are per HEAD; `testing.md`).
-`pre-git.sh` takes, for the review, the newest commit of the push range that has a pass record, and, for CI and E2E, the newest commit that has both passing records, or else in both cases the base of the range, which already passed this gate when it reached the remote, and runs `.claude/tools/release-only-diff.sh {that commit} HEAD`. A HEAD that has its own records needs no such diff. `post-checks.sh` does the same from `origin/main`. The diff counts as release-only when it holds only:
+`pre-git.sh` takes, for the review, the newest commit of the push range that has a pass record, or else the base of the range, which already passed this gate when it reached the remote, and runs `.claude/tools/release-only-diff.sh {that commit} HEAD`. A HEAD that has its own pass record needs no such diff. `post-checks.sh` does the same from `origin/main`. CI and E2E go through `check-records.sh` with the same base, and it passes more files than these three (`testing.md`). The diff counts as release-only when it holds only:
 - `README.md`, `CHANGELOG.md` and anything under `docs/`
 
 Any other path, or a deleted or missing side, is offending, and the push stops with the paths listed.

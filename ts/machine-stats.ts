@@ -8,6 +8,7 @@ import { $, el, span, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
 import { closeOtherPanes, registerPane } from "./footer.js";
 import { hhmm, WEEKDAYS } from "./format.js";
+import { ANTIGRAVITY_SVG, CLAUDE_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 
 const RESOURCES_MS = 5_000;
@@ -39,14 +40,21 @@ const stat = (label: string, value: number | null) => {
   return node;
 };
 
-// The weekly of an AI as a dot and a number; the dot says which AI, and its image label gives the name to a reader that does not see the color, so the name and the number are read together.
+// The mark of an AI, in the AI's color (the shape is the AI's, the color is `--claude` or `--google`).
+function aiIcon(kind: string) {
+  const node = tag("span", "stat-icon");
+  node.dataset.ai = kind;
+  node.innerHTML = kind === "claude" ? CLAUDE_SVG : ANTIGRAVITY_SVG;
+  return node;
+}
+
+// The weekly of an AI as its mark and a number; the mark's image label gives the name to a reader that does not see the shape, so the name and the number are read together.
 function aiStat(name: string, kind: string, value: AiUsage | undefined) {
   const node = span("stat-ai", "");
-  const dot = tag("i", "stat-dot");
-  dot.dataset.ai = kind;
-  dot.setAttribute("role", "img");
-  dot.setAttribute("aria-label", name);
-  node.append(dot, num(usedOf(value, "weekly")));
+  const icon = aiIcon(kind);
+  icon.setAttribute("role", "img");
+  icon.setAttribute("aria-label", name);
+  node.append(icon, num(usedOf(value, "weekly")));
   return node;
 }
 
@@ -97,9 +105,7 @@ const windowRow = (label: string, ai: AiUsage | undefined, which: "session" | "w
 function aiGroup(name: string, kind: string, ai: AiUsage | undefined) {
   const group = el("res-group");
   const title = el("res-group-name");
-  const dot = tag("i", "stat-dot");
-  dot.dataset.ai = kind;
-  title.append(dot, name);
+  title.append(aiIcon(kind), name);
   group.append(title);
   // The window of 5 hours only where Orca gives one.
   if (ai?.status === "ok" && ai.session) group.append(windowRow("5 時間", ai, "session"));

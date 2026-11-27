@@ -468,6 +468,11 @@ describe("footer: the resources (A-48)", () => {
   });
   const usageOf = (environment: string | null, claude: AiUsage, antigravity: AiUsage): MachineUsage => ({ environment, name: environment ?? "この Mac", claude, antigravity });
   const idle = ai("idle", null, null);
+  // The icon of each AI in the footer: the color of `--claude` and `--google`, and the first path of `CLAUDE_SVG` and of `ANTIGRAVITY_SVG`.
+  const CLAUDE_COLOR = "rgb(217, 119, 87)";
+  const GOOGLE_COLOR = "rgb(26, 115, 232)";
+  const CLAUDE_SHAPE = "M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4";
+  const ANTIGRAVITY_SHAPE = "M4 20C6 9 9 4 12 4s6 5 8 16";
   const start = (fixtures: Record<string, unknown> = {}) =>
     boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline(heap(3), { refreshSecs: 1 }), claude_status: claudeReady, calendar_week: weekOfToday(), ...fixtures });
   // The two readings never come by themselves in a spec that does not shorten them: only the start and the opening of the pane read.
@@ -506,14 +511,14 @@ describe("footer: the resources (A-48)", () => {
     expect(place.beforeBell).toBe(true);
   });
 
-  it("puts the AI of a machine inside its group, names it by the aria-label of its dot with no text of its name and none on the number's group, and stands one separator between two machines", async () => {
+  it("puts the AI of a machine inside its group, names it by the aria-label of its icon with no text of its name and none on the number's group, and stands one separator between two machines", async () => {
     await start({ machine_resources: [machine("この Mac"), saved("PC 1")], machine_usage: [usageOf(null, ai("ok", 30, 74), idle), usageOf("PC 1", ai("ok", null, 12), ai("ok", 46, 93))], ...quiet });
     await waitForAis(4);
     const shape = await browser.execute(() => {
       const kids = [...document.getElementById("footer-stats")!.children];
       return {
         order: kids.map((k) => (k.classList.contains("stat-sep") ? "sep" : k.classList.contains("stat-machine") ? "machine" : "other")),
-        groups: kids.filter((k) => k.classList.contains("stat-machine")).map((k) => [...k.querySelectorAll(".stat-ai")].map((a) => ({ group: a.getAttribute("aria-label") ?? a.getAttribute("role"), role: a.querySelector(".stat-dot")?.getAttribute("role"), label: a.querySelector(".stat-dot")?.getAttribute("aria-label"), ai: a.querySelector(".stat-dot")?.getAttribute("data-ai"), text: a.textContent }))),
+        groups: kids.filter((k) => k.classList.contains("stat-machine")).map((k) => [...k.querySelectorAll(".stat-ai")].map((a) => ({ group: a.getAttribute("aria-label") ?? a.getAttribute("role"), role: a.querySelector(".stat-icon")?.getAttribute("role"), label: a.querySelector(".stat-icon")?.getAttribute("aria-label"), ai: a.querySelector(".stat-icon")?.getAttribute("data-ai"), color: a.querySelector(".stat-icon") ? getComputedStyle(a.querySelector(".stat-icon")!).color : null, shape: a.querySelector(".stat-icon svg path")?.getAttribute("d") ?? null, text: a.textContent }))),
         outside: document.querySelectorAll("#footer-stats > .stat-ai").length,
       };
     });
@@ -521,12 +526,12 @@ describe("footer: the resources (A-48)", () => {
     expect(shape.outside).toBe(0);
     expect(shape.groups).toEqual([
       [
-        { group: null, role: "img", label: "Claude", ai: "claude", text: "74%" },
-        { group: null, role: "img", label: "Antigravity", ai: "antigravity", text: "—" },
+        { group: null, role: "img", label: "Claude", ai: "claude", color: CLAUDE_COLOR, shape: CLAUDE_SHAPE, text: "74%" },
+        { group: null, role: "img", label: "Antigravity", ai: "antigravity", color: GOOGLE_COLOR, shape: ANTIGRAVITY_SHAPE, text: "—" },
       ],
       [
-        { group: null, role: "img", label: "Claude", ai: "claude", text: "12%" },
-        { group: null, role: "img", label: "Antigravity", ai: "antigravity", text: "93%" },
+        { group: null, role: "img", label: "Claude", ai: "claude", color: CLAUDE_COLOR, shape: CLAUDE_SHAPE, text: "12%" },
+        { group: null, role: "img", label: "Antigravity", ai: "antigravity", color: GOOGLE_COLOR, shape: ANTIGRAVITY_SHAPE, text: "93%" },
       ],
     ]);
     expect((await textsOf("#footer-stats"))[0]).not.toMatch(/Claude|AG/);
@@ -562,7 +567,7 @@ describe("footer: the resources (A-48)", () => {
     await start({ machine_resources: [machine("<i>PC</i>")], ...quiet });
     await waitForText("#footer-stats", "CPU 38%");
     expect(await names()).toEqual(["<i>PC</i>"]);
-    expect(await browser.execute(() => document.querySelectorAll("#footer-stats i:not(.stat-dot):not(.stat-sep)").length)).toBe(0);
+    expect(await browser.execute(() => document.querySelectorAll("#footer-stats i:not(.stat-sep)").length)).toBe(0);
   });
 
   it("opens the pane from the right, with the heading リソース, the same place and width as the pane of the unread, and the numbers of each machine under it", async () => {

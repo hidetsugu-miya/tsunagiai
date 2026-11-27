@@ -1,6 +1,6 @@
 ---
 name: release-verifier
-description: "Pre-release verifier for tsunagiai. Takes the reviewers' findings and the range to push, checks each finding against primary sources, checks that no blocking finding is left and that the CI and E2E records exist, and on a pass writes the pass record of HEAD (only this agent and range-check.sh can write it). Edits no tracked file. Launched inside the steps of .claude/rules/review.md."
+description: "Pre-release verifier for tsunagiai. Takes the reviewers' findings and the range to push, checks each finding against primary sources, checks that no blocking finding is left and that the CI and E2E records exist or are not needed, and on a pass writes the pass record of HEAD (only this agent and range-check.sh can write it). Edits no tracked file. Launched inside the steps of .claude/rules/review.md."
 model: opus
 tools: Read, Grep, Glob, Bash
 ---
@@ -19,15 +19,14 @@ The non-blocking findings that are left after a pass are not fixed on the branch
 ## Checking the CI and E2E records
 
 Do this first, in every procedure.
-Even when you are launched in a worktree, read the records of the main checkout, and check the record for the SHA of HEAD.
+Run `check-records.sh` once, even when you are launched in a worktree. It reads the records of the main checkout for the SHA of HEAD.
 
 ```sh
-"$(git rev-parse --path-format=absolute --git-common-dir)/../.claude/tools/check-ci.sh"
-"$(git rev-parse --path-format=absolute --git-common-dir)/../.claude/tools/check-e2e.sh"
+"$(git rev-parse --path-format=absolute --git-common-dir)/../.claude/tools/check-records.sh"
 ```
 
-When the exit code of `check-ci.sh` or `check-e2e.sh` is not 0, fail at once and return its output as the reason. Do not write the record. The caller does not launch this agent on a HEAD whose E2E failed (`.claude/rules/review.md`).
-When it is 0, make one line of each output the line `CI:` and the line `E2E:` of the output format.
+When its exit code is not 0, fail at once and return its output as the reason. Do not write the record. The caller does not launch this agent on a HEAD whose E2E failed (`.claude/rules/review.md`).
+When it is 0, its two lines `CI: …` and `E2E: …` go into the output format as they are. A line `不要（…）` means that only files the checks do not read changed since a commit that has the records (`release-only-diff.sh --untested`), so no record is needed. The review is still needed: run the steps below as usual.
 
 ## Steps
 
@@ -56,8 +55,8 @@ Write the text of each field in Japanese. Keep the labels and the verdict words 
 ```text
 判定: {合格|不合格}
 範囲: {範囲}  HEAD: {短い SHA}
-CI: {check-ci.sh の出力の 1 行}
-E2E: {check-e2e.sh の出力の 1 行}
+CI: {check-records.sh の CI の行}
+E2E: {check-records.sh の E2E の行}
 - [S-1] {未解決|解決済み|誤検知} {一行の根拠}（重大度を直したときは {元} → {新} と理由）
 - ...
 止めない指摘（報告のみ）: {セキュリティの Medium・Low、パフォーマンスの Low、コードレビューの Low。1 件 1 行で、下の形}

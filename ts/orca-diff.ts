@@ -1,4 +1,4 @@
-// The diff tab of the Orca screen (A-24): the difference of a file of a worktree from HEAD, as a tab of the work pane, side by side (HEAD on the left, the working tree on the right, the numbers of the lines between them) or in one column. A file of a commit in the history (A-27) opens the same tab: the parent on the left, the commit on the right, and the short id of the commit in the heading.
+// The diff tab of the Orca screen (A-24): the difference of a file of a worktree from HEAD, as a tab of the work pane, side by side (HEAD on the left, the working tree on the right, the number of each line at the left end of its column) or in one column. A file of a commit in the history (A-27) opens the same tab: the parent on the left, the commit on the right, and the short id of the commit in the heading.
 // Rust reads the two texts and compares them (`orca_file_diff`, and `orca_commit_file_diff` for a commit): the rows of both views, the blocks of changes and the language to color by; this module draws them, colors the text with highlight.js, which the editor no longer uses (the editor is CodeMirror, A-18), and takes the presses of the buttons of the tab.
 // A tab of a difference from HEAD that a pane shows is read again by the clock of the Orca screen (whether the file pane is shown or not), at once when the watch of the disk tells a change of its file (`rereadDiffs`, A-24), and when it is shown again after it was out of the page (`refreshDiffs`, `showDiffs`): the rows are drawn again only when the answer is not the one held, and a read that fails keeps what is shown. A file of a commit does not change and is not read again.
 // The tabs are kept in memory only, by target and project, as the tabs of the work pane (their ids are `diff:{n}`), as the files of the editor are (`file:{n}`). The view chosen (side by side or in one column) is one choice for all the tabs.
@@ -95,7 +95,7 @@ function htmlLines(lines: string[], language: string | null): string[] {
 
 const lineOf = (html: string[], n: number | null) => (n === null ? "" : (html[n - 1] ?? ""));
 
-// The HTML of one row. Side by side: the line of HEAD, the two numbers, the line of the working tree (a side with no line is a blank). In one column: the two numbers, the mark and the line (a removed line is HEAD's, any other the working tree's).
+// The HTML of one row. Side by side: the number and the line of HEAD, the number and the line of the working tree (a side with no line is a blank). In one column: the two numbers, the mark and the line (a removed line is HEAD's, any other the working tree's).
 function rowHtml(d: DiffTab, row: OrcaDiffRow): string {
   const number = (n: number | null) => `<span class="odf-num">${n ?? ""}</span>`;
   if (inline) {
@@ -103,7 +103,7 @@ function rowHtml(d: DiffTab, row: OrcaDiffRow): string {
     return `<div class="odf-row odf-inline" data-kind="${row.kind}">${number(row.old)}${number(row.new)}<span class="odf-mark">${MARKS[row.kind]}</span><span class="odf-code">${html}</span></div>`;
   }
   const code = (side: "old" | "new", html: string, blank: boolean) => `<span class="odf-code ${side}${blank ? " blank" : ""}">${html}</span>`;
-  return `<div class="odf-row" data-kind="${row.kind}">${code("old", lineOf(d.oldHtml, row.old), row.old === null)}${number(row.old)}${number(row.new)}${code("new", lineOf(d.newHtml, row.new), row.new === null)}</div>`;
+  return `<div class="odf-row" data-kind="${row.kind}">${number(row.old)}${code("old", lineOf(d.oldHtml, row.old), row.old === null)}${number(row.new)}${code("new", lineOf(d.newHtml, row.new), row.new === null)}</div>`;
 }
 
 const viewRows = (d: DiffTab) => (d.diff === null ? [] : inline ? d.diff.inline : d.diff.side);
