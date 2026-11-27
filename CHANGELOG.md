@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6, and cookapps until v0.80.0.
 
+## v0.101.6
+
+開発の手順を直しただけの版（#1511）。アプリの動きは変わらない。
+
 ## v0.101.5
 
 A-48: フッターの Claude と Antigravity の利用率を、色の点ではなく、それぞれのアイコンと数字で出すようにした（#1494）。読み上げの名前と、保存するものは変わらない。
