@@ -10,7 +10,7 @@ import { invoke } from "./ipc.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { HandoffPane } from "./orca-handoff.js";
-import { focusPopout, initTodoPopout, popOut, syncTodoPopouts } from "./orca-popout.js";
+import { focusPopout, hasTodoPopouts, initTodoPopout, noticeTodoPopouts, popOut, syncTodoPopouts } from "./orca-popout.js";
 import { todoCard } from "./orca-handoff-cards.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
 import { onScreenChanged } from "./screen-bridge.js";
@@ -422,7 +422,8 @@ async function showKeptTodo() {
 
 // Fetches only for the Todo count on the sidebar while another screen is shown: `todo` and the Todo screen stay as they are, a missing token shows no count, and nothing shows a message.
 async function loadTodoCount() {
-  if (currentScreen() === "todo" || document.hidden || todoState.countOff || todoState.writes) return;
+  // A window of a task (T-11) is read for while the main window is hidden.
+  if (currentScreen() === "todo" || (document.hidden && !hasTodoPopouts()) || todoState.countOff || todoState.writes) return;
   // A change that started or ended while fetching makes the answer older than the screen's count.
   const seq = todoState.seq;
   let tasks: TaskItem[] = [];
@@ -460,7 +461,7 @@ export async function ensureTodoData() {
 // One at a time: while Todoist does not answer, the next rounds are skipped instead of piling up behind the backend's lock.
 let refreshingTodo = false;
 async function refreshTodo() {
-  if (refreshingTodo || document.hidden) return;
+  if (refreshingTodo || (document.hidden && !hasTodoPopouts())) return;
   refreshingTodo = true;
   try {
     // Not while the token form is up: a load would read the keychain and draw the form again, dropping what is typed in it.
@@ -468,6 +469,8 @@ async function refreshTodo() {
     if (currentScreen() === "todo" || orcaTodoWanted()) {
       if ($("todo-token").hidden) await loadTodo(true, false);
     } else await loadTodoCount();
+    // The windows of tasks read what this read kept (T-11), so they call Todoist no more than this screen does.
+    noticeTodoPopouts();
   } finally {
     refreshingTodo = false;
   }

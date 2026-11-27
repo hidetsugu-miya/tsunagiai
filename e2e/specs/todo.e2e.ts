@@ -4315,6 +4315,18 @@ describe("todo: a task's tab in a window of its own (T-11)", () => {
     const data = todoData();
     await mock("todoist_load", { ...data, tasks: data.tasks.map((t) => (t.id === "k1" ? { ...t, content: "Write the report" } : t)) });
     await browser.execute((id) => window.__e2e_once__(id) && document.dispatchEvent(new Event("visibilitychange")), onceId());
-    expect(await waitForCalls(updated)).toEqual([{ was: "todo:k1", tab: windowOf("k1", "Write the report") }]);
+    // The first call is the one the draw makes for the new name; the read's notice that follows gives the same tab again.
+    expect((await waitForCalls(updated))[0]).toEqual({ was: "todo:k1", tab: windowOf("k1", "Write the report") });
+  });
+
+  it("tells the window after each read of the tasks, with the tab it holds, so that the window reads what was kept and calls Todoist no more", async () => {
+    await openTabs();
+    await popOut("k1");
+    await waitForCalls("orca_popout_open");
+    const updated = await mock("orca_popout_update", null);
+    const loaded = await mock("todoist_load", todoData());
+    await browser.execute((id) => window.__e2e_once__(id) && document.dispatchEvent(new Event("visibilitychange")), onceId());
+    expect(await waitForCalls(loaded)).toHaveLength(1);
+    expect(await waitForCalls(updated)).toEqual([{ was: "todo:k1", tab: windowOf("k1", "Write report") }]);
   });
 });
