@@ -9,6 +9,7 @@
 #          記録は書かず（作業ツリーが汚れていてもよい）、出力は only-{名前}.log に残す。記録の代わりにはならないので、通ったら引数なしで 1 回回す。
 # 作業ツリーが汚れていれば、記録を書かずに exit 2 で止まる（記録は HEAD のコミットの中身についてだけ言うため）。
 # node_modules が無いか package-lock.json と食い違っていれば、先に ensure-deps.sh で npm ci する（ログに入る）。
+# 始める前と終わるときに、親のない E2E のアプリを止める（stop_orphan_apps。#1499）。
 set -uo pipefail
 only=""
 if [ "${1:-}" = "--only" ]; then
@@ -22,9 +23,40 @@ root=$(git rev-parse --show-toplevel) && cd "$root" || exit 2
 main="$(git rev-parse --path-format=absolute --git-common-dir)/.."
 here=$(cd "$(dirname "$0")" && pwd)
 dirty() { [ -n "$(git status --porcelain)" ]; }
+# 親のない（PPID 1）E2E のアプリを止める。E2E が途中で止められると、wdio がアプリを閉じないまま終わり、アプリが残り続けるため（#1499）。
+# 対象は、実行ファイルのパスが次のどちらかに完全一致するもの。
+#   main の checkout と git worktree list の各 checkout の src-tauri/target/debug/tsunagiai
+#   {main の checkout}/.claude/worktrees/{1 階層の名前}/src-tauri/target/debug/tsunagiai（その worktree がもう無くても。use-worktree.sh --park で消した worktree のアプリを止めるため）
+# 部分一致では止めない（ほかのリポジトリや tauri dev のアプリ、/Applications のアプリを巻き込まないため）。実行中の E2E のアプリは親が wdio の worker なので対象にならない。
+# 止めた数が 1 以上のときだけ 1 行書く。E2E を始める前（全体と --only）と、終わるとき（trap EXIT）に呼ぶ。
+stop_orphan_apps() {
+  local d b pid ppid exe n=0 bins=() mainp wt rest name
+  mainp=$(cd "$main" && pwd -P) || return 0
+  wt="$mainp/.claude/worktrees/"
+  while IFS= read -r d; do
+    [ -d "$d" ] || continue
+    bins+=("$(cd "$d" && pwd -P)/src-tauri/target/debug/tsunagiai")
+  done < <({ echo "$main"; git worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p'; })
+  while read -r pid ppid exe; do
+    [ "$ppid" = 1 ] || continue
+    rest=${exe#"$wt"}
+    name=${rest%/src-tauri/target/debug/tsunagiai}
+    if [ "$rest" != "$exe" ] && [ "$name" != "$rest" ] && [ -n "$name" ] && [[ $name != */* ]]; then
+      kill "$pid" 2>/dev/null && n=$((n + 1))
+      continue
+    fi
+    for b in "${bins[@]}"; do
+      [ "$exe" = "$b" ] && { kill "$pid" 2>/dev/null && n=$((n + 1)); break; }
+    done
+  done < <(ps -axo pid=,ppid=,comm=)
+  [ "$n" -eq 0 ] || echo "親のない E2E のアプリを $n 個止めました"
+  return 0
+}
+trap stop_orphan_apps EXIT
 
 if [ -n "$only" ]; then
   [ -f "e2e/specs/$only.e2e.ts" ] || { echo "e2e/specs/$only.e2e.ts がありません" >&2; exit 2; }
+  stop_orphan_apps
   mkdir -p "$main/.claude/e2e" || exit 2
   log="$main/.claude/e2e/only-$only.log"
   "$here/ensure-deps.sh" "$root" >"$log" 2>&1 \
@@ -37,6 +69,7 @@ if [ -n "$only" ]; then
 fi
 
 dirty && { echo "作業ツリーが汚れています。コミットしてから実行してください（記録は書きません）" >&2; git status --short >&2; exit 2; }
+stop_orphan_apps
 sha=$(git rev-parse HEAD)
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -n 1)
 
