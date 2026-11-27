@@ -12,7 +12,7 @@
       "assertions": [
         "記録を書くコマンドは 1 つで、判定をファイルから stdin に渡している。stdin を渡さない呼び出しや、空の判定を出していない",
         "渡す判定の 1 行目が「判定: 合格」で始まる",
-        "渡す判定に、範囲、CI の行（`check-ci.sh` の出力）、E2E の行（`check-e2e.sh` の出力）と、R-1 を `issue` に振り分けた止めない指摘の行（`ts/orca-files.ts:210` と一行の理由つき）が入っている",
+        "渡す判定に、範囲、CI の行と E2E の行（`check-records.sh` の出力の `CI:` と `E2E:` の行）と、R-1 を `issue` に振り分けた止めない指摘の行（`ts/orca-files.ts:210` と一行の理由つき）が入っている",
         "判定の全文を 1 回で渡し、先に空の記録を書いてから呼び直す形にしていない"
       ]
     },
@@ -29,6 +29,21 @@
         "記録のスクリプトの呼び出しは 1 回で、`< {そのファイル}` の形で判定を stdin に渡している",
         "記録のスクリプトの呼び出しにヒアドキュメント（`<<`）を使っていない。stdin を渡さない呼び出しも出していない",
         "ファイルに書く判定の 1 行目が「判定: 合格」で始まり、CI の行と E2E の行が入っている"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "no-record-needed-is-not-a-failure-and-review-still-runs",
+      "prompt": "あなたは release-verifier です。`.claude/agents/release-verifier.md` を読み、`.claude/evals/files/release-verifier/exempt-scene.md` の場面について、記録の確認から合格記録を書くまでに打つ操作を順に書き出してください。各操作は、使う道具と、そのコマンドか書き込む内容で示してください。実行はせず、打つはずの操作をそのまま書いてください。記録のスクリプトの中身は読まなくて構いません。",
+      "expected_output": "CI と E2E の記録の確認は `check-records.sh` を 1 回呼ぶだけで、`check-ci.sh` と `check-e2e.sh` は呼ばない。exit 0 なので、HEAD に記録が無くても不合格にしない。出力の `CI: 不要（…）` と `E2E: 不要（…）` の 2 行をそのまま判定に写し、レビューの手順は省かずに合格記録を書く。",
+      "files": [
+        ".claude/evals/files/release-verifier/exempt-scene.md"
+      ],
+      "assertions": [
+        "記録の確認は `check-records.sh` の呼び出し 1 回で、`check-ci.sh` と `check-e2e.sh` を別々に呼んでいない",
+        "HEAD に CI と E2E の記録が無いことを理由に不合格にしていない。`check-records.sh` が exit 0 であることを根拠に先へ進んでいる",
+        "判定の CI の行と E2E の行が、`check-records.sh` の `不要（…）` の 2 行をそのまま写している",
+        "レビューの手順は省かず、判定を `判定: 合格` で始めて記録のスクリプトに stdin で渡している"
       ]
     }
   ]
