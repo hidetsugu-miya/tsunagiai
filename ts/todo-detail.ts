@@ -1,15 +1,15 @@
-// One task opened on the Todo screen: its name, description, linked mail and subtasks, and beside them its project and due date.
+// The detail of one task, drawn into a box (T-1; the Todo screen draws the selected tab, T-10): its name, description, linked mail and subtasks, and beside them its project and due date.
 import type { TaskItem } from "./bindings/TaskItem";
-import { $, composing, onEnter, tag } from "./dom.js";
+import { composing, onEnter, tag } from "./dom.js";
 import { addDays, isoDate, WEEKDAYS } from "./format.js";
 import { CLOSE_SVG, COPY_SVG, DATE_SVG, FOLDER_SVG, MAIL_SVG, OUTDENT_SVG, PLUS_SVG, RETURN_SVG } from "./icons.js";
 import { rowButton } from "./inbox-rows.js";
 import { closeMenu, openMenu, showMenu } from "./menu.js";
 import { commentsSection, fitCommentInput } from "./todo-comments.js";
 import { accountSet, dueLabel, linkedMail, markdownHtml, PRIORITY_COLORS, projectName, projectOf, todoState } from "./todo-data.js";
-import { checkBox, gripOf, openMailFromTodo, renderList } from "./todo-list.js";
+import { checkBox, gripOf, openMailFromTodo } from "./todo-list.js";
 import { createLabel, moveTask, saveTask, setTaskDone, todoCall } from "./todo-write.js";
-import { renderTodo, syncTodoHandoff, todoMode } from "./todo.js";
+import { openTodoTab } from "./todo.js";
 import { copyText } from "./view.js";
 
 // A month of days to pick from, Sunday first; `shown` is the 1st of the month, `current` (a `YYYY-MM-DD` or null) and today are marked.
@@ -330,10 +330,7 @@ function subtaskRow(s: TaskItem["subtasks"][number]) {
   const t = todoState.taskById.get(s.id);
   if (t) {
     li.dataset.id = s.id;
-    li.onclick = () => {
-      todoState.open = s.id;
-      renderTodo();
-    };
+    li.onclick = () => openTodoTab(s.id);
     box.onclick = (e) => e.stopPropagation();
   }
   const body = tag("div", "body");
@@ -440,8 +437,9 @@ function foldDesc(t: TaskItem, view: HTMLElement, wrap: HTMLElement) {
   observer.observe(view);
 }
 
-// The description of `t`: its Markdown shown in full, or, while it is edited, the textarea and its buttons.
-function descParts(t: TaskItem): HTMLElement[] {
+// The description of `t` in `box`: its Markdown shown in full, or, while it is edited, the textarea and its buttons.
+function descParts(box: HTMLElement, t: TaskItem): HTMLElement[] {
+  const redraw = () => renderDetail(box, t.id);
   if (todoState.descEdit?.id !== t.id) {
     // Another task was opened: what was typed for the old one is dropped.
     todoState.descEdit = null;
@@ -455,8 +453,8 @@ function descParts(t: TaskItem): HTMLElement[] {
     view.setAttribute("aria-description", "押すと編集");
     const edit = () => {
       todoState.descEdit = { id: t.id, value: t.description };
-      renderDetail();
-      const area = $("todo-detail").querySelector<HTMLTextAreaElement>(".desc-edit")!;
+      redraw();
+      const area = box.querySelector<HTMLTextAreaElement>(".desc-edit")!;
       area.focus();
       area.setSelectionRange(area.value.length, area.value.length);
     };
@@ -473,8 +471,8 @@ function descParts(t: TaskItem): HTMLElement[] {
       clearTimeout(editTimer);
       if (e.detail > 1 || selectedIn()) return;
       editTimer = setTimeout(() => {
-        // The task was closed, a redraw replaced the view, a screen change hid it (offsetParent is null), or the selection came after the press.
-        if (todoState.open === t.id && view.isConnected && view.offsetParent !== null && !selectedIn()) edit();
+        // The task's tab was closed, a redraw replaced the view, a screen change hid it (offsetParent is null), or the selection came after the press.
+        if (todoState.tabs.includes(t.id) && view.isConnected && view.offsetParent !== null && !selectedIn()) edit();
       }, 250);
     };
     view.onkeydown = (e) => {
@@ -509,7 +507,7 @@ function descParts(t: TaskItem): HTMLElement[] {
   };
   const close = () => {
     todoState.descEdit = null;
-    renderDetail();
+    redraw();
   };
   const cancel = tag("button", "text-btn", "キャンセル");
   cancel.onclick = close;
@@ -517,12 +515,12 @@ function descParts(t: TaskItem): HTMLElement[] {
   save.onclick = () => {
     const value = area.value;
     todoState.descEdit = null;
-    if (value === t.description) return renderDetail();
-    // A failed save reopens the editor with what was typed, so a long description is not lost to the reload.
+    if (value === t.description) return redraw();
+    // A failed save reopens the editor with what was typed, so a long description is not lost to the reload. Not when the box shows another task by then.
     saveTask(t.id, { description: value }).then((answer) => {
-      if (answer !== null || todoState.open !== t.id || todoState.descEdit) return;
+      if (answer !== null || box.dataset.task !== t.id || todoState.descEdit) return;
       todoState.descEdit = { id: t.id, value };
-      renderDetail();
+      redraw();
     });
   };
   const actions = tag("div", "desc-actions");
@@ -539,25 +537,22 @@ function parentDescPanel(parentId: string) {
   return panel;
 }
 
-export function renderDetail() {
-  const t = todoState.taskById.get(todoState.open!);
-  if (!t) {
-    todoState.open = null;
-    return renderList();
-  }
+// Draws the detail of the task `id` into `box` (T-1, T-10): the Todo screen draws its selected tab into `#todo-detail`. Does nothing for a task that is not in the data.
+export function renderDetail(box: HTMLElement, id: string) {
+  const t = todoState.taskById.get(id);
+  if (!t) return;
   // A reload redraws the whole detail; the field being typed in keeps the focus and the caret.
   const active = document.activeElement as HTMLInputElement;
-  const field = $("todo-detail").contains(active) ? active.dataset.field : null;
+  const field = box.contains(active) ? active.dataset.field : null;
   const caret = active.selectionStart;
   // The comments are fetched when this task was not the one shown: another task, or no detail at all.
-  const fresh = !!$("todo-detail").hidden || $("todo-detail").dataset.task !== t.id;
+  const fresh = !!box.hidden || box.dataset.task !== t.id;
   // What was typed into the subtask field of this task is not lost to the redraw.
-  const typed = $("todo-detail").dataset.task === t.id ? $("todo-detail").querySelector<HTMLInputElement>('[data-field="sub"]')?.value ?? "" : "";
-  todoMode("detail");
-  $("todo-title").textContent = projectName(projectOf(t.projectId));
+  const typed = box.dataset.task === t.id ? box.querySelector<HTMLInputElement>('[data-field="sub"]')?.value ?? "" : "";
+  box.hidden = false;
 
-  const box = checkBox(PRIORITY_COLORS[t.priority], false, "完了にする");
-  box.onchange = () => setTaskDone(t.id, true, box);
+  const check = checkBox(PRIORITY_COLORS[t.priority], false, "完了にする");
+  check.onchange = () => setTaskDone(t.id, true, check);
   const name = nameField(t.content);
   name.dataset.field = "name";
   // The name is saved by the change event (a click elsewhere) and by Enter itself: a blur does not fire the change event while the window is not the one with the focus. What was saved is not saved again when the blur that follows Enter fires the change event.
@@ -580,14 +575,14 @@ export function renderDetail() {
     name.blur();
   };
   const head = tag("div", "head");
-  head.append(box, name);
+  head.append(check, name);
 
   // The subtasks created since that load are in it now: their rows are drawn for real.
   for (let i = creating.length - 1; i >= 0; i--) if (creating[i].settled !== null && creating[i].settled! < todoState.loaded) creating.splice(i, 1);
-  const parts: HTMLElement[] = [head, ...descParts(t)];
+  const parts: HTMLElement[] = [head, ...descParts(box, t)];
   // A subtask's direct parent, when it has a row to open.
   const parent = t.parent && todoState.taskById.get(t.parent.id);
-  // The checkbox is beside the button, not in it: a button may hold no other control. Completing the parent takes the open task out of the list with it, and the detail falls back to the list.
+  // The checkbox is beside the button, not in it: a button may hold no other control. Completing the parent takes the open task out of the list with it, and its tab closes.
   if (parent) {
     const chip = tag("div", "parent-chip");
     const parentBox = checkBox(PRIORITY_COLORS[parent.priority], false, "親タスクを完了にする");
@@ -595,10 +590,7 @@ export function renderDetail() {
     const link = tag("button", "parent-link");
     link.insertAdjacentHTML("beforeend", RETURN_SVG);
     link.append(tag("span", "pl-label", "親タスク"));
-    link.onclick = () => {
-      todoState.open = parent.id;
-      renderTodo();
-    };
+    link.onclick = () => openTodoTab(parent.id);
     // The name is plain text; the parent's description, when it has one, is always under the chip.
     const name = tag("span", "parent-name");
     name.append(tag("span", "pl-name", parent.content));
@@ -661,14 +653,13 @@ export function renderDetail() {
   main.append(...parts);
   const side = tag("aside", "detail-side");
   side.append(projectField(t), dueField(t), labelsField(t));
-  $("todo-detail").replaceChildren(main, side);
-  $("todo-detail").dataset.task = t.id;
-  const area = $("todo-detail").querySelector<HTMLTextAreaElement>(".desc-edit");
+  box.replaceChildren(main, side);
+  box.dataset.task = t.id;
+  const area = box.querySelector<HTMLTextAreaElement>(".desc-edit");
   if (area) growDesc(area);
   fitCommentInput();
-  syncTodoHandoff();
   if (field) {
-    const again = $("todo-detail").querySelector<HTMLInputElement>(`[data-field="${field}"]`);
+    const again = box.querySelector<HTMLInputElement>(`[data-field="${field}"]`);
     again?.focus();
     if (caret != null) again?.setSelectionRange?.(caret, caret);
   }

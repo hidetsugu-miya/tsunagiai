@@ -821,6 +821,9 @@ describe("footer: the tabs of the pane of the notices", () => {
     await expect($("#todo")).toBeDisplayed();
     await expect($("#todo-detail")).toBeDisplayed();
     await expect($('#todo-detail [data-field="name"]')).toHaveValue("Write report");
+    // It opens in a tab of the side, with the list kept (T-10).
+    await expect($('#todo-tabs [aria-selected="true"] .orca-tab-title')).toHaveText("Write report");
+    await expect($("#todo-list")).toBeDisplayed();
     await expect($("#unread-pane")).not.toBeDisplayed();
   });
 

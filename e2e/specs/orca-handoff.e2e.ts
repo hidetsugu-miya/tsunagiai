@@ -52,7 +52,7 @@ async function openTodo(fixtures: Record<string, unknown> = {}) {
   await $("#nav-todo").click();
   await waitForCount("#todo-list li.task", 1);
   await $("#todo-list li.task").click();
-  await expect($("#todo-back")).toBeDisplayed();
+  await expect($("#todo-detail")).toBeDisplayed();
 }
 
 // A hand-over moves to the Orca screen (A-9): this goes back to the screen of the item, where the pane shows the session.
@@ -66,11 +66,11 @@ async function backTo(screen: Screen) {
     return;
   }
   await $("#nav-todo").click();
-  if (!(await $("#todo-back").isDisplayed())) {
+  if (!(await $("#todo-detail").isDisplayed())) {
     await waitForCount("#todo-list li.task", 1);
     await $("#todo-list li.task").click();
   }
-  await expect($("#todo-back")).toBeDisplayed();
+  await expect($("#todo-detail")).toBeDisplayed();
 }
 
 // The list of Orca is read when the pane opens: the project chip is enabled once the projects are in.
@@ -1157,7 +1157,7 @@ describe("orca handoff", () => {
     expect(await count('.orca-tabs [data-tab="claude:tab_new:leaf_9"] [role="tab"][aria-selected="true"]')).toBe(0);
   });
 
-  it("opens from the header icon of a Todo, under the detail in the same scroll, with its content as the card", async () => {
+  it("opens from the icon in the row of tabs of a Todo, under the detail in the same scroll, with its content as the card", async () => {
     await openTodo();
     await expect($(TODO.button)).toHaveAttribute("aria-label", "Orca に渡す");
     await expect($(TODO.button)).toHaveAttribute("aria-pressed", "false");
@@ -1165,22 +1165,21 @@ describe("orca handoff", () => {
     const handoff = await mock("orca_handoff", started);
     await openPane(TODO);
     await expect($(TODO.button)).toHaveAttribute("aria-pressed", "true");
-    // The button is in the header of the tasks at the left of 編集, the pane follows the detail inside #todo-main, in view, and the right side holds Claude's pane alone.
+    // The button is in the row of tabs at the left of 編集, the pane follows the detail of the selected tab inside #todo-pane of the right side, in view (T-10).
     const place = await browser.execute(() => {
       const rect = (s: string) => document.querySelector(s)!.getBoundingClientRect();
-      const main = rect("#todo-main");
+      const main = rect("#todo-pane");
       const pane = rect("#todo-handoff");
       return {
-        inHeader: document.querySelector("#todo-body > header > #todo-orca-open") !== null,
+        inTools: document.querySelector("#todo-tools > #todo-orca-open") !== null,
         leftOfEdit: rect("#todo-orca-open").right <= rect("#todo-more").left,
-        inMain: document.querySelector("#todo-main > #todo-handoff") !== null,
+        inPane: document.querySelector("#todo-side > #todo-pane > #todo-handoff") !== null,
         underDetail: pane.top >= rect("#todo-detail").bottom - 1,
         inView: pane.top >= main.top - 1 && pane.top < main.bottom,
-        inSide: document.querySelectorAll("#todo-side #todo-handoff, #todo-side .ho-pane, #todo-tool-orca").length,
       };
     });
-    expect(place).toEqual({ inHeader: true, leftOfEdit: true, inMain: true, underDetail: true, inView: true, inSide: 0 });
-    await expect($("#todo-claude")).toBeDisplayed();
+    expect(place).toEqual({ inTools: true, leftOfEdit: true, inPane: true, underDetail: true, inView: true });
+    expect(await count("#todo-claude, #todo-tool-claude")).toBe(0);
     // The pane goes with the task, so it has no close icon before a send; its title is its first row.
     expect(await textsOf(`${TODO.pane} .ho-title`)).toEqual(["Orca に渡す"]);
     await expect($(`${TODO.pane} .ho-head [aria-label="閉じる"]`)).not.toBeDisplayed();
@@ -1204,11 +1203,10 @@ describe("orca handoff", () => {
     await expect($(`${TODO.pane} .ho-session-name`)).toBeDisplayed();
     expect(await terminalParts(TODO)).toBe(0);
     expect(await heightOf(TODO.pane)).toBeLessThan(200);
-    // Back to the list: the pane and the button are gone, and the right side still holds Claude's pane.
-    await $("#todo-back").click();
+    // The tab is closed: the pane and the button are gone.
+    await $("#todo-tabs .orca-tab-close").click();
     await expect($(TODO.pane)).not.toBeDisplayed();
     await expect($(TODO.button)).not.toBeDisplayed();
-    await expect($("#todo-claude")).toBeDisplayed();
     // The same task again shows its session, with the button pressed.
     await $("#todo-list li.task").click();
     await expect($(`${TODO.pane} .ho-session-name`)).toBeDisplayed();

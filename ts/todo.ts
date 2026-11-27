@@ -4,22 +4,22 @@ import type { TaskItem } from "./bindings/TaskItem";
 import type { Todo } from "./bindings/Todo";
 import { $, tag } from "./dom.js";
 import { pad2 } from "./format.js";
-import { COPY_SVG, DELETE_SVG, LINK_SVG } from "./icons.js";
+import { CLOSE_SVG, COPY_SVG, DELETE_SVG, LINK_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 import { closeMenu, showMenu } from "./menu.js";
 import { currentScreen, setScreen } from "./nav.js";
 import { HandoffPane } from "./orca-handoff.js";
 import { todoCard } from "./orca-handoff-cards.js";
 import { drawListToggle, listToggle } from "./list-toggle.js";
+import { onScreenChanged } from "./screen-bridge.js";
 import { initSplit, type SplitHandle } from "./split.js";
-import { initTodoClaude, syncTodoClaude, toggleTodoClaude } from "./todo-claude.js";
 import { renderDetail } from "./todo-detail.js";
 import { discardDraft, draftOpen } from "./todo-draft.js";
 import { clearCommentNotices, loadedComments } from "./todo-comments.js";
-import { editingField, projectName, projectOf, recountTodo, searching, setTodoCount, settleLocal, todoState } from "./todo-data.js";
+import { closeTab, editingField, openTab, projectName, projectOf, pruneTabs, recountTodo, searching, setTodoCount, settleLocal, todoState } from "./todo-data.js";
 import { renderList, renderProjects } from "./todo-list.js";
 import { clearSearch, initTodoSearch, searchTodo } from "./todo-search.js";
-import { cancelTodoReload, todoCall } from "./todo-write.js";
+import { cancelTodoReload, scheduleTodoReload, todoCall } from "./todo-write.js";
 import { logError, setNotice, showFailure } from "./error-card.js";
 import { copyText } from "./view.js";
 
@@ -28,17 +28,18 @@ const TODO_REFRESH_MS = 10 * 1000;
 // The pane that hands the open task to Orca (A-9).
 let handoff: HandoffPane;
 
-// The right pane is always there while the list or a task is shown, and holds Claude's pane, a terminal of Claude Code (T-7). The pane that hands the open task to Orca (A-9) is not in it: it follows the detail, under the comments, in the same scroll.
+// The right side is there while the task list is shown, and holds the tabs of the task details (T-10). The pane that hands the selected task to Orca (A-9) is in it too, under the detail.
 let sideUsable = false;
 
 // The list of projects (A-23): `listOpen` is what the owner chose, held in memory only, so the screen is open again when the app starts; `tokenForm` is whether the token form is up, which has no list.
 let listOpen = true;
 let tokenForm = false;
 
-// Where Claude's pane sits (T-7): on the right of the tasks, or, when their column would be under 612px (the detail's 556px and the 56px of its margins) with the side at its least (30% of the screen),
-// under them, with the divider lying down and the ✳ in the header of the tasks. It follows the screen's width and the project list only, never the side's own width, so that the two places cannot flip each other.
-const TASKS_MIN = 612;
-const SIDE_LEAST = 0.3;
+// Where the side sits (T-10): on the right of the tasks, or, when their column would be under 460px with the side at its least (35% of the screen), under them, with the divider lying down.
+// It follows the screen's width and the project list only, never the side's own width, so that the two places cannot flip each other.
+const TASKS_MIN = 460;
+const SIDE_LEAST = 0.35;
+const SIDE_MOST = 0.65;
 // The divider's width (`.split-bar`), which the right side leaves out of the tasks' column.
 const DIVIDER = 7;
 let below = false;
@@ -49,12 +50,7 @@ function setBelow(on: boolean) {
   below = on;
   $("todo").classList.toggle("below", on);
   split?.lie(on);
-  $("todo-split").setAttribute("aria-label", on ? "Claude の高さ" : "Claude の幅");
-  // The ✳ goes to the header of the tasks, and back to its row of the side.
-  const button = $("todo-tool-claude");
-  const focused = document.activeElement === button;
-  (on ? $("todo-body").querySelector("header")! : $("todo-tools")).append(button);
-  if (focused) button.focus({ preventScroll: true });
+  $("todo-split").setAttribute("aria-label", on ? "詳細の高さ" : "詳細の幅");
 }
 
 function layoutSide() {
@@ -89,43 +85,37 @@ function layoutPanes() {
   $("todo-split").hidden = !sideUsable;
   // Under the tasks the column of the tasks has the whole height while the side is hidden (the CSS).
   $("todo").classList.toggle("side-off", !sideUsable);
-  // The ✳ is in the header of the tasks while Claude is under them, and the header is shown under the token form and the page of a draft too.
-  $("todo-tool-claude").hidden = !sideUsable;
-  // The terminal is shown while the side is in view, and hidden when it is not.
-  syncTodoClaude();
 }
 
-// Follows the open task: another task, or none, changes what the pane under the detail shows, and the card takes the task as it is now.
+// Follows the selected tab: another task, or none, changes what the pane under the detail shows, and the card takes the task as it is now.
 export function syncTodoHandoff() {
   handoff.sync();
   handoff.refreshCard();
 }
 
-// Which part the Todo screen shows: the token form, the task list, one task, or the page of a draft (S-2).
-export function todoMode(mode: "token" | "list" | "detail" | "draft") {
+// Which part the left of the Todo screen shows: the token form, the task list, or the page of a draft (S-2). The side, with the tabs, is shown with the list only.
+export function todoMode(mode: "token" | "list" | "draft") {
   $("todo-token").hidden = mode !== "token";
   tokenForm = mode === "token";
   layoutList();
   $("todo-add").hidden = mode !== "list";
   $("todo-pending").hidden = mode !== "list";
   $("todo-list").hidden = mode !== "list";
-  $("todo-detail").hidden = mode !== "detail";
-  $("todo-back").hidden = mode !== "detail" && mode !== "draft";
+  $("todo-back").hidden = mode !== "draft";
   $("todo-main").classList.toggle("drafting", mode === "draft");
   document.getElementById("todo-draft")?.toggleAttribute("hidden", mode !== "draft");
-  $("todo-more").hidden = mode !== "detail";
-  // The comments' card belongs to the detail of a task.
-  if (mode !== "detail") clearCommentNotices();
   // The search has no place in the token form or the page of a draft.
   $("todo-search").hidden = mode === "token" || mode === "draft";
-  // Only a task can be handed over, so the button is in the header of a task only.
-  $("todo-orca-open").hidden = mode !== "detail";
-  sideUsable = mode === "list" || mode === "detail";
+  sideUsable = mode === "list";
   layoutPanes();
-  // Leaving the task takes the pane under it away at once.
-  if (mode !== "detail") handoff.sync();
+  if (mode !== "list") {
+    // The side is away: its detail is drawn as new when it comes back (its comments are fetched again), and the comments' card goes.
+    $("todo-detail").hidden = true;
+    clearCommentNotices();
+    handoff.sync();
+  }
   // A redraw of the same task keeps its menu open; another task or another part closes it.
-  if (moreMenu && (mode !== "detail" || todoState.open !== moreMenu.id)) closeMoreMenu();
+  if (moreMenu && (mode !== "list" || todoState.selected !== moreMenu.id)) closeMoreMenu();
 }
 
 // Shows the token form and forgets the content: a missing token, or one the settings screen just removed.
@@ -138,7 +128,8 @@ export function showTokenForm() {
   // The disconnect cleared the backend's completed tasks too.
   todoState.doneStale = true;
   setTodoCount([]);
-  todoState.open = null;
+  todoState.tabs = [];
+  todoState.selected = null;
   clearSearch();
   setNotice(NOTICE_OFFLINE, null);
   todoMode("token");
@@ -147,23 +138,82 @@ export function showTokenForm() {
   if (currentScreen() === "todo") $("todo-token-input").focus();
 }
 
-// Shows the detail of task `id` on the Todo screen (the row of a task in the pane of the notices, A-35). Until the screen's own load has drawn, the task is the one it opens on.
+// Opens the task `id` in a tab of the side and selects it, or selects the tab it has already (T-10). A row of a list, a subtask row and the parent chip of a detail do it.
+export function openTodoTab(id: string) {
+  openTab(id);
+  renderTodo();
+}
+
+// Shows the detail of task `id` on the Todo screen, in its tab (the row of a task in the pane of the notices, A-35). Until the screen's own load has drawn, the task is the one it opens on.
 export function openTodoTask(id: string) {
-  todoState.open = id;
+  openTab(id);
   setScreen("todo");
   if (todoState.todo) renderTodo();
+}
+
+// The strip of tabs of the side: a tab for each open task (its name, cut with an ellipsis, and ×), the selected one marked as the tabs of the Orca work pane are.
+function drawTabs() {
+  const focused = document.activeElement?.closest<HTMLElement>("#todo-tabs [data-tab]")?.dataset.tab;
+  const nodes = todoState.tabs.map((id) => {
+    const wrap = tag("div", "orca-tab");
+    wrap.dataset.tab = id;
+    wrap.setAttribute("role", "presentation");
+    const select = tag("button", "orca-tab-btn");
+    select.type = "button";
+    select.setAttribute("role", "tab");
+    select.setAttribute("aria-selected", String(id === todoState.selected));
+    select.append(tag("span", "orca-tab-title", todoState.taskById.get(id)?.content ?? ""));
+    select.onclick = () => {
+      todoState.selected = id;
+      renderTodo();
+    };
+    // The close button is beside the tab, not in it, so that pressing it never selects the tab.
+    const close = tag("button", "icon-btn orca-tab-close");
+    close.type = "button";
+    close.setAttribute("aria-label", "閉じる");
+    close.innerHTML = CLOSE_SVG;
+    close.onclick = () => {
+      closeTab(id);
+      renderTodo();
+    };
+    wrap.append(select, close);
+    return wrap;
+  });
+  $("todo-tabs").replaceChildren(...nodes);
+  if (focused) $("todo-tabs").querySelector<HTMLElement>(`[data-tab="${CSS.escape(focused)}"] .orca-tab-btn`)?.focus({ preventScroll: true });
+  $("todo-tabs").querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
+// The side (T-10): the strip of tabs, the detail of the selected one and, under it, the pane that hands that task to Orca (A-9). With no tab the pane is empty.
+function renderSide() {
+  const id = todoState.selected;
+  drawTabs();
+  $("todo-more").hidden = id === null;
+  $("todo-orca-open").hidden = id === null;
+  const detail = $("todo-detail");
+  if (id === null) {
+    detail.hidden = true;
+    detail.replaceChildren();
+    delete detail.dataset.task;
+    clearCommentNotices();
+  } else renderDetail(detail, id);
+  syncTodoHandoff();
 }
 
 export function renderTodo() {
   todoState.undrawn = false;
   if (!projectOf(todoState.view) && todoState.view !== "today" && todoState.view !== "inbox") todoState.view = "today";
+  // A task that is gone from the data (completed, deleted) loses its tab.
+  pruneTabs();
   renderProjects();
   // An open draft stays whatever the refresh brings; only its own back button and 破棄 close it.
   if (draftOpen()) {
     todoMode("draft");
     $("todo-title").textContent = "Todo の案";
-  } else if (todoState.open) renderDetail();
-  else renderList();
+  } else {
+    renderList();
+    renderSide();
+  }
 }
 
 // The card that says the list is the last one fetched (A-28, `setNotice`): a warning, drawn while the Todo screen is shown.
@@ -179,7 +229,7 @@ function drawTodoNotice(offline: Offline | null | undefined) {
   setNotice(NOTICE_OFFLINE, text ? { text, warn: true } : null);
 }
 
-// Takes off the cards that belong to the Todo screen, with their ×, when another screen is shown (`hideTodoClaude`, which `setScreen` calls for every other screen, calls it).
+// Takes off the cards that belong to the Todo screen, with their ×, when another screen is shown (`setScreen` calls it for every other screen).
 export function clearTodoNotices() {
   setNotice(NOTICE_OFFLINE, null);
   clearCommentNotices();
@@ -230,7 +280,7 @@ export async function loadTodo(quiet = false, withDone = true) {
   return false;
 }
 
-// The menu of the open task, opened for task `id`: every item acts on that task, whatever is open when it is pressed.
+// The menu of the selected tab's task, opened for task `id`: every item acts on that task, whatever is open when it is pressed.
 // Todoist cannot undo a delete, so 削除 asks twice: the first press changes its label, the second deletes.
 let moreMenu: { id: string; timer: number } | null = null;
 
@@ -252,7 +302,7 @@ function menuItem(icon: string, label: string) {
 }
 
 function openMoreMenu() {
-  const id = todoState.open;
+  const id = todoState.selected;
   if (!id) return;
   const menu = tag("div", "menu");
   menu.setAttribute("role", "menu");
@@ -289,8 +339,7 @@ function openMoreMenu() {
       return;
     }
     closeMoreMenu();
-    todoState.open = null;
-    // Gone from the list at once; the reload after the call brings it back if Todoist refused.
+    // Gone from the list at once, and its tab with it; the reload after the call brings it back if Todoist refused.
     todoCall("todoist_delete", { id }, null, () => settleLocal(id, null));
   };
   menu.append(del.b);
@@ -379,8 +428,8 @@ export function initTodo() {
   handoff = new HandoffPane({
     root: $("todo-handoff"),
     current: () => {
-      const id = todoState.open;
-      return $("todo").hidden || $("todo-detail").hidden || id === null || !todoState.taskById.has(id)
+      const id = todoState.selected;
+      return $("todo").hidden || $("todo-side").hidden || id === null || !todoState.taskById.has(id)
         ? null
         : {
             key: `todo:${id}`,
@@ -401,11 +450,11 @@ export function initTodo() {
     // The pane is under the comments, in the scroll of the detail: it is brought into view.
     $("todo-handoff").scrollIntoView({ block: "start" });
   };
-  initTodoClaude();
   initTodoSearch();
-  $("todo-tool-claude").onclick = toggleTodoClaude;
-  // 30% of the screen at first, its least; the divider keeps it between 30% and 45% of the screen (the CSS holds the same range). Under the tasks it is the height, 30% to 45%, kept apart from the width.
-  split = initSplit($("todo"), $("todo-split"), { min: 0.3, max: 0.45, lying: { min: 0.3, max: 0.45 } });
+  // A task that Claude Code adds through the tools of tsunagiai-mcp (A-36): the list is read again as after any change of a task.
+  onScreenChanged("todo", () => scheduleTodoReload(false));
+  // 50% of the screen at first; the divider keeps it between 35% and 65% of the screen (the CSS holds the same range). Under the tasks it is the height, 35% to 65%, kept apart from the width.
+  split = initSplit($("todo"), $("todo-split"), { min: SIDE_LEAST, max: SIDE_MOST, initial: 0.5, lying: { min: SIDE_LEAST, max: SIDE_MOST, initial: 0.5 } });
   split.lie(below);
   new ResizeObserver(layoutSide).observe($("todo"));
   // The document's pointerdown closes an open menu before the click, so whether this press found it open is read before that.
@@ -417,11 +466,9 @@ export function initTodo() {
     if (was) closeMoreMenu();
     else openMoreMenu();
   };
+  // The back button is shown on the page of a draft only.
   $("todo-back").onclick = () => {
-    if (draftOpen()) return discardDraft();
-    todoState.open = null;
-    renderTodo();
-    handoff.sync();
+    if (draftOpen()) discardDraft();
   };
   $("todo-token").onsubmit = async (e) => {
     e.preventDefault();

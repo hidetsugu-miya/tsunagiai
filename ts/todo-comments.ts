@@ -82,7 +82,7 @@ function commentRow(c: Comment) {
   return row;
 }
 
-// The card of a fetch that failed (A-28, `setNotice`, one key for each task): only the open task's is drawn, and `todoMode` takes it off when the detail is left.
+// The card of a fetch that failed (A-28, `setNotice`, one key for each task): only the selected tab's task is drawn, and `renderTodo` takes it off when there is none or the side is left.
 const noticeKey = (taskId: string) => `todo-comments:${taskId}`;
 
 function drawFailureCard(openTaskId: string | null) {
@@ -136,7 +136,7 @@ function drawComposer(v: View) {
 
 // Draws what changed for `taskId`, the field's controls only when the comments did not change (the list is not drawn again under a selection or a press); nothing when its section is not the one on screen.
 function redraw(taskId: string, composerOnly = false) {
-  if (!view || view.taskId !== taskId || todoState.open !== taskId) return;
+  if (!view || view.taskId !== taskId || todoState.selected !== taskId) return;
   if (!composerOnly) drawList(view);
   drawComposer(view);
 }
@@ -164,7 +164,7 @@ function filePicker() {
     const file = input!.files?.[0];
     // Emptied so that the same file can be picked again.
     input!.value = "";
-    const taskId = todoState.open;
+    const taskId = todoState.selected;
     if (!file || !taskId) return;
     if (file.size > MAX_FILE_BYTES) return showFailure("todo-comments", "ファイルが大きすぎます（100 MB まで）");
     const draft = draftOf(taskId);
@@ -203,7 +203,7 @@ async function load(taskId: string, projectId: string) {
 
 // The Todo screen shown again with a task's detail still open: its comments are fetched, as for a detail that was not showing.
 export function fetchOpenComments() {
-  const task = todoState.open ? todoState.taskById.get(todoState.open) : undefined;
+  const task = todoState.selected ? todoState.taskById.get(todoState.selected) : undefined;
   if (task) load(task.id, task.projectId);
 }
 

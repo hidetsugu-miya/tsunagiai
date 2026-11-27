@@ -426,7 +426,7 @@ describe("orca", () => {
     await expect($("#orca")).not.toBeDisplayed();
     await waitForCount("#todo-list li.task", 1);
     await $("#todo-list li.task").click();
-    await expect($("#todo-back")).toBeDisplayed();
+    await expect($("#todo-detail")).toBeDisplayed();
     // The pane of the task reads the list when it opens, and that read finds the selected session done.
     const overview = await mock("orca_overview", orcaOverview([finished("example-app"), working("example-api")], worktrees()));
     await $("#todo-orca-open").click();

@@ -3,7 +3,10 @@ import { askScreen, boot, callsOf, claudeKeyReady, claudeMissing, claudeReady, c
 // A press as a mouse makes it. WebDriver's element click sends no pointerdown, which is what closes a popover (as in calendar.e2e.ts).
 const press = (target: ChainablePromiseElement) => browser.action("pointer").move({ origin: target }).down().up().perform();
 
-// Runs `run` in a window of `width`px and puts the window back. The E2E window is 1200px, where Claude's side is under the tasks (T-7, "Under the tasks"); a spec that needs the side on the right takes a wider window, and one that needs a narrow detail a narrower one.
+// Presses the × of the selected tab of the side (T-10).
+const closeSelectedTab = () => $('#todo-tabs [aria-selected="true"] + .orca-tab-close').click();
+
+// Runs `run` in a window of `width`px and puts the window back. The E2E window is 1200px, where the side (50% of the screen) leaves the detail under 556px, so its side pane is under its body (T-10); a spec that needs the detail wide takes a wider window, and one that needs a narrow detail a narrower one.
 async function inWindow(width: number, run: () => Promise<void>) {
   const before = await browser.getWindowSize();
   const resize = async (w: number) => {
@@ -299,7 +302,7 @@ describe("todo", () => {
     await expect($("#todo-add-input")).toBeEnabled();
   });
 
-  it("waits as a row while a task is open, and opens the page when the list is shown again", async () => {
+  it("opens the page in the place of the list while a task has a tab, hides the side, and brings the tab back when the page is closed", async () => {
     await openTodo();
     const summarize = await mock("todoist_summarize_slack", holds);
     await $("#todo-add-input").setValue(slackMessageUrl);
@@ -308,13 +311,15 @@ describe("todo", () => {
     await $("#todo-list li.task").click();
     await expect($("#todo-detail")).toBeDisplayed();
     await release(summarize, slackSummary);
-    // The task stays open: the draft does not take the screen from it.
-    await expect($("#todo-detail")).toBeDisplayed();
-    expect(await count("#todo-draft")).toBe(0);
-    await $("#todo-back").click();
     await $("#todo-draft").waitForExist();
     await expect($("#todo-draft .draft-name")).toHaveValue("Reply to the vendor");
     expect(await count("#todo-pending .pending")).toBe(0);
+    await expect($("#todo-side")).not.toBeDisplayed();
+    await $("#todo-back").click();
+    await $("#todo-draft").waitForExist({ reverse: true });
+    await expect($("#todo-side")).toBeDisplayed();
+    await expect($("#todo-detail .name")).toHaveValue("Write report");
+    expect(await count("#todo-tabs .orca-tab")).toBe(1);
   });
 
   it("opens the next summary when the first page is closed, and shows it as a row until then", async () => {
@@ -1114,7 +1119,7 @@ describe("todo: closing the list of projects (A-23)", () => {
   });
 
   it("closes the list, widens the tasks to its width, and puts the button at the left of the heading", async () => {
-    // In a window where Claude's side is on the right with the list open and closed (T-7), so that the tasks take the list's width and nothing else.
+    // In a window where the side is on the right with the list open and closed (T-10), so that the tasks take the list's width and nothing else.
     await inWindow(1600, async () => {
       await openTodo();
       const [listBefore, bodyBefore] = await Promise.all(["#projects", "#todo-body"].map(rect));
@@ -1458,13 +1463,15 @@ describe("todo detail", () => {
   });
 
   it("puts the side pane under the body when the body column would be narrower than 320px", async () => {
-    // In the 1200px window Claude's side is under the tasks (T-7), so the detail has the width of the column less its margins, 556px at least with two columns; the side pane goes under the body in a narrow window only.
+    // In a window of 1600px the side (50% of the screen, T-10) leaves the detail 556px at least with two columns; the side pane goes under the body in a narrower window only.
     await openTodo();
     await $(ROWS).click();
     const place = (selector: string) => browser.execute((s) => document.querySelector(s)!.getBoundingClientRect().toJSON(), selector);
-    const wide = [await place("#todo-detail"), await place("#todo-detail .detail-main"), await place("#todo-detail .detail-side")];
-    expect(wide[0].width).toBeGreaterThanOrEqual(556);
-    expect(wide[2].top).toBeLessThan(wide[1].bottom);
+    await inWindow(1600, async () => {
+      await browser.waitUntil(async () => (await place("#todo-detail")).width >= 556, { timeoutMsg: "the detail did not widen with the window" });
+      const [main, side] = [await place("#todo-detail .detail-main"), await place("#todo-detail .detail-side")];
+      expect(side.top).toBeLessThan(main.bottom);
+    });
     // A window of 800px with the project list open leaves the detail less than 556px (320 + 16 + 220).
     await inWindow(800, async () => {
       await browser.waitUntil(async () => (await place("#todo-detail")).width < 556, { timeoutMsg: "the detail did not narrow with the window" });
@@ -1493,7 +1500,8 @@ describe("todo detail", () => {
     await $('.menu button[role="menuitem"]:nth-child(3)').click();
     expect(await waitForCalls(move)).toEqual([{ id: "k1", projectId: "p2" }]);
     await expect($("#todo-detail .field:nth-child(1) .field-value")).toHaveText("Design");
-    await expect($("#todo-title")).toHaveText("Design");
+    // The title is the list's name, not the task's project.
+    await expect($("#todo-title")).toHaveText("今日");
   });
 
   it("wraps a long name of the task at the width of its field and grows with it, and Enter saves it with no newline", async () => {
@@ -1645,7 +1653,7 @@ describe("todo prompt icon", () => {
     await openTodo();
     expect(await count("#todo-prompt")).toBe(0);
     await $(ROWS).click();
-    await expect($("#todo-back")).toBeDisplayed();
+    await expect($("#todo-detail")).toBeDisplayed();
     expect(await count("#todo-prompt")).toBe(0);
   });
 
@@ -1708,14 +1716,15 @@ describe("todo detail menu", () => {
     // As high as the other buttons of the header, which keep their size: the band does not grow.
     const sizes = await browser.execute(() => {
       const h = (q: string) => document.querySelector(q)!.getBoundingClientRect().height;
-      return [h("#todo-more"), h("#todo-back"), h("#todo-body > header")];
+      return [h("#todo-more"), h("#todo-orca-open"), h("#todo-body > header"), h("#todo-tools")];
     });
     expect(sizes[0]).toBe(sizes[1]);
     expect(sizes[2]).toBeLessThanOrEqual(46);
+    expect(sizes[3]).toBe(sizes[2]);
     await $(more).click();
     await waitForCount(items, 2);
     await expect($(more)).toHaveAttribute("aria-expanded", "true");
-    await $("#todo-back").click();
+    await closeSelectedTab();
     await expect($(more)).not.toBeDisplayed();
   });
 
@@ -1942,12 +1951,12 @@ describe("todo detail description copy", () => {
     await expect($(desc)).toBeDisplayed();
   });
 
-  it("does not start the editor when 戻る is pressed within the delay after the press", async () => {
+  it("does not start the editor when the tab is closed within the delay after the press", async () => {
     await openReport();
     await browser.execute((id) => {
       if (!window.__e2e_once__(id)) return;
       document.querySelector<HTMLElement>("#todo-detail .desc")!.click();
-      document.getElementById("todo-back")!.click();
+      document.querySelector<HTMLElement>("#todo-tabs .orca-tab-close")!.click();
     }, onceId());
     // Past the delay before a press starts the editor: it would find the hidden detail and no textarea.
     await browser.pause(500);
@@ -2567,7 +2576,7 @@ describe("todo subtask being created", () => {
     const add = await mock("todoist_add_subtask", holds);
     await typeSub("Buy luggage");
     await waitForCount(creating, 1);
-    await $("#todo-back").click();
+    await closeSelectedTab();
     await rowOf("Plan trip").click();
     await waitForCount(creating, 1);
     await expect($(creating)).toHaveText(expect.stringContaining("Buy luggage"));
@@ -2773,8 +2782,8 @@ describe("todo detail comments", () => {
     await expect($("#todo-detail .name")).toHaveValue("Write report v2");
     await waitForCount(rows, 3);
     expect(await callsOf("todoist_comments")).toHaveLength(1);
-    // Opened again after the list: a new opening fetches again.
-    await $("#todo-back").click();
+    // Opened again after its tab was closed: a new opening fetches again.
+    await closeSelectedTab();
     await $(ROWS).click();
     expect(await waitForCalls("todoist_comments", 2)).toHaveLength(2);
   });
@@ -2809,12 +2818,12 @@ describe("todo detail comments", () => {
     await expect($(field)).toBeDisplayed();
   });
 
-  it("shows a failed fetch as a card, not in the section, and takes the card off when the detail is left", async () => {
+  it("shows a failed fetch as a card, not in the section, and takes the card off when the tab is closed", async () => {
     await openReport(rejects("boom"));
     await waitForCard("コメントを読み込めませんでした: boom");
     expect(await count(CARDS)).toBe(1);
     await expect($(field)).toBeDisplayed();
-    await $("#todo-back").click();
+    await closeSelectedTab();
     await $(CARDS).waitForExist({ reverse: true });
   });
 
@@ -2824,7 +2833,7 @@ describe("todo detail comments", () => {
     await $(ROWS).click();
     await waitForCalls(first);
     await expect($("#todo-detail .c-note")).toHaveText(expect.stringContaining("読み込み中"));
-    await $("#todo-back").click();
+    await closeSelectedTab();
     await release(first, [comment("c1", "Alice Example", "late")]);
     await browser.pause(200);
     expect(await count(rows)).toBe(0);
@@ -2840,7 +2849,7 @@ describe("todo detail comments", () => {
 
   it("shows the token form when the fetch finds that a token is needed", async () => {
     await openReport([]);
-    await $("#todo-back").click();
+    await closeSelectedTab();
     const comments = await mock("todoist_comments", holds);
     await $(ROWS).click();
     await waitForCalls(comments);
@@ -3776,21 +3785,18 @@ describe("todo: search (T-9)", () => {
     await expect($(clear)).not.toBeDisplayed();
   });
 
-  it("opens the detail of a result, goes back to the results with the text kept, and closes the detail when typing", async () => {
+  it("opens a result in a tab while the results and the text stay, and keeps the tab when typing", async () => {
     const hits = await openSearch();
     await searchFor("report", hits);
     await waitForCount("#todo-list li.task", 2);
     await $("#todo-list li.task:first-child .tname").click();
     await expect($("#todo-detail")).toBeDisplayed();
     await expect($("#todo-search")).toBeDisplayed();
-    await $("#todo-back").click();
-    await waitForCount("#todo-list li.task", 2);
     await expect($("#todo-list .group")).toHaveText("全プロジェクトで 2 件");
     await expect($(input)).toHaveValue("report");
-    await $("#todo-list li.task:first-child .tname").click();
-    await expect($("#todo-detail")).toBeDisplayed();
     await $(input).addValue("s");
-    await expect($("#todo-detail")).not.toBeDisplayed();
+    await expect($("#todo-detail")).toBeDisplayed();
+    expect(await count("#todo-tabs .orca-tab")).toBe(1);
     await waitForCount("#todo-list li.task", 2);
   });
 
@@ -3869,5 +3875,299 @@ describe("todo: search (T-9)", () => {
     await $("#nav-todo").click();
     await expect($("#todo-token")).toBeDisplayed();
     await expect($("#todo-search")).not.toBeDisplayed();
+  });
+});
+
+describe("todo: tabs of task details (T-10)", () => {
+  const rect = (selector: string) => browser.execute((s) => document.querySelector(s)!.getBoundingClientRect().toJSON(), selector);
+  const tabs = "#todo-tabs .orca-tab";
+  const tabTitles = () => textsOf("#todo-tabs .orca-tab-title");
+  const selectedTitle = () => browser.execute(() => document.querySelector('#todo-tabs [aria-selected="true"] .orca-tab-title')?.textContent ?? null);
+  const nameOfDetail = () => browser.execute(() => (document.querySelector("#todo-detail .name") as HTMLTextAreaElement | null)?.value ?? null);
+  const tabButton = (title: string) => $(`//div[@id="todo-tabs"]//button[@role="tab"][contains(., "${title}")]`);
+  const closeOf = (title: string) => $(`//div[@id="todo-tabs"]//button[@role="tab"][contains(., "${title}")]/following-sibling::button`);
+  // The Todo screen on the list of Work, which holds "Write report" and "Plan trip" (its subtasks are in the detail of "Plan trip").
+  async function openWork(data = todoData()) {
+    await boot({ inbox: inbox(), todoist_load: data, slack_load: slackLoad, claude_status: claudeReady });
+    await $("#nav-todo").click();
+    await $('#projects .proj[data-view="p1"]').click();
+    await waitForCount(ROWS, 2);
+  }
+  // Runs the timed refresh now: the page's visibilitychange makes it load again.
+  const refreshNow = () => browser.execute((id) => window.__e2e_once__(id) && document.dispatchEvent(new Event("visibilitychange")), onceId());
+  const key = (name: string, times: number, id = "todo-split") =>
+    browser.execute((k, n, target) => {
+      for (let i = 0; i < n; i++) document.getElementById(target)!.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
+    }, name, times, id);
+
+  it("shows an empty side with no tab: the row of tabs at the height of the header, no buttons and no text", async () => {
+    await openTodo();
+    await expect($("#todo-side")).toBeDisplayed();
+    await expect($("#todo-tabs")).toHaveAttribute("role", "tablist");
+    expect(await count(tabs)).toBe(0);
+    await expect($("#todo-detail")).not.toBeDisplayed();
+    await expect($("#todo-more")).not.toBeDisplayed();
+    await expect($("#todo-orca-open")).not.toBeDisplayed();
+    await expect($("#todo-pane")).toHaveText("");
+    expect((await rect("#todo-tools")).height).toBe((await rect("#todo-body > header")).height);
+    expect(await count("#todo-tool-claude, #todo-claude")).toBe(0);
+    await expect($("#todo-back")).not.toBeDisplayed();
+  });
+
+  it("opens a task in a tab when its row is pressed, keeps the list, and selects the tab it has instead of opening a second", async () => {
+    await openWork();
+    await rowOf("Write report").click();
+    expect(await tabTitles()).toEqual(["Write report"]);
+    expect(await selectedTitle()).toBe("Write report");
+    expect(await nameOfDetail()).toBe("Write report");
+    await expect($("#todo-list")).toBeDisplayed();
+    expect(await count(ROWS)).toBe(2);
+    await expect($("#todo-back")).not.toBeDisplayed();
+    await rowOf("Plan trip").click();
+    expect(await tabTitles()).toEqual(["Write report", "Plan trip"]);
+    expect(await selectedTitle()).toBe("Plan trip");
+    expect(await nameOfDetail()).toBe("Plan trip");
+    await rowOf("Write report").click();
+    expect(await tabTitles()).toEqual(["Write report", "Plan trip"]);
+    expect(await selectedTitle()).toBe("Write report");
+    expect(await nameOfDetail()).toBe("Write report");
+    await expect($("#todo-more")).toBeDisplayed();
+    await expect($("#todo-orca-open")).toBeDisplayed();
+  });
+
+  it("puts the buttons of the selected tab at the right end of the row of tabs", async () => {
+    await openWork();
+    await rowOf("Write report").click();
+    const [tools, strip, orca, more] = await Promise.all(["#todo-tools", "#todo-tabs", "#todo-orca-open", "#todo-more"].map(rect));
+    expect(strip.right).toBeLessThanOrEqual(orca.left);
+    expect(orca.right).toBeLessThanOrEqual(more.left);
+    expect(more.right).toBeLessThanOrEqual(tools.right);
+    expect(await browser.execute(() => document.querySelector("#todo-tools > #todo-orca-open") !== null && document.querySelector("#todo-tools > #todo-more") !== null)).toBe(true);
+  });
+
+  it("selects a tab when it is pressed, and draws its detail", async () => {
+    await openWork();
+    await rowOf("Write report").click();
+    await rowOf("Plan trip").click();
+    await tabButton("Write report").click();
+    expect(await selectedTitle()).toBe("Write report");
+    expect(await nameOfDetail()).toBe("Write report");
+    await expect(tabButton("Write report")).toHaveAttribute("aria-selected", "true");
+    await expect(tabButton("Plan trip")).toHaveAttribute("aria-selected", "false");
+    await tabButton("Plan trip").click();
+    expect(await nameOfDetail()).toBe("Plan trip");
+  });
+
+  it("shows the name of a row that has a tab in bold, and in the normal weight again when the tab is closed", async () => {
+    await openWork();
+    const weight = (name: string) => browser.execute((n) => parseInt(getComputedStyle([...document.querySelectorAll("#todo-list li.task")].find((li) => li.textContent!.includes(n))!.querySelector(".tname")!).fontWeight, 10), name);
+    expect(await weight("Write report")).toBeLessThan(600);
+    await rowOf("Write report").click();
+    expect(await weight("Write report")).toBeGreaterThanOrEqual(600);
+    expect(await weight("Plan trip")).toBeLessThan(600);
+    await closeOf("Write report").click();
+    expect(await weight("Write report")).toBeLessThan(600);
+  });
+
+  it("closes a tab with its ×, and selects its neighbour: the next, else the one before, else none", async () => {
+    await openWork();
+    await rowOf("Write report").click();
+    await rowOf("Plan trip").click();
+    await subRowOf("Book flights").click();
+    expect(await tabTitles()).toEqual(["Write report", "Plan trip", "Book flights"]);
+    expect(await selectedTitle()).toBe("Book flights");
+    // The last tab: the one before it.
+    await closeOf("Book flights").click();
+    expect(await tabTitles()).toEqual(["Write report", "Plan trip"]);
+    expect(await selectedTitle()).toBe("Plan trip");
+    expect(await nameOfDetail()).toBe("Plan trip");
+    await subRowOf("Book flights").click();
+    // A tab that is not the selected one closes and leaves the selection alone.
+    await closeOf("Write report").click();
+    expect(await tabTitles()).toEqual(["Plan trip", "Book flights"]);
+    expect(await selectedTitle()).toBe("Book flights");
+    // The selected tab with one after it: the next.
+    await tabButton("Plan trip").click();
+    await rowOf("Write report").click();
+    await tabButton("Plan trip").click();
+    await closeOf("Plan trip").click();
+    expect(await tabTitles()).toEqual(["Book flights", "Write report"]);
+    expect(await selectedTitle()).toBe("Book flights");
+    await closeOf("Book flights").click();
+    await closeOf("Write report").click();
+    expect(await count(tabs)).toBe(0);
+    await expect($("#todo-detail")).not.toBeDisplayed();
+    await expect($("#todo-more")).not.toBeDisplayed();
+    await expect($("#todo-orca-open")).not.toBeDisplayed();
+    await expect($("#todo-pane")).toHaveText("");
+    expect(await count(ROWS)).toBe(2);
+  });
+
+  it("closes the tab of a task that is completed, and selects its neighbour", async () => {
+    await openWork();
+    const done = await mock("todoist_set_done", true);
+    const after = todoData();
+    after.tasks = after.tasks.filter((t) => t.id !== "k2" && t.parent?.id !== "k2" && t.id !== "k3" && t.id !== "k4");
+    await mock("todoist_load", after);
+    await rowOf("Write report").click();
+    await rowOf("Plan trip").click();
+    await $("#todo-detail .head .check").click();
+    expect(await waitForCalls(done)).toEqual([{ id: "k2", done: true }]);
+    expect(await tabTitles()).toEqual(["Write report"]);
+    expect(await selectedTitle()).toBe("Write report");
+    expect(await nameOfDetail()).toBe("Write report");
+  });
+
+  it("closes the tab of a task that is deleted from the menu of the selected tab", async () => {
+    await openWork();
+    const del = await mock("todoist_delete", true);
+    const after = todoData();
+    after.tasks = after.tasks.filter((t) => t.id === "k1");
+    await mock("todoist_load", after);
+    await rowOf("Write report").click();
+    await rowOf("Plan trip").click();
+    await tabButton("Write report").click();
+    await tabButton("Plan trip").click();
+    await $("#todo-more").click();
+    await $('.menu[role="menu"] button.danger').click();
+    await $('.menu[role="menu"] button.danger').click();
+    expect(await waitForCalls(del)).toEqual([{ id: "k2" }]);
+    expect(await tabTitles()).toEqual(["Write report"]);
+    expect(await selectedTitle()).toBe("Write report");
+  });
+
+  it("closes the tab of a task that a reload no longer has, and keeps the others with the selected one", async () => {
+    await openWork();
+    await rowOf("Write report").click();
+    await rowOf("Plan trip").click();
+    const after = todoData();
+    after.tasks = after.tasks.filter((t) => t.id === "k1");
+    await mock("todoist_load", after);
+    await refreshNow();
+    await $(`${tabs}:nth-child(2)`).waitForExist({ reverse: true });
+    expect(await tabTitles()).toEqual(["Write report"]);
+    expect(await selectedTitle()).toBe("Write report");
+    expect(await nameOfDetail()).toBe("Write report");
+  });
+
+  it("keeps the tabs over a reload that changes a name, and shows the new name in the tab", async () => {
+    await openWork();
+    await rowOf("Write report").click();
+    await rowOf("Plan trip").click();
+    const after = todoData();
+    after.tasks[0].content = "Write report v2";
+    await mock("todoist_load", after);
+    await refreshNow();
+    await browser.waitUntil(async () => (await tabTitles()).includes("Write report v2"));
+    expect(await tabTitles()).toEqual(["Write report v2", "Plan trip"]);
+    expect(await selectedTitle()).toBe("Plan trip");
+  });
+
+  it("opens a subtask from its row in the detail in a tab, and selects the tab of the parent when its chip is pressed", async () => {
+    await openWork();
+    await rowOf("Plan trip").click();
+    await subRowOf("Book flights").click();
+    expect(await tabTitles()).toEqual(["Plan trip", "Book flights"]);
+    expect(await nameOfDetail()).toBe("Book flights");
+    await $("#todo-detail .parent-link").click();
+    expect(await tabTitles()).toEqual(["Plan trip", "Book flights"]);
+    expect(await selectedTitle()).toBe("Plan trip");
+    expect(await nameOfDetail()).toBe("Plan trip");
+  });
+
+  it("keeps the tabs when another project is picked, and opens a task of the new list in a new tab", async () => {
+    await openWork();
+    await rowOf("Write report").click();
+    await $('#projects .proj[data-view="p4"]').click();
+    await expect($("#todo-title")).toHaveText("Home");
+    expect(await tabTitles()).toEqual(["Write report"]);
+    expect(await nameOfDetail()).toBe("Write report");
+    await $('#projects .proj[data-view="today"]').click();
+    await rowOf("Write report").click();
+    expect(await count(tabs)).toBe(1);
+  });
+
+  it("draws only the selected tab's detail, and the comments of a task are fetched when its tab is selected", async () => {
+    await openWork();
+    await rowOf("Write report").click();
+    expect(await waitForCalls("todoist_comments")).toEqual([{ taskId: "k1", projectId: "p1" }]);
+    await rowOf("Plan trip").click();
+    expect(await waitForCalls("todoist_comments", 2)).toEqual([
+      { taskId: "k1", projectId: "p1" },
+      { taskId: "k2", projectId: "p1" },
+    ]);
+    expect(await count("#todo-detail .name")).toBe(1);
+  });
+
+  it("starts at half the screen with the divider between 35% and 65%, and moves it with the arrow keys", async () => {
+    await inWindow(1600, async () => {
+      await openTodo();
+      const split = $("#todo-split");
+      await expect(split).toBeDisplayed();
+      await expect(split).toHaveAttribute("aria-label", "詳細の幅");
+      await expect(split).toHaveAttribute("aria-orientation", "vertical");
+      await expect(split).toHaveAttribute("aria-valuemin", "35");
+      await expect(split).toHaveAttribute("aria-valuemax", "65");
+      await expect(split).toHaveAttribute("aria-valuenow", "50");
+      const share = async () => (await rect("#todo-side")).width / (await rect("#todo")).width;
+      expect(await share()).toBeCloseTo(0.5, 2);
+      await key("ArrowLeft", 20);
+      await expect(split).toHaveAttribute("aria-valuenow", "65");
+      expect(await share()).toBeCloseTo(0.65, 2);
+      await key("ArrowRight", 30);
+      await expect(split).toHaveAttribute("aria-valuenow", "35");
+      expect(await share()).toBeCloseTo(0.35, 2);
+    });
+  });
+
+  it("moves the divider by dragging it, within the range", async () => {
+    await inWindow(1600, async () => {
+      await openTodo();
+      const bar = $("#todo-split");
+      const todo = await rect("#todo");
+      await browser.action("pointer").move({ origin: bar }).down().move({ origin: "viewport", x: Math.round(todo.left + todo.width * 0.4), y: 400 }).up().perform();
+      await expect(bar).toHaveAttribute("aria-valuenow", "60");
+      await browser.action("pointer").move({ origin: bar }).down().move({ origin: "viewport", x: Math.round(todo.left + todo.width * 0.9), y: 400 }).up().perform();
+      await expect(bar).toHaveAttribute("aria-valuenow", "35");
+    });
+  });
+
+  it("puts the side under the tasks in a narrow window, with the divider lying down and its own range, and back on the right when the window is widened", async () => {
+    const places = () =>
+      browser.execute(() => {
+        const r = (s: string) => document.querySelector(s)!.getBoundingClientRect();
+        const [body, split, side] = ["#todo-body", "#todo-split", "#todo-side"].map(r);
+        return {
+          below: document.getElementById("todo")!.classList.contains("below"),
+          under: Math.abs(body.bottom - split.top) <= 1 && Math.abs(split.bottom - side.top) <= 1 && Math.abs(side.left - body.left) <= 1 && Math.abs(side.width - body.width) <= 1,
+          beside: Math.abs(body.right - split.left) <= 1 && Math.abs(split.right - side.left) <= 1 && Math.abs(side.top - body.top) <= 1,
+          splitHeight: split.height,
+          tools: document.querySelector("#todo-side > #todo-tools") !== null,
+        };
+      });
+    await inWindow(800, async () => {
+      await openTodo();
+      expect(await places()).toMatchObject({ below: true, under: true, splitHeight: 7, tools: true });
+      const split = $("#todo-split");
+      await expect(split).toHaveAttribute("aria-orientation", "horizontal");
+      await expect(split).toHaveAttribute("aria-label", "詳細の高さ");
+      await expect(split).toHaveAttribute("aria-valuemin", "35");
+      await expect(split).toHaveAttribute("aria-valuemax", "65");
+      await expect(split).toHaveAttribute("aria-valuenow", "50");
+      await key("ArrowUp", 20);
+      await expect(split).toHaveAttribute("aria-valuenow", "65");
+      await key("ArrowDown", 30);
+      await expect(split).toHaveAttribute("aria-valuenow", "35");
+      // A task opened there is drawn under the tasks, in the same side.
+      await rowOf("Write report").click();
+      expect(await nameOfDetail()).toBe("Write report");
+      expect(await places()).toMatchObject({ below: true, under: true });
+    });
+    await inWindow(1600, async () => {
+      await browser.waitUntil(async () => (await places()).beside, { timeoutMsg: "the side did not go back to the right" });
+      expect(await places()).toMatchObject({ below: false, beside: true });
+      await expect($("#todo-split")).toHaveAttribute("aria-label", "詳細の幅");
+      await expect($("#todo-split")).toHaveAttribute("aria-orientation", "vertical");
+    });
   });
 });
