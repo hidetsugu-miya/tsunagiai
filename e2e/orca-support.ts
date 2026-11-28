@@ -201,6 +201,8 @@ export async function setCaret(start: number, end = start) {
       const selection = getSelection()!;
       selection.removeAllRanges();
       selection.addRange(range);
+      // The editor reads the selection at this event, in this task, before the focus timer or a redraw of the lines writes its own selection back over it.
+      document.dispatchEvent(new Event("selectionchange"));
     },
     start,
     end,
