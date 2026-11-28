@@ -585,6 +585,7 @@ fn drop_children(config: &Path, formation: &str, names: &[String]) -> Result<usi
 fn dispatch(
     config: &Path,
     plugins: &Result<PathBuf, String>,
+    worktrees: &Result<String, String>,
     version: &str,
     request: &[u8],
 ) -> Reply {
@@ -756,6 +757,10 @@ fn dispatch(
                 Err(e) => Reply::error(&e),
             }
         }
+        "worktrees.base" => match worktrees {
+            Ok(base) => Reply::ok(json!({"base": base})),
+            Err(e) => Reply::error(e),
+        },
         "subscribe" => Reply {
             subscribe: true,
             ..Reply::ok(json!({"subscribed": true}))
@@ -1013,6 +1018,8 @@ pub struct Setup {
     pub version: String,
     /// The folder of the owner's plugins of this PC (`plugins::plugins_dir`) that `plugins.begin`, `plugins.write` and `plugins.commit` replace, or why it cannot be told.
     pub plugins: Result<PathBuf, String>,
+    /// The place of the worktrees of this PC (`formation::local_worktree_base`, `{home}/.local/share/tsunagiai/worktrees`) that `worktrees.base` tells the app, or why it cannot be told.
+    pub worktrees: Result<String, String>,
 }
 
 fn socket_config() -> WebSocketConfig {
@@ -1073,15 +1080,17 @@ where
         limit = IDLE_LIMIT;
         let request = channel.open(&frame)?;
         // `page.read` runs `orca` and `git`, so a request is served on a thread that may block.
-        let (config, version, plugins) = (
+        let (config, version, plugins, worktrees) = (
             setup.config.clone(),
             setup.version.clone(),
             setup.plugins.clone(),
+            setup.worktrees.clone(),
         );
-        let reply =
-            tokio::task::spawn_blocking(move || dispatch(&config, &plugins, &version, &request))
-                .await
-                .ok()?;
+        let reply = tokio::task::spawn_blocking(move || {
+            dispatch(&config, &plugins, &worktrees, &version, &request)
+        })
+        .await
+        .ok()?;
         // The connection is the one of the pushes from before the reply, so a push right after it is not lost.
         let deliveries = reply.subscribe.then(|| hub.attach());
         let sealed = sealed_reply(&mut channel, &reply.body)?;
@@ -1387,6 +1396,15 @@ impl Client {
         )
         .await
         .map(|_| ())
+    }
+
+    /// The place that the PC makes the worktrees of its children in (`{its home}/.local/share/tsunagiai/worktrees`, A-37, #1560), as it tells it: the app checks it before it uses it (`formation_remote::worktree_base_from_here`). A PC that cannot tell its home folder refuses.
+    pub async fn worktrees_base(&mut self) -> Result<String, String> {
+        let result = self.call("worktrees.base", Value::Null).await?;
+        result["base"]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| "サーバーの答えの形式が正しくありません".to_owned())
     }
 
     /// Makes the plugins' folder of that PC hold `files` (as `formation_assets::read_plugins_folder` gives them) as a whole, and answers whether it sent them: a PC that holds the very set already (by its hash) is sent nothing (#1535). What is sent goes in requests whose files add up to `PLUGINS_PIECE` bytes at most, so that one is far under the frame of 1 MiB, and a file that is larger goes in several; the PC checks the whole against the hash before it replaces its folder.
@@ -1876,6 +1894,7 @@ pub async fn run_daemon(config: &Path, bind: &str) -> Result<(), String> {
             client_public,
             version,
             plugins: crate::plugins::plugins_dir(),
+            worktrees: formation::local_worktree_base(),
         },
         hub,
     )
@@ -2387,9 +2406,18 @@ mod tests {
 
     // ---- the API ----
 
+    /// The base of the server's PC in the tests: what `formation::local_worktree_base_in` gives for its home folder.
+    const PC_BASE: &str = "/home/pc/.local/share/tsunagiai/worktrees";
+
     fn call(config: &Path, method: &str, params: Value) -> Reply {
         let request = serde_json::to_vec(&json!({"method": method, "params": params})).unwrap();
-        dispatch(config, &Ok(config.join("owner-plugins")), "1.2.3", &request)
+        dispatch(
+            config,
+            &Ok(config.join("owner-plugins")),
+            &Ok(PC_BASE.to_owned()),
+            "1.2.3",
+            &request,
+        )
     }
 
     #[test]
@@ -2406,7 +2434,14 @@ mod tests {
         assert_eq!(unknown.body["ok"], false);
         assert!(!unknown.stop);
         assert_eq!(
-            dispatch(&config, &Err("x".to_owned()), "1", b"not json").body["ok"],
+            dispatch(
+                &config,
+                &Err("x".to_owned()),
+                &Err("x".to_owned()),
+                "1",
+                b"not json"
+            )
+            .body["ok"],
             false
         );
         assert_eq!(
@@ -2775,6 +2810,7 @@ mod tests {
             client_public,
             version: "9.9.9".to_owned(),
             plugins: Ok(plugins.clone()),
+            worktrees: Ok(PC_BASE.to_owned()),
         };
         let hub = Hub::new();
         let task = tokio::spawn(serve_with(listener, setup, hub.clone()));
@@ -2876,7 +2912,7 @@ mod tests {
         let config = temp_dir("api-plugins");
         let call_with = |plugins: &Result<PathBuf, String>, method: &str, params: Value| {
             let request = serde_json::to_vec(&json!({"method": method, "params": params})).unwrap();
-            dispatch(&config, plugins, "1", &request).body
+            dispatch(&config, plugins, &Err("x".to_owned()), "1", &request).body
         };
         let none = Err("環境変数 HOME がありません".to_owned());
         let mark = "0".repeat(64);
@@ -2912,6 +2948,40 @@ mod tests {
         assert!(body["error"].as_str().unwrap().contains("ハッシュ"));
         assert!(!config.join("plugins").exists());
         let _ = std::fs::remove_dir_all(&config);
+    }
+
+    #[test]
+    fn the_place_of_the_worktrees_is_told_and_a_pc_with_no_home_folder_refuses() {
+        let config = temp_dir("api-worktrees");
+        let ask = |worktrees: &Result<String, String>, params: Value| {
+            let request =
+                serde_json::to_vec(&json!({"method": "worktrees.base", "params": params})).unwrap();
+            dispatch(&config, &Err("x".to_owned()), worktrees, "1", &request).body
+        };
+        // The place is the PC's own, in any case of the parameters.
+        let place = Ok(PC_BASE.to_owned());
+        assert_eq!(
+            ask(&place, Value::Null),
+            json!({"ok": true, "result": {"base": PC_BASE}})
+        );
+        assert_eq!(ask(&place, json!({"x": 1}))["result"]["base"], PC_BASE);
+        // The place that this PC works out from its home folder is the one that is told.
+        let told = formation::local_worktree_base_in(Some(Path::new("/home/pc")));
+        assert_eq!(ask(&told, Value::Null)["result"]["base"], PC_BASE);
+        // No home folder: the reason is the answer.
+        let none = formation::local_worktree_base_in(None);
+        let body = ask(&none, Value::Null);
+        assert_eq!(body["ok"], false);
+        assert!(body["error"].as_str().unwrap().contains("HOME"));
+    }
+
+    #[tokio::test]
+    async fn the_place_of_the_worktrees_is_read_over_the_socket() {
+        let served = served("net-worktrees").await;
+        let mut client = served.client().await;
+        assert_eq!(client.worktrees_base().await.unwrap(), PC_BASE);
+        served.task.abort();
+        std::fs::remove_dir_all(&served.config).unwrap();
     }
 
     #[tokio::test]
@@ -3124,6 +3194,7 @@ mod tests {
             client_public,
             version: "9.9.9".to_owned(),
             plugins: Err("プラグインのフォルダがありません".to_owned()),
+            worktrees: Err("worktree の置き場所がありません".to_owned()),
         };
         let (client_end, server_end) = tokio::io::duplex(64 * 1024);
         let server =
@@ -3423,6 +3494,7 @@ mod tests {
             client_public,
             version: "9.9.9".to_owned(),
             plugins: Err("プラグインのフォルダがありません".to_owned()),
+            worktrees: Err("worktree の置き場所がありません".to_owned()),
         };
         let server = tokio::spawn(serve_with(listener, setup, hub));
         let seen = Arc::new(Mutex::new(Vec::new()));

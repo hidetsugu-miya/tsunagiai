@@ -916,16 +916,54 @@ pub fn send_plugins_from_here(config: &Path, environment: &str) -> Result<(), St
         return Ok(());
     }
     let work = async {
-        let pin = pin_of(config, environment)?;
-        let key = canonical_32(&pin.key).ok_or("固定したサーバーの鍵が壊れています")?;
-        let host = bind_host(environment)?;
-        let mut client = Client::connect(&host, formation_server::PORT, app_secret()?, key).await?;
+        let mut client = connect_pinned(config, environment).await?;
         send_plugins(&mut client).await
     };
     tokio::runtime::Handle::current()
         .block_on(async { tokio::time::timeout(PLUGINS_SEND_WAIT, work).await })
         .unwrap_or_else(|_| Err("時間内に送れませんでした".to_owned()))
         .map_err(|e| format!("その PC にプラグインを送れません: {e}"))
+}
+
+/// Connects to the server of `environment` with the key the owner pinned, and starts or places nothing.
+async fn connect_pinned(config: &Path, environment: &str) -> Result<Client, String> {
+    let pin = pin_of(config, environment)?;
+    let key = canonical_32(&pin.key).ok_or("固定したサーバーの鍵が壊れています")?;
+    let host = bind_host(environment)?;
+    Client::connect(&host, formation_server::PORT, app_secret()?, key).await
+}
+
+/// How long the ask for the place of a PC's worktrees may take, the connection included.
+const WORKTREE_BASE_WAIT: Duration = Duration::from_secs(30);
+
+/// The place of the worktrees that the server of `environment` tells (`worktrees.base`, A-37), checked by `check_worktree_base`. It connects with the pinned key only and starts or places nothing, so an environment with no pinned key, a server that does not run and an answer that is not the place all give no place (the reason is in Japanese), and the caller makes nothing. Run it on a thread that may block, inside the runtime.
+pub fn worktree_base_from_here(config: &Path, environment: &str) -> Result<String, String> {
+    let work = async {
+        let mut client = connect_pinned(config, environment).await?;
+        client.worktrees_base().await
+    };
+    tokio::runtime::Handle::current()
+        .block_on(async { tokio::time::timeout(WORKTREE_BASE_WAIT, work).await })
+        .unwrap_or_else(|_| Err("時間内に答えませんでした".to_owned()))
+        .and_then(|base| check_worktree_base(&base))
+        .map_err(|e| {
+            format!("環境「{environment}」の PC の worktree の置き場所を受け取れません: {e}")
+        })
+}
+
+/// The place a PC told for its worktrees, when it is one that its server gives: an absolute path with no empty, `.` or `..` part and no control character, that ends with `/.local/share/tsunagiai/worktrees` (`formation::LOCAL_WORKTREE_FOLDERS` under the PC's home folder). The app sets it as Orca's worktree base and checks the worktrees against it, so anything else is refused.
+fn check_worktree_base(base: &str) -> Result<String, String> {
+    let suffix = format!("/{}", formation::LOCAL_WORKTREE_FOLDERS.join("/"));
+    let plain = base
+        .strip_prefix('/')
+        .is_some_and(|rest| rest.split('/').all(|part| !matches!(part, "" | "." | "..")));
+    if !plain || base.chars().any(char::is_control) || !base.ends_with(&suffix) {
+        return Err(format!(
+            "PC が答えた置き場所「{}」は、絶対パスの {suffix} ではありません",
+            base.chars().take(200).collect::<String>()
+        ));
+    }
+    Ok(base.to_owned())
 }
 
 /// Reads the pinned server of `environment`: the owner must have allowed it.
@@ -1403,6 +1441,51 @@ mod tests {
     }
 
     // ---- the pieces of a command ----
+
+    #[test]
+    fn the_place_a_pc_tells_for_its_worktrees_is_its_own_absolute_folder_and_nothing_else() {
+        for ok in [
+            "/home/pc/.local/share/tsunagiai/worktrees",
+            "/Users/me/.local/share/tsunagiai/worktrees",
+            "/.local/share/tsunagiai/worktrees",
+            "/home/a b/.local/share/tsunagiai/worktrees",
+        ] {
+            assert_eq!(check_worktree_base(ok).as_deref(), Ok(ok), "{ok}");
+        }
+        for bad in [
+            // Empty, relative, and the repository's own folder.
+            "",
+            ".claude/worktrees",
+            ".local/share/tsunagiai/worktrees",
+            "home/pc/.local/share/tsunagiai/worktrees",
+            "/w/api/.claude/worktrees",
+            // Somewhere else, or only a part of the place.
+            "/home/pc",
+            "/home/pc/.local/share/tsunagiai",
+            "/home/pc/.local/share/tsunagiai/worktrees-x",
+            "/home/pc/.local/share/tsunagiai/worktrees/a",
+            "/home/pc/.local/share/tsunagiai/worktrees/",
+            "/home/pc/.local/share/other/worktrees",
+            "worktrees",
+            "/",
+            // An empty, `.` or `..` part, and a control character.
+            "/home//pc/.local/share/tsunagiai/worktrees",
+            "/home/./pc/.local/share/tsunagiai/worktrees",
+            "/home/../etc/.local/share/tsunagiai/worktrees",
+            "/home/pc/.local/share/tsunagiai/worktrees/..",
+            "/home/pc\n/.local/share/tsunagiai/worktrees",
+            "/home/pc/.local/share/tsunagiai/worktrees\0",
+        ] {
+            let err = check_worktree_base(bad).unwrap_err();
+            assert!(
+                err.contains("/.local/share/tsunagiai/worktrees"),
+                "{bad:?}: {err}"
+            );
+        }
+        // A long answer is quoted in part only.
+        let long = "/".to_owned() + &"a".repeat(5000);
+        assert!(check_worktree_base(&long).unwrap_err().len() < 600);
+    }
 
     #[test]
     fn only_a_release_version_has_a_program_to_fetch() {
@@ -2425,6 +2508,7 @@ mod tests {
             client_public,
             version: version.to_owned(),
             plugins: Err("プラグインのフォルダがありません".to_owned()),
+            worktrees: Err("worktree の置き場所がありません".to_owned()),
         };
         tokio::spawn(async move {
             serve(TcpListener::from_std(listener).unwrap(), setup).await;
@@ -2789,6 +2873,7 @@ mod tests {
             client_public,
             version: "1.2.3".to_owned(),
             plugins: Err("プラグインのフォルダがありません".to_owned()),
+            worktrees: Err("worktree の置き場所がありません".to_owned()),
         };
         let hub = Hub::new();
         let task = tokio::spawn(serve_with(

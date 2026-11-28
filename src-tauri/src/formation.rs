@@ -50,10 +50,8 @@ const LEGACY_FILES: [&str; 3] = ["CLAUDE.md", "mcp.json", "start.sh"];
 pub const LOCAL: &str = "local";
 /// How this Mac is named to the owner in the list of environments.
 const LOCAL_LABEL: &str = "この Mac";
-/// Where Orca makes the worktrees of a repository, as the repository's `worktreeBasePath`: a folder in the repository itself (A-37). Orca adds the repository's folder name and the child's name under it.
-const WORKTREE_BASE: &str = ".claude/worktrees";
-/// The line of `.git/info/exclude` that keeps that folder out of the repository's `git status`.
-const EXCLUDE_LINE: &str = "/.claude/worktrees/";
+/// The folders under the home folder of a PC that make the place of its worktrees, `~/.local/share/tsunagiai/worktrees` (A-37), outside every repository: this Mac's, and the one that the server of a saved environment's PC tells (`formation_remote::worktree_base_from_here`). Orca adds the repository's folder name and the child's name under it.
+pub(crate) const LOCAL_WORKTREE_FOLDERS: [&str; 4] = [".local", "share", "tsunagiai", "worktrees"];
 const NAME_LIMIT: usize = 40;
 const PROMPT_LIMIT: usize = 20_000;
 /// How long Claude Code may take to start and wait for its first input (`--timeout-ms`), and how long the run of that command may take with Orca's own margin.
@@ -87,7 +85,6 @@ const STEP_STOP: &str = "ターミナルを閉じる";
 /// The file that carries the lock between processes while a formation's Run is made, so that children launched side by side share one Run.
 const RUN_LOCK: &str = "run.lock";
 const STEP_WORKTREE_BASE: &str = "worktree の場所の設定";
-const STEP_EXCLUDE: &str = "git の追跡外の設定";
 pub(crate) const STEP_LISTED: &str = "worktree の一覧の読み取り";
 const STEP_FILES: &str = "フォルダの一覧の読み取り";
 const STEP_FILE: &str = "ファイルの読み取り";
@@ -841,120 +838,91 @@ fn resolve_repo<'a>(repos: &'a [Repo], wanted: &str) -> Result<&'a Repo, String>
 
 // ---- where the worktrees are made ----
 
-/// Whether the repository's worktree base is `.claude/worktrees` already: the relative form, or the absolute path of that folder in the repository (which puts the worktrees in the same folder, so it is left as the owner set it). A base that is empty or anything else is not.
-fn worktree_base_is_set(current: &str, repo_path: &str) -> bool {
-    let current = current.trim().trim_end_matches('/');
-    current == WORKTREE_BASE
-        || (!repo_path.is_empty()
-            && current == format!("{}/{WORKTREE_BASE}", repo_path.trim_end_matches('/')))
+/// The place of the worktrees of the PC this runs on: the absolute path `{home}/.local/share/tsunagiai/worktrees` (`home` is the home folder, which must be an absolute path).
+pub(crate) fn local_worktree_base_in(home: Option<&Path>) -> Result<String, String> {
+    let Some(home) = home.filter(|home| home.is_absolute()) else {
+        return Err("環境変数 HOME がないので、worktree の置き場所を決められません".to_owned());
+    };
+    let base = LOCAL_WORKTREE_FOLDERS
+        .iter()
+        .fold(home.to_path_buf(), |dir, name| dir.join(name));
+    base.to_str().map(str::to_owned).ok_or_else(|| {
+        format!(
+            "{} は文字として読めないので、worktree の置き場所にできません",
+            base.display()
+        )
+    })
 }
 
-/// Whether the worktree Orca made is under `{repository}/.claude/worktrees/` and not that folder itself, with no `.` or `..` in its path. A repository whose own path is not known cannot be compared, and is taken as it is.
-fn check_worktree_place(path: &str, repo_path: &str) -> Result<(), String> {
-    if repo_path.is_empty() {
-        return Ok(());
+/// The name Orca gives a child's worktree: `{formation}-{child}`, so that the children of two formations under one repository do not meet in its folder. The record keeps the child's own name.
+fn worktree_name(formation: &str, child: &str) -> String {
+    format!("{formation}-{child}")
+}
+
+/// `local_worktree_base_in` with the home folder of the environment variable `HOME`.
+pub(crate) fn local_worktree_base() -> Result<String, String> {
+    local_worktree_base_in(std::env::var_os("HOME").as_deref().map(Path::new))
+}
+
+/// The worktree base of `environment`: this Mac's own place, and for a saved environment the place its PC tells (`formation_remote::worktree_base_from_here`, which connects with the pinned key). A PC that cannot tell it (no pinned key, a server that does not run, an answer that is not the place) gives no place, and nothing is made. Run it on a thread that may block, inside the runtime.
+fn worktree_base(config: &Path, environment: &str) -> Result<String, String> {
+    if environment == LOCAL {
+        local_worktree_base()
+    } else {
+        crate::formation_remote::worktree_base_from_here(config, environment)
     }
-    let base = Path::new(repo_path).join(WORKTREE_BASE);
+}
+
+/// Whether the repository's worktree base is `base` already, the same path (a trailing slash does not matter). `base` is always absolute (`worktree_base`). A base that is empty or anything else is not, and the previous `.claude/worktrees` of a repository, relative or in the repository, is one of them, so it is set again.
+fn worktree_base_is_set(current: &str, base: &str) -> bool {
+    current.trim().trim_end_matches('/') == base.trim_end_matches('/')
+}
+
+/// Whether the worktree Orca made is under the worktree base and not that folder itself, with no `.` or `..` in its path.
+fn check_worktree_place(path: &str, base: &str) -> Result<(), String> {
+    let base = Path::new(base);
     let made = Path::new(path);
     // `Path::components` drops a `.` between two parts, so the text is read part by part.
     let plain = path.split('/').all(|part| part != "." && part != "..");
-    if plain && made.starts_with(&base) && made != base {
+    if plain && made.starts_with(base) && made != base {
         return Ok(());
     }
     Err(format!(
-        "Orca が作った worktree「{path}」は、リポジトリの {} の下にありません",
+        "Orca が作った worktree「{path}」は、worktree の置き場所 {} の下にありません",
         base.display()
     ))
 }
 
-/// What to append to the content of `.git/info/exclude` so that `.claude/worktrees/` is not shown by `git status`; `None` when a line of it names that folder already (with or without the leading or the trailing slash). The line goes on a line of its own whether the file ends with a line break or not.
-fn exclude_addition(contents: &str) -> Option<String> {
-    let named = contents.lines().map(str::trim).any(|line| {
-        matches!(
-            line,
-            "/.claude/worktrees/"
-                | "/.claude/worktrees"
-                | ".claude/worktrees/"
-                | ".claude/worktrees"
-        )
-    });
-    if named {
-        return None;
-    }
-    let lead = if contents.is_empty() || contents.ends_with('\n') {
-        ""
-    } else {
-        "\n"
-    };
-    Some(format!("{lead}{EXCLUDE_LINE}\n"))
-}
-
-/// Appends `exclude_addition` to `{common_dir}/info/exclude`, making the file and its folder when they are missing; says whether it wrote.
-fn append_exclude(common_dir: &Path) -> Result<bool, String> {
-    let file = common_dir.join("info").join("exclude");
-    let old = match std::fs::read_to_string(&file) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(format!("{} を読めません: {e}", file.display())),
-    };
-    let Some(addition) = exclude_addition(&old) else {
-        return Ok(false);
-    };
-    let write = || -> std::io::Result<()> {
-        use std::io::Write;
-        std::fs::create_dir_all(common_dir.join("info"))?;
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&file)?
-            .write_all(addition.as_bytes())
-    };
-    write().map_err(|e| format!("{} に書けません: {e}", file.display()))?;
-    Ok(true)
-}
-
-/// Keeps `.claude/worktrees/` of a repository of this Mac out of its `git status`: in `info/exclude` of the repository's common git folder (the repository's own `.gitignore` is not touched, and a linked worktree or a `.git` that is a file leads to the same folder).
-fn ensure_excluded(repo_path: &str) -> Result<bool, String> {
-    let printed = git(&git_common_dir_args(repo_path))?;
-    let common = PathBuf::from(printed.trim());
-    let common = if common.is_absolute() {
-        common
-    } else {
-        Path::new(repo_path).join(common)
-    };
-    append_exclude(&common)
-}
-
-/// Sets the worktree base of `repo` to `.claude/worktrees` when it is not so yet (`write` runs the CLI); says whether it did.
+/// Sets the worktree base of `repo` to `base` when it is not so yet (`write` runs the CLI); says whether it did.
 fn settle_worktree_base(
     repo: &Repo,
+    base: &str,
     environment: &str,
     write: &dyn Fn(&[String]) -> Result<Value, String>,
 ) -> Result<bool, String> {
-    if worktree_base_is_set(&repo.worktree_base_path, &repo.path) {
+    if worktree_base_is_set(&repo.worktree_base_path, base) {
         return Ok(false);
     }
-    write(&worktree_base_args(&repo.id, environment)).map(|_| true)
+    write(&worktree_base_args(&repo.id, base, environment)).map(|_| true)
 }
 
-/// Makes a repository ready for a child's worktree: its worktree base is `.claude/worktrees`, and on this Mac that folder is kept out of the repository's `git status`. Nothing else of Orca's settings is changed.
+/// Makes a repository ready for a child's worktree: its worktree base is `base`. Nothing else of Orca's settings is changed.
 fn prepare_repo(
     repo: &Repo,
+    base: &str,
     environment: &str,
     write: &dyn Fn(&[String]) -> Result<Value, String>,
 ) -> Result<(), Refusal> {
-    if environment == LOCAL && !repo.path.is_empty() {
-        ensure_excluded(&repo.path).map_err(|e| Refusal::failed(STEP_EXCLUDE, e))?;
-    }
-    settle_worktree_base(repo, environment, write)
+    settle_worktree_base(repo, base, environment, write)
         .map_err(|e| Refusal::failed(STEP_WORKTREE_BASE, e))?;
     Ok(())
 }
 
-/// Sets the worktree base of each repository of `projects` (`formation_create`): the repositories of each environment are read once. A project whose repository the environment does not list is skipped, because `check_projects` has checked it against the same list a moment before.
+/// Sets the worktree base of each repository of `projects` (`formation_create`; `base_of` gives the base of an environment): the repositories of each environment are read once. A project whose repository the environment does not list is skipped, because `check_projects` has checked it against the same list a moment before.
 /// A failure says which repositories had their setting changed before it, and that it is not taken back: `formation_create` takes the formation back, and Orca's own settings stay as they were set.
 fn settle_projects(
     projects: &[FormationProject],
+    base_of: &dyn Fn(&str) -> Result<String, String>,
     read: &dyn Fn(&str) -> Result<Vec<Repo>, String>,
     write: &dyn Fn(&[String]) -> Result<Value, String>,
 ) -> Result<(), String> {
@@ -983,7 +951,16 @@ fn settle_projects(
         let Ok(repo) = resolve_repo(&lists[environment], &project.repo) else {
             continue;
         };
-        let did = settle_worktree_base(repo, environment, write).map_err(|e| {
+        let base = base_of(environment).map_err(|e| {
+            failed(
+                format!(
+                    "「{STEP_WORKTREE_BASE}」に失敗しました（{}）: {e}",
+                    repo.name
+                ),
+                &changed,
+            )
+        })?;
+        let did = settle_worktree_base(repo, &base, environment, write).map_err(|e| {
             failed(
                 format!(
                     "「{STEP_WORKTREE_BASE}」に失敗しました（{}）: {e}",
@@ -1108,14 +1085,14 @@ fn repo_list_args(environment: &str) -> Vec<String> {
     on(orca::args_of(&["repo", "list", "--json"]), environment)
 }
 
-/// Sets the repository's `worktreeBasePath` to `.claude/worktrees` (the setup of a repository has the repository's id). The relative path is joined to the repository's folder by Orca.
-fn worktree_base_args(repo_id: &str, environment: &str) -> Vec<String> {
+/// Sets the repository's `worktreeBasePath` to `base` (the setup of a repository has the repository's id). A relative path is joined to the repository's folder by Orca.
+fn worktree_base_args(repo_id: &str, base: &str, environment: &str) -> Vec<String> {
     on(
         vec![
             "project".into(),
             "setup-update".into(),
             format!("--setup={repo_id}"),
-            format!("--worktree-base-path={WORKTREE_BASE}"),
+            format!("--worktree-base-path={base}"),
             "--json".into(),
         ],
         environment,
@@ -1625,19 +1602,6 @@ fn git_status_args(path: &str) -> Vec<String> {
         "status".into(),
         "--porcelain".into(),
     ]
-}
-
-/// The repository's common git folder (`.git` of its main folder, whichever worktree `path` is), as an absolute path.
-fn git_common_dir_args(path: &str) -> Vec<String> {
-    [
-        "-C",
-        path,
-        "rev-parse",
-        "--path-format=absolute",
-        "--git-common-dir",
-    ]
-    .map(String::from)
-    .to_vec()
 }
 
 fn git_remote_args(path: &str) -> Vec<String> {
@@ -2157,14 +2121,22 @@ pub fn launch(
             (folder.to_owned(), branch, false, false, 0)
         }
         Target::NewWorktree { branch, base } => {
-            prepare_repo(repo, environment, &|args| orca::write(args))?;
-            let (made, branch_made) = make_worktree(environment, repo, name, branch, base)?;
+            let worktree_base = worktree_base(config, environment)
+                .map_err(|e| Refusal::failed(STEP_WORKTREE_BASE, e))?;
+            prepare_repo(repo, &worktree_base, environment, &|args| orca::write(args))?;
+            let (made, branch_made) = make_worktree(
+                environment,
+                repo,
+                &worktree_name(formation, name),
+                branch,
+                base,
+            )?;
             let path = orca::created_worktree_path_of(&made)
                 .map_err(|e| Refusal::failed(STEP_WORKTREE, e))?;
             let made_branch = created_branch_of(&made);
             if let Err(message) = branch
                 .map_or(Ok(()), |asked| check_created_branch(asked, &made_branch))
-                .and_then(|()| check_worktree_place(&path, &repo.path))
+                .and_then(|()| check_worktree_place(&path, &worktree_base))
             {
                 return Err(unwanted_worktree(&path, environment, message, branch_made));
             }
@@ -2682,7 +2654,7 @@ pub fn git_state(
     tokio::runtime::Handle::current().block_on(git_report_of(&mut connection, &chosen, query))
 }
 
-/// A worktree that was just made on a branch other than the one asked for, or outside the repository's `.claude/worktrees/`: it holds nothing, so it is removed again, with its branch only when `branch_made` (a branch that was there before is kept), and the refusal says so; one that cannot be removed is left, and named.
+/// A worktree that was just made on a branch other than the one asked for, or outside the worktree base (`check_worktree_place`): it holds nothing, so it is removed again, with its branch only when `branch_made` (a branch that was there before is kept), and the refusal says so; one that cannot be removed is left, and named.
 fn unwanted_worktree(path: &str, environment: &str, message: String, branch_made: bool) -> Refusal {
     close_shells(path, environment);
     let refusal = Refusal {
@@ -4661,17 +4633,19 @@ fn create_with(
 }
 
 /// `create_with`, and then the worktree base of each repository of the projects is set (`settle_projects`), so that the children of this formation are made under their repositories. A setting that fails takes the formation back (its folder is deleted), so that the owner sees the failure and nothing half-made is left.
+#[allow(clippy::too_many_arguments)]
 fn create_and_settle(
     config: &Path,
     name: &str,
     projects: &[FormationProject],
     view: &EnvironmentsView,
     created_at: u64,
+    base_of: &dyn Fn(&str) -> Result<String, String>,
     read: &dyn Fn(&str) -> Result<Vec<Repo>, String>,
     write: &dyn Fn(&[String]) -> Result<Value, String>,
 ) -> Result<FormationEntry, String> {
     let entry = create_with(config, name, projects, view, created_at)?;
-    if let Err(e) = settle_projects(&entry.projects, read, write) {
+    if let Err(e) = settle_projects(&entry.projects, base_of, read, write) {
         let _ = std::fs::remove_dir_all(dir(config, name));
         return Err(format!(
             "フォーメーション「{name}」は作らず、取り消しました。{e}"
@@ -5107,7 +5081,7 @@ pub async fn formation_list(
     .await?
 }
 
-/// Makes a formation named `name` of the `projects` (each an environment and a repository of `formation_environments`), sets the worktree base of each repository to `.claude/worktrees` (`settle_projects`), and answers it as the list draws it. Its orchestrator, when it is started, takes the projects as its first instruction.
+/// Makes a formation named `name` of the `projects` (each an environment and a repository of `formation_environments`), sets the worktree base of each repository (`settle_projects`: `~/.local/share/tsunagiai/worktrees` on this Mac), and answers it as the list draws it. Its orchestrator, when it is started, takes the projects as its first instruction.
 #[tauri::command]
 pub async fn formation_create(
     app: tauri::AppHandle,
@@ -5130,6 +5104,7 @@ pub async fn formation_create(
             &projects,
             &view,
             now_ms(),
+            &|environment| worktree_base(&config, environment),
             &read_repos,
             &|args| orca::write(args),
         )
@@ -10570,7 +10545,20 @@ mod tests {
         assert_eq!(refusal_text(&Refusal::from("だめ".to_owned())), "だめ");
     }
 
-    // ---- the worktrees are made under the repository's `.claude/worktrees` (#842) ----
+    // ---- the worktrees are made under the base: `~/.local/share/tsunagiai/worktrees` on this Mac (#1559) and on the PC of a saved environment, which tells it (#1560) ----
+
+    const MAC_BASE: &str = "/Users/me/.local/share/tsunagiai/worktrees";
+    /// The place that the PC of a saved environment tells.
+    const PC_BASE: &str = "/home/pc/.local/share/tsunagiai/worktrees";
+
+    /// `worktree_base` with the home folder `/Users/me` on this Mac, and the place `PC_BASE` as the PC of a saved environment tells it.
+    fn base_of(environment: &str) -> Result<String, String> {
+        if environment == LOCAL {
+            local_worktree_base_in(Some(Path::new("/Users/me")))
+        } else {
+            Ok(PC_BASE.to_owned())
+        }
+    }
 
     fn repo_with_base(base: &str) -> Repo {
         Repo {
@@ -10582,47 +10570,97 @@ mod tests {
     }
 
     #[test]
-    fn the_worktree_base_is_set_when_it_is_empty_or_somewhere_else() {
+    fn the_worktree_base_of_a_pc_is_under_its_home_folder() {
+        assert_eq!(
+            local_worktree_base_in(Some(Path::new("/Users/me"))).as_deref(),
+            Ok(MAC_BASE)
+        );
+        assert_eq!(
+            local_worktree_base_in(Some(Path::new("/home/pc"))).as_deref(),
+            Ok(PC_BASE)
+        );
+        // No home folder, or one that is not absolute, gives no place.
+        for home in [None, Some(Path::new("")), Some(Path::new("me"))] {
+            let err = local_worktree_base_in(home).unwrap_err();
+            assert!(err.contains("HOME"), "{err}");
+        }
+    }
+
+    #[test]
+    fn a_saved_environment_with_no_pinned_server_gives_no_place() {
+        // No server of the environment is pinned in this folder: no place, and the reason is in Japanese.
+        let config = temp_dir("base-no-pin");
+        std::fs::create_dir_all(&config).unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let err = runtime
+            .block_on(async {
+                let config = config.clone();
+                tokio::task::spawn_blocking(move || worktree_base(&config, "mac-studio")).await
+            })
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            err.contains("mac-studio") && err.contains("置き場所"),
+            "{err}"
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_childs_worktree_is_named_by_its_formation_and_its_own_name() {
+        assert_eq!(worktree_name("alpha", "web-2"), "alpha-web-2");
+        // Both names are at most 40 characters (`check_name`), so the worktree's name has at most 81.
+        let longest = "a".repeat(NAME_LIMIT);
+        assert_eq!(worktree_name(&longest, &longest).len(), 2 * NAME_LIMIT + 1);
+    }
+
+    #[test]
+    fn the_worktree_base_is_set_when_it_is_the_base_asked_for() {
+        // On this Mac: the absolute base, with or without a trailing slash.
         for current in [
-            ".claude/worktrees",
-            ".claude/worktrees/",
-            " .claude/worktrees ",
-            "/w/api/.claude/worktrees",
-            "/w/api/.claude/worktrees/",
+            MAC_BASE,
+            "/Users/me/.local/share/tsunagiai/worktrees/",
+            " /Users/me/.local/share/tsunagiai/worktrees ",
         ] {
-            assert!(worktree_base_is_set(current, "/w/api"), "{current:?}");
+            assert!(worktree_base_is_set(current, MAC_BASE), "{current:?}");
         }
         for current in [
             "",
+            // The base before #1559, relative or absolute in the repository.
+            ".claude/worktrees",
+            "/w/api/.claude/worktrees",
             "/home/me/orca/workspaces",
-            "/w/other/.claude/worktrees",
-            ".claude/worktrees-old",
-            ".claude",
-            "/w/api/.claude/worktrees2",
+            "/Users/me/.local/share/tsunagiai/worktrees-old",
+            "/Users/me/.local/share/tsunagiai",
+            "/Users/other/.local/share/tsunagiai/worktrees",
         ] {
-            assert!(!worktree_base_is_set(current, "/w/api"), "{current:?}");
+            assert!(!worktree_base_is_set(current, MAC_BASE), "{current:?}");
         }
-        // The absolute form is compared only when the repository's path is known.
-        assert!(!worktree_base_is_set("/.claude/worktrees", ""));
-        assert!(worktree_base_is_set(".claude/worktrees", ""));
     }
 
     #[test]
     fn the_worktree_base_is_set_with_the_repository_id_and_in_its_environment() {
         assert_eq!(
-            worktree_base_args("repo-1", LOCAL),
+            worktree_base_args("repo-1", MAC_BASE, LOCAL),
             [
                 "project",
                 "setup-update",
                 "--setup=repo-1",
-                "--worktree-base-path=.claude/worktrees",
+                "--worktree-base-path=/Users/me/.local/share/tsunagiai/worktrees",
                 "--json",
                 "--environment=local",
             ]
         );
         assert_eq!(
-            worktree_base_args("repo-2", "mac-studio").last().unwrap(),
-            "--environment=mac-studio"
+            worktree_base_args("repo-2", PC_BASE, "mac-studio"),
+            [
+                "project",
+                "setup-update",
+                "--setup=repo-2",
+                "--worktree-base-path=/home/pc/.local/share/tsunagiai/worktrees",
+                "--json",
+                "--environment=mac-studio",
+            ]
         );
     }
 
@@ -10637,133 +10675,95 @@ mod tests {
     }
 
     #[test]
-    fn a_made_worktree_must_be_under_the_repositorys_worktree_folder() {
+    fn a_worktree_made_on_this_mac_must_be_under_its_worktree_base() {
         for path in [
-            "/w/api/.claude/worktrees/api/a",
-            "/w/api/.claude/worktrees/a",
+            "/Users/me/.local/share/tsunagiai/worktrees/api/fm-a",
+            "/Users/me/.local/share/tsunagiai/worktrees/api",
         ] {
-            assert!(check_worktree_place(path, "/w/api").is_ok(), "{path}");
+            assert!(check_worktree_place(path, MAC_BASE).is_ok(), "{path}");
         }
         for path in [
-            // Orca's own workspace folder, the repository itself, the folder itself, and look-alikes.
+            // The folder of the repository (the base before #1559), Orca's own workspace folder, the base itself, and look-alikes.
+            "/w/api/.claude/worktrees/api/a",
+            "/home/me/orca/workspaces/api/a",
+            "/Users/me/.local/share/tsunagiai/worktrees",
+            "/Users/me/.local/share/tsunagiai/worktrees/",
+            "/Users/me/.local/share/tsunagiai/worktrees-x/a",
+            "/Users/me/.local/share/tsunagiai",
+            "/Users/me/.local/share/tsunagiai/worktrees/../../a",
+            "/Users/me/.local/share/tsunagiai/worktrees/./a",
+            "/Users/other/.local/share/tsunagiai/worktrees/a",
+            "/w/api",
+        ] {
+            let err = check_worktree_place(path, MAC_BASE).unwrap_err();
+            assert!(err.contains(path) && err.contains(MAC_BASE), "{err}");
+        }
+    }
+
+    #[test]
+    fn a_worktree_made_in_a_saved_environment_must_be_under_its_pcs_worktree_base() {
+        for path in [
+            "/home/pc/.local/share/tsunagiai/worktrees/api/a",
+            "/home/pc/.local/share/tsunagiai/worktrees/a",
+        ] {
+            assert!(check_worktree_place(path, PC_BASE).is_ok(), "{path}");
+        }
+        for path in [
+            // Orca's own workspace folder, the repository itself, the base itself, this Mac's base, and look-alikes.
             "/home/me/orca/workspaces/api/a",
             "/w/api",
-            "/w/api/.claude/worktrees",
-            "/w/api/.claude/worktrees/",
-            "/w/api/.claude/worktrees-x/a",
-            "/w/api/.claude",
-            "/w/api/src/a",
-            "/w/api/.claude/worktrees/../../a",
-            "/w/api/.claude/worktrees/./a",
-            "/w/other/.claude/worktrees/a",
+            "/home/pc/.local/share/tsunagiai/worktrees",
+            "/home/pc/.local/share/tsunagiai/worktrees/",
+            "/home/pc/.local/share/tsunagiai/worktrees-x/a",
+            "/home/pc/.local/share/tsunagiai",
+            "/home/pc/.local/share/tsunagiai/worktrees/../../a",
+            "/home/pc/.local/share/tsunagiai/worktrees/./a",
+            "/home/other/.local/share/tsunagiai/worktrees/a",
+            "/w/api/.claude/worktrees/api/a",
+            "/Users/me/.local/share/tsunagiai/worktrees/api/a",
         ] {
-            let err = check_worktree_place(path, "/w/api").unwrap_err();
-            assert!(
-                err.contains(path) && err.contains("/w/api/.claude/worktrees"),
-                "{err}"
-            );
+            let err = check_worktree_place(path, PC_BASE).unwrap_err();
+            assert!(err.contains(path) && err.contains(PC_BASE), "{err}");
         }
-        // A repository with no path in the list cannot be compared.
-        assert!(check_worktree_place("/anywhere/a", "").is_ok());
-    }
-
-    #[test]
-    fn the_exclude_line_is_added_unless_the_folder_is_named_already() {
-        assert_eq!(
-            exclude_addition("").as_deref(),
-            Some("/.claude/worktrees/\n")
-        );
-        assert_eq!(
-            exclude_addition("*.log\n").as_deref(),
-            Some("/.claude/worktrees/\n")
-        );
-        // A file whose last line has no line break gets one first, so the line is not joined to it.
-        assert_eq!(
-            exclude_addition("*.log").as_deref(),
-            Some("\n/.claude/worktrees/\n")
-        );
-        for named in [
-            "/.claude/worktrees/\n",
-            "*.log\n/.claude/worktrees",
-            ".claude/worktrees/\r\n",
-            "  .claude/worktrees  \n",
-        ] {
-            assert_eq!(exclude_addition(named), None, "{named:?}");
-        }
-        for other in [
-            "# /.claude/worktrees/\n",
-            "/.claude/worktrees-old/\n",
-            "!/.claude/worktrees/\n",
-            "/.claude/\n",
-        ] {
-            assert!(exclude_addition(other).is_some(), "{other:?}");
-        }
-    }
-
-    #[test]
-    fn the_exclude_file_is_made_appended_to_and_never_written_twice() {
-        let common = temp_dir("exclude");
-        std::fs::create_dir_all(&common).unwrap();
-        let file = common.join("info").join("exclude");
-        // No `info` folder yet: it is made with the file.
-        assert!(append_exclude(&common).unwrap());
-        assert_eq!(
-            std::fs::read_to_string(&file).unwrap(),
-            "/.claude/worktrees/\n"
-        );
-        assert!(!append_exclude(&common).unwrap());
-        assert_eq!(
-            std::fs::read_to_string(&file).unwrap(),
-            "/.claude/worktrees/\n"
-        );
-        // What the owner wrote stays, with no line break at its end too.
-        std::fs::write(&file, "*.log").unwrap();
-        assert!(append_exclude(&common).unwrap());
-        assert_eq!(
-            std::fs::read_to_string(&file).unwrap(),
-            "*.log\n/.claude/worktrees/\n"
-        );
-        // A file that cannot be read stops it (here, a folder).
-        std::fs::remove_file(&file).unwrap();
-        std::fs::create_dir(&file).unwrap();
-        assert!(append_exclude(&common).is_err());
-        std::fs::remove_dir_all(&common).unwrap();
-        assert_eq!(
-            git_common_dir_args("/w/api"),
-            [
-                "-C",
-                "/w/api",
-                "rev-parse",
-                "--path-format=absolute",
-                "--git-common-dir"
-            ]
-        );
     }
 
     #[test]
     fn the_worktree_base_is_written_only_when_it_is_not_set() {
+        const PREVIOUS: &str = ".claude/worktrees";
         let orca = Calls::new();
-        let set = settle_worktree_base(&repo_with_base(".claude/worktrees"), LOCAL, &|a| {
-            orca.run(a)
-        });
-        assert_eq!(set, Ok(false));
-        let set = settle_worktree_base(&repo_with_base("/w/api/.claude/worktrees"), LOCAL, &|a| {
-            orca.run(a)
-        });
-        assert_eq!(set, Ok(false));
-        assert!(orca.0.borrow().is_empty());
-        for current in ["", "/home/me/orca/workspaces"] {
-            let set =
-                settle_worktree_base(&repo_with_base(current), "mac-studio", &|a| orca.run(a));
-            assert_eq!(set, Ok(true));
+        // Already set: this Mac's base and a saved environment's base, as they are.
+        for (current, base, environment) in [
+            (MAC_BASE, MAC_BASE, LOCAL),
+            (PC_BASE, PC_BASE, "mac-studio"),
+        ] {
+            let set = settle_worktree_base(&repo_with_base(current), base, environment, &|a| {
+                orca.run(a)
+            });
+            assert_eq!(set, Ok(false), "{current:?}");
         }
+        assert!(orca.0.borrow().is_empty());
+        // Not set: empty, somewhere else, and the previous base of this Mac, which is set again.
+        for current in ["", "/home/me/orca/workspaces", PREVIOUS] {
+            let set =
+                settle_worktree_base(&repo_with_base(current), MAC_BASE, LOCAL, &|a| orca.run(a));
+            assert_eq!(set, Ok(true), "{current:?}");
+        }
+        let set =
+            settle_worktree_base(&repo_with_base(""), PC_BASE, "mac-studio", &|a| orca.run(a));
+        assert_eq!(set, Ok(true));
         let calls = orca.0.borrow();
-        assert_eq!(calls.len(), 2);
-        assert_eq!(calls[0], worktree_base_args("repo-1", "mac-studio"));
+        assert_eq!(calls.len(), 4);
+        assert_eq!(calls[0], worktree_base_args("repo-1", MAC_BASE, LOCAL));
+        assert_eq!(
+            calls[3],
+            worktree_base_args("repo-1", PC_BASE, "mac-studio")
+        );
         // A failure of Orca is the message, and the launch stops before the worktree.
-        let failed = settle_worktree_base(&repo_with_base(""), LOCAL, &|_| Err("だめ".to_owned()));
+        let failed = settle_worktree_base(&repo_with_base(""), MAC_BASE, LOCAL, &|_| {
+            Err("だめ".to_owned())
+        });
         assert_eq!(failed, Err("だめ".to_owned()));
-        let refusal = prepare_repo(&repo_with_base(""), "mac-studio", &|_| {
+        let refusal = prepare_repo(&repo_with_base(""), MAC_BASE, LOCAL, &|_| {
             Err("だめ".to_owned())
         })
         .unwrap_err();
@@ -10781,6 +10781,12 @@ mod tests {
                     id: "repo-2".into(),
                     name: "web".into(),
                     path: "/w/web".into(),
+                    worktree_base_path: MAC_BASE.into(),
+                },
+                Repo {
+                    id: "repo-3".into(),
+                    name: "old".into(),
+                    path: "/w/old".into(),
                     worktree_base_path: ".claude/worktrees".into(),
                 },
             ])
@@ -10790,10 +10796,15 @@ mod tests {
             &[
                 project(LOCAL, "api"),
                 project(LOCAL, "web"),
+                // The previous base of this Mac is set again to the new place.
+                project(LOCAL, "old"),
                 project("mac-studio", "api"),
+                // The previous relative base of a saved environment is set again to the place its PC tells.
+                project("mac-studio", "old"),
                 // A repository the list lacks was checked before; it is skipped here.
                 project(LOCAL, "gone"),
             ],
+            &base_of,
             &read,
             &|a| orca.run(a),
         )
@@ -10802,17 +10813,39 @@ mod tests {
         assert_eq!(
             *orca.0.borrow(),
             [
-                worktree_base_args("repo-1", LOCAL),
-                worktree_base_args("repo-1", "mac-studio"),
+                worktree_base_args("repo-1", MAC_BASE, LOCAL),
+                worktree_base_args("repo-3", MAC_BASE, LOCAL),
+                worktree_base_args("repo-1", PC_BASE, "mac-studio"),
+                worktree_base_args("repo-3", PC_BASE, "mac-studio"),
             ]
         );
         let err = settle_projects(
             &[project(LOCAL, "api")],
+            &base_of,
             &|_| Err("no orca".to_owned()),
             &|a| orca.run(a),
         )
         .unwrap_err();
         assert!(err.contains("no orca"), "{err}");
+        // A PC with no place to set (this Mac without a home folder, a saved environment whose PC does not tell its place) gets nothing written, and the repository is named.
+        let before = orca.0.borrow().len();
+        for (environment, said) in [(LOCAL, "HOME"), ("mac-studio", "答えません")] {
+            let err = settle_projects(
+                &[project(environment, "api")],
+                &|environment| {
+                    if environment == LOCAL {
+                        local_worktree_base_in(None)
+                    } else {
+                        Err("答えません".to_owned())
+                    }
+                },
+                &read,
+                &|a| orca.run(a),
+            )
+            .unwrap_err();
+            assert!(err.contains(said) && err.contains("api"), "{err}");
+        }
+        assert_eq!(orca.0.borrow().len(), before);
     }
 
     #[test]
@@ -10826,7 +10859,7 @@ mod tests {
         let read = |_: &str| Ok(vec![other("repo-1", "api"), other("repo-2", "web")]);
         // `api` is set, then Orca refuses `web`.
         let write = |args: &[String]| {
-            if *args == worktree_base_args("repo-2", "mac-studio") {
+            if *args == worktree_base_args("repo-2", PC_BASE, "mac-studio") {
                 Err("拒みました".to_owned())
             } else {
                 Ok(json!({}))
@@ -10834,6 +10867,7 @@ mod tests {
         };
         let err = settle_projects(
             &[project("mac-studio", "api"), project("mac-studio", "web")],
+            &base_of,
             &read,
             &write,
         )
@@ -10841,7 +10875,8 @@ mod tests {
         assert!(err.contains("web") && err.contains("拒みました"), "{err}");
         assert!(err.contains("api（mac-studio）"), "{err}");
         // The first one fails: nothing was changed, and nothing is said of it.
-        let err = settle_projects(&[project("mac-studio", "web")], &read, &write).unwrap_err();
+        let err =
+            settle_projects(&[project("mac-studio", "web")], &base_of, &read, &write).unwrap_err();
         assert!(!err.contains("戻していません"), "{err}");
     }
 
@@ -10867,12 +10902,16 @@ mod tests {
             &[project(LOCAL, "api")],
             &view,
             1,
+            &base_of,
             &read,
             &|a| orca.run(a),
         )
         .unwrap();
         assert_eq!(made.name, "alpha");
-        assert_eq!(*orca.0.borrow(), [worktree_base_args("repo-1", LOCAL)]);
+        assert_eq!(
+            *orca.0.borrow(),
+            [worktree_base_args("repo-1", MAC_BASE, LOCAL)]
+        );
         assert!(dir(&config, "alpha").is_dir());
         // Orca refuses the setting: the folder of the formation is taken back, and the name is free again.
         let err = create_and_settle(
@@ -10881,6 +10920,7 @@ mod tests {
             &[project(LOCAL, "api")],
             &view,
             1,
+            &base_of,
             &read,
             &|_| Err("setup が見つかりません".to_owned()),
         )
@@ -10899,6 +10939,7 @@ mod tests {
             &[project(LOCAL, "api")],
             &view,
             1,
+            &base_of,
             &read,
             &|a| orca.run(a)
         )
@@ -10967,64 +11008,6 @@ mod tests {
             assert!(!removes(&writes), "{path}");
         }
         std::fs::remove_dir_all(&config).unwrap();
-    }
-
-    #[test]
-    fn a_repository_and_its_linked_worktree_share_one_exclude_file_that_hides_the_folder() {
-        let root = temp_dir("exclude-git");
-        let repo = root.join("repo");
-        let linked = root.join("linked");
-        std::fs::create_dir_all(&repo).unwrap();
-        let run = |dir: &Path, args: &[&str]| {
-            let mut all = vec!["-C".to_owned(), dir.to_string_lossy().into_owned()];
-            all.extend(args.iter().map(|a| (*a).to_owned()));
-            git(&all).unwrap()
-        };
-        run(&repo, &["init", "-q"]);
-        run(
-            &repo,
-            &[
-                "-c",
-                "user.name=t",
-                "-c",
-                "user.email=t@example.com",
-                "-c",
-                "commit.gpgsign=false",
-                "-c",
-                "tag.gpgsign=false",
-                "commit",
-                "-q",
-                "--allow-empty",
-                "-m",
-                "first",
-            ],
-        );
-        run(
-            &repo,
-            &[
-                "worktree",
-                "add",
-                "-q",
-                "-b",
-                "other",
-                &linked.to_string_lossy(),
-            ],
-        );
-        std::fs::create_dir_all(repo.join(".claude/worktrees/repo/a")).unwrap();
-        std::fs::write(repo.join(".claude/worktrees/repo/a/file"), "x").unwrap();
-        assert!(run(&repo, &["status", "--porcelain"]).contains(".claude/"));
-        // Asked through the linked worktree, the line goes to the repository's own `.git/info/exclude`.
-        assert!(ensure_excluded(&linked.to_string_lossy()).unwrap());
-        assert!(!ensure_excluded(&repo.to_string_lossy()).unwrap());
-        assert!(std::fs::read_to_string(repo.join(".git/info/exclude"))
-            .unwrap()
-            .lines()
-            .any(|line| line == EXCLUDE_LINE));
-        assert_eq!(run(&repo, &["status", "--porcelain"]), "");
-        // The repository's own `.gitignore` is not made.
-        assert!(!repo.join(".gitignore").exists());
-        assert!(ensure_excluded(&root.to_string_lossy()).is_err());
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     // ---- the read tools: worktrees, files, read, git ----
@@ -12315,6 +12298,7 @@ mod tests {
                 client_public: public_of(&CLIENT_SECRET),
                 version: "1.2.3".into(),
                 plugins: Err("プラグインのフォルダがありません".to_owned()),
+                worktrees: Err("worktree の置き場所がありません".to_owned()),
             };
             let task = tokio::spawn(async move {
                 serve(tokio::net::TcpListener::from_std(listener).unwrap(), setup).await;
