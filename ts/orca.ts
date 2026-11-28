@@ -2071,14 +2071,14 @@ function openFilesAndDraw(next: FilesMode) {
   document.getElementById(`orca-files-mode-${next}`)?.focus({ preventScroll: true });
 }
 
-// The button of the file pane (A-18) is in the top row of the pane while it is shown, and at the right end of the tab strip of the corner pane while it is hidden.
-// The pressed button is hidden by the draw, so the focus goes on to the button that is shown now.
+// Pressing the pressed icon of the file pane closes the pane (A-18): the focus moves onto the icon of the same part in the corner pane's strip.
 function toggleFilesAndDraw() {
-  const focused = document.activeElement?.classList.contains("orca-files-toggle") ?? false;
+  const activeId = document.activeElement?.id ?? "";
+  const mode = activeId.startsWith("orca-files-mode-") ? activeId.slice("orca-files-mode-".length) : null;
   toggleFiles();
   draw();
-  if (focused) {
-    const shown = [...document.querySelectorAll<HTMLElement>(".orca-files-toggle")].find((b) => b.offsetParent !== null);
+  if (mode !== null && !filesShown()) {
+    const shown = [...document.querySelectorAll<HTMLElement>(`.orca-tab-mode[data-mode="${mode}"]`)].find((b) => b.offsetParent !== null);
     shown?.focus({ preventScroll: true });
   }
 }
@@ -2317,7 +2317,6 @@ export function initOrca() {
       focusPane(pane);
       void openStartMenu(anchor);
     },
-    files: toggleFilesAndDraw,
     mode: openFilesAndDraw,
     list: toggleList,
     focus: focusPane,
