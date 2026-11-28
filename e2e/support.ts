@@ -609,7 +609,7 @@ export const databaseProfile = (id: string, name: string, extra: Partial<Databas
 // The Jira data of J-2 as the commands answer it: a board, a sprint (the dates are none), a ticket and the tickets of a sprint or of the backlog.
 export const jiraBoard = (id: number, name: string, type = "scrum"): JiraBoard => ({ id, name, type });
 export const jiraSprint = (id: number, name: string, state = "active"): JiraSprint => ({ id, name, state, startDate: null, endDate: null });
-export const jiraIssue = (key: string, summary: string, status: string, statusCategory = "new", extra: Partial<JiraIssue> = {}): JiraIssue => ({ key, summary, status, statusCategory, assignee: null, priority: null, ...extra });
+export const jiraIssue = (key: string, summary: string, status: string, statusCategory = "new", extra: Partial<JiraIssue> = {}): JiraIssue => ({ key, summary, status, statusCategory, assignee: null, ...extra });
 export const jiraIssues = (issues: JiraIssue[], truncated = false): JiraIssues => ({ issues, truncated });
 // A project and an issue type as `jira_projects` and `jira_issue_types` answer them (#874).
 export const jiraProject = (id: string, key: string, name: string): JiraProject => ({ id, key, name });

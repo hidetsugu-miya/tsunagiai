@@ -115,6 +115,8 @@ const answers = {
   database_sql_csv: null,
   database_connections: [],
   database_disconnect: null,
+  database_favorites: [],
+  database_favorite_set: ({ connection, database, table, on }) => (on ? [{ connection, database, table }] : []),
   // No orca command: the Orca screen reads once and stops.
   orca_overview: { state: "missing", message: "", target: null, environments: [], rows: [], worktrees: [], projects: [], terminals: [], known: true },
   // A-8: no title fixed; a spec that checks the pin mocks `orca_titles`.

@@ -19,6 +19,7 @@ import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import type { DatabaseRecords } from "./bindings/DatabaseRecords";
 import type { DatabaseCsvSaved } from "./bindings/DatabaseCsvSaved";
 import type { DatabaseSqlRun } from "./bindings/DatabaseSqlRun";
+import type { DatabaseFavorite } from "./bindings/DatabaseFavorite";
 import type { DatabaseStructure } from "./bindings/DatabaseStructure";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
 import type { DecisionPage } from "./bindings/DecisionPage";
@@ -687,6 +688,8 @@ export interface Commands {
   database_sql_csv: { args: { id: string; database: string; sql: string }; result: DatabaseCsvSaved | null };
   // D-3: closes the connection `id` and ends its script.
   database_disconnect: { args: { id: string }; result: null };
+  database_favorites: { args: { environment: string | null; project: string }; result: DatabaseFavorite[] };
+  database_favorite_set: { args: { environment: string | null; project: string; connection: string; database: string; table: string; on: boolean }; result: DatabaseFavorite[] };
   // D-3: the ids of the connections that are open now.
   database_connections: { args: undefined; result: string[] };
 }

@@ -558,6 +558,8 @@ pub fn run() {
             database::database_sql_csv,
             database::database_disconnect,
             database::database_connections,
+            database::favorites::database_favorites,
+            database::favorites::database_favorite_set,
             markdown_patch::markdown_split,
             markdown_patch::markdown_patch,
             ghostty::ghostty_saved,
