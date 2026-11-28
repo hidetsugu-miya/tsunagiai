@@ -1625,6 +1625,33 @@ describe("settings: the pairing of this machine's Orca (the 開発 tab, A-12)", 
   });
 });
 
+describe("settings: AI usage statusLine (the Orca tab, A-48)", () => {
+  async function openAiUsage(state = { claude: false, antigravity: false }) {
+    await boot({
+      inbox: inbox(),
+      slack_load: slackLoad,
+      slack_check: checked([]),
+      claude_status: claudeMissing,
+      ai_usage_statusline_state: state,
+    });
+    await $("#nav-settings").click();
+    await openTab("orca");
+    await expect($("#ai-usage-items")).toBeDisplayed();
+  }
+
+  it("shows switches for Claude Code and Antigravity and toggles registration via ai_usage_statusline_set", async () => {
+    await openAiUsage({ claude: true, antigravity: false });
+    const claudeSwitch = $('#ai-usage-items [data-ai="claude"] .switch');
+    const agySwitch = $('#ai-usage-items [data-ai="antigravity"] .switch');
+    await expect(claudeSwitch).toHaveAttribute("aria-checked", "true");
+    await expect(agySwitch).toHaveAttribute("aria-checked", "false");
+    const set = await mock("ai_usage_statusline_set", { claude: true, antigravity: true });
+    await agySwitch.click();
+    expect(await waitForCalls(set)).toEqual([{ kind: "antigravity", enabled: true }]);
+    await expect(agySwitch).toHaveAttribute("aria-checked", "true");
+  });
+});
+
 describe("settings: terminal colors (the Orca tab, A-14, A-15)", () => {
   // The app with `fixtures` added, and the settings screen open on the Orca tab.
   async function openOrcaTab(fixtures: Record<string, unknown> = {}) {

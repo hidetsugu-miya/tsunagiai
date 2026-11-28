@@ -18,6 +18,7 @@ import { updateAddMode } from "./todo-add.js";
 import { showTokenForm } from "./todo.js";
 import { loadPromptState } from "./todo-prompt.js";
 import { showConsentCard } from "./formation-consent-settings.js";
+import { showAiUsageSettingsCard } from "./ai-usage-settings.js";
 import { showOrcaPairingCard } from "./orca-pairing-settings.js";
 import { showLogTab } from "./log-settings.js";
 import { initIcloudTab, showIcloudTab } from "./icloud-settings.js";
@@ -58,7 +59,10 @@ export function selectSettingsTab(name: SettingsTab) {
   // The PCs that the owner agreed to put tsunagiai-mcp on are read each time the Orca tab is shown (A-37).
   if (name === "orca") showConsentCard();
   // Whether this machine's Orca is paired is read each time the tab is shown (A-12).
-  if (name === "orca") showOrcaPairingCard();
+  if (name === "orca") {
+    showOrcaPairingCard();
+    showAiUsageSettingsCard();
+  }
   // The workspaces are read each time the Notion tab is shown (N-1).
   if (name === "notion") showNotionTab();
   // The accounts are read, and iCloud is asked about each one, each time the iCloud tab is shown (M-13).
