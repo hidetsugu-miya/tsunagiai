@@ -8,12 +8,12 @@ The owner starts the implementation of an issue from Claude Code; nothing else s
 No scheduled job implements an issue (at the owner's instruction, 2026-11-21; #1179: the launchd job that ran `ship` at 00:30 is removed, and the X post that was the only scheduled run left is removed too, at the owner's instruction, 2026-11-23, so no scheduled run starts a session of the repository).
 An issue is made only after its spec is settled ("Make an issue only once its spec is decided, verified, planned and shown" below), so it is ready to implement.
 Naming the issues to `implement` is that instruction: it proposes the open issues, ranked, and implements the ones the owner names, one after another or together in a worktree of its own (at the owner's instruction, 2026-11-09; Discussion #293; the worktree of its own, 2026-11-19; #1006; the owner names the issues every time, and the run never picks them, 2026-11-21; #1207).
-The one exception: before the Release PR, the run itself takes up to three items from the issues of the Lows that merged pull requests' reviews left, of flaky tests and of retrospectives, and fixes them (`review.md`, "Turn the Lows of a merged pull request into one issue…"; at the owner's instruction, 2026-11-21; #1211, #1212).
+The one exception: before the Release PR, the run itself takes up to three items from the issues of the Lows that merged pull requests' reviews left and three reviews have pointed out, of flaky tests and of retrospectives, and fixes them (`review.md`, "Turn each Low of a merged pull request into an issue…"; at the owner's instruction, 2026-11-21; #1211, #1212; the count of three, 2026-11-28).
 
 ```text
 Good: the owner says "implement #13" in a session -> the session works on #13
 Good: the owner says 「次を進めて」 -> the session proposes the ranked issues and waits for the owner to name them
-Good: an `implement` run has merged its pull request -> before the Release PR it fixes the findings of 「PR #1300 のレビューで残った Low」, which the owner did not name
+Good: an `implement` run has merged its pull request -> before the Release PR it fixes the issue 「Low: ts/orca-files.ts 落とし先の強調が消えない」, which three reviews have pointed out and the owner did not name
 Bad:  a schedule picks the oldest open issue and implements it
 Bad:  the session takes the first issue of the ranked list without the owner naming it
 ```
@@ -138,7 +138,7 @@ Good: a drag stops working only in the real WKWebView and the AI cannot run it -
 Bad:  two layouts are put to the owner, and the issue is made before the owner has picked one
 Bad:  the owner has decided, and the issue is made before the plan is set or a prototype is shown
 Bad:  a bug is filed from reading the code alone, with no run and no cause in the body, when a real-machine check was needed
-Bad:  a Low whose fix needs a design choice of the owner goes into the issue of Lows, and every run skips it
+Bad:  a Low whose fix needs a design choice of the owner goes into a Low issue, and every run skips it
 Bad:  a bug fix that changes what the screen shows beyond its requirement is filed with no decision of the owner and no prototype
 Bad:  the issue does not record the options, the plan or the prototype that its scope asks for
 ```
@@ -162,7 +162,7 @@ Push the branch after release-verifier passes, open the pull request, send the c
 The issue closes at the merge, and the Release PR shows what has not reached the app yet.
 An `implement` run puts all its issues in one pull request, with one `Closes #n` line for each.
 A ruleset on main requires the statuses `e2e` and `review`, and that the branch contains main, so a change tested on an old main cannot merge.
-Before the merge, only the pass or failure of the pull request goes to GitHub, and the review findings stay local. After the merge, the findings that release-verifier sorted `issue` go into one issue (`review.md`; at the owner's instruction, 2026-11-21; #1211). A security finding never goes to GitHub, because it may show a way to abuse the app (decided by the agent, 2026-11-21, at the owner's leave; #1211).
+Before the merge, only the pass or failure of the pull request goes to GitHub, and the review findings stay local. After the merge, the findings that release-verifier sorted `issue` go into issues of their own, one for each finding (`review.md`; at the owner's instruction, 2026-11-21; #1211; one for each finding, 2026-11-28). A security finding never goes to GitHub, because it may show a way to abuse the app (decided by the agent, 2026-11-21, at the owner's leave; #1211).
 
 ```sh
 gh pr create --title "Slack 一覧をウォッチ式にする" --body "Closes #13"

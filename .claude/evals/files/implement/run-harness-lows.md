@@ -9,3 +9,4 @@
    - [R-1] `.claude/evals/retrospective.json:15` 1 件目のラベルの assertion が、skill が求めるラベルを許していない。振り分け：`issue`
    - [R-2] `.claude/skills/retrospective/SKILL.md:19` 直しの対象に `.claude/evals/` が書かれていない。振り分け：`issue`
    - [R-3] `.claude/rules/review.md:150` 見出しの言い回しの好み。振り分け：`drop`
+3. 開いている「Low:」の issue は無い（`gh issue list --state open --search "Low: in:title"` の結果は空）。

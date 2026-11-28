@@ -8,3 +8,4 @@
 2. `release-verifier` の返りの、報告だけの指摘は次のとおり。どれも振り分けは `issue`。
    - [R-1] `ts/orca-files.ts:210` 落とし先の行の強調が、落としたあとも消えない。直し方：`drop` の受け口の先頭で強調のクラスを外す（1 行）。
    - [R-2] `ts/orca-terminal.ts:88` 実機の WKWebView でだけ、IME の確定前の文字の位置が 1 文字ずれて見える。直し方は、実機で IME を使って位置を確かめてからでないと決められない。AI は実機の IME を回せない。
+3. 開いている「Low:」の issue は無い（`gh issue list --state open --search "Low: in:title"` の結果は空）。
