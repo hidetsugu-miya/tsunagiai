@@ -616,7 +616,7 @@ struct Meta {
     /// Epoch milliseconds.
     #[serde(default)]
     created_at: Option<u64>,
-    /// The handle of the terminal of the orchestrator in the Orca of a saved environment (`start_orchestrator_with`): only a formation of a saved environment has one. A file written before it was kept has none. A formation that has none never had its orchestrator started on its PC, so that PC has no record of it and the screen's polls do not ask.
+    /// The handle of the terminal of the orchestrator in the Orca of its PC (`start_orchestrator_with`): this Mac's Orca for a formation of this Mac (since #1579), that of the saved environment for one of a saved environment. A file written before it was kept has none. A formation of a saved environment that has none never had its orchestrator started on its PC, so that PC has no record of it and the screen's polls do not ask.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     orchestrator_terminal: Option<String>,
     /// The Run of Orca's orchestration that holds the children of this formation as Dispatches (#1237): made at the first launch, in the Orca of this Mac (`ensure_run`). A formation with none has launched no child since the Run was introduced.
@@ -708,7 +708,7 @@ pub(crate) fn formation_home(config: &Path, formation: &str) -> (String, bool) {
     )
 }
 
-/// The PC a formation belongs to and the handle of its orchestrator's terminal in that PC's Orca (`Meta::orchestrator_terminal`): where a reply to a decision page goes (A-41). A formation of this Mac has no handle: its orchestrator is the app's own pane.
+/// The PC a formation belongs to and the handle of its orchestrator's terminal in that PC's Orca (`Meta::orchestrator_terminal`): where a reply to a decision page goes (A-41). A formation whose orchestrator was never started has no handle.
 pub(crate) fn orchestrator_home(config: &Path, formation: &str) -> (String, Option<String>) {
     let meta = read_meta(config, formation).unwrap_or_default();
     (
@@ -1298,44 +1298,79 @@ fn check_orca_id(id: &str) -> Result<(), String> {
     }
 }
 
-fn run_create_args(formation: &str, environment: &str) -> Vec<String> {
+/// The terminal of the leader that runs this `tsunagiai-mcp`, from the value of `ORCA_TERMINAL_HANDLE` that Orca gives the processes of its terminal (#1579): the leader runs in a terminal of its PC's Orca. A value that is not the shape of an id of Orca (`check_orca_id`) is none, and nothing is passed.
+fn leader_terminal(value: Option<String>) -> Option<String> {
+    value.filter(|handle| check_orca_id(handle).is_ok())
+}
+
+/// `--from={handle}` before `--json` when the leader's terminal is known (`leader_terminal`): Orca 1.4.280 takes the sender of an orchestration command from `--from`, else from `ORCA_TERMINAL_HANDLE`, else from a guess by the working folder, and the CLI runs in a temporary folder (#1579).
+fn from_leader(mut args: Vec<String>, from: Option<&str>) -> Vec<String> {
+    if let Some(handle) = from {
+        let at = args.len() - 1;
+        args.insert(at, format!("--from={handle}"));
+    }
+    args
+}
+
+fn run_create_args(formation: &str, environment: &str, from: Option<&str>) -> Vec<String> {
     on(
-        vec![
-            "orchestration".into(),
-            "run-create".into(),
-            format!("--objective=formation {formation}"),
-            "--json".into(),
-        ],
+        from_leader(
+            vec![
+                "orchestration".into(),
+                "run-create".into(),
+                format!("--objective=formation {formation}"),
+                "--json".into(),
+            ],
+            from,
+        ),
         environment,
     )
 }
 
-fn task_create_args(run_id: &str, formation: &str, name: &str, environment: &str) -> Vec<String> {
+fn task_create_args(
+    run_id: &str,
+    formation: &str,
+    name: &str,
+    environment: &str,
+    from: Option<&str>,
+) -> Vec<String> {
     on(
-        vec![
-            "orchestration".into(),
-            "task-create".into(),
-            format!("--run={run_id}"),
-            format!("--task-title={name}"),
-            format!("--spec=the child {name} of the formation {formation}"),
-            "--json".into(),
-        ],
+        from_leader(
+            vec![
+                "orchestration".into(),
+                "task-create".into(),
+                format!("--run={run_id}"),
+                format!("--task-title={name}"),
+                format!("--spec=the child {name} of the formation {formation}"),
+                "--json".into(),
+            ],
+            from,
+        ),
         environment,
     )
 }
 
 /// The Dispatch of a task to the child's terminal. There is no `--inject`: the terminal is not typed into, and `--return-preamble` gives the text that tells the child how to use the orchestration, which the first instruction carries.
-fn dispatch_args(run_id: &str, task_id: &str, handle: &str, environment: &str) -> Vec<String> {
+fn dispatch_args(
+    run_id: &str,
+    task_id: &str,
+    handle: &str,
+    environment: &str,
+    from: Option<&str>,
+) -> Vec<String> {
     on(
-        vec![
-            "orchestration".into(),
-            "dispatch".into(),
-            format!("--run={run_id}"),
-            format!("--task={task_id}"),
-            format!("--to={handle}"),
-            "--return-preamble".into(),
-            "--json".into(),
-        ],
+        from_leader(
+            vec![
+                "orchestration".into(),
+                "dispatch".into(),
+                format!("--run={run_id}"),
+                format!("--task={task_id}"),
+                format!("--to={handle}"),
+                "--return-preamble".into(),
+                "--json".into(),
+            ],
+            from,
+        ),
         environment,
     )
 }
@@ -1428,11 +1463,12 @@ fn remote_preamble(formation: &str, name: &str) -> String {
     )
 }
 
-/// The Run of `formation`: the one `formation.json` holds, else a new one (`run-create`), kept there. The Run binds itself to the terminal of the process that makes it, which is the orchestrator's (the `tsunagiai-mcp` of its Claude Code). Children launched side by side share one Run: the lock of the file `RUN_LOCK` is held while it is read and made.
+/// The Run of `formation`: the one `formation.json` holds, else a new one (`run-create`), kept there. The Run is bound to the sender's terminal, the leader's: `from` names it (`leader_terminal`), and without it Orca looks for `ORCA_TERMINAL_HANDLE`, which the leader's terminal gives the `tsunagiai-mcp` of its Claude Code, then guesses from the working folder (Orca 1.4.280, `terminal-identity.js`). Children launched side by side share one Run: the lock of the file `RUN_LOCK` is held while it is read and made.
 fn ensure_run(
     config: &Path,
     formation: &str,
     environment: &str,
+    from: Option<&str>,
     write: &dyn Fn(&[String]) -> Result<Value, String>,
 ) -> Result<String, String> {
     let _held = lock_file(config, formation, RUN_LOCK)?;
@@ -1441,7 +1477,7 @@ fn ensure_run(
         return Ok(id);
     }
     let id = orca_id_of(
-        &write(&run_create_args(formation, environment))?,
+        &write(&run_create_args(formation, environment, from))?,
         "runId",
         "run",
     )?;
@@ -1457,18 +1493,25 @@ struct Dispatched {
     preamble: String,
 }
 
-/// Makes the task and the Dispatch of a launched child in the Run of its formation, keeps the Dispatch's id in `formation.json`, and answers the ids and the preamble. The terminal `handle` is the child's own.
+/// Makes the task and the Dispatch of a launched child in the Run of its formation, keeps the Dispatch's id in `formation.json`, and answers the ids and the preamble. The terminal `handle` is the child's own, and `from` the leader's (`leader_terminal`).
 fn dispatch_child(
     config: &Path,
     formation: &str,
     name: &str,
     handle: &str,
     environment: &str,
+    from: Option<&str>,
     write: &dyn Fn(&[String]) -> Result<Value, String>,
 ) -> Result<Dispatched, String> {
-    let run_id = ensure_run(config, formation, environment, write)?;
+    let run_id = ensure_run(config, formation, environment, from, write)?;
     let task_id = orca_id_of(
-        &write(&task_create_args(&run_id, formation, name, environment))?,
+        &write(&task_create_args(
+            &run_id,
+            formation,
+            name,
+            environment,
+            from,
+        ))?,
         "taskId",
         "task",
     )?;
@@ -1477,6 +1520,7 @@ fn dispatch_child(
         &task_id,
         handle,
         environment,
+        from,
     ))?)?;
     update_meta(config, formation, |meta| {
         meta.dispatches.insert(name.to_owned(), dispatch_id.clone());
@@ -1533,6 +1577,16 @@ fn forget_dispatch(config: &Path, formation: &str, name: &str) {
 
 /// The shell sentence that starts an orchestrator on its PC: it begins with `exec`, so the `sh` takes the place of the login shell it is typed into and the terminal ends with the process that runs in it (a sentence typed without it leaves the login shell, and the terminal, listed after Claude Code has ended; measured on Orca, #943). In it the `remote/tsunagiai-mcp` that the app put there (`formation_remote::program_path`) first runs `--serve --bind {host}`, which starts the server of A-37 unless it runs (a failure is not shown and does not stop the orchestrator), and then takes the place of the `sh` with `--formation-start {name}` and one `--project {repo}` for each of `repos` (it writes the orchestrator's files on that PC and starts Claude Code with the projects as its first instruction, so nothing is typed into the terminal afterwards). It is typed into the login shell of the terminal, whichever shell that is: the `sh -c` has its script in one single quote with none inside, and the repositories follow it as the arguments `"$@"` of that script, each in single quotes of its own (`claude_code::sh_quote`, a quote closed, escaped and opened again). sh, bash and zsh read that the same way, and fish reads it the same way too while the name holds no `\`, because fish treats a `\` inside single quotes as an escape; so a name with a `\` is refused. A PC without the program prints `MCP_NOT_PLACED` and opens a shell in its place (`exec "${SHELL:-/bin/sh}"`), so the terminal stays and the owner can read the words (an `exit` would close the terminal with them). The name must pass `check_name`, so it holds no character a shell reads, `host` must be an IP address (it is put in the sentence as the address prints), and the repositories must pass what `first_prompt` checks (`local_first_prompt`), so that a name `tsunagiai-mcp` would refuse is refused here, where the app can say it.
 fn orchestrator_command(name: &str, repos: &[String], host: &str) -> Result<String, String> {
+    let projects = orchestrator_projects(name, repos)?;
+    let host = crate::formation_remote::parse_host(host)?;
+    let program = crate::formation_remote::program_path();
+    Ok(format!(
+        "exec sh -c 'm=\"{program}\"; [ -x \"$m\" ] || {{ echo \"{MCP_NOT_PLACED}\" >&2; exec \"${{SHELL:-/bin/sh}}\"; }}; \"$m\" --serve --bind {host} >/dev/null 2>&1; exec \"$m\" --formation-start {name} \"$@\"' sh{projects}"
+    ))
+}
+
+/// The checks of the name and the repositories of an orchestrator's command, and the repositories as its arguments: one ` --project {repo}` for each, in single quotes of its own (`claude_code::sh_quote`). The name must pass `check_name`, the repositories what `first_prompt` checks (`local_first_prompt`), and a repository with a `\\` is refused, because fish reads it in single quotes as an escape.
+fn orchestrator_projects(name: &str, repos: &[String]) -> Result<String, String> {
     check_name(name)?;
     local_first_prompt(repos)?;
     if let Some(repo) = repos.iter().find(|repo| repo.contains('\\')) {
@@ -1540,34 +1594,43 @@ fn orchestrator_command(name: &str, repos: &[String], host: &str) -> Result<Stri
             "リポジトリ「{repo}」の名前に \\ があります（シェルによって読み方が変わるため、使えません）"
         ));
     }
-    let host = crate::formation_remote::parse_host(host)?;
-    let program = crate::formation_remote::program_path();
-    let projects: String = repos
+    Ok(repos
         .iter()
         .map(|repo| format!(" --project {}", crate::claude_code::sh_quote(repo)))
-        .collect();
+        .collect())
+}
+
+/// The shell sentence that starts the orchestrator of a formation of this Mac in a terminal of this Mac's Orca (#1579): it begins with `exec`, so the terminal ends with the process, as `orchestrator_command`'s does, and `program` (the `tsunagiai-mcp` beside the app, `claude_code::checked_mcp_binary`) takes the place of the login shell with `--formation-start {name}` and the repositories (`orchestrator_projects`). No server is started: the app reads this Mac's records itself. `program` is one word in single quotes (`claude_code::sh_quote`), and a path with a `\\` is refused for the same reason as a repository with one.
+fn local_orchestrator_command(
+    name: &str,
+    repos: &[String],
+    program: &Path,
+) -> Result<String, String> {
+    let projects = orchestrator_projects(name, repos)?;
+    let program = program.to_string_lossy();
+    if program.contains('\\') {
+        return Err(format!(
+            "tsunagiai-mcp の場所「{program}」に \\ があります（シェルによって読み方が変わるため、使えません）"
+        ));
+    }
     Ok(format!(
-        "exec sh -c 'm=\"{program}\"; [ -x \"$m\" ] || {{ echo \"{MCP_NOT_PLACED}\" >&2; exec \"${{SHELL:-/bin/sh}}\"; }}; \"$m\" --serve --bind {host} >/dev/null 2>&1; exec \"$m\" --formation-start {name} \"$@\"' sh{projects}"
+        "exec {} --formation-start {name}{projects}",
+        crate::claude_code::sh_quote(&program)
     ))
 }
 
-/// The orchestrator's terminal, in the floating terminal of its PC's Orca (`FLOATING_WORKTREE`; Orca asks a `--worktree` of a terminal it creates on a saved environment), titled with the name of its formation, running `orchestrator_command` with the repositories of its projects and the address of its PC.
-fn orchestrator_create_args(
-    name: &str,
-    environment: &str,
-    repos: &[String],
-    host: &str,
-) -> Result<Vec<String>, String> {
+/// The orchestrator's terminal, in the floating terminal of its PC's Orca (`FLOATING_WORKTREE`; Orca asks a `--worktree` of a terminal it creates on a saved environment), titled with the name of its formation, running `command` (`orchestrator_command` or `local_orchestrator_command`).
+fn orchestrator_create_args(name: &str, environment: &str, command: String) -> Vec<String> {
     let mut args = orca::args_of(&["terminal", "create", "--worktree"]);
     args.extend([
         FLOATING_WORKTREE.into(),
         "--title".into(),
         name.into(),
         "--command".into(),
-        orchestrator_command(name, repos, host)?,
+        command,
         "--json".into(),
     ]);
-    Ok(on(args, environment))
+    on(args, environment)
 }
 
 pub(crate) fn terminal_close_args(handle: &str, environment: &str) -> Vec<String> {
@@ -2186,11 +2249,19 @@ pub fn launch(
     }; // A Claude Code child is a Dispatch of the formation's Run (#1237): the preamble of the Dispatch goes in front of the first instruction. A Codex child reports by files and is no Dispatch, so that no preamble tells it to talk with orchestration.
        // A Claude Code child of another PC is no Dispatch (a Dispatch is made in the Orca that holds the Run, and the child's terminal is in another's): the Run is the leader's own, in this PC's Orca, and the leader sends to the child's terminal with `--on {environment}` (#1236, #1239). Its own preamble stands where the Dispatch's would be.
     let talks = talks_by_messages(agent);
+    let from = leader_terminal(std::env::var("ORCA_TERMINAL_HANDLE").ok());
+    let from = from.as_deref();
     let dispatched = if talks && !remote_claude {
         Some(
-            dispatch_child(config, formation, name, &handle, environment, &|args| {
-                orca::write(args)
-            })
+            dispatch_child(
+                config,
+                formation,
+                name,
+                &handle,
+                environment,
+                from,
+                &|args| orca::write(args),
+            )
             .map_err(|e| recorded(STEP_DISPATCH, e))?,
         )
     } else {
@@ -2199,7 +2270,7 @@ pub fn launch(
     let run_id = match &dispatched {
         Some(dispatched) => Some(dispatched.run_id.clone()),
         None if talks => Some(
-            ensure_run(config, formation, LOCAL, &|args| orca::write(args))
+            ensure_run(config, formation, LOCAL, from, &|args| orca::write(args))
                 .map_err(|e| recorded(STEP_DISPATCH, e))?,
         ),
         None => None,
@@ -4004,12 +4075,8 @@ fn screen_read(args: &[String], timeout: Duration) -> Result<Value, String> {
         })
 }
 
-/// The title that the pane of this Mac's leader last wrote (`ClaudeCode::formation_title`).
-type LocalTitle<'a> = dyn Fn(&str) -> Option<String> + 'a;
-
-/// What the list reads of this Mac's leaders: the title of the pane of each (`title`), and how a mark of a question is taken away (`clear`: the environment, the formation and the time of the mark; a failure leaves the mark, and the next poll clears it again). `seen` holds the marks that were seen with `✳` (`formation_ask::Seen`).
+/// What the list needs to tell whether a leader waits: how a mark of a question is taken away (`clear`: the environment, the formation and the time of the mark; a failure leaves the mark, and the next poll clears it again). `seen` holds the marks that were seen with `✳` (`formation_ask::Seen`).
 struct Leaders<'a> {
-    title: &'a LocalTitle<'a>,
     seen: &'a formation_ask::Seen,
     clear: &'a dyn Fn(&str, &str, u64),
 }
@@ -4251,7 +4318,7 @@ fn list_with(config: &Path, read: &Read<'_>, pull: &PullEnv<'_>) -> Result<Forma
     list_core(config, read, pull, None)
 }
 
-/// The formations, in order of name, with their projects, when they were created and how many children are in each state. With `leaders` it also sets `waiting` (#915, #1105): a leader waits when its mark of a question is there (`formation_ask`: this Mac's own file, and for a saved environment the one its PC's server answers with the records) and its title says `✳` (`formation_ask::judge`); a mark whose leader was seen waiting and no longer is is taken away (`Leaders::clear`). The title of this Mac's leader is `leaders.title`'s, and that of a saved environment's leader (`Meta::orchestrator_terminal`) is read from that Orca's `orca terminal list` of every terminal (`all_terminals_args`), once for each environment, side by side with the records of the PCs (the same scope); a terminal list that cannot be read, a leader that was never started and one that is not listed have no known title, so they are not waiting and clear nothing. All the children are joined to Orca's lists in one `children_view_with`, so `orca worktree ps` is read once for each environment, however many formations have a child in it. The records of the formations of a saved environment are read over one connection for the environment (`pull`), the environments side by side, and `orca environment list` is read at most once, and only when a record could not be read.
+/// The formations, in order of name, with their projects, when they were created and how many children are in each state. With `leaders` it also sets `waiting` (#915, #1105): a leader waits when its mark of a question is there (`formation_ask`: this Mac's own file, and for a saved environment the one its PC's server answers with the records) and its title says `✳` (`formation_ask::judge`); a mark whose leader was seen waiting and no longer is is taken away (`Leaders::clear`). The title of a leader (`Meta::orchestrator_terminal`, of this Mac or of a saved environment, #1579) is read from that Orca's `orca terminal list` of every terminal (`all_terminals_args`), once for each environment, side by side with the records of the PCs (the same scope); a terminal list that cannot be read, a leader that was never started and one that is not listed have no known title, so they are not waiting and clear nothing. All the children are joined to Orca's lists in one `children_view_with`, so `orca worktree ps` is read once for each environment, however many formations have a child in it. The records of the formations of a saved environment are read over one connection for the environment (`pull`), the environments side by side, and `orca environment list` is read at most once, and only when a record could not be read.
 fn list_core(
     config: &Path,
     read: &Read<'_>,
@@ -4261,6 +4328,14 @@ fn list_core(
     migrate_legacy(config)?;
     let metas = read_metas(config, &formation_names(config, None));
     let groups = pc_groups(&metas);
+    // The environments whose Orca holds the terminal of a leader: the saved ones of `groups`, and this Mac when a formation of it has one (#1579).
+    let mut leader_environments: Vec<&String> = groups.keys().collect();
+    let local = LOCAL.to_owned();
+    if metas.iter().any(|(_, meta)| {
+        meta.orchestrator_terminal.is_some() && formation_environment(&meta.projects) == LOCAL
+    }) {
+        leader_environments.push(&local);
+    }
     // The reads of the PCs block on the runtime that `list_with` runs in (`on_pc`), and a thread of the scope has none of its own.
     let runtime = tokio::runtime::Handle::try_current().ok();
     let (pulled, terminals): (Vec<(&String, ListPull)>, BTreeMap<&String, Value>) =
@@ -4278,8 +4353,9 @@ fn list_core(
                     )
                 })
                 .collect();
-            let seen: Vec<_> = groups
-                .keys()
+            let seen: Vec<_> = leader_environments
+                .iter()
+                .copied()
                 .filter(|_| leaders.is_some())
                 .map(|environment| {
                     let run = scope
@@ -4364,26 +4440,22 @@ fn list_core(
         rows = rest;
         let environment = formation_environment(&meta.projects);
         let waiting = leaders.is_some_and(|leaders| {
-            let (mark, title) = if environment == LOCAL {
-                (
-                    formation_ask::read(config, &name),
-                    (leaders.title)(&name).map(|title| title_waits(&title)),
-                )
+            let mark = if environment == LOCAL {
+                formation_ask::read(config, &name)
             } else {
-                let mark = groups
+                groups
                     .get(&environment)
                     .and_then(|items| items.iter().position(|f| *f == name))
                     .and_then(|at| {
                         let (_, pulled) = pulled.iter().find(|(e, _)| **e == environment)?;
                         pulled.asked.get(at).copied().flatten()
-                    });
-                let title = meta
-                    .orchestrator_terminal
-                    .as_deref()
-                    .zip(terminals.get(&environment))
-                    .and_then(|(handle, list)| terminal_waits(list, handle));
-                (mark, title)
+                    })
             };
+            let title = meta
+                .orchestrator_terminal
+                .as_deref()
+                .zip(terminals.get(&environment))
+                .and_then(|(handle, list)| terminal_waits(list, handle));
             match leaders.seen.settle(&name, mark, title) {
                 Verdict::Waiting(_) => true,
                 Verdict::Clear(at) => {
@@ -4694,7 +4766,7 @@ pub struct FormationDeleteAnswer {
 
 /// Deletes the formation `formation` (A-37). First every child in its record is checked as `close` checks it (`inspect_child`: nothing is changed, and the worktree must be in `orca worktree ps` and, without `force`, have no change, no untracked file and no commit no remote has). A child that is refused for what git says of it (`kept_answer`) is collected, and the answer lists them all with nothing ended, closed or deleted; the first child that is refused otherwise stops the deletion with its reason before anything is ended or closed: the formation stays whole, its orchestrator's process included.
 /// With `force` (the owner's own press on the screen, `formation_delete`: the children as the owner was shown them) the look at git is left out as in `close_child_with` for a child whose name and recorded path are in it, and that child is closed with `--force` and its branch; any other child, one added or whose path was replaced after the owner was shown, is looked at as without `force`, so that when git keeps it the answer is `kept` again and nothing is ended or closed. The checks of the record, the environment and `orca worktree ps` are made as always.
-/// Then `stop_orchestrator` ends the process of its orchestrator and returns only when that process has ended (or has been killed): the tools of `tsunagiai-mcp` run in the orchestrator's process group, in another process than this one, and the lock of the record does not hold them, so a tool that goes on would write the record, or launch a child, while the folder is deleted. The terminal of the orchestrator of a formation of a saved environment is closed in that Orca right after, before any child is closed, so that its Claude Code adds no child meanwhile (`close_orchestrator_terminal`); a terminal that cannot be closed and is still there stops the deletion with its reason.
+/// Then the terminal of its orchestrator is closed in the Orca of its PC, this Mac's or a saved environment's (#1579), before any child is closed, so that its Claude Code adds no child meanwhile (`close_orchestrator_terminal`): the tools of `tsunagiai-mcp` run in another process than this one, and the lock of the record does not hold them. A terminal that cannot be closed and is still there stops the deletion with its reason.
 /// Then every child is closed as `close` does, in the order of the record, except that the children that work in a folder tsunagiai did not make go first (a close refuses to remove a worktree while such a child works in it, `folder_holder`); a planned one is dropped from the record. A child that is refused only now (the state changed after the check) stops the deletion with its reason: the formation stays (its orchestrator's process is already ended), and the children closed before it stay closed.
 /// When every child is closed, the record is read once more under its lock, and a child that is in it still stops the deletion; otherwise its folder `formations/{formation}/` is deleted. The record is never written once the folder is gone (`update`).
 fn delete_with(
@@ -4704,7 +4776,6 @@ fn delete_with(
     read: &dyn Fn(&[String]) -> Result<Value, String>,
     write: &dyn Fn(&[String]) -> Result<Value, String>,
     git_of: &dyn Fn(&str, &str) -> GitAnswers,
-    stop_orchestrator: &dyn Fn(),
 ) -> Result<FormationDeleteAnswer, String> {
     check_name(formation)?;
     migrate_legacy(config)?;
@@ -4738,7 +4809,6 @@ fn delete_with(
             preserved: Vec::new(),
         });
     }
-    stop_orchestrator();
     close_orchestrator_terminal(config, formation, read, write).map_err(|e| {
         format!(
             "リーダーのターミナルを閉じられないので、フォーメーション「{formation}」を削除していません（子は閉じていません。リーダーのプロセスは終えています）。{e}"
@@ -4784,20 +4854,11 @@ fn delete_formation(
     force: Option<&[FormationShown]>,
     write: &dyn Fn(&[String]) -> Result<Value, String>,
     git_of: &dyn Fn(&str, &str) -> GitAnswers,
-    stop_orchestrator: &dyn Fn(),
     access: &Access<'_>,
 ) -> Result<FormationDeleteAnswer, String> {
     check_name(formation)?;
     let (answer, copied) = through_record(config, formation, access, |scratch| {
-        delete_with(
-            scratch,
-            formation,
-            force,
-            access.read,
-            write,
-            git_of,
-            stop_orchestrator,
-        )
+        delete_with(scratch, formation, force, access.read, write, git_of)
     })?;
     if copied && answer.deleted {
         if !record_children(config, formation, access.read, access.pull)?.is_empty() {
@@ -4829,12 +4890,12 @@ fn close_child_formation(
     .map(|(answer, _)| answer)
 }
 
-/// The orchestrator of a formation that belongs to a saved environment: its terminal in the Orca of that PC, which the screen shows as it shows a child's (A-37).
+/// The orchestrator of a formation: its terminal in the Orca of the formation's PC, which the screen shows as it shows a child's (A-37).
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 pub struct FormationOrchestrator {
-    /// The saved environment whose Orca holds the terminal.
+    /// The environment whose Orca holds the terminal: `local` (this Mac) or a saved environment.
     pub environment: String,
     /// The handle of the terminal in that Orca.
     pub handle: String,
@@ -4887,10 +4948,11 @@ fn terminal_is_gone(
     }
 }
 
-/// The terminal of the orchestrator of `formation`, a formation of a saved environment (A-37): the one the file records when it is still in that Orca's `terminal list` (of every terminal), else a new one. With `restart` the recorded one is closed first, so that the new one starts Claude Code again; one that cannot be closed and is still listed stops the restart, because a new terminal beside it would run a second orchestrator.
-/// A new terminal is made in the floating terminal of that PC's Orca (`FLOATING_WORKTREE`), titled with the formation's name, running `orchestrator_command` with the address of that PC (`host_of`: where the server of A-37 listens), which gives the projects to Claude Code as its first instruction (every project in `local`, as the orchestrator of this Mac has it). The app does not wait for Claude Code and sends it nothing: Claude Code first asks whether to trust the folder (its answer is No, exit), and the owner answers that in the terminal the screen shows, as in the pane of this Mac (A-36), which nothing here answers. Only when the terminal is made and its handle is written in `formation.json` (the screen's polls read the PC's record only of a formation that has one, `Meta::orchestrator_terminal`) does the start succeed; a terminal whose handle cannot be recorded is closed, so none is left running with no record. A recorded handle that is no longer listed stays in the file until the new one replaces it, so that the children the orchestrator launched stay in the screen's reads when the start fails. When Claude Code ends, the terminal ends with it (`orchestrator_command` replaces the login shell), so it leaves that list and the next ask makes a new one (#943).
+/// The terminal of the orchestrator of `formation` (A-37): the one the file records when it is still in that Orca's `terminal list` (of every terminal), else a new one. With `restart` the recorded one is closed first, so that the new one starts Claude Code again; one that cannot be closed and is still listed stops the restart, because a new terminal beside it would run a second orchestrator.
+/// A new terminal is made in the floating terminal of that PC's Orca (`FLOATING_WORKTREE`), titled with the formation's name, running `orchestrator_command` with the address of that PC (`host_of`: where the server of A-37 listens), which gives the projects to Claude Code as its first instruction (every project in `local`, as the orchestrator of this Mac has it). The app does not wait for Claude Code and sends it nothing: Claude Code first asks whether to trust the folder (its answer is No, exit), and the owner answers that in the terminal the screen shows, which nothing here answers. Only when the terminal is made and its handle is written in `formation.json` (the screen's polls read the PC's record only of a formation that has one, `Meta::orchestrator_terminal`) does the start succeed; a terminal whose handle cannot be recorded is closed, so none is left running with no record. A recorded handle that is no longer listed stays in the file until the new one replaces it, so that the children the orchestrator launched stay in the screen's reads when the start fails. When Claude Code ends, the terminal ends with it (`orchestrator_command` replaces the login shell), so it leaves that list and the next ask makes a new one (#943).
 /// Before a new terminal is made, `send_plugins` puts the owner's plugins of this PC on that PC (`formation_remote::send_plugins`): a failure stops the start with nothing made. A restart sends them before the leader that runs is closed, so a failure leaves that leader running.
-/// A formation of this Mac has no such terminal (its orchestrator runs in a pseudo terminal of the app): it is refused.
+/// A formation of this Mac has its leader in a terminal of this Mac's Orca the same way (the owner's decision of 2026-11-28, #1579: Orca gives the terminal `ORCA_TERMINAL_HANDLE`, by which the orchestration knows the leader), running `local_orchestrator_command` with `local_program` (the `tsunagiai-mcp` beside the app) in place of `host_of`, and nothing is sent: the plugins are this Mac's own.
+#[allow(clippy::too_many_arguments)]
 fn start_orchestrator_with(
     config: &Path,
     formation: &str,
@@ -4899,6 +4961,7 @@ fn start_orchestrator_with(
     write: &dyn Fn(&[String]) -> Result<Value, String>,
     host_of: &dyn Fn(&str) -> Result<String, String>,
     send_plugins: &dyn Fn(&str) -> Result<(), String>,
+    local_program: &dyn Fn() -> Result<PathBuf, String>,
 ) -> Result<FormationOrchestrator, String> {
     check_name(formation)?;
     if !dir(config, formation).is_dir() {
@@ -4909,25 +4972,28 @@ fn start_orchestrator_with(
     let meta = read_meta(config, formation)?;
     let environment = formation_environment(&meta.projects);
     let environment = environment.as_str();
-    if environment == LOCAL {
-        return Err(format!(
-            "フォーメーション「{formation}」は、この Mac のものです。リーダーはつなぎAI の疑似端末で動きます"
-        ));
-    }
+    let here = environment == LOCAL;
     let failed = |e: String| {
         format!(
             "リーダーを起動できません（環境「{environment}」）: {}",
             first_line(&e)
         )
     };
-    // A restart closes the terminal that runs, so the address of the PC is settled before that.
-    let restart_host = if restart {
-        Some(host_of(environment).map_err(failed)?)
-    } else {
-        None
+    let repos: Vec<String> = meta.projects.iter().map(|p| p.repo.clone()).collect();
+    // The command of a new terminal: on this Mac with the `tsunagiai-mcp` beside the app, on a saved environment with the address of its PC.
+    let command = || {
+        if here {
+            let program = local_program().map_err(failed)?;
+            local_orchestrator_command(formation, &repos, &program)
+        } else {
+            let host = host_of(environment).map_err(failed)?;
+            orchestrator_command(formation, &repos, &host)
+        }
     };
+    // A restart closes the terminal that runs, so its command is settled before that.
+    let restart_command = if restart { Some(command()?) } else { None };
     // A restart sends the plugins before it closes the leader that runs, so a failed send leaves that leader as it is.
-    if restart {
+    if restart && !here {
         send_plugins(environment).map_err(failed)?;
     }
     if let Some(handle) = &meta.orchestrator_terminal {
@@ -4949,14 +5015,13 @@ fn start_orchestrator_with(
             });
         }
     }
-    let repos: Vec<String> = meta.projects.iter().map(|p| p.repo.clone()).collect();
-    let host = match restart_host {
-        Some(host) => host,
-        None => host_of(environment).map_err(failed)?,
+    let command = match restart_command {
+        Some(command) => command,
+        None => command()?,
     };
-    let create = orchestrator_create_args(formation, environment, &repos, &host)?;
-    // The owner's plugins of this PC are on that PC before the leader starts, which reads them with `--plugin-dir` (#1535). A restart sent them already.
-    if !restart {
+    let create = orchestrator_create_args(formation, environment, command);
+    // The owner's plugins of this PC are on that PC before the leader starts, which reads them with `--plugin-dir` (#1535). A restart sent them already, and a leader of this Mac reads this Mac's own.
+    if !restart && !here {
         send_plugins(environment).map_err(failed)?;
     }
     let made = write(&create).map_err(failed)?;
@@ -4977,7 +5042,7 @@ fn start_orchestrator_with(
     })
 }
 
-/// Closes the terminal of the orchestrator that `formation.json` records, in the Orca of the formation's environment (the deletion of the formation, A-37). One that is already gone (`terminal_is_gone`: the owner closed the tab, or the environment is gone) counts as closed; any other failure is the message, so that the deletion does not go on with an orchestrator that still runs, in auto mode, with no record.
+/// Closes the terminal of the orchestrator that `formation.json` records, in the Orca of the formation's environment, this Mac's included (the deletion of the formation, A-37). One that is already gone (`terminal_is_gone`: the owner closed the tab, or the environment is gone) counts as closed; any other failure is the message, so that the deletion does not go on with an orchestrator that still runs, in auto mode, with no record.
 fn close_orchestrator_terminal(
     config: &Path,
     formation: &str,
@@ -5007,7 +5072,7 @@ pub async fn formation_environments() -> Result<EnvironmentsView, String> {
     orca::blocking(|| environments_view(read_saved_environments(), &read_repos)).await
 }
 
-/// The terminal of the orchestrator of the formation `name`, which belongs to a saved environment (A-37): it is started in the Orca of that PC when it has none (`start_orchestrator_with`), and `restart` ends the one it has and starts a new one. A failure carries the message the screen shows.
+/// The terminal of the orchestrator of the formation `name` (A-37): it is started in the Orca of the formation's PC, this Mac's or a saved environment's, when it has none (`start_orchestrator_with`), and `restart` ends the one it has and starts a new one. A failure carries the message the screen shows.
 #[tauri::command]
 pub async fn formation_orchestrator(
     app: tauri::AppHandle,
@@ -5033,6 +5098,11 @@ pub async fn formation_orchestrator(
                     crate::formation_remote::send_plugins,
                 )
             },
+            &|| {
+                crate::claude_code::checked_mcp_binary(
+                    &std::env::current_exe().map_err(|e| e.to_string())?,
+                )
+            },
         )
     })
     .await?
@@ -5040,13 +5110,9 @@ pub async fn formation_orchestrator(
 
 /// The formations of the screen (A-37): each with its projects, when it was created, the number of its children in each state and whether its leader waits for the owner's answer to a question (#915, #1105).
 #[tauri::command]
-pub async fn formation_list(
-    app: tauri::AppHandle,
-    sessions: tauri::State<'_, crate::claude_code::ClaudeCode>,
-) -> Result<FormationList, String> {
+pub async fn formation_list(app: tauri::AppHandle) -> Result<FormationList, String> {
     let dir = config_dir(&app)?;
     let version = app.package_info().version.to_string();
-    let claude = sessions.inner().clone();
     orca::blocking(move || {
         let open = pc_connect(&dir, &version, false);
         let pulled = |environment: &str, items: &[String]| {
@@ -5072,7 +5138,6 @@ pub async fn formation_list(
             &screen_read,
             &pulled,
             Some(&Leaders {
-                title: &|name| claude.formation_title(name),
                 seen: &formation_ask::SEEN,
                 clear: &clear,
             }),
@@ -5116,14 +5181,12 @@ pub async fn formation_create(
 #[tauri::command]
 pub async fn formation_delete(
     app: tauri::AppHandle,
-    sessions: tauri::State<'_, crate::claude_code::ClaudeCode>,
     name: String,
     force: bool,
     shown: Vec<FormationShown>,
 ) -> Result<FormationDeleteAnswer, String> {
     let dir = config_dir(&app)?;
     let version = app.package_info().version.to_string();
-    let sessions = sessions.inner().clone();
     orca::blocking(move || {
         with_pc_access(&pc_connect(&dir, &version, true), |access| {
             delete_formation(
@@ -5132,7 +5195,6 @@ pub async fn formation_delete(
                 force.then_some(shown.as_slice()),
                 &|args| orca::write(args),
                 &orca_git_of,
-                &|| sessions.close_formation(&name),
                 access,
             )
         })
@@ -7152,7 +7214,6 @@ mod tests {
             &|_| Ok(ps.clone()),
             &|args| orca.run(args),
             &no_remote_git,
-            &|| {},
         )
         .unwrap();
         // The planned child is dropped with no command; the folder child's terminal is the only command.
@@ -7321,7 +7382,6 @@ mod tests {
             ),
             &|args| orca.run(args),
             &no_remote_git,
-            &|| {},
         )
         .unwrap();
         assert!(done.deleted, "{:?}", done.kept);
@@ -7383,14 +7443,14 @@ mod tests {
         std::fs::create_dir_all(dir(&config, F)).unwrap();
         let orca = Calls::new();
         let write = |args: &[String]| orchestration_orca(&orca, args);
-        let dispatched = dispatch_child(&config, F, "a", "term_a", LOCAL, &write).unwrap();
+        let dispatched = dispatch_child(&config, F, "a", "term_a", LOCAL, None, &write).unwrap();
         assert_eq!(dispatched.preamble, "check with orca orchestration check");
         // The leader's addresses: the Run and the child's Dispatch.
         assert_eq!(
             (dispatched.run_id.as_str(), dispatched.dispatch_id.as_str()),
             ("run_1", "ctx_1")
         );
-        dispatch_child(&config, F, "b", "term_b", LOCAL, &write).unwrap();
+        dispatch_child(&config, F, "b", "term_b", LOCAL, None, &write).unwrap();
         // One Run for both; a task and a Dispatch for each.
         assert_eq!(
             orca.names(),
@@ -7403,10 +7463,13 @@ mod tests {
             ]
         );
         let calls = orca.0.borrow();
-        assert_eq!(calls[0], run_create_args(F, LOCAL));
-        assert_eq!(calls[1], task_create_args("run_1", F, "a", LOCAL));
+        assert_eq!(calls[0], run_create_args(F, LOCAL, None));
+        assert_eq!(calls[1], task_create_args("run_1", F, "a", LOCAL, None));
         // The Dispatch is to the child's own terminal, takes no `--inject` and asks for the preamble.
-        assert_eq!(calls[2], dispatch_args("run_1", "task_1", "term_a", LOCAL));
+        assert_eq!(
+            calls[2],
+            dispatch_args("run_1", "task_1", "term_a", LOCAL, None)
+        );
         assert!(calls[2].contains(&"--return-preamble".to_owned()));
         assert!(!calls[2].contains(&"--inject".to_owned()));
         assert!(calls[2].contains(&"--environment=local".to_owned()));
@@ -7418,6 +7481,85 @@ mod tests {
     }
 
     #[test]
+    fn the_run_the_task_and_the_dispatch_name_the_leaders_terminal_as_the_sender_when_it_is_known()
+    {
+        // #1579: Orca takes the sender from `--from` first, and the CLI runs in a temporary folder, where it guesses nothing.
+        assert_eq!(
+            run_create_args(F, LOCAL, Some("term_leader")),
+            [
+                "orchestration",
+                "run-create",
+                "--objective=formation formation",
+                "--from=term_leader",
+                "--json",
+                "--environment=local",
+            ]
+        );
+        assert_eq!(
+            task_create_args("run_1", F, "a", LOCAL, Some("term_leader"))[5..],
+            ["--from=term_leader", "--json", "--environment=local"]
+        );
+        assert_eq!(
+            dispatch_args("run_1", "task_1", "term_a", LOCAL, Some("term_leader"))[5..],
+            [
+                "--return-preamble",
+                "--from=term_leader",
+                "--json",
+                "--environment=local"
+            ]
+        );
+        // Without it there is no `--from`, as before.
+        for args in [
+            run_create_args(F, LOCAL, None),
+            task_create_args("run_1", F, "a", LOCAL, None),
+            dispatch_args("run_1", "task_1", "term_a", LOCAL, None),
+        ] {
+            assert!(!args.iter().any(|a| a.starts_with("--from")), "{args:?}");
+        }
+        // The launch passes it on to each of the three.
+        let config = temp_dir("dispatch-from");
+        std::fs::create_dir_all(dir(&config, F)).unwrap();
+        let orca = Calls::new();
+        let write = |args: &[String]| orchestration_orca(&orca, args);
+        dispatch_child(
+            &config,
+            F,
+            "a",
+            "term_a",
+            LOCAL,
+            Some("term_leader"),
+            &write,
+        )
+        .unwrap();
+        let calls = orca.0.borrow();
+        assert_eq!(calls.len(), 3);
+        for call in calls.iter() {
+            assert!(call.contains(&"--from=term_leader".to_owned()), "{call:?}");
+        }
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn the_leaders_terminal_is_taken_from_orca_only_in_the_shape_of_an_id() {
+        assert_eq!(
+            leader_terminal(Some("term_a216846d-92ef".into())).as_deref(),
+            Some("term_a216846d-92ef")
+        );
+        assert_eq!(leader_terminal(None), None);
+        for bad in [
+            "",
+            "term a",
+            "--json",
+            "-x",
+            "term/1",
+            "a;b",
+            &"x".repeat(65),
+        ] {
+            assert_eq!(leader_terminal(Some(bad.to_owned())), None, "{bad:?}");
+        }
+    }
+
+    #[test]
     fn an_id_that_orca_gave_is_checked_before_it_is_kept_or_used() {
         assert!(check_orca_id("ctx_a216846d92ef").is_ok());
         for bad in ["", "a b", "--run=x", "-x", "ctx/1", &"x".repeat(65)] {
@@ -7425,10 +7567,11 @@ mod tests {
         }
         let config = temp_dir("dispatch-bad-id");
         std::fs::create_dir_all(dir(&config, F)).unwrap();
-        let err = ensure_run(&config, F, LOCAL, &|_| Ok(json!({"runId": "run 1"}))).unwrap_err();
+        let err =
+            ensure_run(&config, F, LOCAL, None, &|_| Ok(json!({"runId": "run 1"}))).unwrap_err();
         assert!(err.contains("id が正しくありません"));
         assert_eq!(read_meta(&config, F).unwrap().run_id, None);
-        let err = ensure_run(&config, F, LOCAL, &|_| Ok(json!({}))).unwrap_err();
+        let err = ensure_run(&config, F, LOCAL, None, &|_| Ok(json!({}))).unwrap_err();
         assert!(err.contains("runId"));
         assert!(dispatch_of(&json!({"dispatch": {}})).is_err());
         assert!(dispatch_of(&json!({"dispatch": {"id": "ctx 1"}})).is_err());
@@ -7449,7 +7592,7 @@ mod tests {
     fn a_failure_of_the_run_or_the_dispatch_keeps_nothing_it_did_not_make() {
         let config = temp_dir("dispatch-fails");
         std::fs::create_dir_all(dir(&config, F)).unwrap();
-        let err = dispatch_child(&config, F, "a", "term_a", LOCAL, &|_| {
+        let err = dispatch_child(&config, F, "a", "term_a", LOCAL, None, &|_| {
             Err("orca is down".into())
         })
         .unwrap_err();
@@ -7463,7 +7606,7 @@ mod tests {
                 orchestration_orca(&orca, args)
             }
         };
-        assert!(dispatch_child(&config, F, "a", "term_a", LOCAL, &fail_dispatch).is_err());
+        assert!(dispatch_child(&config, F, "a", "term_a", LOCAL, None, &fail_dispatch).is_err());
         // The Run was made and is kept for the next child; the child has no Dispatch.
         let meta = read_meta(&config, F).unwrap();
         assert_eq!(meta.run_id.as_deref(), Some("run_1"));
@@ -8796,7 +8939,6 @@ mod tests {
             &|_| Ok(listed.clone()),
             &|args| orca.run(args),
             &no_remote_git,
-            &|| {},
         )
         .unwrap();
         assert!(done.deleted, "{:?}", done.kept);
@@ -10067,11 +10209,29 @@ mod tests {
         child
     }
 
+    /// The handle of the terminal of a leader of this Mac that a test records (`with_leader`).
+    const LEADER: &str = "term_leader";
+
+    /// Records `LEADER` as the terminal of the leader of the formation `name` of this Mac (#1579).
+    fn with_leader(config: &Path, name: &str) {
+        update_meta(config, name, |m| {
+            m.orchestrator_terminal = Some(LEADER.into())
+        })
+        .unwrap();
+    }
+
+    /// Whether the terminal of the leader that `with_leader` recorded was closed in this Mac's Orca.
+    fn leader_closed(orca: &Calls) -> bool {
+        orca.0
+            .borrow()
+            .contains(&terminal_close_args(LEADER, LOCAL))
+    }
+
     #[test]
     fn the_formation_named_formation_is_deleted_as_any_other() {
         let config = temp_dir("delete-first");
         formation_of_children(&config, F, &[planned("p", "x")]);
-        let stopped = std::cell::Cell::new(false);
+        with_leader(&config, F);
         let orca = Calls::new();
         let answer = delete_with(
             &config,
@@ -10080,12 +10240,11 @@ mod tests {
             &|_| Ok(json!({})),
             &|args| orca.run(args),
             &no_remote_git,
-            &|| stopped.set(true),
         )
         .unwrap();
         assert!(answer.deleted);
         assert!(answer.kept.is_empty());
-        assert!(stopped.get());
+        assert!(leader_closed(&orca));
         assert!(!dir(&config, F).exists());
         assert!(formation_names(&config, None).is_empty());
         std::fs::remove_dir_all(&config).unwrap();
@@ -10103,7 +10262,6 @@ mod tests {
                 &|_| Ok(json!({})),
                 &|_| Ok(json!({})),
                 &no_remote_git,
-                &|| panic!("no orchestrator is ended"),
             );
             assert!(err.is_err(), "{name}");
         }
@@ -10120,24 +10278,28 @@ mod tests {
             &[planned("p", "x"), gone_child("a"), gone_child("b")],
         );
         formation_of_children(&config, "beta", &[planned("keep", "x")]);
-        let stopped = std::cell::Cell::new(0);
+        with_leader(&config, "alpha");
+        let closed = std::cell::Cell::new(0);
         let orca = Calls::new();
         delete_with(
             &config,
             "alpha",
             None,
             &|_| Ok(json!({})),
-            &|args| orca.run(args),
-            &no_remote_git,
-            &|| {
-                // The orchestrator ends first, while the folder and the record are still whole.
-                assert!(dir(&config, "alpha").is_dir());
-                assert_eq!(read_children(&config, "alpha").len(), 3);
-                stopped.set(stopped.get() + 1);
+            &|args| {
+                if args == terminal_close_args(LEADER, LOCAL) {
+                    // The leader's terminal is closed first, while the folder and the record are still whole.
+                    assert!(dir(&config, "alpha").is_dir());
+                    assert_eq!(read_children(&config, "alpha").len(), 3);
+                    closed.set(closed.get() + 1);
+                }
+                orca.run(args)
             },
+            &no_remote_git,
         )
         .unwrap();
-        assert_eq!(stopped.get(), 1);
+        assert_eq!(closed.get(), 1);
+        assert_eq!(orca.0.borrow()[0], terminal_close_args(LEADER, LOCAL));
         assert!(!dir(&config, "alpha").exists());
         // Another formation is not touched.
         assert_eq!(names(&read_children(&config, "beta")), ["keep"]);
@@ -10159,7 +10321,7 @@ mod tests {
             "alpha",
             &[gone_child("a"), refused, planned("c", "x")],
         );
-        let stopped = std::cell::Cell::new(false);
+        with_leader(&config, "alpha");
         let orca = Calls::new();
         let err = delete_with(
             &config,
@@ -10168,13 +10330,11 @@ mod tests {
             &|_| Ok(json!({})),
             &|args| orca.run(args),
             &no_remote_git,
-            &|| stopped.set(true),
         )
         .unwrap_err();
         assert!(err.contains("子「b」を閉じられない"), "{err}");
         assert!(err.contains("何も消していません"), "{err}");
-        // The refusal comes before the orchestrator is ended, and says so.
-        assert!(!stopped.get());
+        // The refusal comes before the leader's terminal is closed, and says so.
         assert!(err.contains("リーダーのプロセスも終えていません"), "{err}");
         assert!(!err.contains("リーダーのプロセスは終えています"), "{err}");
         // The child before the refused one is not closed either.
@@ -10199,7 +10359,7 @@ mod tests {
         );
         let saved = Saved::new(Ok(ps_with(remote_child())));
         let orca = Calls::new();
-        let stopped = std::cell::Cell::new(false);
+        with_leader(&config, "alpha");
         let asked = std::cell::Cell::new(0);
         let err = delete_with(
             &config,
@@ -10216,13 +10376,12 @@ mod tests {
                     Ok(git_answers(json!([{"status": "M", "path": "a.rs"}]), 0))
                 }
             },
-            &|| stopped.set(true),
         )
         .unwrap_err();
         assert!(err.contains("子「a」を閉じられない"), "{err}");
-        assert!(stopped.get());
         assert!(err.contains("リーダーのプロセスは終えています"), "{err}");
-        assert!(orca.0.borrow().is_empty());
+        // Only the leader's terminal was closed.
+        assert_eq!(*orca.0.borrow(), [terminal_close_args(LEADER, LOCAL)]);
         assert!(dir(&config, "alpha").is_dir());
         assert_eq!(names(&read_children(&config, "alpha")), ["a"]);
         std::fs::remove_dir_all(&config).unwrap();
@@ -10262,7 +10421,7 @@ mod tests {
         let config = temp_dir("delete-kept");
         let saved = two_saved_children(&config, false);
         let orca = Calls::new();
-        let stopped = std::cell::Cell::new(false);
+        with_leader(&config, "alpha");
         let answer = delete_with(
             &config,
             "alpha",
@@ -10270,7 +10429,6 @@ mod tests {
             &|args| saved.read(args),
             &|args| orca.run(args),
             &kept_git,
-            &|| stopped.set(true),
         )
         .unwrap();
         assert!(!answer.deleted);
@@ -10288,7 +10446,6 @@ mod tests {
         assert!(b.changed.is_empty() && b.untracked.is_empty());
         assert_eq!(b.unpushed.len(), 1);
         // Nothing is ended, closed or deleted.
-        assert!(!stopped.get());
         assert!(orca.0.borrow().is_empty());
         assert!(dir(&config, "alpha").is_dir());
         assert_eq!(names(&read_children(&config, "alpha")), ["p", "a", "b"]);
@@ -10300,7 +10457,7 @@ mod tests {
         let config = temp_dir("delete-kept-and-refused");
         // `b` is the repository's own folder: that is not a refusal of git, so the answer is the message.
         let saved = two_saved_children(&config, true);
-        let stopped = std::cell::Cell::new(false);
+        with_leader(&config, "alpha");
         let err = delete_with(
             &config,
             "alpha",
@@ -10308,12 +10465,10 @@ mod tests {
             &|args| saved.read(args),
             &|_| panic!("nothing is written"),
             &kept_git,
-            &|| stopped.set(true),
         )
         .unwrap_err();
         assert!(err.contains("子「b」を閉じられない"), "{err}");
         assert!(err.contains("リーダーのプロセスも終えていません"), "{err}");
-        assert!(!stopped.get());
         assert_eq!(names(&read_children(&config, "alpha")), ["p", "a", "b"]);
         std::fs::remove_dir_all(&config).unwrap();
     }
@@ -10323,7 +10478,6 @@ mod tests {
         let config = temp_dir("delete-force");
         let saved = two_saved_children(&config, false);
         let orca = Calls::new();
-        let stopped = std::cell::Cell::new(0);
         let answer = delete_with(
             &config,
             "alpha",
@@ -10331,12 +10485,10 @@ mod tests {
             &|args| saved.read(args),
             &|args| orca.run(args),
             &|_, _| panic!("a forced deletion asks no git"),
-            &|| stopped.set(stopped.get() + 1),
         )
         .unwrap();
         assert!(answer.deleted);
         assert!(answer.kept.is_empty());
-        assert_eq!(stopped.get(), 1);
         assert_eq!(
             *orca.0.borrow(),
             [
@@ -10355,7 +10507,6 @@ mod tests {
         let config = temp_dir("delete-force-shown");
         let saved = two_saved_children(&config, false);
         let orca = Calls::new();
-        let stopped = std::cell::Cell::new(false);
         let asked = std::cell::RefCell::new(Vec::new());
         let git = |environment: &str, path: &str| {
             asked.borrow_mut().push(path.to_owned());
@@ -10369,7 +10520,6 @@ mod tests {
             &|args| saved.read(args),
             &|args| orca.run(args),
             &git,
-            &|| stopped.set(true),
         )
         .unwrap();
         assert!(!answer.deleted);
@@ -10381,7 +10531,6 @@ mod tests {
         assert_eq!(answer.kept[0].answer.unpushed.len(), 1);
         assert_eq!(*asked.borrow(), ["/srv/work/b"]);
         // Nothing is ended, closed or deleted.
-        assert!(!stopped.get());
         assert!(orca.0.borrow().is_empty());
         assert_eq!(names(&read_children(&config, "alpha")), ["p", "a", "b"]);
         // A path that is not the recorded one (the record was written after the owner was shown) forces nothing.
@@ -10392,13 +10541,11 @@ mod tests {
             &|args| saved.read(args),
             &|args| orca.run(args),
             &git,
-            &|| stopped.set(true),
         )
         .unwrap();
         let kept: Vec<&str> = answer.kept.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(kept, ["a", "b"]);
         assert_eq!(answer.kept[0].answer.path, REMOTE_PATH);
-        assert!(!stopped.get());
         assert!(orca.0.borrow().is_empty());
         std::fs::remove_dir_all(&config).unwrap();
     }
@@ -10430,7 +10577,6 @@ mod tests {
                 assert_eq!(path, "/srv/work/b", "the shown child is not asked");
                 Ok(git_answers(json!([]), 0))
             },
-            &|| (),
         )
         .unwrap();
         assert!(answer.deleted);
@@ -10451,7 +10597,7 @@ mod tests {
     fn a_forced_deletion_still_stops_for_the_repositorys_own_folder() {
         let config = temp_dir("delete-force-forged");
         let saved = two_saved_children(&config, true);
-        let stopped = std::cell::Cell::new(false);
+        with_leader(&config, "alpha");
         let err = delete_with(
             &config,
             "alpha",
@@ -10459,12 +10605,10 @@ mod tests {
             &|args| saved.read(args),
             &|_| panic!("nothing is written"),
             &|_, _| panic!("a forced deletion asks no git"),
-            &|| stopped.set(true),
         )
         .unwrap_err();
         assert!(err.contains("子「b」を閉じられない"), "{err}");
         assert!(err.contains("リーダーのプロセスも終えていません"), "{err}");
-        assert!(!stopped.get());
         assert!(dir(&config, "alpha").is_dir());
         assert_eq!(names(&read_children(&config, "alpha")), ["p", "a", "b"]);
         std::fs::remove_dir_all(&config).unwrap();
@@ -10482,7 +10626,6 @@ mod tests {
             &|_| Ok(json!({})),
             &|_| Ok(json!({})),
             &no_remote_git,
-            &|| panic!("no orchestrator is ended"),
         )
         .unwrap_err();
         assert!(err.contains("形式が正しくありません"), "{err}");
@@ -10510,7 +10653,6 @@ mod tests {
             },
             &|_| Ok(json!({})),
             &no_remote_git,
-            &|| {},
         )
         .unwrap_err();
         assert!(err.contains("リーダーが子を足しました"), "{err}");
@@ -11639,21 +11781,57 @@ mod tests {
     #[test]
     fn the_terminal_is_made_in_the_floating_terminal_of_the_environment_with_the_name_of_the_formation(
     ) {
-        let args =
-            orchestrator_create_args("api-work", "mac-studio", &["api".to_owned()], HOST).unwrap();
+        let command = orchestrator_command("api-work", &["api".to_owned()], HOST).unwrap();
+        let args = orchestrator_create_args("api-work", "mac-studio", command.clone());
         assert_eq!(args[..3], ["terminal", "create", "--worktree"]);
         assert_eq!(args[3], "global-floating-terminal");
         assert_eq!(args[4..6], ["--title", "api-work"]);
         assert_eq!(args[6], "--command");
-        assert_eq!(
-            args[7],
-            orchestrator_command("api-work", &["api".to_owned()], HOST).unwrap()
-        );
+        assert_eq!(args[7], command);
         assert_eq!(args[8..], ["--json", "--environment=mac-studio"]);
-        assert!(orchestrator_create_args("a b", "mac-studio", &[], HOST).is_err());
-        assert!(
-            orchestrator_create_args("api-work", "mac-studio", &["a\nb".to_owned()], HOST).is_err()
+        // This Mac's leader is in the floating terminal of this Mac's Orca (#1579).
+        let here = orchestrator_create_args("api-work", LOCAL, "exec x".into());
+        assert_eq!(here[3], "global-floating-terminal");
+        assert_eq!(here[8..], ["--json", "--environment=local"]);
+    }
+
+    #[test]
+    fn the_command_of_a_leader_of_this_mac_runs_the_program_beside_the_app_in_place_of_the_login_shell(
+    ) {
+        let repos = |list: &[&str]| list.iter().map(|r| (*r).to_owned()).collect::<Vec<_>>();
+        let program = Path::new("/Applications/tsunagiai.app/Contents/MacOS/tsunagiai-mcp");
+        assert_eq!(
+            local_orchestrator_command("api-work", &[], program).unwrap(),
+            "exec '/Applications/tsunagiai.app/Contents/MacOS/tsunagiai-mcp' --formation-start api-work"
         );
+        // No server is started, and nothing is placed: the program is the app's own.
+        let command =
+            local_orchestrator_command("api-work", &repos(&["api", "it's"]), program).unwrap();
+        assert_eq!(
+            command,
+            "exec '/Applications/tsunagiai.app/Contents/MacOS/tsunagiai-mcp' --formation-start api-work --project 'api' --project 'it'\\''s'"
+        );
+        assert!(!command.contains("--serve") && !command.contains(MCP_NOT_PLACED));
+        // A path with a quote stays one word.
+        assert!(local_orchestrator_command(
+            "api-work",
+            &[],
+            Path::new("/Users/o'neil/tsunagiai-mcp")
+        )
+        .unwrap()
+        .starts_with("exec '/Users/o'\\''neil/tsunagiai-mcp' "));
+        // The checks of the remote command: the name, the repositories, and a backslash, in the path too.
+        for bad in ["", "a b", "a;b", "$(x)"] {
+            assert!(
+                local_orchestrator_command(bad, &[], program).is_err(),
+                "{bad:?}"
+            );
+        }
+        assert!(local_orchestrator_command("api-work", &repos(&["a\nb"]), program).is_err());
+        assert!(local_orchestrator_command("api-work", &repos(&["a\\b"]), program).is_err());
+        let error = local_orchestrator_command("api-work", &[], Path::new("/x\\y/tsunagiai-mcp"))
+            .unwrap_err();
+        assert!(error.contains("使えません"), "{error}");
     }
 
     #[test]
@@ -11762,6 +11940,7 @@ mod tests {
                 &|args| self.run(args),
                 &|_| Ok(HOST.to_owned()),
                 &|_| Ok(()),
+                &|| Ok(PathBuf::from(PROGRAM_HERE)),
             )
         }
         fn steps(&self) -> Vec<String> {
@@ -11916,6 +12095,7 @@ mod tests {
                     host(environment)
                 },
                 &|_| Ok(()),
+                &|| panic!("a leader of a saved environment runs no program of this Mac"),
             )
         };
         let refuse = |_: &str| Err("接続先「mac.local」は IP アドレスではありません".to_owned());
@@ -12021,7 +12201,8 @@ mod tests {
             &read,
             &write,
             &|_| Ok(HOST.to_owned()),
-            &|_| Ok(())
+            &|_| Ok(()),
+            &|| panic!("a leader of a saved environment runs no program of this Mac"),
         )
         .is_err());
         let steps: Vec<String> = calls.borrow().iter().map(|a| a[..2].join(" ")).collect();
@@ -12050,6 +12231,7 @@ mod tests {
                         .push((environment.to_owned(), orca.steps()));
                     send(environment)
                 },
+                &|| panic!("a leader of a saved environment runs no program of this Mac"),
             )
         };
         // A send that fails stops the start before a terminal is made: nothing is recorded.
@@ -12102,6 +12284,7 @@ mod tests {
                         Ok(())
                     }
                 },
+                &|| panic!("a leader of a saved environment runs no program of this Mac"),
             )
         };
         // The send fails: no terminal is closed or made, and the recorded one stays.
@@ -12154,9 +12337,13 @@ mod tests {
         std::fs::remove_dir_all(&config).unwrap();
     }
 
+    /// The `tsunagiai-mcp` beside the app that a test gives the start of a leader of this Mac.
+    const PROGRAM_HERE: &str = "/Applications/tsunagiai.app/Contents/MacOS/tsunagiai-mcp";
+
     #[test]
-    fn a_formation_of_this_mac_and_a_missing_one_make_no_terminal() {
-        let config = temp_dir("orchestrator-refused");
+    fn the_orchestrator_of_this_mac_is_a_terminal_of_this_macs_orca_that_runs_the_program_beside_the_app(
+    ) {
+        let config = temp_dir("orchestrator-here");
         create_with(
             &config,
             "here",
@@ -12166,12 +12353,71 @@ mod tests {
         )
         .unwrap();
         create_with(&config, "empty", &[], &two_environments(), 1).unwrap();
-        for (name, why) in [
-            ("here", "この Mac のものです"),
-            ("empty", "この Mac のものです"),
-            ("nowhere", "はありません"),
-            ("../x", "名前は"),
-        ] {
+        // The owner's decision of 2026-11-28 (#1579): the leader of this Mac is in the floating terminal of this Mac's Orca, as a saved environment's is in that PC's.
+        let orca = Stand::new();
+        let got = orca.start(&config, "here", false).unwrap();
+        assert_eq!(
+            got,
+            FormationOrchestrator {
+                environment: LOCAL.into(),
+                handle: "term_new".into()
+            }
+        );
+        assert_eq!(orca.steps(), ["terminal create"]);
+        let command =
+            local_orchestrator_command("here", &["api".to_owned()], Path::new(PROGRAM_HERE))
+                .unwrap();
+        assert_eq!(
+            orca.call("terminal create"),
+            orchestrator_create_args("here", LOCAL, command)
+        );
+        assert_eq!(recorded_terminal(&config, "here"), Some("term_new".into()));
+        // A formation with no project has one too, with no first instruction.
+        let orca = Stand::new();
+        orca.start(&config, "empty", false).unwrap();
+        assert!(orca.call("terminal create")[7].ends_with("--formation-start empty"));
+        // No address is asked and nothing is sent; a restart closes the recorded terminal in this Mac's Orca first.
+        let mut orca = Stand::new();
+        orca.listed = json!({"terminals": [{"handle": "term_new"}]});
+        let start = |program: &dyn Fn() -> Result<PathBuf, String>| {
+            start_orchestrator_with(
+                &config,
+                "here",
+                true,
+                &|args| orca.run(args),
+                &|args| orca.run(args),
+                &|_| panic!("a leader of this Mac needs no address"),
+                &|_| panic!("a leader of this Mac is sent no plugins"),
+                program,
+            )
+        };
+        // A program that is not there stops the restart before the leader that runs is closed.
+        let err = start(&|| Err("tsunagiai-mcp が見つかりません".into())).unwrap_err();
+        assert!(
+            err.contains("tsunagiai-mcp が見つかりません") && err.contains("local"),
+            "{err}"
+        );
+        assert!(orca.steps().is_empty());
+        assert_eq!(
+            start(&|| Ok(PROGRAM_HERE.into())).unwrap().handle,
+            "term_new"
+        );
+        assert_eq!(
+            orca.steps(),
+            ["terminal list", "terminal close", "terminal create"]
+        );
+        assert_eq!(
+            orca.call("terminal close"),
+            terminal_close_args("term_new", LOCAL)
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_missing_formation_makes_no_terminal() {
+        let config = temp_dir("orchestrator-refused");
+        std::fs::create_dir_all(root(&config)).unwrap();
+        for (name, why) in [("nowhere", "はありません"), ("../x", "名前は")] {
             let orca = Stand::new();
             let err = orca.start(&config, name, false).unwrap_err();
             assert!(err.contains(why), "{name}: {err}");
@@ -12192,7 +12438,6 @@ mod tests {
         })
         .unwrap();
         let orca = Calls::new();
-        let stopped = std::cell::Cell::new(false);
         let answer = delete_with(
             &config,
             "api-work",
@@ -12200,11 +12445,9 @@ mod tests {
             &|_| Ok(json!({})),
             &|args| orca.run(args),
             &no_remote_git,
-            &|| stopped.set(true),
         )
         .unwrap();
         assert!(answer.deleted);
-        assert!(stopped.get());
         assert_eq!(
             *orca.0.borrow(),
             [[
@@ -12227,7 +12470,6 @@ mod tests {
             &|_| Ok(json!({})),
             &|args| orca.run(args),
             &no_remote_git,
-            &|| {},
         )
         .unwrap();
         assert!(orca.0.borrow().is_empty());
@@ -12243,7 +12485,6 @@ mod tests {
             &|_| Ok(json!({})),
             &|_| Err("no such environment".into()),
             &no_remote_git,
-            &|| {},
         )
         .unwrap();
         assert!(answer.deleted);
@@ -13193,18 +13434,21 @@ mod tests {
             pull: &|e, f| flow.pc.pull(e, f),
             drop: &|e, f, r| flow.pc.drop(e, f, r),
         };
-        let stopped = std::cell::Cell::new(false);
         let answer = delete_formation(
             &config,
             "api-work",
             None,
             &|args| flow.writes.run(args),
             &|_, _| Ok(git_answers(json!([]), 0)),
-            &|| stopped.set(true),
             &access,
         )
         .unwrap();
-        assert!(answer.deleted && stopped.get());
+        assert!(answer.deleted);
+        assert!(flow
+            .writes
+            .0
+            .borrow()
+            .contains(&terminal_close_args("term_orch", "mac-studio")));
         // Each child's terminal and worktree are closed in the PC's Orca, as for a child of any saved environment.
         let writes = flow.writes.0.borrow().clone();
         for name in ["a", "b"] {
@@ -13235,7 +13479,6 @@ mod tests {
             pull: &|e, f| flow.pc.pull(e, f),
             drop: &|e, f, r| flow.pc.drop(e, f, r),
         };
-        let stopped = std::cell::Cell::new(false);
         let answer = delete_formation(
             &config,
             "api-work",
@@ -13247,14 +13490,12 @@ mod tests {
                     0,
                 ))
             },
-            &|| stopped.set(true),
             &access,
         )
         .unwrap();
         assert!(!answer.deleted);
         assert_eq!(answer.kept.len(), 1);
         assert_eq!(answer.kept[0].name, "a");
-        assert!(!stopped.get());
         assert!(flow.writes.0.borrow().is_empty());
         assert!(flow.pc.drops.lock().unwrap().is_empty());
         assert_eq!(names(&flow.pc.record.lock().unwrap()), ["a"]);
@@ -13277,7 +13518,6 @@ mod tests {
             None,
             &|args| writes.run(args),
             &no_remote_git,
-            &|| {},
             &access,
         )
         .unwrap();
@@ -13698,7 +13938,6 @@ mod tests {
             None,
             &|args| flow.writes.run(args),
             &|_, _| Ok(git_answers(json!([]), 0)),
-            &|| {},
             &access,
         )
         .unwrap();
@@ -13727,9 +13966,14 @@ mod tests {
             &config,
             "api-work",
             None,
-            &|args| flow.writes.run(args),
+            &|args| {
+                // The orchestrator adds a child while its terminal is being closed.
+                if args == terminal_close_args("term_orch", "mac-studio") {
+                    flow.pc.record.lock().unwrap().push(on_pc("late"));
+                }
+                flow.writes.run(args)
+            },
             &|_, _| Ok(git_answers(json!([]), 0)),
-            &|| flow.pc.record.lock().unwrap().push(on_pc("late")),
             &access,
         )
         .unwrap_err();
@@ -13991,7 +14235,6 @@ mod tests {
         })
         .unwrap();
         write_children(&config, "api-work", &[planned("a", "api")]).unwrap();
-        let stopped = std::cell::Cell::new(false);
         let closing = |args: &[String]| -> Result<Value, String> {
             if args[..2] == ["terminal", "close"] {
                 Err("terminal_handle_stale".into())
@@ -14006,37 +14249,20 @@ mod tests {
             assert_eq!(args, all_terminals_args("mac-studio"));
             Ok(json!({"terminals": [{"handle": "term_orch"}]}))
         };
-        let err = delete_with(
-            &config,
-            "api-work",
-            None,
-            &listed,
-            &closing,
-            &no_remote_git,
-            &|| stopped.set(true),
-        )
-        .unwrap_err();
+        let err =
+            delete_with(&config, "api-work", None, &listed, &closing, &no_remote_git).unwrap_err();
         assert!(
             err.contains("リーダーのターミナルを閉じられない")
                 && err.contains("terminal_handle_stale"),
             "{err}"
         );
-        assert!(stopped.get());
         // No child was closed, and the formation is still here.
         assert_eq!(names(&read_children(&config, "api-work")), ["a"]);
         assert!(dir(&config, "api-work").join(FORMATION_FILE).is_file());
         // The terminal is not listed any more: the failed close was of one that is gone, and the deletion goes on.
         let gone = |_: &[String]| -> Result<Value, String> { Ok(json!({"terminals": []})) };
-        let answer = delete_with(
-            &config,
-            "api-work",
-            None,
-            &gone,
-            &closing,
-            &no_remote_git,
-            &|| {},
-        )
-        .unwrap();
+        let answer =
+            delete_with(&config, "api-work", None, &gone, &closing, &no_remote_git).unwrap();
         assert!(answer.deleted);
         std::fs::remove_dir_all(&config).unwrap();
     }
@@ -14132,7 +14358,7 @@ mod tests {
         assert_eq!(terminal_waits(&json!({}), "term_a"), None);
     }
 
-    /// What the list of the leaders of a test does: the titles of this Mac's panes, the marks that were seen, and the clears that were asked (environment, formation, time).
+    /// What the list of the leaders of a test does: the marks that were seen, and the clears that were asked (environment, formation, time).
     struct Panes {
         seen: formation_ask::Seen,
         cleared: Mutex<Vec<(String, String, u64)>>,
@@ -14146,13 +14372,7 @@ mod tests {
             }
         }
 
-        fn list(
-            &self,
-            config: &Path,
-            read: &Read<'_>,
-            pull: &PullEnv<'_>,
-            title: &LocalTitle<'_>,
-        ) -> FormationList {
+        fn list(&self, config: &Path, read: &Read<'_>, pull: &PullEnv<'_>) -> FormationList {
             let clear = |environment: &str, name: &str, at: u64| {
                 self.cleared
                     .lock()
@@ -14164,7 +14384,6 @@ mod tests {
                 read,
                 pull,
                 Some(&Leaders {
-                    title,
                     seen: &self.seen,
                     clear: &clear,
                 }),
@@ -14181,37 +14400,48 @@ mod tests {
     }
 
     #[test]
-    fn the_leader_of_this_mac_waits_with_its_mark_and_the_title_of_its_pane() {
+    fn the_leader_of_this_mac_waits_with_its_mark_and_the_title_of_its_terminal_in_this_macs_orca()
+    {
         let config = temp_dir("waiting-local");
-        for name in ["idle", "busy", "untitled", "none"] {
+        for name in ["idle", "busy", "untitled", "none", "unstarted"] {
             create_with(&config, name, &[], &two_environments(), 1).unwrap();
+            if name != "unstarted" {
+                update_meta(&config, name, |m| {
+                    m.orchestrator_terminal = Some(format!("term_{name}"));
+                })
+                .unwrap();
+            }
         }
-        // The title of every pane says `✳`: only the formations that have a mark wait.
-        for name in ["idle", "busy", "untitled"] {
+        // Only the formations that have a mark wait.
+        for name in ["idle", "busy", "untitled", "unstarted"] {
             formation_ask::mark(&config, name, 5).unwrap();
         }
-        let titles = |name: &str| match name {
-            "idle" | "none" => Some("✳ Claude Code".to_owned()),
-            "busy" => Some("◑ Claude Code".to_owned()),
-            "untitled" => Some(String::new()),
-            _ => None,
+        // The titles are those of this Mac's Orca, read once for every leader (#1579).
+        let calls = Mutex::new(Vec::new());
+        let read = |args: &[String], limit: Duration| {
+            calls.lock().unwrap().push((args.to_vec(), limit));
+            Ok(json!({"terminals": [
+                {"handle": "term_idle", "title": "✳ Claude Code", "orphaned": false},
+                {"handle": "term_none", "title": "✳ Claude Code", "orphaned": false},
+                {"handle": "term_busy", "title": "◑ Claude Code", "orphaned": false},
+                {"handle": "term_untitled", "title": "", "orphaned": false},
+            ]}))
         };
         let panes = Panes::new();
-        // This Mac's leaders ask no Orca for their titles.
-        let list = panes.list(
-            &config,
-            &|args, _| panic!("no Orca is asked: {args:?}"),
-            &no_pull_env,
-            &titles,
-        );
+        let list = panes.list(&config, &read, &no_pull_env);
         assert_eq!(
             waiting_of(&list),
             [
                 ("busy", false),
                 ("idle", true),
                 ("none", false),
+                ("unstarted", false),
                 ("untitled", false)
             ]
+        );
+        assert_eq!(
+            *calls.lock().unwrap(),
+            [(all_terminals_args(LOCAL), SAVED_PS_TIMEOUT)]
         );
         // `busy` was not at its prompt yet and `untitled` has a title that is not `✳`: no mark is taken away before it was seen waiting.
         assert!(panes.cleared.lock().unwrap().is_empty());
@@ -14223,25 +14453,27 @@ mod tests {
     fn the_mark_of_this_macs_leader_is_cleared_once_when_it_works_again_after_it_waited() {
         let config = temp_dir("waiting-clear");
         create_with(&config, "api-work", &[], &two_environments(), 1).unwrap();
+        update_meta(&config, "api-work", |m| {
+            m.orchestrator_terminal = Some("term_a".into());
+        })
+        .unwrap();
         formation_ask::mark(&config, "api-work", 5).unwrap();
-        let title = std::cell::RefCell::new("◐ api-work".to_owned());
-        let panes = Panes::new();
-        let poll = || {
-            panes.list(
-                &config,
-                &|args, _| panic!("no Orca is asked: {args:?}"),
-                &no_pull_env,
-                &|_| Some(title.borrow().clone()),
-            )
+        let title = Mutex::new("◐ api-work".to_owned());
+        let read = |_: &[String], _: Duration| {
+            Ok(json!({"terminals": [
+                {"handle": "term_a", "title": *title.lock().unwrap(), "orphaned": false},
+            ]}))
         };
+        let panes = Panes::new();
+        let poll = || panes.list(&config, &read, &no_pull_env);
         // The leader is writing its question.
         assert!(!poll().formations[0].waiting);
-        *title.borrow_mut() = "✳ api-work".to_owned();
+        *title.lock().unwrap() = "✳ api-work".to_owned();
         assert!(poll().formations[0].waiting);
         assert!(poll().formations[0].waiting);
         assert!(panes.cleared.lock().unwrap().is_empty());
         // The owner answered.
-        *title.borrow_mut() = "⠂ api-work".to_owned();
+        *title.lock().unwrap() = "⠂ api-work".to_owned();
         assert!(!poll().formations[0].waiting);
         assert_eq!(
             *panes.cleared.lock().unwrap(),
@@ -14285,7 +14517,7 @@ mod tests {
             pages: items.iter().map(|_| Vec::new()).collect(),
         };
         let panes = Panes::new();
-        let list = panes.list(&config, &read, &pull, &|_| None);
+        let list = panes.list(&config, &read, &pull);
         // `quiet` has no mark, `busy` is not at its prompt, `closed` is not listed.
         assert_eq!(
             waiting_of(&list),
@@ -14327,9 +14559,9 @@ mod tests {
             pages: items.iter().map(|_| Vec::new()).collect(),
         };
         let panes = Panes::new();
-        assert!(panes.list(&config, &read, &pull, &|_| None).formations[0].waiting);
+        assert!(panes.list(&config, &read, &pull).formations[0].waiting);
         *title.lock().unwrap() = "◐ api-work";
-        assert!(!panes.list(&config, &read, &pull, &|_| None).formations[0].waiting);
+        assert!(!panes.list(&config, &read, &pull).formations[0].waiting);
         assert_eq!(
             *panes.cleared.lock().unwrap(),
             [("mac-studio".to_owned(), "api-work".to_owned(), 9)]
@@ -14346,16 +14578,13 @@ mod tests {
         })
         .unwrap();
         let panes = Panes::new();
-        let list = panes.list(
-            &config,
-            &|_, _| Err("no answer".into()),
-            &|_, items| ListPull {
+        let list = panes.list(&config, &|_, _| Err("no answer".into()), &|_, items| {
+            ListPull {
                 records: items.iter().map(|_| Ok(Vec::new())).collect(),
                 asked: items.iter().map(|_| Some(5)).collect(),
                 pages: items.iter().map(|_| Vec::new()).collect(),
-            },
-            &|_| None,
-        );
+            }
+        });
         assert!(!list.formations[0].waiting);
         std::fs::remove_dir_all(&config).unwrap();
     }

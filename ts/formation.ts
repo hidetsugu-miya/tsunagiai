@@ -1,7 +1,6 @@
 // The orchestration of the development screen (A-37): a formation selected in the list (formation-list.ts, under its heading at the top of the Orca screen's list) takes the place of the work pane of a project with two panes, the tabs in the middle (the leader's terminal and the children's, formation-flow.ts) and the flow at the right, a column of cards. While a project or a session is selected, or nothing, the work pane of Orca is shown.
-// A formation belongs to one PC. The orchestrator of one of this Mac runs in a pseudo terminal of the app (A-36); the one of a formation of a saved environment runs in a terminal of the Orca of that environment, which Rust makes (`formation_orchestrator`) and which is shown here as a child's terminal is: streamed when the Orca screen streams that environment, else mirrored.
+// A formation belongs to one PC. Its orchestrator runs in a terminal of the Orca of that PC, this Mac's or a saved environment's (#1579), which Rust makes (`formation_orchestrator`) and which is shown here as a child's terminal is: streamed when the Orca screen streams that environment, else mirrored.
 import type { FormationOrchestrator } from "./bindings/FormationOrchestrator";
-import { closeClaudeCode, formationPaneId, hideClaudeCode, isClaudeCodeShowing, showClaudeCode } from "./claude-code.js";
 import { $ } from "./dom.js";
 import { ensureConsent } from "./formation-consent.js";
 import { hideSession, isLeaderTab, onTabChange, showChild, startFlow, startList, stopFlow, switchFormation } from "./formation-flow.js";
@@ -9,26 +8,21 @@ import { currentFormation, drawNotices, formationEnvironment, initFormationList 
 import { setNotice } from "./error-card.js";
 import { invoke } from "./ipc.js";
 import { redrawOrca, streamsEnvironment } from "./orca.js";
-import { isShowing, releaseTerminal, showTerminals } from "./orca-terminal.js";
+import { hideTerminals, isShowing, releaseTerminal, showTerminals } from "./orca-terminal.js";
 
-// The name of the pane's owner: what `hideClaudeCode` is told when the formation is deselected or the screen is left.
+// The name of the owner of the leader's terminal: what `hideTerminals` is told when the formation is deselected or the screen is left.
 const OWNER = "formation-screen";
-// The pane of the orchestrator of the formation the screen shows; null while none is selected.
-const pane = () => {
-  const name = currentFormation();
-  return name === null ? null : formationPaneId(name);
-};
 
-// The environment of this Mac in `FormationEntry.environment`.
+// The environment of this Mac in `FormationEntry.environment` and `FormationOrchestrator.environment`; the terminal source calls it null, as the Orca screen's.
 const LOCAL = "local";
-// The orchestrators of the formations of a saved environment, by the name of the formation: the terminal once Rust has made it (in memory only; Rust finds the recorded one again), the starts on their way, and the words of the ones that failed.
+// The orchestrators of the formations, by the name of the formation: the terminal once Rust has made it (in memory only; Rust finds the recorded one again), the starts on their way, and the words of the ones that failed.
 const terminals = new Map<string, FormationOrchestrator>();
 const starting = new Set<string>();
-// The formations of a saved environment whose orchestrator's terminal has ended (it left its Orca's list: Claude Code ended and the terminal went with it). The last screen stays drawn; the handle is dropped at the next show of the formation, which asks Rust again (it makes a new terminal when none is listed).
+// The formations whose orchestrator's terminal has ended (it left its Orca's list: Claude Code ended and the terminal went with it). The last screen stays drawn; the handle is dropped at the next show of the formation, which asks Rust again (it makes a new terminal when none is listed).
 const ended = new Set<string>();
 const failures = new Map<string, string>();
 
-// The card of a failure of the leader's terminal of a saved environment (A-28): it is there while the leader's tab of that formation is shown, and goes when the formation is pressed again (which tries again), when another tab or formation is shown and when the screen is left.
+// The card of a failure of the leader's terminal (A-28): it is there while the leader's tab of that formation is shown, and goes when the formation is pressed again (which tries again), when another tab or formation is shown and when the screen is left.
 const NOTICE_TERM = "formation:terminal";
 
 // Whether the development screen is shown (set by `showFormation` and `hideFormation`).
@@ -39,41 +33,40 @@ let onScreen = false;
 // While no formation is selected the middle pane is not shown, and no orchestrator is started.
 function showPane() {
   if (!onScreen) return;
-  const id = pane();
-  if (id === null) {
+  const name = currentFormation();
+  if (name === null) {
     setNotice(NOTICE_TERM, null);
-    return hideClaudeCode(OWNER);
+    return hideTerminals(OWNER);
   }
-  const name = currentFormation()!;
   const host = $("formation-term");
-  const remote = formationEnvironment(name) !== LOCAL;
-  const said = remote ? (failures.get(name) ?? null) : null;
+  const said = failures.get(name) ?? null;
   // The leader's terminal and its words are shown only while the leader's tab is the selected one; a child's tab shows the child's terminal under the strip (formation-flow.ts), and the leader's process goes on.
   const leader = isLeaderTab();
   host.hidden = !leader;
   setNotice(NOTICE_TERM, said !== null && leader ? { text: said } : null);
-  if (!leader) return hideClaudeCode(OWNER);
-  if (remote) return showRemote(name, host, said);
-  if (!isClaudeCodeShowing(host, id, OWNER)) showClaudeCode(host, { id, kind: "formation" }, OWNER);
+  if (!leader) return hideTerminals(OWNER);
+  showLeader(name, host, said);
 }
 
-// Shows the terminal of the orchestrator of a formation of a saved environment, and starts it when it has none and no failure is on the screen (a failure is tried again by pressing the formation again).
-function showRemote(name: string, host: HTMLElement, failure: string | null) {
-  if (ended.delete(name)) dropRemote(name);
+// Shows the terminal of the orchestrator of a formation, and starts it when it has none and no failure is on the screen (a failure is tried again by pressing the formation again).
+function showLeader(name: string, host: HTMLElement, failure: string | null) {
+  if (ended.delete(name)) dropLeader(name);
   const got = terminals.get(name);
   if (!got) {
-    hideClaudeCode(OWNER);
-    if (failure === null) void startRemote(name);
+    hideTerminals(OWNER);
+    if (failure === null) void startLeader(name);
     return;
   }
   host.classList.add("claude-code-pane");
-  const kind = streamsEnvironment(got.environment) ? "stream" : "mirror";
-  const placement = { id: got.handle, source: { kind, handle: got.handle, path: "", environment: got.environment, onGone: () => gone(name, got.handle) } as const, host };
+  // The terminal is read and typed into in the Orca of the formation's environment.
+  const environment = got.environment === LOCAL ? null : got.environment;
+  const kind = streamsEnvironment(environment) ? "stream" : "mirror";
+  const placement = { id: got.handle, source: { kind, handle: got.handle, path: "", environment, onGone: () => gone(name, got.handle) } as const, host };
   if (!isShowing(placement, OWNER)) showTerminals([placement], got.handle, OWNER);
 }
 
 // The screen forgets the terminal of the orchestrator of `name`.
-function dropRemote(name: string) {
+function dropLeader(name: string) {
   const got = terminals.get(name);
   if (got) releaseTerminal(got.handle, OWNER);
   terminals.delete(name);
@@ -85,7 +78,7 @@ function gone(name: string, handle: string) {
 }
 
 // Asks Rust for the terminal of the orchestrator of `name` (one start at a time for a formation), and shows it when that formation is still the one shown.
-async function startRemote(name: string) {
+async function startLeader(name: string) {
   if (starting.has(name)) return;
   starting.add(name);
   failures.delete(name);
@@ -136,10 +129,9 @@ export function initFormation() {
       syncPanes();
       redrawOrca();
     },
-    // A formation was deleted: Rust has ended its orchestrator's process, so its terminal is dropped. The release hides the shown terminal of this owner too, so the shown formation's is shown again.
+    // A formation was deleted: Rust has closed its orchestrator's terminal, so the screen drops it. The release hides the shown terminal of this owner too, so the shown formation's is shown again.
     (name) => {
-      closeClaudeCode(formationPaneId(name), OWNER);
-      dropRemote(name);
+      dropLeader(name);
       ended.delete(name);
       failures.delete(name);
       showPane();
@@ -161,5 +153,5 @@ export function hideFormation() {
 // Only the terminals are hidden.
 function hidePanes() {
   hideSession();
-  hideClaudeCode(OWNER);
+  hideTerminals(OWNER);
 }
