@@ -23,6 +23,8 @@ import { show } from "./view.js";
 const HOUR_PX = 64;
 // Keep in step with MIN_MINUTES in calendar.rs.
 const MIN_EVENT_MIN = 20;
+// The width of a box, in thousandths of the day column's, from which it shows its time: more than two boxes side by side.
+const TIME_MIN_WIDTH = 600;
 const CAL_REFRESH_MS = 5 * 60 * 1000;
 
 // The day the week starts on (0 = Sunday to 6 = Saturday), read from the backend once; null until it is asked for. No week is fetched before it is known.
@@ -137,8 +139,8 @@ function eventBox(e: TimedItem, weekStart: string) {
   box.dataset.endAt = String(timedEndAt(weekStart, e));
   box.style.top = `${(e.startMin / 60) * HOUR_PX}px`;
   box.style.height = `${(Math.max(e.endMin - e.startMin, MIN_EVENT_MIN) / 60) * HOUR_PX - 1}px`;
-  box.style.left = `${(e.col / e.cols) * 100}%`;
-  box.style.width = `${100 / e.cols}%`;
+  box.style.left = `${e.left / 10}%`;
+  box.style.width = `${e.width / 10}%`;
   box.style.setProperty("--c", eventColor(e));
   box.title = `${e.summary}\n${e.account}`;
   const name = e.summary || "(件名なし)";
@@ -147,8 +149,8 @@ function eventBox(e: TimedItem, weekStart: string) {
   box.append(el("cal-name", chars.length > CAL_NAME_MAX ? `${chars.slice(0, CAL_NAME_MAX).join("")}…` : name));
   // Under 45 minutes has no room for a second line, so the title takes the only one.
   if (e.endMin - e.startMin < 45) box.classList.add("short");
-  // Side-by-side boxes are too narrow for the time; a long title would push it out of sight anyway.
-  else if (e.cols === 1) box.append(el("cal-time", `${hhmm(e.startMin)} - ${hhmm(e.endMin)}`));
+  // A box narrower than this (side by side with others) has no room for the time; a long title would push it out of sight anyway.
+  else if (e.width >= TIME_MIN_WIDTH) box.append(el("cal-time", `${hhmm(e.startMin)} - ${hhmm(e.endMin)}`));
   return box;
 }
 
@@ -247,7 +249,8 @@ function renderWeek(w: Week) {
       const col = el("cal-col");
       // An empty place of the column makes an event of the hour pressed (C-5); an event box is the detail's own.
       col.onclick = (e) => e.target === col && openCreate(w.weekStart, i, false, Math.floor((e.clientY - col.getBoundingClientRect().top) / HOUR_PX) * 60);
-      col.append(...w.timed.filter((e) => e.day === i).map((e) => eventBox(e, w.weekStart)));
+      // Drawn from the lowest layer, so a box that starts later is above the ones it overlaps (and the selected box, which has its own z-index, stays above all).
+      col.append(...w.timed.filter((e) => e.day === i).sort((a, b) => a.layer - b.layer).map((e) => eventBox(e, w.weekStart)));
       return col;
     }),
   );

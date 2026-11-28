@@ -36,6 +36,14 @@ const MAX_PAGES: usize = 10;
 /// A shorter event is laid out as if it lasted this long, so it stays visible.
 /// Keep in step with `MIN_EVENT_MIN` in `ts/calendar.ts`.
 const MIN_MINUTES: u32 = 20;
+/// The width of a day's column in the unit of `TimedItem.left` and `width`: thousandths.
+const FULL: u32 = 1000;
+/// An event that starts this many minutes or more after an event it overlaps is laid over it, not beside it (C-1).
+const OVERLAY_AFTER_MIN: u32 = 30;
+/// How far an event is moved right for each event it lies over in its column, at most (it is also at most a quarter of the column).
+const INDENT: u32 = FULL / 8;
+/// An event is moved right by at most this many steps, so its box keeps a width however many lie under it.
+const MAX_INDENT_STEPS: usize = 3;
 
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -449,7 +457,7 @@ pub struct AllDayItem {
     info: Info,
 }
 
-/// A timed event on one day of the week, in minutes from local midnight, with its column among overlapping events.
+/// A timed event on one day of the week, in minutes from local midnight, with where its box lies among overlapping events (C-1).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -458,10 +466,22 @@ pub struct TimedItem {
     day: usize,
     start_min: u32,
     end_min: u32,
-    col: usize,
-    cols: usize,
+    /// The box's left edge and width, in thousandths of the day column's width.
+    /// Absent in a cache an older version wrote, which held `col` and `cols` instead (0 and 1000, the whole column).
+    #[serde(default)]
+    left: u32,
+    #[serde(default = "full_width")]
+    width: u32,
+    /// The stacking order among the day's events: an event that starts later is above the ones it overlaps, so a higher number is drawn later.
+    /// Absent in a cache an older version wrote (0).
+    #[serde(default)]
+    layer: u32,
     #[serde(flatten)]
     info: Info,
+}
+
+fn full_width() -> u32 {
+    FULL
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -985,44 +1005,83 @@ fn is_duplicate(seen: &mut HashSet<(String, When)>, e: &RawEvent) -> bool {
     !e.ical_uid.is_empty() && !seen.insert((e.ical_uid.clone(), e.when.clone()))
 }
 
-/// Column of each span, and the number of columns of the cluster of chained overlapping spans it belongs to.
+/// Where the box of an event lies in its day (see `TimedItem`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Place {
+    left: u32,
+    width: u32,
+    layer: u32,
+}
+
+/// Where each span of one day lies, as the calendar of Google lays overlapping events out (C-1).
 /// `spans` are `(start, end)` minutes, `end` exclusive; the result follows the input order.
-fn assign_columns(spans: &[(u32, u32)]) -> Vec<(usize, usize)> {
+/// Events that overlap in a chain make a cluster, and a cluster has as many columns as it needs.
+/// An event goes into the first column whose running events all started `OVERLAY_AFTER_MIN` minutes or more before it, else into a new column: so events that start together or close together lie side by side, and one that starts later lies over the events that run in its column, moved right.
+/// A box ends at the left edge of the first column to its right that has an event during its time, else at the right edge of the day.
+fn place_events(spans: &[(u32, u32)]) -> Vec<Place> {
     let mut order: Vec<_> = (0..spans.len()).collect();
     // The longer of two events starting together goes first, so it takes the left column.
     order.sort_by_key(|&i| (spans[i].0, Reverse(spans[i].1)));
-    let mut out = vec![(0, 0); spans.len()];
-    let (mut cluster_start, mut cluster_end) = (0, 0);
-    let mut col_ends: Vec<u32> = vec![];
-    for (n, &i) in order.iter().enumerate() {
-        let (start, end) = spans[i];
-        if n > cluster_start && start >= cluster_end {
-            for &m in &order[cluster_start..n] {
-                out[m].1 = col_ends.len();
-            }
-            cluster_start = n;
-            col_ends.clear();
-        }
-        let col = col_ends
-            .iter()
-            .position(|&e| e <= start)
-            .unwrap_or(col_ends.len());
-        if col == col_ends.len() {
-            col_ends.push(end);
-        } else {
-            col_ends[col] = end;
-        }
-        out[i].0 = col;
-        cluster_end = if n == cluster_start {
-            end
-        } else {
-            cluster_end.max(end)
+    let mut out = vec![
+        Place {
+            left: 0,
+            width: FULL,
+            layer: 0
         };
-    }
-    for &m in &order[cluster_start..] {
-        out[m].1 = col_ends.len();
+        spans.len()
+    ];
+    let mut from = 0;
+    while from < order.len() {
+        let mut cluster_end = spans[order[from]].1;
+        let mut to = from + 1;
+        while to < order.len() && spans[order[to]].0 < cluster_end {
+            cluster_end = cluster_end.max(spans[order[to]].1);
+            to += 1;
+        }
+        place_cluster(spans, &order[from..to], from as u32, &mut out);
+        from = to;
     }
     out
+}
+
+/// `place_events` for one cluster: `members` are its spans in start order, and their layers count from `first_layer`.
+fn place_cluster(spans: &[(u32, u32)], members: &[usize], first_layer: u32, out: &mut [Place]) {
+    let mut columns: Vec<Vec<usize>> = vec![];
+    // The column of each member, and how many events run in it when the member starts.
+    let mut slots = Vec::with_capacity(members.len());
+    for &i in members {
+        let start = spans[i].0;
+        let fits = |c: &Vec<usize>| {
+            c.iter()
+                .all(|&j| spans[j].1 <= start || spans[j].0 + OVERLAY_AFTER_MIN <= start)
+        };
+        let col = columns.iter().position(fits).unwrap_or(columns.len());
+        if col == columns.len() {
+            columns.push(vec![]);
+        }
+        let running = columns[col].iter().filter(|&&j| spans[j].1 > start).count();
+        columns[col].push(i);
+        slots.push((col, running));
+    }
+    let n = columns.len() as u32;
+    let edge = |c: usize| c as u32 * FULL / n;
+    let step = INDENT.min(FULL / n / 4);
+    for (k, (&i, &(col, running))) in members.iter().zip(&slots).enumerate() {
+        let (start, end) = spans[i];
+        let left = edge(col) + step * running.min(MAX_INDENT_STEPS) as u32;
+        let right = (col + 1..columns.len())
+            .find(|&c| {
+                columns[c]
+                    .iter()
+                    .any(|&j| spans[j].0 < end && spans[j].1 > start)
+            })
+            .map_or(FULL, edge);
+        out[i] = Place {
+            left,
+            width: right - left,
+            layer: first_layer + k as u32,
+        };
+    }
 }
 
 /// Puts the events of the week starting `start` (a local date in `tz`) on its seven days.
@@ -1065,8 +1124,9 @@ fn build_week<Tz: TimeZone>(
                             day,
                             start_min: minutes(s.max(day_start)),
                             end_min: minutes(end.min(day_end)),
-                            col: 0,
-                            cols: 1,
+                            left: 0,
+                            width: FULL,
+                            layer: 0,
                             info: info.clone(),
                         });
                     }
@@ -1080,8 +1140,8 @@ fn build_week<Tz: TimeZone>(
             .iter()
             .map(|t| (t.start_min, t.end_min.max(t.start_min + MIN_MINUTES)))
             .collect();
-        for (t, (col, cols)) in on_day.into_iter().zip(assign_columns(&spans)) {
-            (t.col, t.cols) = (col, cols);
+        for (t, p) in on_day.into_iter().zip(place_events(&spans)) {
+            (t.left, t.width, t.layer) = (p.left, p.width, p.layer);
         }
     }
     (all_day, timed)
@@ -2976,7 +3036,7 @@ mod tests {
             (segs[0].day, segs[0].start_min, segs[0].end_min),
             (4, 600, 690)
         );
-        assert_eq!((segs[0].col, segs[0].cols), (0, 1));
+        assert_eq!((segs[0].left, segs[0].width, segs[0].layer), (0, 1000, 0));
     }
 
     #[test]
@@ -3020,40 +3080,86 @@ mod tests {
     }
 
     #[test]
-    fn overlapping_timed_events_share_the_column_width() {
+    fn overlapping_timed_events_get_their_place() {
         let a = timed("2026-10-29T15:00:00+09:00", "2026-10-29T18:00:00+09:00");
         let b = timed("2026-10-29T15:00:00+09:00", "2026-10-29T16:00:00+09:00");
         let c = timed("2026-10-29T17:00:00+09:00", "2026-10-29T17:30:00+09:00");
         let (_, segs) = build_week(&jst(), date("2026-10-25"), vec![a, b, c]);
-        let got: Vec<_> = segs.iter().map(|s| (s.col, s.cols)).collect();
-        // a takes column 0, b column 1, c reuses column 1 once b has ended.
-        assert_eq!(got, vec![(0, 2), (1, 2), (1, 2)]);
+        let got: Vec<_> = segs.iter().map(|s| (s.left, s.width, s.layer)).collect();
+        // a and b start together and lie side by side. c starts two hours after a, so it lies over a, moved right, and reaches the right edge because b is over.
+        assert_eq!(got, vec![(0, 500, 0), (500, 500, 1), (125, 875, 2)]);
+    }
+
+    fn placed(spans: &[(u32, u32)]) -> Vec<(u32, u32, u32)> {
+        place_events(spans)
+            .iter()
+            .map(|p| (p.left, p.width, p.layer))
+            .collect()
     }
 
     #[test]
-    fn assign_columns_separates_clusters() {
-        // [0,60) and [30,90) overlap; [90,120) starts as the cluster ends.
-        let got = assign_columns(&[(0, 60), (30, 90), (90, 120)]);
-        assert_eq!(got, vec![(0, 2), (1, 2), (0, 1)]);
-        assert_eq!(assign_columns(&[]), vec![]);
+    fn events_that_start_together_lie_side_by_side() {
+        let got = placed(&[(0, 180), (0, 60), (0, 60)]);
+        assert_eq!(got, vec![(0, 333, 0), (333, 333, 1), (666, 334, 2)]);
+        assert_eq!(placed(&[]), vec![]);
     }
 
     #[test]
-    fn assign_columns_keeps_input_order_and_chains_overlaps() {
-        // [0,40) overlaps [30,70) overlaps [60,100), but the first and the last do not overlap.
-        let got = assign_columns(&[(60, 100), (0, 40), (30, 70)]);
-        assert_eq!(got, vec![(0, 2), (0, 2), (1, 2)]);
+    fn an_event_starting_30_minutes_later_lies_over_and_one_starting_sooner_does_not() {
+        // [0,60) and [30,90): the second starts 30 minutes later, so it lies over the first, moved right.
+        assert_eq!(
+            placed(&[(0, 60), (30, 90)]),
+            vec![(0, 1000, 0), (125, 875, 1)]
+        );
+        // [29,90) starts one minute too soon, so it takes a column of its own.
+        assert_eq!(
+            placed(&[(0, 60), (29, 90)]),
+            vec![(0, 500, 0), (500, 500, 1)]
+        );
+    }
+
+    #[test]
+    fn clusters_are_placed_apart() {
+        // [0,60) and [30,90) overlap; [90,120) starts as the cluster ends, so it has the whole width.
+        let got = placed(&[(0, 60), (30, 90), (90, 120)]);
+        assert_eq!(got, vec![(0, 1000, 0), (125, 875, 1), (0, 1000, 2)]);
+    }
+
+    #[test]
+    fn a_later_event_reaches_the_right_edge_when_the_columns_there_are_free() {
+        // The cluster has 3 columns, but nothing runs in the other two when the fourth event starts.
+        let got = placed(&[(0, 180), (0, 60), (0, 60), (120, 180)]);
+        assert_eq!(
+            got,
+            vec![(0, 333, 0), (333, 333, 1), (666, 334, 2), (83, 917, 3)]
+        );
+    }
+
+    #[test]
+    fn places_follow_the_input_order_and_chain_overlaps() {
+        // [0,40) and [60,100) do not overlap, but both overlap [30,70), so the three are one cluster.
+        let got = placed(&[(60, 100), (0, 40), (30, 70)]);
+        assert_eq!(got, vec![(125, 875, 2), (0, 1000, 0), (125, 875, 1)]);
+    }
+
+    #[test]
+    fn the_move_to_the_right_stops_after_three_steps() {
+        let got = placed(&[(0, 300), (30, 300), (60, 300), (90, 300), (120, 300)]);
+        let lefts: Vec<_> = got.iter().map(|p| p.0).collect();
+        let widths: Vec<_> = got.iter().map(|p| p.1).collect();
+        assert_eq!(lefts, vec![0, 125, 250, 375, 375]);
+        assert_eq!(widths, vec![1000, 875, 750, 625, 625]);
     }
 
     #[test]
     fn short_events_are_laid_out_with_a_minimum_length() {
-        // A zero-length event still occupies MIN_MINUTES, so one starting inside it must not share its column.
+        // A zero-length event still occupies MIN_MINUTES, so one starting inside it must not lie over it.
         let a = timed("2026-10-29T10:00:00+09:00", "2026-10-29T10:00:00+09:00");
         let b = timed("2026-10-29T10:10:00+09:00", "2026-10-29T11:00:00+09:00");
         let (_, segs) = build_week(&jst(), date("2026-10-25"), vec![a, b]);
         assert_eq!(segs[0].end_min, 600);
-        assert_eq!((segs[0].col, segs[0].cols), (0, 2));
-        assert_eq!((segs[1].col, segs[1].cols), (1, 2));
+        assert_eq!((segs[0].left, segs[0].width), (0, 500));
+        assert_eq!((segs[1].left, segs[1].width), (500, 500));
     }
 
     #[test]
@@ -3474,6 +3580,9 @@ mod tests {
             (None, None, None)
         );
         assert_eq!((i.attendees, i.accepted), (0, 0));
+        // The cache held `col` and `cols`; the box takes the whole column until the week is read again.
+        let t = &w.timed[0];
+        assert_eq!((t.left, t.width, t.layer), (0, 1000, 0));
     }
 
     #[test]
@@ -3505,8 +3614,9 @@ mod tests {
                 day: 2,
                 start_min: 60,
                 end_min: 120,
-                col: 0,
-                cols: 1,
+                left: 0,
+                width: FULL,
+                layer: 0,
                 info: info(start, Some("#fff"), ResponseStatus::Unknown),
             }],
             needs_login: vec![],

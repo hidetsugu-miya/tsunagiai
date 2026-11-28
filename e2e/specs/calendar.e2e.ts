@@ -1080,3 +1080,44 @@ describe("calendar: events that have ended", () => {
     await expect(eventButton("Unanswered")).not.toHaveElementClass("past");
   });
 });
+
+describe("calendar: overlapping events", () => {
+  // The first two events of the week of today, 10:00 and 12:00 of one day, with the places Rust gives them: "Team sync" is on the left half and above, "Maybe lunch" is moved right and reaches the right edge.
+  const overlapWeek = (): Week => {
+    const base = weekOfToday();
+    const [sync, lunch] = base.timed;
+    return {
+      ...base,
+      timed: [
+        { ...sync, left: 0, width: 500, layer: 1 },
+        { ...lunch, left: 125, width: 875, layer: 0 },
+      ],
+    };
+  };
+  const openOverlapWeek = async () => {
+    await boot({ inbox: inbox(), calendar_week: overlapWeek() });
+    await $("#nav-calendar").click();
+    await waitForText("#cal-body .cal-name", "Team sync");
+  };
+
+  it("puts each box at the left and the width the week gives it", async () => {
+    await openOverlapWeek();
+    const styles = await browser.execute(() =>
+      [...document.querySelectorAll<HTMLElement>("#cal-body .cal-event")].map((b) => [b.querySelector(".cal-name")!.textContent, b.style.left, b.style.width]),
+    );
+    expect(styles).toContainEqual(["Team sync", "0%", "50%"]);
+    expect(styles).toContainEqual(["Maybe lunch", "12.5%", "87.5%"]);
+  });
+
+  it("draws a box of a higher layer later, so that it is above the ones it overlaps", async () => {
+    await openOverlapWeek();
+    const order = await browser.execute(() => [...document.querySelectorAll("#cal-body .cal-event .cal-name")].map((n) => n.textContent));
+    expect(order).toEqual(["Maybe lunch", "Team sync"]);
+  });
+
+  it("shows the time in a box that is wide enough, and not in one of half the day's width", async () => {
+    await openOverlapWeek();
+    await expect(eventButton("Maybe lunch").$(".cal-time")).toHaveText("12:00 - 13:00");
+    await expect(eventButton("Team sync").$(".cal-time")).not.toExist();
+  });
+});
