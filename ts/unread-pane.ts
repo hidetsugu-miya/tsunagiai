@@ -151,7 +151,7 @@ function slackItem(m: TimelineMessage): Item {
       dot.title = m.team;
       avatar.append(dot);
       const who = el("unread-who");
-      who.append(tag("b", "", m.name), span("unread-channel", `#${m.channelName}`), span("unread-time", formatDate(ms)));
+      who.append(tag("b", "", m.name), span("unread-channel", m.channelKind ? m.channelName : `#${m.channelName}`), span("unread-time", formatDate(ms)));
       const actions = [iconButton("ウォッチ", BOOKMARK_SVG, () => watchUnreadMessage(m))];
       if (readable) actions.unshift(iconButton("既読にする", CHECK_SVG, () => readUnreadMessage(m)));
       const li = line(avatar, who, text, SLACK_SVG, "スレッドを開く", () => openUnreadMessage(m), actions);

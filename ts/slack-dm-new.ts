@@ -8,6 +8,7 @@ import { closeMenu, showMenu } from "./menu.js";
 import { decorateAvatar, loadIcons } from "./slack-view.js";
 
 const MAX_USERS = 8;
+const MAX_SHOWN = 50;
 
 export function openNewDmMenu(
   anchor: HTMLElement,
@@ -67,7 +68,7 @@ export function openNewDmMenu(
     openBtn.disabled = busy || picked.length === 0;
     if (users === null) return;
     const q = search.value.trim().toLowerCase();
-    const matched = users.filter((u) => !q || u.name.toLowerCase().includes(q));
+    const matched = users.filter((u) => !q || u.name.toLowerCase().includes(q)).slice(0, MAX_SHOWN);
     if (!matched.length) {
       list.replaceChildren(tag("div", "dm-new-empty", "該当する相手がいません"));
       return;
@@ -102,9 +103,11 @@ export function openNewDmMenu(
     render();
     try {
       const opened = await invoke("slack_open_dm", { teamId, userIds: picked.map((u) => u.id) });
+      if (!pop.isConnected) return;
       closeMenu();
       onOpened(opened);
     } catch (e) {
+      if (!pop.isConnected) return;
       busy = false;
       render();
       showFailure("slack-dm-new", `DM を開けませんでした: ${e}`);

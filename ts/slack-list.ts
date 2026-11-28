@@ -444,9 +444,9 @@ function readRow(m: TimelineMessage) {
 // Whether pressing "既読にする" changes something (the pane of the footer draws it only then, A-35): its position can be set (the token may write it) and it has an unread message, or it has unread replies, or it is a watched thread that was read and has new replies.
 function readable(m: TimelineMessage) {
   if (m.unreadReplies) return true;
-  if (!m.watch) return m.unread && canWrite(m.teamId);
+  if (!m.watch) return m.unread && canWrite(m.teamId, m.channel, m.channelKind);
   if (m.watch.newReplies > 0 || m.watch.uncounted) return true;
-  return m.watch.status === "ok" && !!m.watch.unreadTo && canWrite(m.teamId);
+  return m.watch.status === "ok" && !!m.watch.unreadTo && canWrite(m.teamId, m.channel, m.channelKind);
 }
 
 // "既読にする": it reads the row without opening the thread. The position of the channel is one, so the older rows of the channel are read too (as S-8 says for a press on the row).
@@ -570,13 +570,15 @@ function moveRead(teamId: string, channel: string, to: string): Promise<unknown>
 }
 
 // Whether the token of a workspace cannot set the read position for the given conversation kind.
-const kindOf = (teamId: string, channel?: string) => (channel ? timeline?.side.find((w) => w.teamId === teamId)?.channels.find((c) => c.id === channel)?.kind : undefined);
+const kindOf = (teamId: string, channel?: string, hint?: SideChannel["kind"]) =>
+  hint ?? (channel ? timeline?.side.find((w) => w.teamId === teamId)?.channels.find((c) => c.id === channel)?.kind : undefined);
 const lacksWriteFor = (x: { scopes: string[] }, kind: SideChannel["kind"]) => {
   if (kind === "im") return x.scopes.includes("im:write");
   if (kind === "mpim") return x.scopes.includes("mpim:write");
   return x.scopes.some((s) => s === "channels:write" || s === "groups:write");
 };
-const canWrite = (teamId: string, channel?: string) => !timeline?.missing.some((x) => x.teamId === teamId && lacksWriteFor(x, kindOf(teamId, channel)));
+const canWrite = (teamId: string, channel?: string, hint?: SideChannel["kind"]) =>
+  !timeline?.missing.some((x) => x.teamId === teamId && lacksWriteFor(x, kindOf(teamId, channel, hint)));
 
 // Whether the Slack timestamp `a` is not after `b`, compared as numbers (seconds, then microseconds), not as text.
 function notAfter(a: string, b: string) {

@@ -126,7 +126,7 @@ pub struct Channel {
 }
 
 impl Channel {
-    pub(super) fn channel(id: String, name: String, private: bool) -> Self {
+    pub(super) fn plain(id: String, name: String, private: bool) -> Self {
         Self {
             id,
             name,
@@ -308,7 +308,7 @@ fn channels_of(reply: &Value) -> Vec<Channel> {
         .filter_map(|c| {
             let (id, name) = (c["id"].as_str()?, c["name"].as_str()?);
             valid_channel(id).then(|| {
-                Channel::channel(
+                Channel::plain(
                     id.to_owned(),
                     name.to_owned(),
                     c["is_private"].as_bool().unwrap_or(false),
@@ -1236,14 +1236,22 @@ pub async fn slack_remove_workspace(
     Ok(list)
 }
 
-/// All the channels the token's user is in, page by page.
-async fn fetch_channels(http: &reqwest::Client, token: &str) -> Result<Vec<Channel>, String> {
+/// All the channels the token's user is in, page by page, with the `x-oauth-scopes` header when Slack returned one.
+async fn fetch_channels(
+    http: &reqwest::Client,
+    token: &str,
+) -> Result<(Vec<Channel>, Option<String>), String> {
     let mut all = vec![];
     let mut cursor = None;
+    let mut scopes = None;
     // shortcut: channels past the last page are left out; raise CHANNEL_PAGES if a workspace has more.
     for _ in 0..CHANNEL_PAGES {
         let params = channels_params(cursor.as_deref());
-        let reply = call(http, token, "users.conversations", Payload::Form(&params)).await?;
+        let (reply, got_scopes) =
+            call_scoped(http, token, "users.conversations", Payload::Form(&params))
+                .await
+                .map_err(|e| e.message)?;
+        scopes = scopes.or(got_scopes);
         all.extend(channels_of(&reply));
         cursor = next_cursor(&reply);
         if cursor.is_none() {
@@ -1251,25 +1259,38 @@ async fn fetch_channels(http: &reqwest::Client, token: &str) -> Result<Vec<Chann
         }
     }
     all.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(all)
+    Ok((all, scopes))
 }
 
 /// Pages of DM conversations read from `users.conversations` (at most 2 pages = 400 DMs).
 const DM_PAGES: usize = 2;
 
 /// Fetches open/unread DMs and group DMs for a workspace when the token has `im:read` / `mpim:read`.
-/// A `missing_scope` or transient failure returns an empty list so channel reads are never broken.
+/// Uses 0 retries so a 429 never stalls the timeline; a `missing_scope` or transient failure returns an empty list so channel reads are never broken.
 async fn fetch_dms(
     http: &reqwest::Client,
+    cache: &TimelineCache,
+    team_id: &str,
     token: &str,
     types: &str,
 ) -> (Vec<Channel>, Option<String>) {
+    if cache.rate_limited(team_id) {
+        return (Vec::new(), None);
+    }
     let mut all = Vec::new();
     let mut cursor = None;
     let mut scopes = None;
     for _ in 0..DM_PAGES {
         let params = conversations_params(types, cursor.as_deref());
-        match call_scoped(http, token, "users.conversations", Payload::Form(&params)).await {
+        match call_scoped_retrying(
+            http,
+            token,
+            "users.conversations",
+            Payload::Form(&params),
+            0,
+        )
+        .await
+        {
             Ok((reply, got_scopes)) => {
                 scopes = scopes.or(got_scopes);
                 all.extend(dms_of(&reply));
@@ -1278,7 +1299,12 @@ async fn fetch_dms(
                     break;
                 }
             }
-            Err(_) => break,
+            Err(e) => {
+                if let Some(wait) = e.rate_limited {
+                    cache.limit(team_id, wait);
+                }
+                break;
+            }
         }
     }
     (all, scopes)
@@ -1296,28 +1322,47 @@ async fn resolve_dm_names(
         return;
     }
     let own = own_user_id(http, cache, team_id, token).await;
-    // Fetch member IDs for group DMs (MPIM) concurrently.
-    let mpim_ids: Vec<String> = dms
-        .iter()
-        .filter(|d| d.kind == Some(ConversationKind::Mpim))
-        .map(|d| d.id.clone())
-        .collect();
+    // Fetch member IDs for group DMs (MPIM) concurrently without retrying 429s.
+    let mpim_ids: Vec<String> = if cache.rate_limited(team_id) {
+        Vec::new()
+    } else {
+        dms.iter()
+            .filter(|d| d.kind == Some(ConversationKind::Mpim))
+            .map(|d| d.id.clone())
+            .collect()
+    };
     let member_jobs = mpim_ids.into_iter().map(|cid| {
-        let (http, token) = (http.clone(), token.to_owned());
+        let (http, token, cache, team_id) = (
+            http.clone(),
+            token.to_owned(),
+            Arc::clone(cache),
+            team_id.to_owned(),
+        );
         async move {
             let form = [("channel", cid.clone()), ("limit", "20".to_owned())];
-            let got = call(&http, &token, "conversations.members", Payload::Form(&form))
-                .await
-                .ok()
-                .and_then(|reply| {
-                    reply["members"].as_array().map(|arr| {
-                        arr.iter()
-                            .filter_map(Value::as_str)
-                            .filter(|u| valid_channel(u))
-                            .map(str::to_owned)
-                            .collect::<Vec<_>>()
-                    })
-                });
+            let got = match call_scoped_retrying(
+                &http,
+                &token,
+                "conversations.members",
+                Payload::Form(&form),
+                0,
+            )
+            .await
+            {
+                Ok((reply, _)) => reply["members"].as_array().map(|arr| {
+                    arr.iter()
+                        .filter_map(Value::as_str)
+                        .filter(|u| valid_channel(u))
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>()
+                }),
+                Err(e) => {
+                    if let Some(wait) = e.rate_limited {
+                        cache.limit(&team_id, wait);
+                    }
+                    None
+                }
+            };
             (cid, got)
         }
     });
@@ -1602,8 +1647,8 @@ pub async fn slack_channels(
     Ok(list.into_iter().filter(|c| !c.is_dm()).collect())
 }
 
-/// A workspace's channel list and when it was read, by `team_id`.
-type ChannelCache = Mutex<HashMap<String, (Instant, Vec<Channel>)>>;
+/// A workspace's channel list and when a full fetch completed (`None` when seeded only by a single DM upsert), by `team_id`.
+type ChannelCache = Mutex<HashMap<String, (Option<Instant>, Vec<Channel>)>>;
 
 /// The channel list kept for the workspace, if it is younger than `CHANNELS_TTL`.
 fn fresh_channels(cache: &ChannelCache, team_id: &str) -> Option<Vec<Channel>> {
@@ -1611,7 +1656,7 @@ fn fresh_channels(cache: &ChannelCache, team_id: &str) -> Option<Vec<Channel>> {
         .lock()
         .unwrap()
         .get(team_id)
-        .filter(|(at, _)| channels_fresh(at.elapsed()))
+        .filter(|(at, _)| at.is_some_and(|t| channels_fresh(t.elapsed())))
         .map(|(_, list)| list.clone())
 }
 
@@ -1623,10 +1668,13 @@ async fn fetch_and_keep_channels(
     team_id: &str,
     token: &str,
 ) -> Result<Vec<Channel>, String> {
-    let mut list = fetch_channels(http, token).await?;
+    let (mut list, ch_scopes) = fetch_channels(http, token).await?;
+    if let Some(s) = ch_scopes {
+        timeline.put_scopes(team_id, &s);
+    }
     let remembered_scopes = timeline.scopes(team_id);
     if let Some(dm_types) = dm_types_for_scopes(remembered_scopes.as_deref()) {
-        let (raw_dms, dm_scopes) = fetch_dms(http, token, dm_types).await;
+        let (raw_dms, dm_scopes) = fetch_dms(http, timeline, team_id, token, dm_types).await;
         if let Some(s) = dm_scopes {
             timeline.put_scopes(team_id, &s);
         }
@@ -1643,7 +1691,7 @@ async fn fetch_and_keep_channels(
     cache
         .lock()
         .unwrap()
-        .insert(team_id.to_owned(), (Instant::now(), list.clone()));
+        .insert(team_id.to_owned(), (Some(Instant::now()), list.clone()));
     Ok(list)
 }
 
@@ -3560,11 +3608,12 @@ fn kept_channel(cache: &ChannelCache, team_id: &str, channel: &str) -> Option<Ch
 }
 
 /// Inserts or updates one conversation in the workspace's `ChannelCache` (used when Socket Mode receives a DM event for a closed DM or when `slack_open_dm` opens a DM).
+/// When the workspace has no full fetch yet, inserts `None` as the fetch timestamp so `fresh_channels` still performs the full fetch.
 fn upsert_kept_channel(cache: &ChannelCache, team_id: &str, channel: Channel) {
     let mut map = cache.lock().unwrap();
     let entry = map
         .entry(team_id.to_owned())
-        .or_insert_with(|| (Instant::now(), Vec::new()));
+        .or_insert_with(|| (None, Vec::new()));
     if let Some(slot) = entry.1.iter_mut().find(|c| c.id == channel.id) {
         *slot = channel;
     } else {
@@ -4996,7 +5045,7 @@ async fn check_watched(
             None => {}
             Some(Ok((reply, _))) => {
                 let channel = kept_channel(channels, &team, &key.1)
-                    .unwrap_or_else(|| Channel::channel(key.1.clone(), key.1.clone(), false));
+                    .unwrap_or_else(|| Channel::plain(key.1.clone(), key.1.clone(), false));
                 let own = cache.own_user(&team);
                 let read = watch_read_of(&reply, &team, &channel, &key.2, own.as_deref());
                 cache.record_watch(key, Some(read));
@@ -5074,7 +5123,7 @@ async fn check_threads(
             None => {}
             Some(Ok((reply, _))) => {
                 let channel = kept_channel(channels, &team, &key.1)
-                    .unwrap_or_else(|| Channel::channel(key.1.clone(), key.1.clone(), false));
+                    .unwrap_or_else(|| Channel::plain(key.1.clone(), key.1.clone(), false));
                 let own = cache.own_user(&team).unwrap_or_default();
                 let read = thread_read_of(&reply, &team, &channel, &key.2, &own);
                 cache.record_thread(key, count, read);
@@ -6019,7 +6068,7 @@ pub async fn slack_watch(
                 log_failure(command, &team_id, read_error(e, &workspace.team))
             })?;
             let named = kept_channel(&state.channels, &team_id, &channel)
-                .unwrap_or_else(|| Channel::channel(channel.clone(), channel.clone(), false));
+                .unwrap_or_else(|| Channel::plain(channel.clone(), channel.clone(), false));
             let own = state.timeline.own_user(&team_id);
             let read = watch_read_of(&reply, &team_id, &named, &ts, own.as_deref());
             let WatchRead::Thread { latest_reply, .. } = &read else {
@@ -6891,8 +6940,8 @@ mod tests {
         assert_eq!(
             channels_of(&page),
             vec![
-                Channel::channel("C1".into(), "general".into(), false),
-                Channel::channel("G4".into(), "secret".into(), true),
+                Channel::plain("C1".into(), "general".into(), false),
+                Channel::plain("G4".into(), "secret".into(), true),
             ]
         );
         assert_eq!(next_cursor(&page), Some("abc".into()));
@@ -7515,7 +7564,7 @@ mod tests {
     }
 
     fn channel(id: &str) -> Channel {
-        Channel::channel(id.into(), format!("name {id}"), false)
+        Channel::plain(id.into(), format!("name {id}"), false)
     }
 
     fn raw(channel: &str, ts: &str) -> Raw {
@@ -7547,7 +7596,7 @@ mod tests {
     #[test]
     fn the_side_menu_lists_the_channels_by_name_without_the_hidden_ones() {
         let named =
-            |id: &str, name: &str, private: bool| Channel::channel(id.into(), name.into(), private);
+            |id: &str, name: &str, private: bool| Channel::plain(id.into(), name.into(), private);
         let list = vec![
             named("C1", "release", false),
             named("G2", "Ops", true),
@@ -8247,7 +8296,7 @@ mod tests {
         let channels: ChannelCache = Mutex::new(HashMap::from([(
             "T1".to_owned(),
             (
-                Instant::now(),
+                Some(Instant::now()),
                 vec![channel("C1"), channel("C2"), channel("C3")],
             ),
         )]));
@@ -8312,7 +8361,7 @@ mod tests {
         );
         let cache: ChannelCache = Mutex::new(HashMap::from([(
             "T1".to_owned(),
-            (Instant::now(), vec![channel("C1")]),
+            (Some(Instant::now()), vec![channel("C1")]),
         )]));
         assert_eq!(
             kept_channel_name(&cache, "T1", "C1").as_deref(),
@@ -9315,7 +9364,7 @@ mod tests {
         let cache = TimelineCache::default();
         let channels: ChannelCache = Mutex::new(HashMap::from([(
             "T1".to_owned(),
-            (Instant::now(), vec![channel("C1")]),
+            (Some(Instant::now()), vec![channel("C1")]),
         )]));
         let workspaces = vec![workspace("T1", "https://one.slack.com/")];
         cache.record_watch(
@@ -9912,7 +9961,10 @@ mod tests {
     fn channels_of_t1(ids: &[&str]) -> ChannelCache {
         Mutex::new(HashMap::from([(
             "T1".to_owned(),
-            (Instant::now(), ids.iter().map(|c| channel(c)).collect()),
+            (
+                Some(Instant::now()),
+                ids.iter().map(|c| channel(c)).collect(),
+            ),
         )]))
     }
 

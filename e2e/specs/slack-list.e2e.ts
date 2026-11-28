@@ -1711,7 +1711,7 @@ describe("slack list: the side menu (S-19)", () => {
       await openList(timeline(unreadSample(), { side: sideSample() }));
       await waitForCount("#slack-feed .feed-row", 3);
     };
-    const all = ["button:*未読メッセージ 3", "button:ウォッチ", "line", "group:Example Team", "unread:hash:dev 3", "read:lock:ops", "read:hash:announce", "group:Lakeside", "read:hash:random"];
+    const all = ["button:*未読メッセージ 3", "button:ウォッチ", "line", "group:Example Team", "unread:hash:dev 3", "read:lock:ops", "read:hash:announce", "sub:ダイレクトメッセージ", "group:Lakeside", "read:hash:random", "sub:ダイレクトメッセージ"];
 
     it("is a button with aria-expanded and a mark that turns; pressing it folds the workspace to its unread channels, and pressing it again brings the others back", async () => {
       await openSide();

@@ -28,8 +28,8 @@ use super::{
     blocking, call, call_scoped_retrying, check_threads, check_watched, dm_from_value,
     is_bot_token, kept_channel, kept_channel_name, load_hidden, load_watched, load_workspaces,
     lookup_users, needing_lookup, own_user_id, people_of, raw_of, refresh_read_marks,
-    resolve_dm_names, token_key, token_of, upsert_kept_channel, valid_channel, valid_ts, Channel,
-    Hidden, Payload, Raw, SlackState, TimelineCache, WatchKey, Watched, Workspace, HISTORY_LIMIT,
+    resolve_dm_names, token_key, token_of, upsert_kept_channel, valid_channel, valid_ts, Hidden,
+    Payload, Raw, SlackState, TimelineCache, WatchKey, Watched, Workspace, HISTORY_LIMIT,
     USER_LOOKUPS,
 };
 use crate::{
@@ -100,6 +100,7 @@ fn valid_app_token(token: &str) -> bool {
 struct ChannelEvent {
     channel: String,
     thread_ts: Option<String>,
+    is_dm: bool,
 }
 
 /// What to read again for a channel: the channel's messages, and the threads that had an event.
@@ -107,6 +108,7 @@ struct ChannelEvent {
 struct Refresh {
     channel: String,
     threads: Vec<String>,
+    is_dm: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -191,9 +193,13 @@ fn event_of(payload: &Value, team_id: &str) -> Option<ChannelEvent> {
     .filter_map(Value::as_str)
     .find(|t| valid_ts(t))
     .map(str::to_owned);
+    let is_dm = event["channel_type"]
+        .as_str()
+        .is_some_and(|kind| matches!(kind, "im" | "mpim"));
     Some(ChannelEvent {
         channel: channel.to_owned(),
         thread_ts,
+        is_dm,
     })
 }
 
@@ -211,6 +217,7 @@ impl Pending {
             .find(|(_, r)| r.channel == event.channel)
         {
             Some((_, refresh)) => {
+                refresh.is_dm |= event.is_dm;
                 if let Some(thread) = event.thread_ts {
                     if !refresh.threads.contains(&thread) {
                         refresh.threads.push(thread);
@@ -222,6 +229,7 @@ impl Pending {
                 Refresh {
                     channel: event.channel,
                     threads: event.thread_ts.into_iter().collect(),
+                    is_dm: event.is_dm,
                 },
             )),
         }
@@ -250,6 +258,7 @@ fn merge_refreshes(refreshes: Vec<Refresh>) -> Vec<Refresh> {
     for refresh in refreshes {
         match merged.iter_mut().find(|m| m.channel == refresh.channel) {
             Some(kept) => {
+                kept.is_dm |= refresh.is_dm;
                 for thread in refresh.threads {
                     if !kept.threads.contains(&thread) {
                         kept.threads.push(thread);
@@ -323,14 +332,8 @@ fn keep_readable(
     waiting
         .into_iter()
         .filter(|r| {
-            name_to_read(
-                hidden,
-                team_id,
-                &r.channel,
-                listed(&r.channel),
-                rate_limited,
-            )
-            .is_some()
+            let name = listed(&r.channel).or_else(|| r.is_dm.then(|| r.channel.clone()));
+            name_to_read(hidden, team_id, &r.channel, name, rate_limited).is_some()
         })
         .collect()
 }
@@ -811,7 +814,7 @@ async fn refresh_channel(
         return false;
     }
     let existing = kept_channel(&state.channels, team_id, &request.channel);
-    if existing.is_none() && !request.channel.starts_with(['D', 'G']) {
+    if existing.is_none() && !request.is_dm {
         return false;
     }
     let token = match token_of(team_id).await {
@@ -827,12 +830,26 @@ async fn refresh_channel(
         Some(ch) => ch,
         None => {
             // A closed DM/MPIM received a new message: inspect it once and add it to the cache so it appears in the side menu and unread list (S-31).
-            let form = [("channel", request.channel.clone())];
-            let Ok((reply, _)) =
-                call_scoped_retrying(http, &token, "conversations.info", Payload::Form(&form), 0)
-                    .await
-            else {
+            if cache.info_limited(team_id) {
                 return false;
+            }
+            let form = [("channel", request.channel.clone())];
+            let reply = match call_scoped_retrying(
+                http,
+                &token,
+                "conversations.info",
+                Payload::Form(&form),
+                0,
+            )
+            .await
+            {
+                Ok((reply, _)) => reply,
+                Err(e) => {
+                    if let Some(wait) = e.rate_limited {
+                        cache.limit_info(team_id, wait);
+                    }
+                    return false;
+                }
             };
             let Some(mut dm) = dm_from_value(&reply["channel"]) else {
                 return false;
@@ -975,10 +992,7 @@ async fn refresh_worker(app: &AppHandle, team_id: &str, mut rx: UnboundedReceive
             std::mem::take(&mut waiting),
             &hidden,
             team_id,
-            |channel| {
-                kept_channel_name(&state.channels, team_id, channel)
-                    .or_else(|| channel.starts_with(['D', 'G']).then(|| channel.to_owned()))
-            },
+            |channel| kept_channel_name(&state.channels, team_id, channel),
             state.timeline.rate_limited(team_id),
         );
         let (ready, rest, next_wake) = budget.admit(std::mem::take(&mut waiting), Instant::now());
@@ -1141,6 +1155,15 @@ mod tests {
         ChannelEvent {
             channel: channel.into(),
             thread_ts: thread.map(str::to_owned),
+            is_dm: false,
+        }
+    }
+
+    fn dm_event(channel: &str, thread: Option<&str>) -> ChannelEvent {
+        ChannelEvent {
+            channel: channel.into(),
+            thread_ts: thread.map(str::to_owned),
+            is_dm: true,
         }
     }
 
@@ -1148,6 +1171,7 @@ mod tests {
         Refresh {
             channel: channel.into(),
             threads: threads.iter().map(|t| (*t).to_owned()).collect(),
+            is_dm: false,
         }
     }
 
@@ -1287,7 +1311,11 @@ mod tests {
         }));
         assert_eq!(event_of(&changed, "T1"), Some(event("G9", Some("1.2"))));
         // A direct message has an ID of its own kind, and is not in the list of channels.
-        let list = vec![Channel::channel("C1".into(), "dev".into(), false)];
+        let list = vec![crate::slack::Channel::plain(
+            "C1".into(),
+            "dev".into(),
+            false,
+        )];
         assert_eq!(name_in(&list, "C1").as_deref(), Some("dev"));
         assert_eq!(name_in(&list, "D1"), None);
         assert_eq!(name_in(&list, "C2"), None);
@@ -1305,11 +1333,11 @@ mod tests {
         };
         assert_eq!(
             event_of(&message(Some("im")), "T1"),
-            Some(event("C1", None))
+            Some(dm_event("C1", None))
         );
         assert_eq!(
             event_of(&message(Some("mpim")), "T1"),
-            Some(event("C1", None))
+            Some(dm_event("C1", None))
         );
         assert_eq!(event_of(&message(Some("app_home")), "T1"), None);
         assert_eq!(event_of(&message(Some("channel")), "T2"), None);
@@ -1683,7 +1711,7 @@ mod tests {
 
     #[test]
     fn the_threads_to_check_take_their_count_from_the_history_just_read() {
-        let channel = Channel::channel("C1".into(), "dev".into(), false);
+        let channel = crate::slack::Channel::plain("C1".into(), "dev".into(), false);
         let parent = |ts: &str, replies: u32| {
             raw_from(
                 "T1",
