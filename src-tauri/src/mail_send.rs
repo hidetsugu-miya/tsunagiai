@@ -17,6 +17,7 @@ use ts_rs::TS;
 
 use crate::auth::{config_dir, Auth};
 use crate::gmail::{log_failure, send_json_refreshing, thread_url, ApiError};
+use crate::mail;
 use crate::mail_address::split_address;
 use crate::markdown_patch::is_empty_paragraph;
 
@@ -676,7 +677,7 @@ pub async fn send_mail(
     mail: OutgoingMail,
 ) -> Result<Option<bool>, String> {
     let dir = config_dir(&app).map_err(|e| log_failure("send_mail", &account, e))?;
-    send(&dir, &auth, &account, &mail)
+    mail::send(&dir, &auth, &account, &mail)
         .await
         .map_err(|e| log_failure("send_mail", &account, e))
 }

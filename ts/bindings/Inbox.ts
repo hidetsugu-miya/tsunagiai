@@ -11,6 +11,7 @@ needsLogin: Array<string>,
  */
 failed: { [key in string]: string }, 
 /**
- * Per account, the mailbox history ID as of the full load; the starting point of `sync`.
+ * Per account, where the next `sync` starts, as of the full load: a string that only the account's own backend reads
+ * (Gmail: the mailbox history ID). The screen keeps it and gives it back as it is.
  */
 historyIds: { [key in string]: string }, };

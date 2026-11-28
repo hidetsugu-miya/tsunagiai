@@ -20,7 +20,7 @@ use tsunagiai_lib::{
     formation_server::{self, PushRequest},
     gmail, identity,
     lsp::{self, LspServerSettings},
-    lsp_plugin, orca_preview, preview_plugin,
+    lsp_plugin, mail, orca_preview, preview_plugin,
     screen_bridge::{self, Request as ScreenRequest},
     skills::{self, Skill, SkillScreen},
     todoist,
@@ -908,7 +908,7 @@ impl Tsunagiai {
     async fn get_thread(&self, Parameters(a): Parameters<ThreadArgs>) -> Result<String, String> {
         // A text consumer gets no image data, so nothing is ever kept in this cache.
         let images = gmail::InlineCache::default();
-        let thread = gmail::fetch_thread(&self.dir, &self.auth, &images, &a.account, &a.id, true)
+        let thread = mail::fetch_thread(&self.dir, &self.auth, &images, &a.account, &a.id, true)
             .await
             .map_err(|e| gmail::log_failure("get_thread", &a.account, e))?
             .ok_or_else(|| relogin(&a.account))?;
@@ -920,7 +920,7 @@ impl Tsunagiai {
         annotations(idempotent_hint = true, destructive_hint = false)
     )]
     async fn archive(&self, Parameters(a): Parameters<ThreadArgs>) -> Result<String, String> {
-        gmail::archive_thread(&self.dir, &self.auth, &a.account, &a.id)
+        mail::archive_thread(&self.dir, &self.auth, &a.account, &a.id)
             .await
             .map_err(|e| gmail::log_failure("archive", &a.account, e))?
             .ok_or_else(|| relogin(&a.account))?;
@@ -932,7 +932,7 @@ impl Tsunagiai {
         annotations(idempotent_hint = true, destructive_hint = false)
     )]
     async fn set_read(&self, Parameters(a): Parameters<SetReadArgs>) -> Result<String, String> {
-        gmail::set_thread_read(&self.dir, &self.auth, &a.account, &a.id, a.read)
+        mail::set_thread_read(&self.dir, &self.auth, &a.account, &a.id, a.read)
             .await
             .map_err(|e| gmail::log_failure("set_read", &a.account, e))?
             .ok_or_else(|| relogin(&a.account))?;
@@ -949,7 +949,7 @@ impl Tsunagiai {
         annotations(destructive_hint = true)
     )]
     async fn trash(&self, Parameters(a): Parameters<ThreadArgs>) -> Result<String, String> {
-        gmail::trash_thread(&self.dir, &self.auth, &a.account, &a.id)
+        mail::trash_thread(&self.dir, &self.auth, &a.account, &a.id)
             .await
             .map_err(|e| gmail::log_failure("trash", &a.account, e))?
             .ok_or_else(|| relogin(&a.account))?;

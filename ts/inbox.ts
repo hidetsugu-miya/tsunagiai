@@ -78,7 +78,7 @@ async function undoRemove() {
 let loadSeq = 0;
 // Loads in flight; a sync stays out of their way.
 let loading = 0;
-// Per account, the mailbox history ID as of the last load or sync: where the next sync starts.
+// Per account, the sync position as of the last load or sync: where the next sync starts. A string only the account's own backend reads; it is kept and given back as it is.
 export const historyIds = new Map<string, string>();
 
 // Set when a load answers: until then the list shows the loading note.

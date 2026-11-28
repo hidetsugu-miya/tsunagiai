@@ -19,6 +19,7 @@ use tokio::task::JoinSet;
 #[cfg(test)]
 use ts_rs::TS;
 
+use crate::accounts;
 use crate::auth::{config_dir, Auth};
 use crate::disk_cache;
 use crate::image_senders::authenticated;
@@ -26,6 +27,7 @@ use crate::images::{
     cid_refs, image_mime, inline_data_uri, references_to, replace_cids, run_limited, wanted_images,
     CidRef, InlineImage, UriCache, FETCH_TIMEOUT, MAX_INLINE_IMAGES,
 };
+use crate::mail::{self, Backend};
 use crate::mail_address::{recipients_label, reply_choices, split_address, ReplyChoices};
 
 mod held;
@@ -798,7 +800,8 @@ pub struct Inbox {
     needs_login: Vec<String>,
     /// Accounts whose threads are missing because loading them failed, with the error to show.
     failed: HashMap<String, String>,
-    /// Per account, the mailbox history ID as of the full load; the starting point of `sync`.
+    /// Per account, where the next `sync` starts, as of the full load: a string that only the account's own backend reads
+    /// (Gmail: the mailbox history ID). The screen keeps it and gives it back as it is.
     history_ids: HashMap<String, String>,
 }
 
@@ -956,17 +959,28 @@ async fn account_threads(
 /// Threads of every account merged; accounts needing login or failing to load are listed, not fatal.
 /// `command` names the caller in the failure log.
 pub async fn load_inbox(dir: &Path, auth: &Auth, command: &str) -> Result<Inbox, String> {
-    let accounts = auth
-        .accounts(dir)
-        .map_err(|e| log_failure(command, "-", e))?;
+    let listed = accounts::load_accounts(dir)
+        .map_err(|e| log_failure(command, "-", e))?
+        .unwrap_or_default();
+    let accounts: Vec<String> = listed.iter().map(|a| a.address.clone()).collect();
     let (mut lists, mut needs_login, mut failed, mut history_ids) =
         (Vec::new(), Vec::new(), HashMap::new(), HashMap::new());
     // The accounts are read at once (each has its own limit at Gmail), and judged in the order of `accounts`.
-    let handles: Vec<_> = accounts
+    let handles: Vec<_> = listed
         .iter()
         .map(|account| {
-            let (dir, auth, account) = (dir.to_owned(), auth.clone(), account.clone());
-            tokio::spawn(async move { account_threads(&dir, &auth, &account, MAX_RETRIES).await })
+            let (dir, auth, address, kind) = (
+                dir.to_owned(),
+                auth.clone(),
+                account.address.clone(),
+                account.kind,
+            );
+            tokio::spawn(async move {
+                match mail::backend(kind) {
+                    Ok(Backend::Gmail) => account_threads(&dir, &auth, &address, MAX_RETRIES).await,
+                    Err(e) => Err(e.into()),
+                }
+            })
         })
         .collect();
     for (account, handle) in accounts.iter().zip(handles) {
@@ -1139,11 +1153,13 @@ pub enum Sync {
     Changed {
         threads: Vec<ThreadItem>,
         removed: Vec<String>,
+        /// Where the next `sync` starts (see `Inbox::history_ids`).
         history_id: String,
     },
     /// The history was too old or too large: `threads` is the whole inbox of the account.
     Reloaded {
         threads: Vec<ThreadItem>,
+        /// Where the next `sync` starts (see `Inbox::history_ids`).
         history_id: String,
     },
     NeedsLogin,
@@ -1246,7 +1262,7 @@ impl SyncState {
     }
 }
 
-/// Differential sync of one account from `start_history_id` (see `Inbox::history_ids` and `Sync`).
+/// Differential sync of one account from `start_history_id`, the position of `Inbox::history_ids` or of the last `Sync` (see `Sync`).
 #[tauri::command]
 pub async fn sync(
     app: AppHandle,
@@ -1265,7 +1281,11 @@ pub async fn sync(
         return Ok(Sync::Unchanged);
     }
     let dir = config_dir(&app).map_err(|e| log_failure("sync", &account, e))?;
-    match sync_account(&dir, &auth, &account, &start_history_id).await {
+    let synced = match mail::backend_of(&dir, &account) {
+        Ok(Backend::Gmail) => sync_account(&dir, &auth, &account, &start_history_id).await,
+        Err(e) => Err(e.into()),
+    };
+    match synced {
         Ok(result) => {
             state.0.lock().unwrap().remove(&account);
             Ok(result)
@@ -1349,7 +1369,7 @@ async fn fresh_thread(
     let dir = config_dir(app).map_err(|e| log_failure(command, account, e))?;
     // Read before the fetch: an answer that arrives after the account was removed meanwhile is not held.
     let since = held.generation();
-    let detail = fetch_thread(&dir, auth, cache, account, id, false)
+    let detail = mail::fetch_thread(&dir, auth, cache, account, id, false)
         .await
         .map_err(|e| log_failure(command, account, e))?
         .map(Arc::new);
@@ -1446,10 +1466,13 @@ pub async fn thread_images(
     images: Vec<PendingImage>,
 ) -> Result<HashMap<String, HashMap<String, Arc<str>>>, String> {
     let dir = config_dir(&app).map_err(|e| log_failure("thread_images", &account, e))?;
+    let backend =
+        mail::backend_of(&dir, &account).map_err(|e| log_failure("thread_images", &account, e))?;
     let images = pending.confirm(Instant::now(), &account, &id, &images);
-    Ok(uris_by_message(
-        fetch_missing(&dir, &auth, &cache, &account, images).await,
-    ))
+    let fetched = match backend {
+        Backend::Gmail => fetch_missing(&dir, &auth, &cache, &account, images).await,
+    };
+    Ok(uris_by_message(fetched))
 }
 
 /// Moves the thread to the trash (recoverable in Gmail). `Ok(None)` means `account` must log in again.
@@ -1475,7 +1498,7 @@ pub async fn trash(
     id: String,
 ) -> Result<Option<bool>, String> {
     let dir = config_dir(&app).map_err(|e| log_failure("trash", &account, e))?;
-    trash_thread(&dir, &auth, &account, &id)
+    mail::trash_thread(&dir, &auth, &account, &id)
         .await
         .map_err(|e| log_failure("trash", &account, e))
 }
@@ -1514,7 +1537,7 @@ pub async fn archive(
     id: String,
 ) -> Result<Option<bool>, String> {
     let dir = config_dir(&app).map_err(|e| log_failure("archive", &account, e))?;
-    archive_thread(&dir, &auth, &account, &id)
+    mail::archive_thread(&dir, &auth, &account, &id)
         .await
         .map_err(|e| log_failure("archive", &account, e))
 }
@@ -1541,14 +1564,7 @@ pub async fn untrash(
     id: String,
 ) -> Result<Option<bool>, String> {
     let dir = config_dir(&app).map_err(|e| log_failure("untrash", &account, e))?;
-    // threads.untrash may not bring INBOX back, so put it on again.
-    let done = untrash_thread(&dir, &auth, &account, &id)
-        .await
-        .map_err(|e| log_failure("untrash", &account, e))?;
-    if done.is_none() {
-        return Ok(None);
-    }
-    unarchive_thread(&dir, &auth, &account, &id)
+    mail::untrash_thread(&dir, &auth, &account, &id)
         .await
         .map_err(|e| log_failure("untrash", &account, e))
 }
@@ -1587,7 +1603,7 @@ pub async fn unarchive(
     id: String,
 ) -> Result<Option<bool>, String> {
     let dir = config_dir(&app).map_err(|e| log_failure("unarchive", &account, e))?;
-    unarchive_thread(&dir, &auth, &account, &id)
+    mail::unarchive_thread(&dir, &auth, &account, &id)
         .await
         .map_err(|e| log_failure("unarchive", &account, e))
 }
@@ -1632,7 +1648,7 @@ pub async fn set_read(
     read: bool,
 ) -> Result<Option<bool>, String> {
     let dir = config_dir(&app).map_err(|e| log_failure("set_read", &account, e))?;
-    set_thread_read(&dir, &auth, &account, &id, read)
+    mail::set_thread_read(&dir, &auth, &account, &id, read)
         .await
         .map_err(|e| log_failure("set_read", &account, e))
 }

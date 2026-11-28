@@ -169,8 +169,8 @@ impl Auth {
 
     /// Revokes the account's grant at Google (a failure is logged, not fatal), then forgets its token, its listing and the data kept of it.
     async fn remove(&self, dir: &Path, account: &str) -> Result<(), String> {
-        let list = self.accounts(dir)?;
-        if !is_registered(&list, account) {
+        let list = accounts::load_accounts(dir)?.unwrap_or_default();
+        if !list.iter().any(|a| a.address == account) {
             return Err("登録されていないアカウントです".into());
         }
         if let Some(token) = blocking_read(account).await? {
@@ -182,7 +182,7 @@ impl Auth {
         self.access.lock().unwrap().remove(account);
         // Under the cache lock, so a save that began before cannot write this account's data back after the delete.
         disk_cache::exclusive(|| {
-            accounts::save(dir, &accounts::without_account(list, account))?;
+            accounts::save_accounts(dir, &accounts::without_account(list, account))?;
             // The kept mail list and calendar hold this account's subjects and events.
             [gmail::CACHE_FILE, calendar::CACHE_FILE]
                 .into_iter()
@@ -195,7 +195,7 @@ impl Auth {
     /// Returns the logged-in account's email address.
     async fn login(&self, app: &AppHandle, login_hint: Option<&str>) -> Result<String, String> {
         let dir = config_dir(app)?;
-        let existing = self.accounts(&dir)?;
+        let existing = accounts::load_accounts(&dir)?.unwrap_or_default();
         let client = load_client(&dir)?;
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -246,7 +246,10 @@ impl Auth {
         let access = access_token_of(res)?;
         let email = self.fetch_email(&access).await?;
         keychain::write(KEYRING_SERVICE, &email, &refresh_token)?;
-        accounts::save(&dir, &accounts::with_account(existing, &email))?;
+        accounts::save_accounts(
+            &dir,
+            &accounts::with_account(existing, accounts::Account::gmail(&email)),
+        )?;
         self.access.lock().unwrap().insert(email.clone(), access);
         Ok(email)
     }
