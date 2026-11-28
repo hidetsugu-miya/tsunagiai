@@ -7,20 +7,28 @@ use crate::{
     accounts::{self, AccountKind},
     auth::Auth,
     gmail::{self, ApiError, InlineCache, ThreadDetail},
+    icloud,
     mail_send::{self, OutgoingMail},
 };
 
-/// What runs the mail operations of an account. A kind with no backend yet has no variant: `backend` refuses it.
+/// What runs the mail operations of an account. A kind with no backend has no variant: `backend` refuses it.
+/// An iCloud account reads its mail (M-13, the list and the thread); what else it does comes with the later parts, and each entry below refuses it until then.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
     Gmail,
+    Icloud,
 }
 
 pub fn backend(kind: AccountKind) -> Result<Backend, String> {
     match kind {
         AccountKind::Gmail => Ok(Backend::Gmail),
-        AccountKind::Icloud => Err("iCloud のメールにはまだ対応していません".into()),
+        AccountKind::Icloud => Ok(Backend::Icloud),
     }
+}
+
+/// What an entry says of an operation that an iCloud account cannot do yet.
+fn icloud_unsupported(what: &str) -> ApiError {
+    format!("iCloud のメールの{what}にはまだ対応していません").into()
 }
 
 /// The backend of `account`, by the kind `accounts.json` gives it.
@@ -39,6 +47,7 @@ pub async fn fetch_thread(
 ) -> Result<Option<ThreadDetail>, ApiError> {
     match backend_of(dir, account)? {
         Backend::Gmail => gmail::fetch_thread(dir, auth, cache, account, id, prefer_plain).await,
+        Backend::Icloud => icloud::fetch_thread(account, id, prefer_plain).await,
     }
 }
 
@@ -50,6 +59,7 @@ pub async fn trash_thread(
 ) -> Result<Option<bool>, ApiError> {
     match backend_of(dir, account)? {
         Backend::Gmail => gmail::trash_thread(dir, auth, account, id).await,
+        Backend::Icloud => Err(icloud_unsupported("削除")),
     }
 }
 
@@ -71,6 +81,7 @@ pub async fn untrash_thread(
             }
             gmail::unarchive_thread(dir, auth, account, id).await
         }
+        Backend::Icloud => Err(icloud_unsupported("取り消し")),
     }
 }
 
@@ -82,6 +93,7 @@ pub async fn archive_thread(
 ) -> Result<Option<bool>, ApiError> {
     match backend_of(dir, account)? {
         Backend::Gmail => gmail::archive_thread(dir, auth, account, id).await,
+        Backend::Icloud => Err(icloud_unsupported("アーカイブ")),
     }
 }
 
@@ -93,6 +105,7 @@ pub async fn unarchive_thread(
 ) -> Result<Option<bool>, ApiError> {
     match backend_of(dir, account)? {
         Backend::Gmail => gmail::unarchive_thread(dir, auth, account, id).await,
+        Backend::Icloud => Err(icloud_unsupported("取り消し")),
     }
 }
 
@@ -105,6 +118,7 @@ pub async fn set_thread_read(
 ) -> Result<Option<bool>, ApiError> {
     match backend_of(dir, account)? {
         Backend::Gmail => gmail::set_thread_read(dir, auth, account, id, read).await,
+        Backend::Icloud => Err(icloud_unsupported("既読の変更")),
     }
 }
 
@@ -116,6 +130,7 @@ pub async fn send(
 ) -> Result<Option<bool>, ApiError> {
     match backend_of(dir, account)? {
         Backend::Gmail => mail_send::send(dir, auth, account, mail).await,
+        Backend::Icloud => Err(icloud_unsupported("送信")),
     }
 }
 
@@ -140,13 +155,9 @@ mod tests {
     }
 
     #[test]
-    fn gmail_has_a_backend_and_icloud_is_refused_in_japanese() {
+    fn each_kind_has_its_backend() {
         assert_eq!(backend(AccountKind::Gmail), Ok(Backend::Gmail));
-        let err = backend(AccountKind::Icloud).unwrap_err();
-        assert!(
-            err.contains("iCloud") && err.contains("対応していません"),
-            "{err}"
-        );
+        assert_eq!(backend(AccountKind::Icloud), Ok(Backend::Icloud));
     }
 
     #[test]
@@ -157,7 +168,7 @@ mod tests {
         with_icloud(&dir);
         assert_eq!(backend_of(&dir, "a@example.com"), Ok(Backend::Gmail));
         assert_eq!(backend_of(&dir, "x@example.com"), Ok(Backend::Gmail));
-        assert!(backend_of(&dir, "b@icloud.com").is_err());
+        assert_eq!(backend_of(&dir, "b@icloud.com"), Ok(Backend::Icloud));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -172,13 +183,13 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// Every entry refuses an iCloud account before it builds a request: no token is read and nothing is sent.
+    /// Every operation that an iCloud account cannot do yet is refused before it builds a request: no token is read and nothing is sent.
+    /// (`fetch_thread` is not here: it reads the keychain and asks iCloud.)
     #[test]
-    fn every_entry_refuses_an_icloud_account() {
+    fn the_operations_an_icloud_account_cannot_do_yet_are_refused() {
         let dir = temp_dir("entries");
         with_icloud(&dir);
         let auth = Auth::new();
-        let cache = InlineCache::default();
         let mail = OutgoingMail {
             to: vec!["a@example.com".into()],
             cc: vec![],
@@ -194,10 +205,9 @@ mod tests {
             .build()
             .unwrap();
         let (d, a, who, id) = (dir.as_path(), &auth, "b@icloud.com", "t1");
-        let refused = |e: ApiError| e.to_string().contains("iCloud");
-        assert!(rt
-            .block_on(fetch_thread(d, a, &cache, who, id, true))
-            .is_err_and(refused));
+        let refused = |e: ApiError| {
+            e.to_string().contains("iCloud") && e.to_string().contains("まだ対応していません")
+        };
         assert!(rt.block_on(trash_thread(d, a, who, id)).is_err_and(refused));
         assert!(rt
             .block_on(untrash_thread(d, a, who, id))

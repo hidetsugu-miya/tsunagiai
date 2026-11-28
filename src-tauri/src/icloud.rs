@@ -1,9 +1,14 @@
 //! iCloud mail accounts (M-13): adding one (the address and an App-specific password, tried with an IMAP LOGIN before anything is kept), the state of each, and removing one.
 //! iCloud has no mail API and no OAuth for other apps, so the account is IMAP at `imap.mail.me.com:993` (TLS) with the App-specific password.
 //! The password is in the keychain (service `jp.mysis.tsunagiai.icloud`, the address as the user), never in `accounts.json`, a log or an error text; the row in `accounts.json` has the kind `icloud`.
-//! What an iCloud account reads and does with its mail comes with the later parts of M-13: here the account is only added, checked and removed.
+//! Reading the mail of an account is `read.rs` (the inbox as threads and one thread, with `message.rs` turning a mail into what the screen draws and `threading.rs` joining mails into threads);
+//! what else an iCloud account does with its mail comes with the later parts of M-13.
 
 use std::{fmt, path::Path, sync::Arc, time::Duration};
+
+mod message;
+mod read;
+mod threading;
 
 use rustls::{pki_types::ServerName, ClientConfig};
 use rustls_platform_verifier::BuilderVerifierExt;
@@ -13,13 +18,13 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpStream,
 };
-use tokio_rustls::TlsConnector;
+use tokio_rustls::{client::TlsStream, TlsConnector};
 
 use crate::{
     accounts::{self, Account, AccountKind},
     auth::config_dir,
     disk_cache,
-    gmail::log_failure,
+    gmail::{log_failure, ApiError, ThreadDetail, ThreadItem},
     keychain,
 };
 
@@ -28,6 +33,11 @@ const PORT: u16 = 993;
 const KEYRING_SERVICE: &str = "jp.mysis.tsunagiai.icloud";
 /// The connection, the TLS handshake and the login together.
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(20);
+/// What one read of the mail may take after the login: the list reads up to 50 mails.
+const READ_TIMEOUT: Duration = Duration::from_secs(60);
+/// What the list says of an account whose kept password iCloud refuses: the Google card knows only Google accounts, so the words name the iCloud tab.
+pub const PASSWORD_REFUSED: &str =
+    "App 用パスワードが無効です。設定の iCloud タブで入れ直してください";
 
 /// An iCloud account of the settings' iCloud card.
 #[derive(Serialize, Debug, PartialEq, Eq)]
@@ -59,8 +69,12 @@ fn failed(what: &str, e: impl fmt::Display) -> LoginError {
     LoginError::Failed(format!("iCloud {what}: {e}"))
 }
 
-/// Logs in over an open stream and logs out. The password is only in the LOGIN command.
-async fn login_over<S>(stream: S, user: &str, password: &str) -> Result<(), LoginError>
+/// Logs in over an open stream. The password is only in the LOGIN command.
+async fn login_session<S>(
+    stream: S,
+    user: &str,
+    password: &str,
+) -> Result<async_imap::Session<S>, LoginError>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + fmt::Debug,
 {
@@ -70,11 +84,20 @@ where
         Ok(None) => return Err(failed("との通信に失敗しました", "接続が閉じられました")),
         Err(e) => return Err(failed("に接続できません", e)),
     }
-    let mut session = match client.login(user, password).await {
-        Ok(session) => session,
-        Err((async_imap::error::Error::No(_), _)) => return Err(LoginError::Rejected),
-        Err((e, _)) => return Err(failed("との通信に失敗しました", e)),
-    };
+    match client.login(user, password).await {
+        Ok(session) => Ok(session),
+        Err((async_imap::error::Error::No(_), _)) => Err(LoginError::Rejected),
+        Err((e, _)) => Err(failed("との通信に失敗しました", e)),
+    }
+}
+
+/// Logs in over an open stream and logs out: the tests' way to try a login on a stream of their own.
+#[cfg(test)]
+async fn login_over<S>(stream: S, user: &str, password: &str) -> Result<(), LoginError>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + fmt::Debug,
+{
+    let mut session = login_session(stream, user, password).await?;
     let _ = session.logout().await;
     Ok(())
 }
@@ -88,17 +111,29 @@ fn tls_config() -> Result<ClientConfig, rustls::Error> {
         .with_no_client_auth())
 }
 
-async fn login_tls(user: &str, password: &str) -> Result<(), LoginError> {
+async fn tls_stream() -> Result<TlsStream<TcpStream>, LoginError> {
     let config = tls_config().map_err(|e| failed("への接続を準備できません", e))?;
     let tcp = TcpStream::connect((HOST, PORT))
         .await
         .map_err(|e| failed("に接続できません", e))?;
     let name = ServerName::try_from(HOST).map_err(|e| failed("に接続できません", e))?;
-    let tls = TlsConnector::from(Arc::new(config))
+    TlsConnector::from(Arc::new(config))
         .connect(name, tcp)
         .await
-        .map_err(|e| failed("に接続できません", e))?;
-    login_over(tls, user, password).await
+        .map_err(|e| failed("に接続できません", e))
+}
+
+async fn open_tls(
+    user: &str,
+    password: &str,
+) -> Result<async_imap::Session<TlsStream<TcpStream>>, LoginError> {
+    login_session(tls_stream().await?, user, password).await
+}
+
+async fn login_tls(user: &str, password: &str) -> Result<(), LoginError> {
+    let mut session = open_tls(user, password).await?;
+    let _ = session.logout().await;
+    Ok(())
 }
 
 async fn login(address: &str, password: &str) -> Result<(), LoginError> {
@@ -109,6 +144,58 @@ async fn login(address: &str, password: &str) -> Result<(), LoginError> {
                 "iCloud への接続がタイムアウトしました".into(),
             ))
         })
+}
+
+/// A logged-in session with the kept password. `Ok(None)` means that password is not kept or iCloud refuses it: it must be entered again in the iCloud tab.
+async fn open(address: &str) -> Result<Option<async_imap::Session<TlsStream<TcpStream>>>, String> {
+    let owned = address.to_owned();
+    let Some(password) = blocking(move || keychain::read(KEYRING_SERVICE, &owned)).await? else {
+        return Ok(None);
+    };
+    match tokio::time::timeout(LOGIN_TIMEOUT, open_tls(address, &password)).await {
+        Ok(Ok(session)) => Ok(Some(session)),
+        Ok(Err(LoginError::Rejected)) => Ok(None),
+        Ok(Err(LoginError::Failed(message))) => Err(message),
+        Err(_) => Err("iCloud への接続がタイムアウトしました".into()),
+    }
+}
+
+/// Logs out of a session that has been read; what the server says to that no longer matters.
+async fn close(mut session: async_imap::Session<TlsStream<TcpStream>>) {
+    let _ = tokio::time::timeout(Duration::from_secs(5), session.logout()).await;
+}
+
+fn read_timeout() -> ApiError {
+    "iCloud からの読み込みがタイムアウトしました".into()
+}
+
+/// The threads of the newest mails of the inbox of `address` (as many as Gmail's list holds), newest first.
+/// `Ok(None)` means the password must be entered again.
+pub async fn inbox_threads(address: &str) -> Result<Option<Vec<ThreadItem>>, ApiError> {
+    let Some(mut session) = open(address).await? else {
+        return Ok(None);
+    };
+    let read = tokio::time::timeout(READ_TIMEOUT, read::inbox_threads(&mut session, address)).await;
+    close(session).await;
+    Ok(Some(read.map_err(|_| read_timeout())??))
+}
+
+/// The thread `id` of `address` (an ID that `inbox_threads` gave) as the screen draws it. `Ok(None)` means the password must be entered again.
+pub async fn fetch_thread(
+    address: &str,
+    id: &str,
+    prefer_plain: bool,
+) -> Result<Option<ThreadDetail>, ApiError> {
+    let key = threading::key_of(id).ok_or("スレッド ID が不正です")?;
+    let Some(mut session) = open(address).await? else {
+        return Ok(None);
+    };
+    let read = tokio::time::timeout(READ_TIMEOUT, read::thread_mails(&mut session, &key)).await;
+    close(session).await;
+    let mails = read.map_err(|_| read_timeout())??;
+    read::thread(id, address, &mails, prefer_plain)
+        .map(Some)
+        .ok_or_else(|| "スレッドが見つかりません".into())
 }
 
 /// The address as it is kept: trimmed and in lower case (an address has one entry however it is typed), with one `@` between a name and a domain.

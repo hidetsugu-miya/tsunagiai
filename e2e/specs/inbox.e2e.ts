@@ -369,6 +369,52 @@ describe("inbox", () => {
     });
   });
 
+  describe("an iCloud account (M-13)", () => {
+    const icloud = "me@icloud.com";
+    // The ID of an iCloud thread is the hexadecimal form of the Message-ID of its root mail.
+    const lunch = { ...thread("6c756e6368406578616d706c65", "Lunch on Friday", true), account: icloud };
+
+    it("lists the threads of an iCloud account with the Google ones and opens one by its own account and ID", async () => {
+      await boot({ inbox: inbox([thread("t1", "First unread", true), lunch]) });
+      await waitForCount("#unread-threads li", 2);
+      const open = await mock("thread", threadDetail("Lunch on Friday", "Noon at the usual place?", true));
+      await rowOf("unread-threads", "Lunch on Friday").$(".subject").click();
+      await waitForCalls(open);
+      expect(await callsOf(open)).toEqual([{ account: icloud, id: lunch.id }]);
+      await expect($("#thread-subject")).toHaveText("Lunch on Friday");
+      await expect($("#messages .plain")).toHaveText("Noon at the usual place?");
+    });
+
+    it("lists the threads and not the login screen for an owner with an iCloud account and no Google account", async () => {
+      await boot({ inbox: { ...inbox([lunch]), accounts: [], historyIds: {} }, icloud_accounts: [{ address: icloud }] });
+      await waitForCount("#unread-threads li", 1);
+      await expect($("#unread-threads")).toHaveText(expect.stringContaining("Lunch on Friday"));
+      await expect($("#login")).not.toBeDisplayed();
+    });
+
+    it("shows the login screen when no account of either kind is left", async () => {
+      await boot({ inbox: { ...inbox([]), accounts: [], historyIds: {} }, icloud_accounts: [] });
+      await expect($("#login")).toBeDisplayed();
+    });
+
+    it("syncs the Google accounts only: the load gives an iCloud account no history ID", async () => {
+      await boot({ inbox: inbox([thread("t1", "First unread", true), lunch]) });
+      await waitForCount("#unread-threads li", 2);
+      const sync = await mock("sync", { kind: "unchanged" });
+      await syncRound();
+      await waitForCalls(sync);
+      expect(await callsOf(sync)).toEqual([{ account, startHistoryId: "100" }]);
+    });
+
+    it("says in the card of the list what an iCloud account could not load, and still lists the Google threads", async () => {
+      const refused = "App 用パスワードが無効です。設定の iCloud タブで入れ直してください";
+      await boot({ inbox: { ...inbox(), failed: { [icloud]: refused } } });
+      await waitForCount("#unread-threads li", 2);
+      await waitForCard(refused);
+      expect(await count(CARDS)).toBe(1);
+    });
+  });
+
   describe("the state of the list (M-1)", () => {
     const failing = { ...inbox(), failed: { [account]: "quota" } };
     // Fails the list's load while its rows are drawn: a sync that needs a login makes the list load again.

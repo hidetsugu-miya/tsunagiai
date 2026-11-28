@@ -22,6 +22,7 @@ use ts_rs::TS;
 use crate::accounts;
 use crate::auth::{config_dir, Auth};
 use crate::disk_cache;
+use crate::icloud;
 use crate::image_senders::authenticated;
 use crate::images::{
     cid_refs, image_mime, inline_data_uri, references_to, replace_cids, run_limited, wanted_images,
@@ -130,19 +131,19 @@ struct Header {
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadItem {
-    id: String,
+    pub(crate) id: String,
     /// Email address of the account the thread belongs to.
-    account: String,
-    from: String,
+    pub(crate) account: String,
+    pub(crate) from: String,
     /// The name of `from` (`Name <addr>`); empty when it has none.
-    from_name: String,
+    pub(crate) from_name: String,
     /// The address of `from`.
-    from_address: String,
-    subject: String,
-    snippet: String,
+    pub(crate) from_address: String,
+    pub(crate) subject: String,
+    pub(crate) snippet: String,
     #[cfg_attr(test, ts(type = "number"))]
-    date_ms: i64,
-    unread: bool,
+    pub(crate) date_ms: i64,
+    pub(crate) unread: bool,
 }
 
 fn header_ref<'a>(payload: &'a Payload, name: &str) -> Option<&'a str> {
@@ -188,15 +189,15 @@ impl ThreadItem {
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadDetail {
-    subject: String,
+    pub(crate) subject: String,
     /// Some message of the thread carries the UNREAD label.
-    unread: bool,
-    messages: Vec<MessageDetail>,
+    pub(crate) unread: bool,
+    pub(crate) messages: Vec<MessageDetail>,
     /// Who a reply to the thread goes to, by the account that reads it (M-10).
-    reply: ReplyChoices,
+    pub(crate) reply: ReplyChoices,
     /// The `cid:` images left as references in the bodies because they have to be fetched; `thread_images` takes them back.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pending_images: Vec<PendingImage>,
+    pub(crate) pending_images: Vec<PendingImage>,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -205,25 +206,25 @@ pub struct ThreadDetail {
 #[serde(rename_all = "camelCase")]
 pub struct MessageDetail {
     /// Gmail's message ID. The frontend finds the message's images by it.
-    id: String,
-    from: String,
+    pub(crate) id: String,
+    pub(crate) from: String,
     /// The name of `from` (`Name <addr>`); empty when it has none.
-    from_name: String,
+    pub(crate) from_name: String,
     /// The address of `from`.
-    from_address: String,
+    pub(crate) from_address: String,
     /// The To header as sent; empty when the message has none.
-    to: String,
+    pub(crate) to: String,
     /// The To line the header shows: "To 自分" when the account that reads the thread is a recipient, else the recipients' names; empty with no To.
-    to_label: String,
+    pub(crate) to_label: String,
     #[cfg_attr(test, ts(type = "number"))]
-    date_ms: i64,
+    pub(crate) date_ms: i64,
     /// Gmail's own summary of the message, HTML-escaped.
-    snippet: String,
+    pub(crate) snippet: String,
     /// `body` is HTML when true, plain text otherwise.
-    html: bool,
-    body: String,
+    pub(crate) html: bool,
+    pub(crate) body: String,
     /// Gmail's own `Authentication-Results` vouch for the sender: see `image_senders::authenticated`.
-    authenticated: bool,
+    pub(crate) authenticated: bool,
 }
 
 /// Gmail's format=full usually re-encodes text parts to UTF-8 while keeping the original
@@ -959,16 +960,17 @@ async fn account_threads(
 /// Threads of every account merged; accounts needing login or failing to load are listed, not fatal.
 /// `command` names the caller in the failure log.
 pub async fn load_inbox(dir: &Path, auth: &Auth, command: &str) -> Result<Inbox, String> {
-    // An iCloud account has no backend here yet (M-13): the inbox lists the Gmail accounts only, so no row or failure of an iCloud address reaches the Google card.
-    let listed: Vec<_> = accounts::load_accounts(dir)
+    // The threads of an iCloud account (M-13) are in the list, but the account is not in `accounts`, `needs_login` or `history_ids`: those are the Google accounts, and the screen draws the Google card and the calendar from them.
+    // What an iCloud account could not load is in `failed`, which the list shows whatever the account.
+    let listed = accounts::load_accounts(dir)
         .map_err(|e| log_failure(command, "-", e))?
-        .unwrap_or_default()
-        .into_iter()
+        .unwrap_or_default();
+    let accounts: Vec<String> = listed
+        .iter()
         .filter(|a| a.kind == accounts::AccountKind::Gmail)
+        .map(|a| a.address.clone())
         .collect();
-    let accounts: Vec<String> = listed.iter().map(|a| a.address.clone()).collect();
-    let (mut lists, mut needs_login, mut failed, mut history_ids) =
-        (Vec::new(), Vec::new(), HashMap::new(), HashMap::new());
+    let mut gathered = Gathered::default();
     // The accounts are read at once (each has its own limit at Gmail), and judged in the order of `accounts`.
     let handles: Vec<_> = listed
         .iter()
@@ -982,33 +984,73 @@ pub async fn load_inbox(dir: &Path, auth: &Auth, command: &str) -> Result<Inbox,
             tokio::spawn(async move {
                 match mail::backend(kind) {
                     Ok(Backend::Gmail) => account_threads(&dir, &auth, &address, MAX_RETRIES).await,
+                    Ok(Backend::Icloud) => icloud::inbox_threads(&address).await.map(|found| {
+                        // No history ID: the sync of an iCloud account is a later part of M-13.
+                        found.map(|threads| AccountInbox {
+                            threads,
+                            history_id: String::new(),
+                        })
+                    }),
                     Err(e) => Err(e.into()),
                 }
             })
         })
         .collect();
-    for (account, handle) in accounts.iter().zip(handles) {
+    for (listed, handle) in listed.iter().zip(handles) {
         let result = handle
             .await
             .map_err(|e| log_failure(command, "-", e.to_string()))?;
-        match result {
-            Ok(Some(loaded)) => {
-                lists.push(loaded.threads);
-                history_ids.insert(account.clone(), loaded.history_id);
-            }
-            Ok(None) => needs_login.push(account.clone()),
-            Err(e) => {
-                failed.insert(account.clone(), log_failure(command, account, e));
-            }
-        }
+        gathered.place(command, listed.kind, &listed.address, result);
     }
     Ok(Inbox {
         accounts,
-        threads: merge_inboxes(lists),
-        needs_login,
-        failed,
-        history_ids,
+        threads: merge_inboxes(gathered.lists),
+        needs_login: gathered.needs_login,
+        failed: gathered.failed,
+        history_ids: gathered.history_ids,
     })
+}
+
+/// What the accounts' loads gave, sorted into the fields of `Inbox`.
+#[derive(Default)]
+struct Gathered {
+    lists: Vec<Vec<ThreadItem>>,
+    needs_login: Vec<String>,
+    failed: HashMap<String, String>,
+    history_ids: HashMap<String, String>,
+}
+
+impl Gathered {
+    /// Puts the answer of one account where it belongs. The threads of every account go to the list, but only a Google account has a history ID and can need a login:
+    /// those fields are the Google accounts', which the screen draws the Google card and the calendar from, and a Google login would not mend an iCloud password.
+    /// An iCloud account whose password is refused is a failure of the list, with words that name the iCloud tab.
+    fn place(
+        &mut self,
+        command: &str,
+        kind: accounts::AccountKind,
+        account: &str,
+        result: Result<Option<AccountInbox>, ApiError>,
+    ) {
+        let google = kind == accounts::AccountKind::Gmail;
+        match result {
+            Ok(Some(loaded)) => {
+                self.lists.push(loaded.threads);
+                if google {
+                    self.history_ids
+                        .insert(account.to_owned(), loaded.history_id);
+                }
+            }
+            Ok(None) if google => self.needs_login.push(account.to_owned()),
+            Ok(None) => {
+                self.failed
+                    .insert(account.to_owned(), icloud::PASSWORD_REFUSED.to_owned());
+            }
+            Err(e) => {
+                self.failed
+                    .insert(account.to_owned(), log_failure(command, account, e));
+            }
+        }
+    }
 }
 
 /// The file that earlier versions kept the last load in. Nothing writes or reads it now: `inbox` deletes what is left, and `auth` deletes it with an account.
@@ -1287,6 +1329,8 @@ pub async fn sync(
     let dir = config_dir(&app).map_err(|e| log_failure("sync", &account, e))?;
     let synced = match mail::backend_of(&dir, &account) {
         Ok(Backend::Gmail) => sync_account(&dir, &auth, &account, &start_history_id).await,
+        // The screen syncs the accounts that have a history ID, and `load_inbox` gives an iCloud account none.
+        Ok(Backend::Icloud) => Err("iCloud の自動同期にはまだ対応していません".into()),
         Err(e) => Err(e.into()),
     };
     match synced {
@@ -1475,6 +1519,8 @@ pub async fn thread_images(
     let images = pending.confirm(Instant::now(), &account, &id, &images);
     let fetched = match backend {
         Backend::Gmail => fetch_missing(&dir, &auth, &cache, &account, images).await,
+        // The images of an iCloud mail are in its own parts and inlined at once: `thread` leaves none to fetch.
+        Backend::Icloud => Vec::new(),
     };
     Ok(uris_by_message(fetched))
 }
@@ -2586,17 +2632,89 @@ mod tests {
             (Some("reloaded"), Some("8"))
         );
     }
-    /// An iCloud account has no backend in the inbox yet: its address is not in the list and no failure is reported for it.
-    #[tokio::test]
-    async fn the_inbox_lists_gmail_accounts_only() {
-        let dir =
-            std::env::temp_dir().join(format!("tsunagiai-test-{}-inbox-kinds", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        accounts::save_accounts(&dir, &[accounts::Account::icloud("me@icloud.com")]).unwrap();
-        let inbox = load_inbox(&dir, &Auth::new(), "inbox").await.unwrap();
-        assert!(
-            inbox.accounts.is_empty() && inbox.failed.is_empty() && inbox.needs_login.is_empty()
+    fn loaded(id: &str, history_id: &str) -> Result<Option<AccountInbox>, ApiError> {
+        Ok(Some(AccountInbox {
+            threads: vec![item_at(id, "x@example.com", 1)],
+            history_id: history_id.into(),
+        }))
+    }
+
+    /// The threads of an iCloud account are in the list, and nothing of it reaches the fields that the Google card and the calendar read.
+    #[test]
+    fn an_icloud_account_adds_threads_but_no_history_id_and_no_login() {
+        let mut g = Gathered::default();
+        g.place(
+            "inbox",
+            accounts::AccountKind::Gmail,
+            "g@example.com",
+            loaded("g1", "100"),
         );
-        std::fs::remove_dir_all(&dir).unwrap();
+        g.place(
+            "inbox",
+            accounts::AccountKind::Icloud,
+            "me@icloud.com",
+            loaded("i1", ""),
+        );
+        assert_eq!(g.lists.len(), 2);
+        assert_eq!(
+            g.history_ids,
+            HashMap::from([("g@example.com".to_owned(), "100".to_owned())])
+        );
+        assert!(g.needs_login.is_empty() && g.failed.is_empty());
+    }
+
+    #[test]
+    fn a_refused_icloud_password_is_a_failure_of_the_list_and_a_refused_google_login_is_a_login() {
+        let mut g = Gathered::default();
+        g.place(
+            "inbox",
+            accounts::AccountKind::Gmail,
+            "g@example.com",
+            Ok(None),
+        );
+        g.place(
+            "inbox",
+            accounts::AccountKind::Icloud,
+            "me@icloud.com",
+            Ok(None),
+        );
+        assert_eq!(g.needs_login, ["g@example.com"]);
+        assert_eq!(
+            g.failed,
+            HashMap::from([(
+                "me@icloud.com".to_owned(),
+                icloud::PASSWORD_REFUSED.to_owned()
+            )])
+        );
+        assert!(g.lists.is_empty() && g.history_ids.is_empty());
+    }
+
+    #[test]
+    fn a_failed_load_of_either_kind_is_a_failure_with_its_message() {
+        let mut g = Gathered::default();
+        g.place(
+            "inbox",
+            accounts::AccountKind::Icloud,
+            "me@icloud.com",
+            Err("down".into()),
+        );
+        g.place(
+            "inbox",
+            accounts::AccountKind::Gmail,
+            "g@example.com",
+            Err("quota".into()),
+        );
+        assert_eq!(g.failed["me@icloud.com"], "down");
+        assert_eq!(g.failed["g@example.com"], "quota");
+        assert!(g.needs_login.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_inbox_with_no_accounts_is_empty() {
+        let dir =
+            std::env::temp_dir().join(format!("tsunagiai-test-{}-inbox-none", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let inbox = load_inbox(&dir, &Auth::new(), "inbox").await.unwrap();
+        assert!(inbox.accounts.is_empty() && inbox.threads.is_empty() && inbox.failed.is_empty());
     }
 }
