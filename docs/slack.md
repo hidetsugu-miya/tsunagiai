@@ -7,7 +7,7 @@ title: Slack
 ## ワークスペースを追加する
 
 ワークスペースごとに、社内向けの Slack アプリを作ります。
-User Token Scopes に `chat:write`・`channels:read`・`groups:read`・`channels:history`・`groups:history`・`im:history`・`mpim:history` を付けてワークスペースにインストールし（Slack の一覧に送信者の名前とアイコンを出すには `users:read`、添付画像を出すには `files:read`、ユーザーグループへのメンションを名前（`@ハンドル`）で出すには `usergroups:read`、リアクションのカスタム絵文字を画像で出すには `emoji:read`、リアクションの付け外しには `reactions:write`、一覧で開いたメッセージや、チャンネルの見出しの「既読にする」を Slack 側でも既読にするには `channels:write` と `groups:write` も付けます。なくても、ほかの機能は使えます。`channels:write` と `groups:write` は、Slack の仕様でチャンネルの管理権限も含みますが、つなぎAIは既読位置の更新（`conversations.mark`）にしか使いません）、発行された User OAuth Token（`xoxp-` で始まる）を、サイドメニュー下部の設定にある「Slack」タブへ貼り付けます。
+User Token Scopes に `chat:write`・`channels:read`・`groups:read`・`channels:history`・`groups:history`・`im:history`・`mpim:history` を付けてワークスペースにインストールし（Slack の一覧に送信者の名前とアイコンを出すには `users:read`、添付画像を出すには `files:read`、ユーザーグループへのメンションを名前（`@ハンドル`）で出すには `usergroups:read`、リアクションのカスタム絵文字を画像で出すには `emoji:read`、リアクションの付け外しには `reactions:write`、ダイレクトメッセージ・グループ DM の一覧には `im:read`・`mpim:read`、DM の既読同期と新規作成には `im:write`・`mpim:write`、一覧で開いたメッセージや、チャンネルの見出しの「既読にする」を Slack 側でも既読にするには `channels:write` と `groups:write` も付けます。なくても、ほかの機能は使えます。`channels:write` と `groups:write` は、Slack の仕様でチャンネルの管理権限も含みますが、つなぎAIは既読位置の更新（`conversations.mark`）にしか使いません）、発行された User OAuth Token（`xoxp-` で始まる）を、サイドメニュー下部の設定にある「Slack」タブへ貼り付けます。
 トークンは Slack に確かめてから、OS の資格情報の保管場所（macOS ではキーチェーン、Windows では資格情報マネージャー）に保存します。
 ワークスペースはいくつでも追加でき、同じワークスペースのトークンを貼り直すと置き換わります。
 ワークスペースの一覧は、`app_config_dir` の `slack-workspaces.json` に保存されます。
@@ -155,7 +155,7 @@ Slack の一覧は、既定では 1〜2 分ごとの読み直しで更新しま�
 
 1. [api.slack.com/apps](https://api.slack.com/apps) で、そのワークスペースの User OAuth Token を取ったアプリを開きます。
 2. 「Socket Mode」を開き、「Enable Socket Mode」を有効にします。
-3. 「Event Subscriptions」を有効にし、「Subscribe to events on behalf of users」に `message.channels`（パブリックチャンネル）と `message.groups`（プライベートチャンネル）を足して保存します。アプリの再インストールを求められたら、します（`channels:history` と `groups:history` は、上の「ワークスペースを追加する」のスコープに含まれています）。
+3. 「Event Subscriptions」を有効にし、「Subscribe to events on behalf of users」に `message.channels`（パブリックチャンネル）・`message.groups`（プライベートチャンネル）・`message.im`（ダイレクトメッセージ）・`message.mpim`（グループ DM）を足して保存します。アプリの再インストールを求められたら、します（`channels:history`・`groups:history`・`im:history`・`mpim:history` は、上の「ワークスペースを追加する」のスコープに含まれています）。
 4. 「Basic Information」の「App-Level Tokens」で、`connections:write` のスコープを付けたトークンを作ります。`xapp-` で始まります。
 5. 設定の「Slack」タブの「リアルタイム更新」で、ワークスペースを選び、トークンを貼って「登録」を押します。
 

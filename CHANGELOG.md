@@ -3,6 +3,10 @@
 The newest version comes first.
 The project was named cookup until v0.14.6, and cookapps until v0.80.0.
 
+## v0.106.0
+
+S-31: Slack 画面でダイレクトメッセージ（1対1 DM・自分宛 DM・グループ DM）を扱えるようにした（#1596、#1597、#1598）。各ワークスペースのチャンネルの下に折りたためる「ダイレクトメッセージ」の小見出しと「＋」ボタンを置き、Slack で開いている DM と未読のある DM を並べる（1対1 はアバター、自分宛は「(自分)」、グループ DM は人数バッジ）。DM の未読も「未読メッセージ」一覧・未読バッジ（Slack ボタン・Dock・フッター通知）と Socket Mode のリアルタイム更新（`message.im`・`message.mpim`）に統合し、非表示とウォッチにも対応した（メール右ペインからの投稿先はチャンネルのまま）。「＋」からワークスペースのメンバーを検索・選択（最大 8 人）して新規 DM やグループ DM を開ける。設定の「Slack」タブとヒントに `im:read`・`mpim:read`・`im:write`・`mpim:write` と `message.im`・`message.mpim` を足した。
+
 ## v0.105.0
 
 M-13: iCloud のメールのアドレスを、Gmail のアカウントと並べて追加できるようにした（#1573）。設定に「iCloud」タブを足し（設定のタブは 14 個になった）、アドレスと App 用パスワード（account.apple.com で作る）を入れて「追加」を押す。iCloud にログインできたときだけ、パスワードを OS のキーチェーンに保存する。行には「接続中」「入れ直しが必要」「確認できません」を出し、「入れ直す」と「解除」が使える。Gmail として登録したアドレスと、iCloud として登録したアドレスでの Google のログインは断る。
