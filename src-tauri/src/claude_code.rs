@@ -39,13 +39,8 @@ const SCRIPT_WITH_TOOLS_FILE: &str = "start-with-tools.sh";
 /// #1074: the script and the MCP config of a pane in the `auto` permission mode.
 const SCRIPT_AUTO_FILE: &str = "start-auto.sh";
 const MCP_CALENDAR_FILE: &str = "mcp-calendar.json";
-/// The script and the MCP config of the pane of a Todo's draft, which starts in `auto` too (S-18, #1148).
-const SCRIPT_AUTO_TODO_DRAFT_FILE: &str = "start-auto-todo-draft.sh";
-const MCP_TODO_DRAFT_FILE: &str = "mcp-todo-draft.json";
 /// The argument that makes `tsunagiai-mcp` offer the tools of the calendar pane only (`CALENDAR_TOOLS`, C-6).
 const CALENDAR_MCP_ARG: &str = "--calendar";
-/// The argument that makes `tsunagiai-mcp` offer the tools of the Todo draft pane only (`TODO_DRAFT_TOOLS`, S-18).
-const TODO_DRAFT_MCP_ARG: &str = "--todo-draft";
 const FORMATION_CLAUDE_MD_FILE: &str = "CLAUDE.md";
 /// The text of the orchestrator's `CLAUDE.md`: its role and its steps, with `{name}` where its own name goes. It holds nothing that comes from outside.
 const FORMATION_CLAUDE_MD: &str = include_str!("formation_claude.md");
@@ -87,8 +82,7 @@ pub enum ClaudeCodeEvent {
 }
 
 /// How the pane's Claude Code asks for a tool (#1074): `manual` asks the owner for every tool that writes, `auto` runs the tools with no question, so it has the tools of the calendar only and none of Claude Code's own.
-/// `auto-todo-draft` (#1148) is the pane of a Todo's draft's: the tools of that screen only (it has no tool that posts, so no question is set), and the model Sonnet at the effort high.
-/// The screen names one of the three, and any other text is refused when the argument is read.
+/// The screen names one of the two, and any other text is refused when the argument is read.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -97,8 +91,6 @@ pub enum ClaudeCodePermissionMode {
     #[default]
     Manual,
     Auto,
-    #[serde(rename = "auto-todo-draft")]
-    AutoTodoDraft,
 }
 
 /// A saved skill that the pane's Claude Code is given with `--plugin-dir` (A-32).
@@ -145,21 +137,11 @@ fn launch_script(claude: &Path, mcp_config: &Path, builtin_tools: bool) -> Strin
 
 /// The launch script of a pane in the `auto` permission mode (#1074): the same shape as `launch_script` without the built-in tools, with `--permission-mode auto`, and the MCP config that offers the calendar tools only.
 fn auto_launch_script(claude: &Path, mcp_config: &Path) -> String {
-    auto_script(claude, mcp_config, "")
-}
-
-/// The launch script of the pane of a Todo's draft (S-18, #1148): the `auto` script with `--model sonnet --effort high`.
-fn todo_draft_launch_script(claude: &Path, mcp_config: &Path) -> String {
-    auto_script(claude, mcp_config, " --model sonnet --effort high")
-}
-
-/// The `auto` script with `flags` after `--permission-mode auto`: each is a fixed flag and a value the app decided.
-fn auto_script(claude: &Path, mcp_config: &Path, flags: &str) -> String {
     format!(
         "#!/bin/sh\n\
          # Written by tsunagiai (A-36) at each start of a Claude Code pane; a change here is lost.\n\
          PATH=\"$PATH:/usr/local/bin:/opt/homebrew/bin\"\n\
-         exec {claude} --tools '' --permission-mode auto{flags} --setting-sources user --strict-mcp-config --mcp-config {config} \"$@\"\n",
+         exec {claude} --tools '' --permission-mode auto --setting-sources user --strict-mcp-config --mcp-config {config} \"$@\"\n",
         claude = sh_quote(&claude.to_string_lossy()),
         config = sh_quote(&mcp_config.to_string_lossy()),
     )
@@ -243,7 +225,7 @@ fn launch_args(
 }
 
 /// `tsunagiai-mcp` next to the executable `exe`: in the app bundle it is `Contents/MacOS/tsunagiai-mcp`.
-fn mcp_binary(exe: &Path) -> PathBuf {
+pub(crate) fn mcp_binary(exe: &Path) -> PathBuf {
     let name = if cfg!(windows) {
         format!("{MCP_BINARY}.exe")
     } else {
@@ -303,7 +285,7 @@ fn claude_path() -> Result<PathBuf, String> {
 /// Two panes may start together and write the same files: one at a time (the files are replaced whole, with the same text for the same choice).
 static FILES: Mutex<()> = Mutex::new(());
 
-/// Writes `mcp.json` and the launch script in `claude-code/` of `config` and answers the script's path. In the `auto` mode it writes `mcp-calendar.json` (`--calendar`) and `start-auto.sh` instead, and in `auto-todo-draft` `mcp-todo-draft.json` (`--todo-draft`) and `start-auto-todo-draft.sh`, and `builtin_tools` has been refused before (`check_permission_mode`).
+/// Writes `mcp.json` and the launch script in `claude-code/` of `config` and answers the script's path. In the `auto` mode it writes `mcp-calendar.json` (`--calendar`) and `start-auto.sh` instead, and `builtin_tools` has been refused before (`check_permission_mode`).
 fn write_files(
     config: &Path,
     claude: &Path,
@@ -325,19 +307,6 @@ fn write_files(
             &auto_launch_script(claude, &dir.join(MCP_CALENDAR_FILE)),
         )?;
         return Ok(dir.join(SCRIPT_AUTO_FILE));
-    }
-    if mode == ClaudeCodePermissionMode::AutoTodoDraft {
-        crate::accounts::write_atomic(
-            &dir,
-            MCP_TODO_DRAFT_FILE,
-            &mcp_config(mcp, &[TODO_DRAFT_MCP_ARG]),
-        )?;
-        crate::accounts::write_atomic(
-            &dir,
-            SCRIPT_AUTO_TODO_DRAFT_FILE,
-            &todo_draft_launch_script(claude, &dir.join(MCP_TODO_DRAFT_FILE)),
-        )?;
-        return Ok(dir.join(SCRIPT_AUTO_TODO_DRAFT_FILE));
     }
     let script = if builtin_tools {
         SCRIPT_WITH_TOOLS_FILE
@@ -1173,91 +1142,6 @@ mod tests {
         assert!(manual_text.contains(" --permission-mode manual "));
         let mcp = std::fs::read_to_string(config.join("claude-code/mcp.json")).unwrap();
         assert!(!mcp.contains("--calendar"));
-        std::fs::remove_dir_all(config).unwrap();
-    }
-
-    #[test]
-    fn the_todo_draft_script_is_the_auto_script_with_sonnet_and_high_and_no_settings() {
-        let script = todo_draft_launch_script(
-            Path::new("/Users/x/.local/bin/claude"),
-            Path::new("/c/app/claude-code/mcp-todo-draft.json"),
-        );
-        assert_eq!(
-            script,
-            "#!/bin/sh\n\
-             # Written by tsunagiai (A-36) at each start of a Claude Code pane; a change here is lost.\n\
-             PATH=\"$PATH:/usr/local/bin:/opt/homebrew/bin\"\n\
-             exec '/Users/x/.local/bin/claude' --tools '' --permission-mode auto --model sonnet --effort high --setting-sources user --strict-mcp-config --mcp-config '/c/app/claude-code/mcp-todo-draft.json' \"$@\"\n"
-        );
-        // No tool of this pane posts, so no question is set; the calendar pane's script has no model either.
-        assert!(!script.contains("--settings"));
-        assert!(
-            !auto_launch_script(Path::new("/bin/claude"), Path::new("/c/m.json"))
-                .contains("--model")
-        );
-    }
-
-    #[test]
-    fn the_todo_draft_mode_is_read_as_its_own_word_and_is_refused_as_auto_is() {
-        use ClaudeCodePermissionMode::{Auto, AutoTodoDraft};
-        let read = |text: &str| serde_json::from_str::<ClaudeCodePermissionMode>(text);
-        assert_eq!(read("\"auto-todo-draft\"").unwrap(), AutoTodoDraft);
-        for bad in [
-            "\"autotododraft\"",
-            "\"auto_todo_draft\"",
-            "\"todo-draft\"",
-            "\"Auto-todo-draft\"",
-        ] {
-            assert!(read(bad).is_err(), "{bad}");
-        }
-        assert_eq!(check_permission_mode(false, AutoTodoDraft), Ok(()));
-        assert!(check_permission_mode(true, AutoTodoDraft)
-            .unwrap_err()
-            .contains("ツール"));
-        assert_ne!(Auto, AutoTodoDraft);
-    }
-
-    #[test]
-    fn a_todo_draft_start_writes_its_own_config_and_script_and_leaves_the_others() {
-        let config = temp_dir("files-todo-draft");
-        let calendar = write_files(
-            &config,
-            Path::new("/bin/claude"),
-            Path::new("/app/tsunagiai-mcp"),
-            false,
-            ClaudeCodePermissionMode::Auto,
-        )
-        .unwrap();
-        let calendar_text = std::fs::read_to_string(&calendar).unwrap();
-        let draft = write_files(
-            &config,
-            Path::new("/bin/claude"),
-            Path::new("/app/tsunagiai-mcp"),
-            false,
-            ClaudeCodePermissionMode::AutoTodoDraft,
-        )
-        .unwrap();
-        assert_eq!(draft, config.join("claude-code/start-auto-todo-draft.sh"));
-        let text = std::fs::read_to_string(&draft).unwrap();
-        assert!(text.contains(" --permission-mode auto --model sonnet --effort high "));
-        assert!(text.contains(&format!(
-            "--mcp-config '{}'",
-            config.join("claude-code/mcp-todo-draft.json").display()
-        )));
-        let mcp: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(config.join("claude-code/mcp-todo-draft.json")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            mcp,
-            serde_json::json!({"mcpServers": {"tsunagiai": {
-                "command": "/app/tsunagiai-mcp",
-                "args": ["--todo-draft"]
-            }}})
-        );
-        // The calendar pane's files are as they were.
-        assert_eq!(std::fs::read_to_string(&calendar).unwrap(), calendar_text);
-        assert!(!calendar_text.contains("--model"));
         std::fs::remove_dir_all(config).unwrap();
     }
 

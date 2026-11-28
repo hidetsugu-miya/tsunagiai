@@ -51,7 +51,6 @@ pub const RULES: Rules = Rules {
         "calendar-slots",
         "calendar-form",
         "todo-prompt",
-        "todo-draft",
         "slack-thread",
         "mail-draft",
         "preview-open",
@@ -616,15 +615,14 @@ mod tests {
         let error = check(&read("todo"), &LISTED).unwrap_err();
         assert!(error.contains("todo-draft、mail-reply"), "{error}");
         // The screens the app lists now.
-        assert!(check(&read("todo-draft"), &RULES).is_ok());
-        assert!(check(&write("todo-draft", &[("a", "b")]), &RULES).is_ok());
+        assert!(check(&read("todo-prompt"), &RULES).is_ok());
+        assert!(check(&write("todo-prompt", &[("a", "b")]), &RULES).is_ok());
         assert_eq!(
             RULES.targets,
             [
                 "calendar-slots",
                 "calendar-form",
                 "todo-prompt",
-                "todo-draft",
                 "slack-thread",
                 "mail-draft",
                 "preview-open"
@@ -1018,7 +1016,7 @@ mod tests {
             assert_eq!(error, NOT_RUNNING);
             // A request that the list refuses never reaches the socket.
             let error = request_app(&dir, &read("nowhere")).await.unwrap_err();
-            assert!(error.contains("todo-draft"), "{error}");
+            assert!(error.contains("todo-prompt"), "{error}");
         }
 
         #[tokio::test]
