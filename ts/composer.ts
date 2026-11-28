@@ -1,7 +1,7 @@
 // The request field of the pane of A-9: one frame that holds the field, which starts as one line and grows with its text (orca-handoff.ts grows it),
 // and, in the row under it, the model and effort selects at the left (a slot that `showModelSlot` of claude.ts fills) and the round send button at the right.
 // It makes the form with the ids `{prefix}-form`, `-input`, `-model` and `-send` that orca-handoff.ts reads; the owner puts it in the pane, and may put more in the form, above the frame.
-// `model: false` leaves the slot out, for a pane that has no model to choose. The field has no placeholder (`.claude/rules/frontend.md`).
+// `model: false` leaves the slot out, for a pane that has no model to choose. The field has no placeholder (`.agents/rules/frontend.md`).
 import { tag } from "./dom.js";
 import { ARROW_UP_SVG } from "./icons.js";
 

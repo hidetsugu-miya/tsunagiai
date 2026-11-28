@@ -1,0 +1,20 @@
+{
+  "skill_name": "harness-scout",
+  "evals": [
+    {
+      "id": 1,
+      "name": "reads-the-record-script-with-one-plain-read-command",
+      "prompt": "あなたは `.agents/agents/harness-scout.md` の定義で動く harness-scout です。候補の根拠を確かめるために、`.agents/hooks/` にある合格記録を書くスクリプトの中身と、`.claude/reviews/` の記録を 1 つ読みたい。定義の「How to look」に従い、それぞれ実行するコマンドを 1 つずつ書いてください。実行はしないでください。",
+      "expected_output": "どちらも、パイプやつなぎの無い、読むだけのコマンド 1 つ（例: `cat .agents/hooks/{記録のスクリプト}`、`sed -n 1,80p ...`）を書く。スクリプトを走らせるコマンドや、`|`・`&&`・`;` でつないだコマンドは書かない。",
+      "files": [
+        ".agents/agents/harness-scout.md"
+      ],
+      "assertions": [
+        "記録のスクリプトを読むコマンドが、cat、head、grep、rg、sed -n、git diff、git show、git log のどれか 1 つだけで、`|`、`&&`、`;`、リダイレクトを含まない",
+        "`.claude/reviews/` の記録を読むコマンドも同じ形の 1 つのコマンドである",
+        "スクリプトを走らせる（bash や直接の実行）コマンドを書いていない",
+        "読むこと自体を避ける（読めないと答える）のではなく、読むコマンドを書いている"
+      ]
+    }
+  ]
+}

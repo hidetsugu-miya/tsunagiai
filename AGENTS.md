@@ -84,7 +84,7 @@ tmp/           scratch files, gitignored except .keep
 
 - The frontend is plain TypeScript, HTML and CSS.
   `ts/` is split into one module per screen.
-  The screens show no help text: no placeholder or line of text that explains what to type or what a button does (at the owner's instruction, 2026-11-08). The rule is in `.claude/rules/frontend.md`.
+  The screens show no help text: no placeholder or line of text that explains what to type or what a button does (at the owner's instruction, 2026-11-08). The rule is in `.agents/rules/frontend.md`.
 - The backend is Rust.
   The modules are in the library crate (`src-tauri/src/lib.rs`), and `main.rs` only calls `tsunagiai_lib::run()`.
   Each service has its own module, and the list of the modules is in `src-tauri/AGENTS.md`.
@@ -126,29 +126,29 @@ The tools, and the arguments that start it for one use with fewer tools or for a
 
 There are three layers: static, unit and E2E, and no check is repeated in two layers.
 Static checks cover format, lint, types, the Rust-TS type match, the fixed source version and where the shape of an icon is written, unit tests (cargo test) cover pure Rust logic, and E2E (WebdriverIO in the real WKWebView, commands mocked) covers screen behavior.
-The table of the layers and the rules that follow from it are in `.claude/rules/testing.md`, and how E2E runs is in `.claude/rules/e2e.md`.
+The table of the layers and the rules that follow from it are in `.agents/rules/testing.md`, and how E2E runs is in `.agents/rules/e2e.md`.
 
 ```sh
 npm run lint        # Biome (lint only)
 npm run build:ts    # tsc (ts)
 npm run e2e:check   # tsc (e2e)
-npx tsc --noEmit -p .claude/skills/readme-product/shots/tsconfig.json   # tsc (the spec of the README photos)
+npx tsc --noEmit -p .agents/skills/readme-product/shots/tsconfig.json   # tsc (the spec of the README photos)
 cd src-tauri && cargo fmt --check
 cd src-tauri && cargo clippy --all-targets --all-features -- -D warnings
 cd src-tauri && cargo test --all-features    # also writes the ts-rs types to ts/bindings/
 npm run e2e:build   # build the app for E2E (feature e2e)
 npm run e2e         # WebdriverIO
 scripts/check-version.sh   # the source version is the fixed one: 0.0.0 in Cargo.toml and Cargo.lock, none in tauri.conf.json
-.claude/tools/check-icons.sh   # the shape of an icon is written only in ts/icons.ts (index.html has <svg data-svg="..."> and no child)
+.agents/tools/check-icons.sh   # the shape of an icon is written only in ts/icons.ts (index.html has <svg data-svg="..."> and no child)
 ```
 
-`.claude/tools/run-ci.sh` runs the static checks and unit tests above (all but the E2E two) on a clean working tree and writes a record for HEAD, and `.claude/tools/run-e2e.sh` does the same for E2E.
-Before a push, `pre-git.sh` checks through `check-records.sh` that both records exist for HEAD, unless the diff from a commit that has them holds only files that no check reads (documents, `requirements/` and most of `.claude/`; the list is in `.claude/rules/testing.md`), and then neither `run-ci.sh` nor `run-e2e.sh` is run (`.claude/rules/review.md`).
+`.agents/tools/run-ci.sh` runs the static checks and unit tests above (all but the E2E two) on a clean working tree and writes a record for HEAD, and `.agents/tools/run-e2e.sh` does the same for E2E.
+Before a push, `pre-git.sh` checks through `check-records.sh` that both records exist for HEAD, unless the diff from a commit that has them holds only files that no check reads (documents, `requirements/` and most of `.claude/`; the list is in `.agents/rules/testing.md`), and then neither `run-ci.sh` nor `run-e2e.sh` is run (`.agents/rules/review.md`).
 
 ## CI
 
-The release is `.github/workflows/release.yml`, and only a pushed tag `v*` and the merge of the Release PR (a closed pull request from `release/next` into main, merged by the session that prepared it, with the repository's owner's account) start it (at the owner's instruction, 2026-11-09; #303); the merge is tagged and released in the run that it starts, and the lead launches `release-watcher` to watch that run through (`.claude/skills/release/SKILL.md`, step 2 of the lead).
-Static, unit and E2E checks run on the developer's machine before a push, not in GitHub Actions (`.claude/rules/testing.md`), so a pull request runs no check of this repository: closing one starts `release.yml`, which does nothing unless it is the merged Release PR.
+The release is `.github/workflows/release.yml`, and only a pushed tag `v*` and the merge of the Release PR (a closed pull request from `release/next` into main, merged by the session that prepared it, with the repository's owner's account) start it (at the owner's instruction, 2026-11-09; #303); the merge is tagged and released in the run that it starts, and the lead launches `release-watcher` to watch that run through (`.agents/skills/release/SKILL.md`, step 2 of the lead).
+Static, unit and E2E checks run on the developer's machine before a push, not in GitHub Actions (`.agents/rules/testing.md`), so a pull request runs no check of this repository: closing one starts `release.yml`, which does nothing unless it is the merged Release PR.
 A push to main that changes the dependencies, the Rust version or `docs/` runs two workflows, and neither checks anything: `rust-cache.yml` builds the Rust dependencies of the release to fill the cache that `release` restores (at the owner's instruction, 2026-11-08; #248), and `pages.yml` builds `docs/` with Jekyll and deploys it to GitHub Pages.
 
 | Job | Environment | What it does |

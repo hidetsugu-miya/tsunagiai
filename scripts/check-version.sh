@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ソースの版が固定値のままであることを確かめる。
-# 版を持つのはタグだけで、release job がタグから取って tauri build --config で入れる（.claude/rules/versioning.md）。
+# 版を持つのはタグだけで、release job がタグから取って tauri build --config で入れる（.agents/rules/versioning.md）。
 # Cargo.toml と Cargo.lock は 0.0.0、tauri.conf.json には version が無い。
 # 使い方: scripts/check-version.sh
 set -euo pipefail

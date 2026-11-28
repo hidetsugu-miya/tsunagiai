@@ -1,6 +1,6 @@
 // The rich field for writing a message: the Slack posts of S-21, the thread reply of S-6 and the body of a mail reply (M-10). One frame that holds a toolbar of the styles, the Milkdown editor under it (src/vendor/milkdown.js, A-26) and, unless `arrow` is off, the round send arrow at the right end of the row below.
 // The owner puts `el` in its pane and keeps the text itself (the Markdown of the field, `markdown()`); Rust turns it into mrkdwn (`markdown: true` of `slack_channel_post`, S-21) or into the HTML of a mail (`markdown: true` of `send_mail`, M-10) when it sends.
-// Milkdown is read the first time `ensure()` is called. Until it is there the frame is drawn with the field off and the arrow off, and `ensure()` says when it is ready. The field has no placeholder (`.claude/rules/frontend.md`).
+// Milkdown is read the first time `ensure()` is called. Until it is there the frame is drawn with the field off and the arrow off, and `ensure()` says when it is ready. The field has no placeholder (`.agents/rules/frontend.md`).
 import { composing, isMac, tag } from "./dom.js";
 import { BOLD_SVG, BULLET_LIST_SVG, CODE_BLOCK_SVG, FORMAT_LINK_SVG, INLINE_CODE_SVG, ITALIC_SVG, ORDERED_LIST_SVG, QUOTE_SVG, SEND_SVG, STRIKE_SVG } from "./icons.js";
 import { loadMilkdown } from "./vendor-load.js";

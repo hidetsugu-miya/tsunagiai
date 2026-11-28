@@ -1,0 +1,62 @@
+{
+  "skill_name": "retrospective",
+  "evals": [
+    {
+      "id": 1,
+      "name": "same-cause-and-one-off",
+      "prompt": "あなたは implement の実行を終えたリードです。`.agents/skills/retrospective/SKILL.md` を読み、その手順どおりに、`.agents/evals/files/retrospective/run-same-cause.md` に書かれた実行を振り返ってください。この記録が、あなたの持つ実行の文脈です。GitHub には読み書きともに触れないでください。開いている issue は記録の末尾の一覧を `gh issue list` の結果として使い、`gh issue create` や `gh issue comment` は実行せずに、打つはずのコマンド、題、ラベル、本文をそのまま書き出してください。`guard-public.sh text` はそのまま実行して構いません。最後に手順 5 の報告を書いてください。",
+      "expected_output": "同じ原因（push の前に新しい HEAD の E2E の記録を待つことが手順に無い）の 2 回の拒否を 1 つの「振り返り:」の issue にまとめる。ネットワークの一時的な失敗には issue もコメントも作らない。直しは `.agents/skills/implement/SKILL.md` と `.agents/evals/implement.json` だけに触れるので、issue に `documentation` ラベルを付ける。",
+      "files": [
+        ".agents/evals/files/retrospective/run-same-cause.md"
+      ],
+      "assertions": [
+        "`gh issue create` が 1 件だけで、既存の issue への `gh issue comment` は無い（新しい issue に `issue-plan` 手順 2 のラベルの理由を書くコメントは数えない）",
+        "その issue の題が「振り返り: 」で始まり、2 回の `pre-git.sh` の拒否を両方とも本文に含む",
+        "ラベルが `importance:low` と、`point:2` か `point:3` のどちらか 1 つと `documentation` で、`point:5` と `point:8` は無い（直しが `.agents/skills/` と `.agents/evals/` だけに触れるので `documentation` を付ける）",
+        "本文に、起きたことの根拠（`logs/hooks-2026-11-20.log` などリポジトリからの相対パス）、原因、削るかまとめる方向の直し方、足す eval が書かれている",
+        "`gh pr merge` の `connection reset by peer` について、issue もコメントも作っていない",
+        "本文を `gh` に渡す前に `guard-public.sh text` に通している"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "nothing-notable",
+      "prompt": "あなたは implement の実行を終えたリードです。`.agents/skills/retrospective/SKILL.md` を読み、その手順どおりに、`.agents/evals/files/retrospective/run-quiet.md` に書かれた実行を振り返ってください。この記録が、あなたの持つ実行の文脈です。GitHub には読み書きともに触れないでください。開いている issue は記録の末尾の一覧を `gh issue list` の結果として使い、`gh issue create` や `gh issue comment` は実行せずに、打つはずのコマンド、題、ラベル、本文をそのまま書き出してください。`guard-public.sh text` はそのまま実行して構いません。最後に手順 5 の報告を書いてください。",
+      "expected_output": "意味のある出来事が無いので、issue もコメントも作らず、作らなかったことを報告する。",
+      "files": [
+        ".agents/evals/files/retrospective/run-quiet.md"
+      ],
+      "assertions": [
+        "`gh issue create` も `gh issue comment` も無い",
+        "報告が、issue もコメントも無かったと言っている"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "known-cause-comment",
+      "prompt": "あなたは implement の実行を終えたリードです。`.agents/skills/retrospective/SKILL.md` を読み、その手順どおりに、`.agents/evals/files/retrospective/run-known-cause.md` に書かれた実行を振り返ってください。この記録が、あなたの持つ実行の文脈です。GitHub には読み書きともに触れないでください。開いている issue は記録の末尾の一覧を `gh issue list` の結果として使い、`gh issue create` や `gh issue comment` は実行せずに、打つはずのコマンド、題、ラベル、本文をそのまま書き出してください。`guard-public.sh text` はそのまま実行して構いません。最後に手順 5 の報告を書いてください。",
+      "expected_output": "出来事の原因が開いている #1290 と同じなので、新しい issue を作らず、#1290 にこの実行の出来事と根拠をコメントする。",
+      "files": [
+        ".agents/evals/files/retrospective/run-known-cause.md"
+      ],
+      "assertions": [
+        "`gh issue create` が無い",
+        "`gh issue comment 1290` が 1 件あり、その本文がこの実行の出来事（3 回目のレビューと HEAD の SHA）を根拠として含む",
+        "コメントの本文を `gh` に渡す前に `guard-public.sh text` に通している"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "owner-decision-cause-goes-to-owner-not-issue",
+      "prompt": "あなたは implement の実行を終えたリードです。`.agents/skills/retrospective/SKILL.md` を読み、その手順どおりに、`.agents/evals/files/retrospective/run-design-cause.md` に書かれた実行を振り返ってください。この記録が、あなたの持つ実行の文脈です。GitHub には読み書きともに触れないでください。開いている issue は記録の末尾の一覧を `gh issue list` の結果として使い、`gh issue create` や `gh issue comment` を打つなら、実行せずに、打つはずのコマンド、題、ラベル、本文をそのまま書き出してください。最後に手順 5 の報告を書いてください。",
+      "expected_output": "原因（オーナーの指示で置いた `guard-review.sh` が `record-review.sh` を読む命令まで止め、リードも `code-implementer` も直せない）の直しは、オーナーの置いた門をゆるめるかどうかの選択で、AI が選べないので、issue は作らず、手順 5 の報告にオーナーへの質問として載せる。",
+      "files": [
+        ".agents/evals/files/retrospective/run-design-cause.md"
+      ],
+      "assertions": [
+        "`gh issue create` も `gh issue comment` も打っていない",
+        "手順 5 の報告に、この原因をオーナーへの質問として載せ、何を決めてほしいか（`guard-review.sh` を、読むだけのコマンドを通すようにゆるめるか、ワークツリーのブランチでの編集を通すようにゆるめるか）を書いている"
+      ]
+    }
+  ]
+}
