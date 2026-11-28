@@ -49,7 +49,7 @@ describe("orca: the Todo part of the file pane and the tab of a task (A-49)", ()
     await expect(paneMode("Todo")).toHaveAttribute("aria-pressed", "false");
     await expect($("#orca-todo")).not.toBeDisplayed();
     const bar = await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-files-bar > button")].map((b) => [b.getAttribute("aria-label"), b.getAttribute("aria-pressed"), b.querySelector("svg") !== null]));
-    expect(bar.map((b) => b[0])).toEqual(["ファイル", "履歴", "言語サーバー", "データベース", "Jira", "Todo", "ファイル欄"]);
+    expect(bar.map((b) => b[0])).toEqual(["ファイル", "履歴", "言語サーバー", "データベース", "Jira", "Todo"]);
     await paneMode("Todo").click();
     await expect(paneMode("Todo")).toHaveAttribute("aria-pressed", "true");
     await expect(paneMode("ファイル")).toHaveAttribute("aria-pressed", "false");

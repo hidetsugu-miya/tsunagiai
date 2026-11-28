@@ -550,6 +550,17 @@
       <section class="card">
         <div class="card-head">
           <h2>
+            <span class="logo orca"><svg data-svg="monitor"></svg></span>AI 利用率の取得
+          </h2>
+          <button id="ai-usage-help" class="icon-btn" data-hint aria-label="AI 利用率の取得の説明" aria-expanded="false">
+            <svg data-svg="help"></svg>
+          </button>
+        </div>
+        <div id="ai-usage-items"></div>
+      </section>
+      <section class="card">
+        <div class="card-head">
+          <h2>
             <span class="logo orca"><svg data-svg="monitor"></svg></span>このマシンの Orca
           </h2>
           <button id="orca-pairing-help" class="icon-btn" data-hint aria-label="このマシンの Orca の説明" aria-expanded="false">
@@ -801,7 +812,6 @@
           <button id="orca-files-mode-database" class="icon-btn orca-files-mode" type="button" aria-label="データベース" aria-pressed="false"></button>
           <button id="orca-files-mode-jira" class="icon-btn orca-files-mode" type="button" aria-label="Jira" aria-pressed="false"></button>
           <button id="orca-files-mode-todo" class="icon-btn orca-files-mode" type="button" aria-label="Todo" aria-pressed="false"></button>
-          <button id="orca-files-toggle" class="icon-btn orca-files-toggle" type="button" aria-label="ファイル欄" aria-pressed="true"></button>
         </div>
         <header id="orca-files-head">
           <h2 id="orca-files-title"></h2>

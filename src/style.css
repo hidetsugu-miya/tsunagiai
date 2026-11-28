@@ -75,6 +75,10 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .stat-num { font-weight: bold; }
 .stat-num.hot { color: var(--warn); }
 .stat-sep { width: 1px; height: 16px; background: var(--chip-line); }
+.stat-icon { display: inline-flex; margin-right: 4px; }
+.stat-icon svg { width: 13px; height: 13px; stroke-width: 2.4; }
+.stat-icon[data-ai="claude"] { color: var(--claude); }
+.stat-icon[data-ai="antigravity"] { color: var(--google); }
 /* A-35: the pane of the unread opens from the right over the screen, down to the footer. */
 #unread-pane, #resource-pane { position: fixed; z-index: 11; top: 0; right: 0; bottom: var(--footer-h); box-sizing: border-box; width: 380px; max-width: 100%; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--surface); box-shadow: -8px 0 24px rgba(0, 0, 0, .12); }
 #unread-pane header, #resource-pane header { box-sizing: border-box; min-height: var(--header-h); padding: 0 12px 0 20px; background: var(--bar); border-bottom: 1px solid var(--line); }
@@ -86,6 +90,9 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .res-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; align-items: baseline; font-size: calc(13px * var(--fs)); }
 .res-key { color: var(--ink-soft); }
 .res-sub { grid-column: 1 / 3; font-size: calc(11px * var(--fs)); color: var(--muted); }
+.res-group { display: flex; flex-direction: column; gap: 8px; }
+.res-group-name { display: flex; align-items: center; font-size: calc(12px * var(--fs)); color: var(--muted); }
+.res-updated { margin-left: auto; font-size: calc(11px * var(--fs)); color: var(--muted); }
 .unread-item { display: grid; grid-template-columns: 16px 32px minmax(0, 1fr); column-gap: 10px; align-items: start; padding: 10px 8px; border-radius: 12px; cursor: pointer; }
 .unread-item.bare { grid-template-columns: 16px minmax(0, 1fr); }
 .unread-item.bare .unread-actions { grid-column: 2; }
@@ -583,13 +590,10 @@ button.review-chip:hover { background: var(--hover); }
 @keyframes spin { to { transform: rotate(360deg); } }
 .text-btn.primary .spin { border-color: var(--accent-dim); border-top-color: #fff; }
 .review-add { display: inline-flex; align-items: center; gap: 6px; }
-/* The page of Claude's draft of a Todo (ts/todo-draft.ts), in the place of the list: the draft on the left like the task detail, project, date and labels beside it. The Claude pane is the right column of .draft, past a divider (ts/split.ts): 30 to 60% of the page, 40% at first. */
+/* The page of Claude's draft of a Todo (ts/todo-draft.ts), in the place of the list: the draft like the task detail, project, date and labels beside it. */
 #todo-main.drafting { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 16px; }
 .draft { flex: 1; min-height: 0; display: flex; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
 .draft:focus { outline: none; }
-.draft-chat { flex: none; width: clamp(30%, var(--chat-w, 40%), 60%); min-height: 0; }
-/* S-18, #1148: the pane starts nothing until 「相談する」 is pressed; the button is in the terminal's place, and the terminal takes it when Claude Code starts. */
-#draft-ask { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
 .draft-todo { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 280px; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
 .draft-head { grid-column: 1 / 3; display: flex; align-items: center; gap: 8px; padding: 8px 12px 8px 20px; border-bottom: 1px solid var(--line); font-size: calc(12px * var(--fs)); color: #555; }
 .draft-src { flex: 1; display: flex; align-items: center; gap: 5px; min-width: 0; white-space: nowrap; }
@@ -606,7 +610,6 @@ button.review-chip:hover { background: var(--hover); }
 .draft-omitted, .draft-target-cut { font-size: calc(12px * var(--fs)); color: var(--warn); }
 .draft .detail-side { grid-column: 2; align-self: stretch; overflow-y: auto; border-radius: 0; border-left: 1px solid var(--line); }
 .draft-foot { grid-column: 1 / 3; display: flex; align-items: center; padding: 12px 20px; border-top: 1px solid var(--line); }
-.draft-undo { margin-right: 12px; }
 .draft-add { width: 36px; height: 36px; padding: 0; border: 0; border-radius: 50%; background: var(--accent); color: var(--on-accent); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
 .draft-add:hover:not(:disabled) { filter: brightness(1.1); }
 .draft-add:disabled { opacity: .6; cursor: default; }
@@ -1905,11 +1908,7 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 .orca-edit-lock svg { width: 13px; height: 13px; stroke-width: 1.8; }
 .orca-edit-state[data-state="outside"], .plugin-edit-state[data-state="outside"] { padding: 0 6px; border-radius: 9px; background: var(--soft); color: var(--accent-text); line-height: 18px; }
 .orca-diff-commit { flex: none; margin-right: 8px; padding: 0 6px; border-radius: 8px; background: var(--soft); color: var(--accent); font-family: var(--ff-mono, ) ui-monospace, monospace; font-size: calc(12px * var(--fs)); }
-.orca-files-toggle { flex: none; margin: 0 6px 0 auto; width: var(--header-btn); height: var(--header-btn); color: var(--ink-soft); }
-.orca-files-toggle svg { width: var(--header-ic); height: var(--header-ic); }
-.orca-files-toggle[aria-pressed="true"] { background: var(--soft); color: var(--accent); }
-.orca-tab-modes { flex: none; display: flex; align-items: center; margin-left: auto; }
-.orca-tab-modes + .orca-files-toggle { margin-left: 0; }
+.orca-tab-modes { flex: none; display: flex; align-items: center; margin: 0 6px 0 auto; }
 .orca-tab-mode { flex: none; width: var(--header-btn); height: var(--header-btn); margin-left: 6px; color: var(--ink-soft); }
 .orca-tab-mode svg { width: var(--header-ic); height: var(--header-ic); }
 .orca-file-tab-ic { color: var(--muted); }

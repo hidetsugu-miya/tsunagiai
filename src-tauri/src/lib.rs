@@ -1,4 +1,5 @@
 pub mod accounts;
+pub mod ai_usage;
 pub mod app_log;
 pub mod auth;
 pub mod calendar;
@@ -551,6 +552,9 @@ pub fn run() {
             fonts::font_settings_set,
             side_menu::side_menu_settings,
             side_menu::side_menu_settings_set,
+            ai_usage::ai_usage_read,
+            ai_usage::ai_usage_statusline_state,
+            ai_usage::ai_usage_statusline_set,
             skills::skill_list,
             skills::skill_get,
             skills::skill_save,

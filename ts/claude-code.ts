@@ -12,7 +12,7 @@ export interface ClaudeCodeOptions {
   id: string;
   // Leaves Claude Code's own tools on (the database screen does; the others never).
   builtinTools?: boolean;
-  // How Claude Code asks for a tool (#1074): "manual" (the default) asks the owner for every tool that writes; "auto" runs them unasked, and only the calendar pane takes it; "auto-todo-draft" is the pane of a Todo's draft (#1148: Sonnet at the effort high). Rust refuses both with `builtinTools`.
+  // How Claude Code asks for a tool (#1074): "manual" (the default) asks the owner for every tool that writes; "auto" runs them unasked, and only the calendar pane takes it. Rust refuses `auto` with `builtinTools`.
   permissionMode?: ClaudeCodePermissionMode;
   // A saved skill that Claude Code is given with `--plugin-dir` (A-32).
   skill?: { name: string; screen: SkillScreen } | null;

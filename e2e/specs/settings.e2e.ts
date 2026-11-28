@@ -1530,7 +1530,7 @@ describe("settings: the 開発 tab (the tab `orca`) has no card of the target (A
     await $("#nav-settings").click();
     await openTab("orca");
     await expect($("#settings-panel-orca")).toBeDisplayed();
-    expect(await textsOf("#settings-panel-orca > .card h2")).toEqual(["ターミナルの配色", "エディタ", "Ghostty の設定", "サーバーを置いた PC", "このマシンの Orca"]);
+    expect(await textsOf("#settings-panel-orca > .card h2")).toEqual(["ターミナルの配色", "エディタ", "Ghostty の設定", "サーバーを置いた PC", "AI 利用率の取得", "このマシンの Orca"]);
     expect(await count("#orca-target-items, #orca-target-help")).toBe(0);
   });
 });
@@ -1625,6 +1625,33 @@ describe("settings: the pairing of this machine's Orca (the 開発 tab, A-12)", 
   });
 });
 
+describe("settings: AI usage statusLine (the Orca tab, A-48)", () => {
+  async function openAiUsage(state = { claude: false, antigravity: false }) {
+    await boot({
+      inbox: inbox(),
+      slack_load: slackLoad,
+      slack_check: checked([]),
+      claude_status: claudeMissing,
+      ai_usage_statusline_state: state,
+    });
+    await $("#nav-settings").click();
+    await openTab("orca");
+    await expect($("#ai-usage-items")).toBeDisplayed();
+  }
+
+  it("shows switches for Claude Code and Antigravity and toggles registration via ai_usage_statusline_set", async () => {
+    await openAiUsage({ claude: true, antigravity: false });
+    const claudeSwitch = $('#ai-usage-items [data-ai="claude"] .switch');
+    const agySwitch = $('#ai-usage-items [data-ai="antigravity"] .switch');
+    await expect(claudeSwitch).toHaveAttribute("aria-checked", "true");
+    await expect(agySwitch).toHaveAttribute("aria-checked", "false");
+    const set = await mock("ai_usage_statusline_set", { claude: true, antigravity: true });
+    await agySwitch.click();
+    expect(await waitForCalls(set)).toEqual([{ kind: "antigravity", enabled: true }]);
+    await expect(agySwitch).toHaveAttribute("aria-checked", "true");
+  });
+});
+
 describe("settings: terminal colors (the Orca tab, A-14, A-15)", () => {
   // The app with `fixtures` added, and the settings screen open on the Orca tab.
   async function openOrcaTab(fixtures: Record<string, unknown> = {}) {
@@ -1647,7 +1674,7 @@ describe("settings: terminal colors (the Orca tab, A-14, A-15)", () => {
 
   it("puts the card of the colors above the card of Ghostty, with a row for the light and one for the dark appearance", async () => {
     await openOrcaTab({ terminal_themes: terminalThemes() });
-    expect(await textsOf("#settings-panel-orca > .card h2")).toEqual(["ターミナルの配色", "エディタ", "Ghostty の設定", "サーバーを置いた PC", "このマシンの Orca"]);
+    expect(await textsOf("#settings-panel-orca > .card h2")).toEqual(["ターミナルの配色", "エディタ", "Ghostty の設定", "サーバーを置いた PC", "AI 利用率の取得", "このマシンの Orca"]);
     expect(await textsOf("#terminal-theme-items .item-name")).toEqual(["外観", "ライト", "ダーク"]);
     expect(await textsOf("#terminal-theme-items .item-meta")).toEqual(["ターミナルが使うテーマ", "ライトの外観で使うテーマ", "ダークの外観で使うテーマ"]);
   });

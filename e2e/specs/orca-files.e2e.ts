@@ -79,7 +79,7 @@ describe("orca: files and editor (A-18)", () => {
   const names = () => textsOf("#orca-files-tree .orca-file-name");
   const toggleBoxes = () =>
     browser.execute(() =>
-      [...document.querySelectorAll<HTMLElement>(".orca-files-toggle")]
+      [...document.querySelectorAll<HTMLElement>('.orca-tab-mode[data-mode="files"], #orca-files-mode-files')]
         .filter((e) => e.getClientRects().length > 0)
         .map((e) => {
           const r = e.getBoundingClientRect();
@@ -1033,7 +1033,7 @@ describe("orca: files and editor (A-18)", () => {
     expect(hidden).toHaveLength(1);
     expect(hidden[0].inFiles).toBe(false);
     expect(hidden[0].pressed).toBe("false");
-    expect(hidden[0].label).toBe("ファイル欄");
+    expect(hidden[0].label).toBe("ファイル");
     await mock("orca_files_list", root());
     await project("example-app").click();
     await filesToggle().click();
@@ -1043,20 +1043,18 @@ describe("orca: files and editor (A-18)", () => {
     expect(shown).toHaveLength(1);
     expect(shown[0].inFiles).toBe(true);
     expect(shown[0].pressed).toBe("true");
-    expect(shown[0].label).toBe("ファイル欄");
+    expect(shown[0].label).toBe("ファイル");
     const box = await browser.execute(() => {
       const r = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
-      return { workRight: r("#orca-work").right, splitLeft: r("#orca-files-split").left, splitRight: r("#orca-files-split").right, filesLeft: r("#orca-files").left, filesRight: r("#orca-files").right, share: r("#orca-files").width / r("#orca").width, barTop: r("#orca-files-bar").top, barHeight: r("#orca-files-bar").height, headTop: r("#orca-files-head").top, headBottom: r("#orca-files-head").bottom, tabsTop: r(".orca-tabbar").top, tabs: r(".orca-tabbar").height, toggleRight: r("#orca-files-toggle").right };
+      return { workRight: r("#orca-work").right, splitLeft: r("#orca-files-split").left, splitRight: r("#orca-files-split").right, filesLeft: r("#orca-files").left, filesRight: r("#orca-files").right, share: r("#orca-files").width / r("#orca").width, barTop: r("#orca-files-bar").top, barHeight: r("#orca-files-bar").height, headTop: r("#orca-files-head").top, headBottom: r("#orca-files-head").bottom, tabsTop: r(".orca-tabbar").top, tabs: r(".orca-tabbar").height };
     });
     expect(box.workRight).toBeLessThanOrEqual(box.splitLeft + 1);
     expect(box.splitRight).toBeLessThanOrEqual(box.filesLeft + 1);
     expect(box.share).toBeCloseTo(0.22, 2);
-    // The upper row is as high as the tab strip and level with it; the heading is under it. The button is at the right end of the row.
+    // The upper row is as high as the tab strip and level with it; the heading is under it.
     expect(box.barHeight).toBe(box.tabs);
     expect(box.barTop).toBe(box.tabsTop);
     expect(box.headTop).toBeGreaterThanOrEqual(box.barTop + box.barHeight - 1);
-    expect(box.toggleRight).toBeLessThanOrEqual(box.filesRight);
-    expect(box.filesRight - box.toggleRight).toBeLessThanOrEqual(8);
     await filesToggle().click();
     await expect($("#orca-files")).not.toBeDisplayed();
     await expect($("#orca-files-split")).not.toBeDisplayed();
@@ -1066,12 +1064,12 @@ describe("orca: files and editor (A-18)", () => {
     expect(back[0].pressed).toBe("false");
     const corner = await browser.execute(() => {
       const bar = document.querySelector(".orca-tabbar")!.getBoundingClientRect();
-      const toggle = document.querySelector(".orca-tabbar .orca-files-toggle:not([hidden])")!.getBoundingClientRect();
+      const modes = document.querySelector(".orca-tabbar .orca-tab-modes:not([hidden])")!.getBoundingClientRect();
       const plus = document.querySelector(".orca-plus")!.getBoundingClientRect();
-      return { barRight: bar.right, toggleRight: toggle.right, plusRight: plus.right };
+      return { barRight: bar.right, modesRight: modes.right, plusRight: plus.right };
     });
-    expect(corner.toggleRight).toBeLessThanOrEqual(corner.barRight);
-    expect(corner.toggleRight).toBeGreaterThan(corner.plusRight);
+    expect(corner.modesRight).toBeLessThanOrEqual(corner.barRight);
+    expect(corner.modesRight).toBeGreaterThan(corner.plusRight);
   });
 
   it("moves the focus to the button that is shown when the focused button is pressed", async () => {
@@ -1086,17 +1084,17 @@ describe("orca: files and editor (A-18)", () => {
         b.focus();
         b.click();
         const a = document.activeElement;
-        return { files: a?.closest("#orca-files") !== null, tabs: a?.closest(".orca-tabbar") !== null, toggle: a?.classList.contains("orca-files-toggle") ?? false };
+        return { files: a?.closest("#orca-files") !== null, tabs: a?.closest(".orca-tabbar") !== null, mode: a?.id === "orca-files-mode-files" || a?.getAttribute("data-mode") === "files" };
       }, selector);
-    const shown = await pressFocused(".orca-tabbar .orca-files-toggle:not([hidden])");
+    const shown = await pressFocused('.orca-tabbar .orca-tab-modes:not([hidden]) .orca-tab-mode[data-mode="files"]');
     await expect($("#orca-files")).toBeDisplayed();
-    expect(shown).toEqual({ files: true, tabs: false, toggle: true });
-    const hidden = await pressFocused("#orca-files-toggle");
+    expect(shown).toEqual({ files: true, tabs: false, mode: true });
+    const hidden = await pressFocused("#orca-files-mode-files");
     await expect($("#orca-files")).not.toBeDisplayed();
-    expect(hidden).toEqual({ files: false, tabs: true, toggle: true });
+    expect(hidden).toEqual({ files: false, tabs: true, mode: true });
   });
 
-  it("has the six icons of the parts in the tab strip, left of the button, while the file pane is hidden, and opens the pane on the part that one names (A-18)", async () => {
+  it("has the six icons of the parts in the tab strip while the file pane is hidden, and opens the pane on the part that one names (A-18)", async () => {
     await openOrca(orcaOverview(sample(), worktrees()), { orca_terminal_read: ["$"], orca_files_list: root(), orca_files_ignored: rootIgnored, ...historyFixtures() });
     await project("example-app").click();
     await expect(selectedTab()).toBeDisplayed();
@@ -1109,11 +1107,10 @@ describe("orca: files and editor (A-18)", () => {
     const place = await browser.execute(() => {
       const r = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
       const all = [...document.querySelectorAll(".orca-tabbar .orca-tab-mode")].map((b) => b.getBoundingClientRect());
-      return { plusRight: r(".orca-plus").right, first: all[0].left, last: all[all.length - 1].right, toggleLeft: r(".orca-tabbar .orca-files-toggle").left, barRight: r(".orca-tabbar").right };
+      return { plusRight: r(".orca-plus").right, first: all[0].left, last: all[all.length - 1].right, barRight: r(".orca-tabbar").right };
     });
     expect(place.first).toBeGreaterThanOrEqual(place.plusRight);
-    expect(place.last).toBeLessThanOrEqual(place.toggleLeft);
-    expect(place.toggleLeft).toBeLessThanOrEqual(place.barRight);
+    expect(place.last).toBeLessThanOrEqual(place.barRight);
     await expect($("#orca-files")).not.toBeDisplayed();
     // The press opens the pane on that part, the icons go, and the focus goes to the icon of the same part in the top row.
     await $('.orca-tabbar .orca-tab-mode[aria-label="履歴"]').click();
@@ -1124,7 +1121,7 @@ describe("orca: files and editor (A-18)", () => {
     await expect($("#orca-files-tree")).not.toBeDisplayed();
     expect(await icons()).toEqual([]);
     expect(await browser.execute(() => document.activeElement?.id)).toBe("orca-files-mode-history");
-    // The part that is chosen already still opens the pane.
+    // Pressing the pressed icon closes the pane; pressing the same icon in the strip opens it on that part again.
     await filesToggle().click();
     await expect($("#orca-files")).not.toBeDisplayed();
     expect(await icons()).toHaveLength(6);
@@ -1139,14 +1136,12 @@ describe("orca: files and editor (A-18)", () => {
     await expect($("#orca-history")).not.toBeDisplayed();
   });
 
-  it("puts the button in the pane in the top right corner only", async () => {
+  it("puts the mode icons in the pane in the top right corner only", async () => {
     const two = orcaOverview(sample(), worktrees(), { terminals: [orcaTerminal("example-app", "zsh")] });
     const side = layout({ kind: "split", direction: "row", children: [pane("p1", [claude]), pane("p2", [zsh])], sizes: [0.5, 0.5] }, "p1");
     await openOrca(two, { orca_terminal_read: ["$"], orca_panes: side });
     await project("example-app").click();
     await waitForCount(".orca-pane", 2);
-    await expect($('.orca-pane[data-pane="p1"] .orca-files-toggle')).not.toBeDisplayed();
-    await expect($('.orca-pane[data-pane="p2"] .orca-files-toggle')).toBeDisplayed();
     expect(await toggleBoxes()).toHaveLength(1);
     await expect($('.orca-pane[data-pane="p1"] .orca-tab-modes')).not.toBeDisplayed();
     await expect($('.orca-pane[data-pane="p2"] .orca-tab-modes')).toBeDisplayed();
@@ -1154,8 +1149,6 @@ describe("orca: files and editor (A-18)", () => {
     await openOrca(two, { orca_terminal_read: ["$"], orca_panes: stacked });
     await project("example-app").click();
     await waitForCount(".orca-pane", 2);
-    await expect($('.orca-pane[data-pane="p1"] .orca-files-toggle')).toBeDisplayed();
-    await expect($('.orca-pane[data-pane="p2"] .orca-files-toggle')).not.toBeDisplayed();
     expect(await toggleBoxes()).toHaveLength(1);
     await expect($('.orca-pane[data-pane="p1"] .orca-tab-modes')).toBeDisplayed();
     await expect($('.orca-pane[data-pane="p2"] .orca-tab-modes')).not.toBeDisplayed();
@@ -4249,7 +4242,7 @@ describe("orca: files and editor (A-18)", () => {
     await openFiles(historyFixtures());
     await waitForCount("#orca-files-tree .orca-file", 4);
     const bar = await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#orca-files-bar > button")].map((b) => [b.getAttribute("aria-label"), b.getAttribute("aria-pressed"), b.querySelector("svg") !== null]));
-    expect(bar).toEqual([["ファイル", "true", true], ["履歴", "false", true], ["言語サーバー", "false", true], ["データベース", "false", true], ["Jira", "false", true], ["Todo", "false", true], ["ファイル欄", "true", true]]);
+    expect(bar).toEqual([["ファイル", "true", true], ["履歴", "false", true], ["言語サーバー", "false", true], ["データベース", "false", true], ["Jira", "false", true], ["Todo", "false", true]]);
     await expect($("#orca-files-tree")).toBeDisplayed();
     await expect($("#orca-history")).not.toBeDisplayed();
     await expect($("#orca-database")).not.toBeDisplayed();
@@ -5165,12 +5158,12 @@ describe("orca: files and editor (A-18)", () => {
     await expect($("#orca-history")).toBeDisplayed();
   });
 
-  it("keeps the choice and the list when the pane is hidden and shown again (A-27)", async () => {
+  it("keeps the list when the pane is closed and reopened on history (A-27)", async () => {
     await openHistory();
     await waitForCount("#orca-history-list .orca-commit", 3);
-    await $("#orca-files-toggle").click();
+    await paneMode("履歴").click();
     await expect($("#orca-files")).not.toBeDisplayed();
-    await filesToggle().click();
+    await $('.orca-tabbar .orca-tab-mode[aria-label="履歴"]').click();
     await expect($("#orca-files")).toBeDisplayed();
     await expect($("#orca-history")).toBeDisplayed();
     await expect($("#orca-files-tree")).not.toBeDisplayed();

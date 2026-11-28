@@ -536,6 +536,44 @@ describe("footer: the resources (A-48)", () => {
     expect(await browser.execute(() => document.querySelectorAll("#footer-stats i:not(.stat-sep)").length)).toBe(0);
   });
 
+  it("shows cached Claude and Antigravity weekly usage after a separator, and draws a dash when a window has passed its reset time", async () => {
+    const future = Date.now() + 3_600_000;
+    const past = Date.now() - 60_000;
+    const updatedAt = Date.now() - 30_000;
+    await start({
+      machine_resources: [machine("この Mac")],
+      ai_usage_read: {
+        claude: { updatedAt, session: { usedPercent: 18, resetsAt: future }, weekly: { usedPercent: 42, resetsAt: future } },
+        antigravity: { updatedAt, session: null, weekly: { usedPercent: 85, resetsAt: past } },
+      },
+      ...quiet,
+    });
+    await waitForText("#footer-stats", "42%");
+    const ai = await browser.execute(() =>
+      [...document.querySelectorAll("#footer-stats .stat-ai")].map((n) => [
+        n.querySelector(".stat-icon")?.getAttribute("aria-label"),
+        n.querySelector(".stat-num")?.textContent,
+      ]),
+    );
+    expect(ai).toEqual([
+      ["Claude", "42%"],
+      ["Antigravity", "—"],
+    ]);
+    await open();
+    const groups = await browser.execute(() =>
+      [...document.querySelectorAll("#resource-pane-list .res-group")].map((g) =>
+        [...g.querySelectorAll(".res-row")].map((r) => [r.querySelector(".res-key")?.textContent, r.querySelector(".stat-num")?.textContent]),
+      ),
+    );
+    expect(groups).toEqual([
+      [
+        ["5 時間", "18%"],
+        ["weekly", "42%"],
+      ],
+      [["weekly", "—"]],
+    ]);
+  });
+
   it("opens the pane from the right, with the heading リソース, the same place and width as the pane of the unread, and the CPU and the memory of each machine under it", async () => {
     await start({ machine_resources: [machine("この Mac"), saved("PC 1", { cpuPercent: 85 })], ...quiet });
     await waitForText("#footer-stats", "PC 1");

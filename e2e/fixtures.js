@@ -170,8 +170,11 @@ const answers = {
   },
   // A-18: the files and the editor are answered by the spec that opens them; the settings are read at the start.
   editor_settings: { autosaveMs: 1000, autosaveMin: 100, autosaveMax: 3000, autosaveStep: 100 },
-  // A-48: the footer reads the load of this Mac; a spec that checks the numbers answers with its own values.
+  // A-48: the footer reads the load of this Mac and cached AI usage; a spec that checks the numbers answers with its own values.
   machine_resources: [{ environment: null, name: "この Mac", cpuPercent: 38, loadAverage: 4.52, cores: 12, memoryPercent: 10, usedBytes: 6871947674, totalBytes: 68719476736, error: null }],
+  ai_usage_read: { claude: null, antigravity: null },
+  ai_usage_statusline_state: { claude: false, antigravity: false },
+  ai_usage_statusline_set: { claude: false, antigravity: false },
   // A-12: this machine's Orca is not paired; a spec that streams its list answers `orca_pairing_status` with a pairing, and one that saves or revokes one mocks `orca_pairing_save` or `orca_pairing_revoke`.
   orca_pairing_status: { paired: false },
   orca_pairing_save: { paired: true },

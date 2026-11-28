@@ -1,5 +1,8 @@
 // The commands of src-tauri (`invoke_handler`): each one's arguments and answer. The data types are ts-rs's (bindings/).
 // A command with no arguments is called as `invoke("inbox")`. An answer of `null` is what a Rust `()` or `None` becomes.
+import type { AiKind } from "./bindings/AiKind";
+import type { AiStatuslineState } from "./bindings/AiStatuslineState";
+import type { AiUsageCache } from "./bindings/AiUsageCache";
 import type { AppInfo } from "./bindings/AppInfo";
 import type { AttachedFile } from "./bindings/AttachedFile";
 import type { BrowsedDir } from "./bindings/BrowsedDir";
@@ -443,6 +446,12 @@ export interface Commands {
   orca_browse_dir: { args: { environment: string; path: string }; result: BrowsedDir };
   // A-48: the CPU (the load of a minute per core, in percent) and the memory of this Mac (`environment` null) and of each saved environment, from Orca's `diagnostics.memory`. A machine that fails has its `error` and no figure; the others are still returned. Only reads.
   machine_resources: { args: undefined; result: MachineResources[] };
+  // A-48 (#1603): cached AI usage written by the statusLine wrappers of Claude Code and Antigravity CLI.
+  ai_usage_read: { args: undefined; result: AiUsageCache };
+  // A-48 (#1603): whether each CLI's `settings.json` has tsunagiai's statusLine wrapper registered.
+  ai_usage_statusline_state: { args: undefined; result: AiStatuslineState };
+  // A-48 (#1603): registers or restores tsunagiai's statusLine wrapper for `kind`.
+  ai_usage_statusline_set: { args: { kind: AiKind; enabled: boolean }; result: AiStatuslineState };
   // A-10: puts the file `data` (base64, any kind, up to 20 MiB) in `.orca/drops/` of the worktree at `path` of the target `environment`, under its own `name` (a taken name gets `copy`, `copy 2`, ...), and answers `AttachedFile { text, bracketed }`: the text to type for it (the absolute path, one blank after it) and whether the terminal gets it as a bracketed paste (an image) or as typed text. Not tried again: a failure carries its message.
   orca_attach_file: { args: { path: string; name: string; data: string; environment: string | null }; result: AttachedFile };
   orca_drop_taken: { args: { path: string; dir: string; names: string[]; environment: string | null }; result: string[] };

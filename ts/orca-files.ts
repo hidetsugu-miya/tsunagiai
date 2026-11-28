@@ -1270,20 +1270,22 @@ export function initOrcaFiles(on: { open: (relative: string) => void; jira: (key
     leave: () => showDrop(null),
     drop: (target, read) => void putDropped(dropDirAt(target), read),
   });
-  $("orca-files-toggle").innerHTML = FOLDER_SVG;
-  $("orca-files-toggle").onclick = on.toggle;
-  $("orca-files-mode-files").innerHTML = FILE_SVG;
-  $("orca-files-mode-files").onclick = () => chooseMode("files");
+  const pressMode = (next: FilesMode) => {
+    if (mode === next) on.toggle();
+    else chooseMode(next);
+  };
+  $("orca-files-mode-files").innerHTML = FOLDER_SVG;
+  $("orca-files-mode-files").onclick = () => pressMode("files");
   $("orca-files-mode-history").innerHTML = BRANCH_SVG;
-  $("orca-files-mode-history").onclick = () => chooseMode("history");
+  $("orca-files-mode-history").onclick = () => pressMode("history");
   $("orca-files-mode-server").innerHTML = SERVER_SVG;
-  $("orca-files-mode-server").onclick = () => chooseMode("server");
+  $("orca-files-mode-server").onclick = () => pressMode("server");
   $("orca-files-mode-database").innerHTML = DATABASE_SVG;
-  $("orca-files-mode-database").onclick = () => chooseMode("database");
+  $("orca-files-mode-database").onclick = () => pressMode("database");
   $("orca-files-mode-jira").innerHTML = TICKET_SVG;
-  $("orca-files-mode-jira").onclick = () => chooseMode("jira");
+  $("orca-files-mode-jira").onclick = () => pressMode("jira");
   $("orca-files-mode-todo").innerHTML = TODO_SVG;
-  $("orca-files-mode-todo").onclick = () => chooseMode("todo");
+  $("orca-files-mode-todo").onclick = () => pressMode("todo");
   // The Todo part and its icon (here and in the tab strip, by `menu-todo-off` of the style) are there while Todo is on in the menu (A-49, A-50).
   whileOn(
     "todo",
