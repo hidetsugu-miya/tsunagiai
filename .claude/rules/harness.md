@@ -46,7 +46,7 @@ Bad:  change .claude/rules/machines.md in the worktree
 ### Slim a skill or a subagent, and check each change with a small eval
 
 A change to this project's skills (`.claude/skills/`) and subagents (`.claude/agents/`) aims at slimming them: cut or merge before adding, and give the line count of each changed definition before and after in the pull request (at the owner's instruction, 2026-11-21; #1213).
-Every change to one of them comes with a small eval, `.claude/evals/{name of the skill or subagent}.json`, in the form of skill-creator: `skill_name` and `evals`, 1 to 3 cases, each with `id`, `name`, `prompt`, `files`, `expected_output` and `assertions`, at least one of them on the changed behavior. Its fixtures are under `.claude/evals/files/{name}/`.
+Every change to one of them comes with a small eval, `.claude/evals/{name of the skill or subagent}.json`, in the form of skill-creator: `skill_name` and `evals`, 1 to 3 cases, each with `id`, `name`, `prompt`, `files`, `expected_output` and `assertions`, at least one of them on the changed behavior. Its fixtures are under `.claude/evals/files/{name}/`; a fixture says that its facts are those of the time of the record and that the acting subagent does not check them against the repository again (#1531).
 The eval runs in the session: for each case one subagent acts by the definition on the case's files and writes nothing to GitHub (it writes the command it would run instead), and another subagent grades that result against the assertions. Every case passes before the commit, and the result goes in the body of the pull request. Never `claude -p`.
 The global skills and subagents (`~/.claude/`, kept in another repository) are out of scope.
 
