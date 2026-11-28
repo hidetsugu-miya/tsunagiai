@@ -47,7 +47,7 @@ Slack のスレッドは横のペイン、Todo は詳細の下のペインに、
   <tr>
     <td width="50%" valign="top">
       <strong>受信トレイ</strong><br />
-      複数の Gmail アカウントを 1 つの一覧に。アーカイブもゴミ箱もワンクリックで。<br /><br />
+      Gmail と iCloud の複数のアカウントを 1 つの一覧に。アーカイブもゴミ箱もワンクリックで。<br /><br />
       <img src="docs/assets/readme/inbox.png" alt="2 つのアカウントのメールが並ぶ受信トレイ" />
     </td>
     <td width="50%" valign="top">
@@ -98,9 +98,9 @@ Apple の公証を受けていないので、ブラウザでダウンロード�
 | | |
 |---|---|
 | OS | macOS（Apple Silicon） |
-| メール | Gmail のみ。返信は書式つきで、新規作成はテキストで送れます。ファイルは合計 25 MB まで添付できます。下書きの保存はできません |
+| メール | Gmail と iCloud。返信は書式つきで、新規作成はテキストで送れます。ファイルは、Gmail では合計 25 MB まで、iCloud では 19 MB まで添付できます。下書きの保存はできません |
 | Claude の機能 | [Claude Code](docs/claude-integration.md) と [Orca](docs/orca.md) が必要です。なくても、メール、カレンダー、Todo、Slack は使えます |
-| 連携 | Google Calendar（閲覧と、予定の作成・編集・削除）、Todoist、Slack、MySQL（閲覧と SQL の実行。ポートフォワードなどを開く事前スクリプトも使えます）、Notion（ワークスペースの連携だけ）、Jira Cloud（開発の画面でスプリントとチケットを見て、変え、足す） |
+| 連携 | Google Calendar（閲覧と、予定の作成・編集・削除。組織の人の予定を重ねて見ることもできます）、Todoist、Slack、MySQL（閲覧と SQL の実行。ポートフォワードなどを開く事前スクリプトも使えます）、Notion（ワークスペースの連携だけ）、Jira Cloud（開発の画面でスプリントとチケットを見て、変え、足す） |
 
 ## ドキュメント
 
