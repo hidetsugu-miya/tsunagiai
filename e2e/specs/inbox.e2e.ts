@@ -903,6 +903,14 @@ describe("inbox of an iCloud account", () => {
     await expect($(".toast")).toHaveText(expect.stringContaining("ゴミ箱へ移動しました"));
   });
 
+  it("makes a task from a row with the iCloud address and the thread's ID through todoist_task_from_mail", async () => {
+    const make = await mock("todoist_task_from_mail", true);
+    const row = rowOf("unread-threads", "First unread");
+    await row.moveTo();
+    await row.$(".todo-row").click();
+    expect(await waitForCalls(make)).toEqual([{ account: icloudAccount, threadId: "i1", subject: "First unread" }]);
+  });
+
   it("writes a new mail from the iCloud account when there is no Google account, and sends it with the iCloud address", async () => {
     const send = await mock("send_mail", true);
     await $("#mail-compose").click();

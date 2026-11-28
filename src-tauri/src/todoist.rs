@@ -17,7 +17,7 @@ use ts_rs::TS;
 use url::Url;
 
 use crate::{
-    accounts::write_atomic,
+    accounts::{self, write_atomic, Account, AccountKind},
     auth::{config_dir, Auth, KEYRING_SERVICE},
     claude::{self, Summary},
     gmail::{log_failure, ApiError},
@@ -27,6 +27,8 @@ use crate::{
 const API_URL: &str = "https://api.todoist.com/api/v1";
 const WEB_TASK_URL: &str = "https://app.todoist.com/app/task";
 const GMAIL_URL: &str = "https://mail.google.com/mail/u/";
+/// The link of a thread of an iCloud account (M-13): `tsunagiai://mail/{account}/{thread}`. iCloud has no web page to point at, so the link is the app's own.
+const ICLOUD_LINK: &str = "tsunagiai://mail/";
 /// The keychain user name (and the `account=` of the logs) of the personal API token.
 const TOKEN_USER: &str = "todoist";
 /// The token has a service of its own: under the Gmail accounts' one, a name from outside could reach it as an account.
@@ -286,7 +288,7 @@ pub struct Subtask {
     due: Option<Due>,
 }
 
-/// The Gmail thread a task's description links to.
+/// The mail thread a task's description links to (a Gmail thread, or one of an iCloud account, M-13).
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -553,17 +555,36 @@ fn bucket_of(due: Option<NaiveDate>, today: NaiveDate) -> Bucket {
     }
 }
 
-/// The URL tsunagiai writes into a task's description to point at a thread. The account must be one of `accounts`, the registered ones.
-fn gmail_url(accounts: &[String], account: &str, thread_id: &str) -> Result<String, String> {
-    if !accounts.iter().any(|a| a == account) {
+/// The link tsunagiai writes into a task's description to point at a thread: Gmail's URL for a Gmail account, and `tsunagiai://mail/{account}/{thread}` for an iCloud one.
+/// The account must be one of `accounts`, the registered ones, of any kind.
+fn mail_url(accounts: &[Account], account: &str, thread_id: &str) -> Result<String, String> {
+    let Some(registered) = accounts.iter().find(|a| a.address == account) else {
         return Err("登録されていないアカウントです".into());
-    }
+    };
     valid_id(thread_id, "スレッド ID")?;
-    Ok(format!("{GMAIL_URL}{account}/#all/{thread_id}"))
+    match registered.kind {
+        AccountKind::Gmail => Ok(format!("{GMAIL_URL}{account}/#all/{thread_id}")),
+        AccountKind::Icloud if icloud_address(account) => {
+            Ok(format!("{ICLOUD_LINK}{account}/{thread_id}"))
+        }
+        AccountKind::Icloud => Err("このアカウントのメールは Todo のリンクにできません".into()),
+    }
 }
 
-/// The thread a description links to with a URL `gmail_url` made; links of any other form are not tsunagiai's.
+/// Whether an iCloud address can stand in `tsunagiai://mail/{account}/{thread}` as it is: letters, digits and `. _ + - @` only, so that no character needs escaping and the link reads back as it was written.
+fn icloud_address(account: &str) -> bool {
+    account.contains('@')
+        && account
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._+-@".contains(c))
+}
+
+/// The thread a description links to with a link `mail_url` made; links of any other form are not tsunagiai's.
 fn mail_of(description: &str) -> Option<MailRef> {
+    gmail_mail_of(description).or_else(|| icloud_mail_of(description))
+}
+
+fn gmail_mail_of(description: &str) -> Option<MailRef> {
     let start = description.find(GMAIL_URL)?;
     let link = description[start..].split_whitespace().next()?;
     let url = Url::parse(link).ok()?;
@@ -571,6 +592,21 @@ fn mail_of(description: &str) -> Option<MailRef> {
     let account = url.path_segments()?.nth(2)?;
     let (_, thread_id) = url.fragment()?.split_once('/')?;
     if !account.contains('@') || valid_id(thread_id, "").is_err() {
+        return None;
+    }
+    Some(MailRef {
+        account: account.to_owned(),
+        thread_id: thread_id.to_owned(),
+    })
+}
+
+fn icloud_mail_of(description: &str) -> Option<MailRef> {
+    let start = description.find(ICLOUD_LINK)?;
+    let link = description[start + ICLOUD_LINK.len()..]
+        .split_whitespace()
+        .next()?;
+    let (account, thread_id) = link.split_once('/')?;
+    if !icloud_address(account) || valid_id(thread_id, "").is_err() {
         return None;
     }
     Some(MailRef {
@@ -1946,7 +1982,7 @@ pub async fn todoist_add_subtask(
     Ok(done.map(|_| true))
 }
 
-/// Adds a task to the inbox that points at a Gmail thread: the subject is its name, the thread's URL its description.
+/// Adds a task to the inbox that points at a mail thread (Gmail or iCloud): the subject is its name, the link of the thread its description.
 #[tauri::command]
 pub async fn todoist_task_from_mail(
     app: AppHandle,
@@ -1958,9 +1994,10 @@ pub async fn todoist_task_from_mail(
 ) -> Result<Option<bool>, String> {
     let command = "todoist_task_from_mail";
     let accounts = config_dir(&app)
-        .and_then(|dir| auth.accounts(&dir))
-        .map_err(|e| log_failure(command, TOKEN_USER, e))?;
-    let url = gmail_url(&accounts, &account, &thread_id)
+        .and_then(|dir| accounts::load_accounts(&dir))
+        .map_err(|e| log_failure(command, TOKEN_USER, e))?
+        .unwrap_or_default();
+    let url = mail_url(&accounts, &account, &thread_id)
         .map_err(|e| log_failure(command, TOKEN_USER, e))?;
     let subject = subject.trim();
     let content = if subject.is_empty() {
@@ -2892,8 +2929,11 @@ mod tests {
         assert_eq!((m.token, m.copy, m.delete_old), (None, false, false));
     }
 
-    fn accounts() -> Vec<String> {
-        vec!["a@example.com".into()]
+    fn accounts() -> Vec<Account> {
+        vec![
+            Account::gmail("a@example.com"),
+            Account::icloud("me@icloud.com"),
+        ]
     }
 
     fn task(v: Value) -> ApiTask {
@@ -3211,28 +3251,28 @@ mod tests {
     }
 
     #[test]
-    fn gmail_url_names_the_account_and_thread() {
+    fn mail_url_names_the_account_and_thread() {
         assert_eq!(
-            gmail_url(&accounts(), "a@example.com", "18c3f0a1b2").unwrap(),
+            mail_url(&accounts(), "a@example.com", "18c3f0a1b2").unwrap(),
             "https://mail.google.com/mail/u/a@example.com/#all/18c3f0a1b2"
         );
     }
 
     #[test]
-    fn gmail_url_refuses_a_bad_thread_id() {
-        assert!(gmail_url(&accounts(), "a@example.com", "").is_err());
-        assert!(gmail_url(&accounts(), "a@example.com", "x/y").is_err());
+    fn mail_url_refuses_a_bad_thread_id() {
+        assert!(mail_url(&accounts(), "a@example.com", "").is_err());
+        assert!(mail_url(&accounts(), "a@example.com", "x/y").is_err());
     }
 
     #[test]
-    fn gmail_url_refuses_an_unregistered_account() {
-        assert!(gmail_url(&accounts(), "b@example.com", "18c3f0a1b2").is_err());
-        assert!(gmail_url(&[], "a@example.com", "18c3f0a1b2").is_err());
+    fn mail_url_refuses_an_unregistered_account() {
+        assert!(mail_url(&accounts(), "b@example.com", "18c3f0a1b2").is_err());
+        assert!(mail_url(&[], "a@example.com", "18c3f0a1b2").is_err());
     }
 
     #[test]
     fn mail_is_read_back_from_the_description() {
-        let url = gmail_url(&accounts(), "a@example.com", "18c3f0a1b2").unwrap();
+        let url = mail_url(&accounts(), "a@example.com", "18c3f0a1b2").unwrap();
         for description in [
             url.clone(),
             format!("メモ\n{url}\n続き"),
@@ -3257,6 +3297,72 @@ mod tests {
             "https://mail.google.com/mail/u/0/#inbox/18c3f0a1b2",
             "https://mail.google.com/mail/u/a@example.com/#all/",
             "https://mail.google.com/mail/u/a@example.com/",
+        ] {
+            assert_eq!(mail_of(description), None, "{description}");
+        }
+    }
+
+    #[test]
+    fn an_icloud_thread_gets_the_link_of_the_app() {
+        assert_eq!(
+            mail_url(&accounts(), "me@icloud.com", "3c6162").unwrap(),
+            "tsunagiai://mail/me@icloud.com/3c6162"
+        );
+    }
+
+    #[test]
+    fn the_link_of_an_icloud_thread_is_refused_for_a_bad_thread_id_an_unregistered_account_or_an_address_that_needs_escaping(
+    ) {
+        assert!(mail_url(&accounts(), "me@icloud.com", "").is_err());
+        assert!(mail_url(&accounts(), "me@icloud.com", "x/y").is_err());
+        assert!(mail_url(&accounts(), "you@icloud.com", "3c6162").is_err());
+        let odd = [
+            Account::icloud("a%2Fb@icloud.com"),
+            Account::icloud("a b@icloud.com"),
+        ];
+        assert!(mail_url(&odd, "a%2Fb@icloud.com", "3c6162").is_err());
+        assert!(mail_url(&odd, "a b@icloud.com", "3c6162").is_err());
+    }
+
+    #[test]
+    fn an_icloud_link_is_read_back_from_the_description() {
+        let url = mail_url(&accounts(), "me@icloud.com", "3c6162").unwrap();
+        for description in [
+            url.clone(),
+            format!("メモ\n{url}\n続き"),
+            format!("see {url} ok"),
+        ] {
+            assert_eq!(
+                mail_of(&description),
+                Some(MailRef {
+                    account: "me@icloud.com".into(),
+                    thread_id: "3c6162".into()
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn a_description_with_both_kinds_of_link_reads_the_gmail_one() {
+        let gmail = mail_url(&accounts(), "a@example.com", "18c3f0a1b2").unwrap();
+        let icloud = mail_url(&accounts(), "me@icloud.com", "3c6162").unwrap();
+        assert_eq!(
+            mail_of(&format!("{icloud} {gmail}")).unwrap().thread_id,
+            "18c3f0a1b2"
+        );
+    }
+
+    #[test]
+    fn links_of_the_app_that_are_not_a_thread_are_not_mail() {
+        for description in [
+            "tsunagiai://mail/",
+            "tsunagiai://mail/me@icloud.com",
+            "tsunagiai://mail/me@icloud.com/",
+            "tsunagiai://mail/me@icloud.com/x/y",
+            "tsunagiai://mail/me@icloud.com/abc?x=1",
+            "tsunagiai://mail/not-an-address/3c6162",
+            "tsunagiai://mail//3c6162",
+            "tsunagiai://other/me@icloud.com/3c6162",
         ] {
             assert_eq!(mail_of(description), None, "{description}");
         }
@@ -4023,7 +4129,7 @@ mod tests {
 
     #[test]
     fn task_fields_carry_priority_and_mail() {
-        let url = gmail_url(&accounts(), "a@example.com", "abc123").unwrap();
+        let url = mail_url(&accounts(), "a@example.com", "abc123").unwrap();
         let t = todo(
             vec![task(
                 json!({"id": "A", "content": "件名", "priority": 4, "description": url, "project_id": "p"}),

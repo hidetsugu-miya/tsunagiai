@@ -1,4 +1,4 @@
-import { askScreen, boot, callsOf, claudeKeyReady, claudeMissing, claudeReady, comment, copiedTexts, count, dueToday, holds, inbox, mock, onceId, pickFile, rejects, release, sendPopout, setClock, slackLoad, slackMessageUrl, slackSummary, stubClipboard, task, textsOf, today, todoData, waitForCalls, waitForCount, waitForText, openTodo, taskHit, CARD, CARDS, WARN_CARDS, waitForCard } from "../support";
+import { askScreen, boot, callsOf, claudeKeyReady, claudeMissing, claudeReady, comment, copiedTexts, count, dueToday, holds, icloudAccount, icloudInbox, inbox, mock, onceId, pickFile, rejects, release, sendPopout, setClock, slackLoad, slackMessageUrl, slackSummary, stubClipboard, task, textsOf, today, todoData, waitForCalls, waitForCount, waitForText, openTodo, taskHit, threadDetail, threadLoaded, CARD, CARDS, WARN_CARDS, waitForCard } from "../support";
 import { pickItem } from "../orca-support";
 
 // A press as a mouse makes it. WebDriver's element click sends no pointerdown, which is what closes a popover (as in calendar.e2e.ts).
@@ -4502,5 +4502,50 @@ describe("todo: a task's tab in a window of its own (T-11)", () => {
     await browser.execute((id) => window.__e2e_once__(id) && document.dispatchEvent(new Event("visibilitychange")), onceId());
     expect(await waitForCalls(loaded)).toHaveLength(1);
     expect(await waitForCalls(updated)).toEqual([{ was: "todo:k1", tab: windowOf("k1", "Write report") }]);
+  });
+});
+
+// M-13: a task whose description holds the link of a thread of an iCloud account opens that thread on the mail screen.
+describe("todo with the link of an iCloud mail", () => {
+  const withMail = (account: string) => {
+    const data = todoData();
+    data.tasks[0] = { ...data.tasks[0], mail: { account, threadId: "3c6162" } };
+    return data;
+  };
+  // The inbox is loaded first, so the Todo list is drawn knowing the accounts of the list.
+  const openWith = async (account: string) => {
+    await boot({ inbox: icloudInbox(), icloud_accounts: [{ address: icloudAccount }], todoist_load: withMail(account), slack_load: slackLoad, claude_status: claudeReady });
+    await waitForCount("#unread-threads li", 2);
+    await $("#nav-todo").click();
+    await waitForCount("#todo-list li.task", 1);
+  };
+
+  it("opens the thread with the iCloud address and the thread's ID when the mail button of the row is pressed", async () => {
+    await openWith(icloudAccount);
+    const open = await mock("thread", threadDetail("Linked mail", "Hello from Alice", false));
+    const row = $("#todo-list li.task");
+    await row.moveTo();
+    await row.$(".mail-row").click();
+    await threadLoaded();
+    await expect($("#messages .plain")).toHaveText("Hello from Alice");
+    expect(await waitForCalls(open)).toContainEqual({ account: icloudAccount, id: "3c6162" });
+  });
+
+  it("shows the mail card in the detail of the task and opens the thread from it", async () => {
+    await openWith(icloudAccount);
+    const open = await mock("thread", threadDetail("Linked mail", "Hello from Alice", false));
+    await $("#todo-list li.task").click();
+    await $("#todo-detail .mail-link").click();
+    await threadLoaded();
+    expect(await waitForCalls(open)).toContainEqual({ account: icloudAccount, id: "3c6162" });
+  });
+
+  it("offers no mail button for a link to an address that is not an account of the app", async () => {
+    await openWith("gone@icloud.com");
+    const row = $("#todo-list li.task");
+    await row.moveTo();
+    expect(await count("#todo-list li.task .mail-row")).toBe(0);
+    await row.click();
+    expect(await count("#todo-detail .mail-link")).toBe(0);
   });
 });
