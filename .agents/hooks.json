@@ -1,0 +1,81 @@
+{
+  "post-edit": {
+    "PostToolUse": [
+      {
+        "matcher": "write_file|edit_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./hooks/agy-adapter.sh PostToolUse post-edit.sh",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  },
+  "post-gh": {
+    "PostToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./hooks/agy-adapter.sh PostToolUse post-gh.sh",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  },
+  "pre-git": {
+    "PreToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./hooks/agy-adapter.sh PreToolUse pre-git.sh",
+            "timeout": 600
+          }
+        ]
+      }
+    ]
+  },
+  "guard-review": {
+    "PreToolUse": [
+      {
+        "matcher": "run_command|write_file|edit_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./hooks/agy-adapter.sh PreToolUse guard-review.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "guard-e2e": {
+    "PreToolUse": [
+      {
+        "matcher": "run_command|write_file|edit_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./hooks/agy-adapter.sh PreToolUse guard-e2e.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "session-start": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "./hooks/agy-adapter.sh SessionStart session-start.sh",
+        "timeout": 300
+      }
+    ]
+  }
+}
