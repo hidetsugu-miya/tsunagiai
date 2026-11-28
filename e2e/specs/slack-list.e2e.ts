@@ -1604,10 +1604,18 @@ const sideLayout = () =>
     [...document.getElementById("slack-side-feed")!.children].map((c) => {
       if (c.classList.contains("slack-side-mode")) return `button:${c.getAttribute("aria-pressed") === "true" ? "*" : ""}${c.querySelector(".slack-side-name")!.textContent}${c.querySelector(".slack-side-n") ? ` ${c.querySelector(".slack-side-n")!.textContent}` : ""}`;
       if (c.classList.contains("slack-side-group")) return `group:${c.textContent}`;
+      if (c.classList.contains("slack-side-subrow")) return `sub:${c.querySelector(".slack-side-name")!.textContent}`;
       if (c.classList.contains("slack-side-sep")) return "line";
       const button = c.querySelector(".slack-side-btn")!;
       const n = button.querySelector(".slack-side-n");
-      return `${button.classList.contains("unread") ? "unread" : "read"}:${button.querySelector("rect") ? "lock" : "hash"}:${button.querySelector(".slack-side-name")!.textContent}${n ? ` ${n.textContent}` : ""}`;
+      const mark = button.querySelector(".slack-dm-mpim")
+        ? `mpim(${button.querySelector(".slack-dm-mpim")!.textContent})`
+        : button.querySelector(".slack-dm-av")
+          ? "im"
+          : button.querySelector("rect")
+            ? "lock"
+            : "hash";
+      return `${button.classList.contains("unread") ? "unread" : "read"}:${mark}:${button.querySelector(".slack-side-name")!.textContent}${n ? ` ${n.textContent}` : ""}`;
     }),
   );
 
@@ -1622,7 +1630,7 @@ describe("slack list: the side menu (S-19)", () => {
   it("draws the two sections with the unread number, then each workspace's channels as given, with the lock of a private one and the unread ones in bold, and no search field", async () => {
     await openList(timeline(unreadSample(), { side: sideSample() }));
     await waitForCount("#slack-feed .feed-row", 3);
-    expect(await sideLayout()).toEqual(["button:*未読メッセージ 3", "button:ウォッチ", "line", "group:Example Team", "unread:hash:dev 3", "read:lock:ops", "read:hash:announce", "group:Lakeside", "read:hash:random"]);
+    expect(await sideLayout()).toEqual(["button:*未読メッセージ 3", "button:ウォッチ", "line", "group:Example Team", "unread:hash:dev 3", "read:lock:ops", "read:hash:announce", "sub:ダイレクトメッセージ", "group:Lakeside", "read:hash:random", "sub:ダイレクトメッセージ"]);
     expect(await weightOf("#slack-side .slack-side-btn.unread")).toBe("700");
     expect(await weightOf("#slack-side .slack-side-btn:not(.unread)")).toBe("400");
     await expect($("#slack-side input")).not.toExist();
@@ -1642,8 +1650,8 @@ describe("slack list: the side menu (S-19)", () => {
     expect(await sideLayout()).toEqual(["button:*未読メッセージ", "button:ウォッチ"]);
     await mock("slack_timeline", timeline([], { side: [sideWorkspace([]), sideWorkspace([sideChannel("C9", "random")], { teamId: "T2", team: "Lakeside" })] }));
     await emitEvent("slack-timeline-dirty");
-    await browser.waitUntil(async () => (await sideLayout()).length === 5);
-    expect(await sideLayout()).toEqual(["button:*未読メッセージ", "button:ウォッチ", "line", "group:Lakeside", "read:hash:random"]);
+    await browser.waitUntil(async () => (await sideLayout()).length === 6);
+    expect(await sideLayout()).toEqual(["button:*未読メッセージ", "button:ウォッチ", "line", "group:Lakeside", "read:hash:random", "sub:ダイレクトメッセージ"]);
   });
 
   it("shows the unread section with the first button and the watch section with the second, one at a time, and keeps the choice through a read", async () => {
@@ -1712,7 +1720,7 @@ describe("slack list: the side menu (S-19)", () => {
       const turn = () => browser.execute(() => getComputedStyle(document.querySelector("#slack-side .slack-side-group svg")!).transform);
       const open = await turn();
       await pressHeading("T1");
-      expect(await sideLayout()).toEqual(["button:*未読メッセージ 3", "button:ウォッチ", "line", "group:Example Team", "unread:hash:dev 3", "group:Lakeside", "read:hash:random"]);
+      expect(await sideLayout()).toEqual(["button:*未読メッセージ 3", "button:ウォッチ", "line", "group:Example Team", "unread:hash:dev 3", "group:Lakeside", "read:hash:random", "sub:ダイレクトメッセージ"]);
       expect(await headings()).toEqual(["BUTTON:button:false", "BUTTON:button:true"]);
       expect(await turn()).not.toBe(open);
       await pressHeading("T1");
@@ -1723,7 +1731,7 @@ describe("slack list: the side menu (S-19)", () => {
     it("folds only the workspace pressed, keeps the heading of a workspace with no unread channel, and keeps the fold through a redraw", async () => {
       await openSide();
       await pressHeading("T2");
-      expect(await sideLayout()).toEqual(["button:*未読メッセージ 3", "button:ウォッチ", "line", "group:Example Team", "unread:hash:dev 3", "read:lock:ops", "read:hash:announce", "group:Lakeside"]);
+      expect(await sideLayout()).toEqual(["button:*未読メッセージ 3", "button:ウォッチ", "line", "group:Example Team", "unread:hash:dev 3", "read:lock:ops", "read:hash:announce", "sub:ダイレクトメッセージ", "group:Lakeside"]);
       expect(await headings()).toEqual(["BUTTON:button:true", "BUTTON:button:false"]);
       await mock("slack_timeline", timeline(unreadSample(), { side: sideSample() }));
       await emitEvent("slack-timeline-dirty");
@@ -1753,7 +1761,7 @@ describe("slack list: the side menu (S-19)", () => {
       await openList(timeline(unreadSample(), { side: sideSample() }), { slack_side_folded: ["T2"] });
       await waitForCount("#slack-feed .feed-row", 3);
       expect(await headings()).toEqual(["BUTTON:button:true", "BUTTON:button:false"]);
-      expect(await sideLayout()).toEqual(["button:*未読メッセージ 3", "button:ウォッチ", "line", "group:Example Team", "unread:hash:dev 3", "read:lock:ops", "read:hash:announce", "group:Lakeside"]);
+      expect(await sideLayout()).toEqual(["button:*未読メッセージ 3", "button:ウォッチ", "line", "group:Example Team", "unread:hash:dev 3", "read:lock:ops", "read:hash:announce", "sub:ダイレクトメッセージ", "group:Lakeside"]);
     });
 
     it("keeps the channel whose history is shown when the workspace is folded, and keeps the focus on the heading", async () => {
@@ -1763,7 +1771,7 @@ describe("slack list: the side menu (S-19)", () => {
       await waitForCount("#sc-feed .feed-row", 1);
       await browser.execute(() => document.querySelector<HTMLElement>('#slack-side .slack-side-group[data-key="T1/fold"]')!.focus());
       await pressHeading("T1");
-      expect(await sideLayout()).toEqual(["button:未読メッセージ 3", "button:ウォッチ", "line", "group:Example Team", "unread:hash:dev 3", "read:lock:ops", "group:Lakeside", "read:hash:random"]);
+      expect(await sideLayout()).toEqual(["button:未読メッセージ 3", "button:ウォッチ", "line", "group:Example Team", "unread:hash:dev 3", "read:lock:ops", "group:Lakeside", "read:hash:random", "sub:ダイレクトメッセージ"]);
       expect(await browser.execute(() => document.activeElement?.getAttribute("data-key"))).toBe("T1/fold");
       expect(await browser.execute(() => document.querySelector('#slack-side .slack-side-btn[data-key="T1/G2"]')!.getAttribute("aria-pressed"))).toBe("true");
     });
@@ -1816,7 +1824,7 @@ describe("slack list: the side menu (S-19)", () => {
     expect(await waitForCalls("slack_timeline")).toEqual([{ cached: true }]);
     expect(await callsOf(mark)).toEqual([]);
     await expect($("#slack-thread")).not.toBeDisplayed();
-    expect((await sideLayout()).slice(3)).toEqual(["group:Example Team", "read:lock:ops", "read:hash:announce", "group:Lakeside", "read:hash:random"]);
+    expect((await sideLayout()).slice(3)).toEqual(["group:Example Team", "read:lock:ops", "read:hash:announce", "sub:ダイレクトメッセージ", "group:Lakeside", "read:hash:random", "sub:ダイレクトメッセージ"]);
   });
 
   it("puts the channel back with 元に戻す, as for a row", async () => {
@@ -2709,5 +2717,88 @@ describe("slack list: no Claude pane (S-24, retired)", () => {
     expect(await absent()).toBe(0);
     expect(await fills()).toBe(true);
     expect(await callsOf("claude_code_start")).toEqual([]);
+  });
+});
+
+describe("slack list: direct messages (S-31)", () => {
+  const dmSide = () => [
+    sideWorkspace([
+      sideChannel("C0123ABCD", "dev", { unread: 1 }),
+      sideChannel("D1", "佐藤 花子", { private: true, unread: 2, kind: "im" }),
+      sideChannel("G10", "佐藤 花子、鈴木 一郎", { private: true, unread: 0, kind: "mpim", memberCount: 2 }),
+      sideChannel("D2", "田中 太郎", { private: true, unread: 0, kind: "im", selfDm: true }),
+    ]),
+  ];
+
+  it("lists 1-to-1, group and self DMs under the collapsible DM subheading and shows DM headings in the unread list and history", async () => {
+    const msgs = [
+      timelineMessage(slackTs(1), "佐藤 花子", "佐藤 花子", "DM の本文", {
+        channel: "D1",
+        unread: true,
+        channelKind: "im",
+      }),
+    ];
+    await openList(
+      timeline(msgs, {
+        unreadTotal: 2,
+        unreadChannels: [{ teamId: workspace.teamId, channel: "D1", messages: 2, to: msgs[0].ts, threads: [] }],
+        side: dmSide(),
+      }),
+    );
+    await waitForCount("#slack-feed .feed-row", 1);
+    expect(await sideLayout()).toEqual([
+      "button:*未読メッセージ 2",
+      "button:ウォッチ",
+      "line",
+      "group:Example Team",
+      "unread:hash:dev 1",
+      "sub:ダイレクトメッセージ",
+      "unread:im:佐藤 花子 2",
+      "read:mpim(2):佐藤 花子、鈴木 一郎",
+      "read:im:田中 太郎(自分)",
+    ]);
+    // Unread group heading uses DM avatar instead of #.
+    await expect($("#slack-feed .feed-chan .slack-dm-av")).toExist();
+    await expect($("#slack-feed .feed-chan-name")).toHaveText("佐藤 花子");
+
+    // Folding the DM subsection keeps unread DMs and hides read ones.
+    await $('#slack-side .slack-side-sub[data-key="T1/dm-fold"]').click();
+    expect(await sideLayout()).toEqual([
+      "button:*未読メッセージ 2",
+      "button:ウォッチ",
+      "line",
+      "group:Example Team",
+      "unread:hash:dev 1",
+      "sub:ダイレクトメッセージ",
+      "unread:im:佐藤 花子 2",
+    ]);
+
+    // Opening a DM shows its history header with avatar and no #.
+    await mock("slack_channel_history", msgs);
+    await $('#slack-side .slack-side-btn[data-key="T1/D1"]').click();
+    await waitForCount("#sc-feed .feed-row", 1);
+    await expect($("#sc-ic .slack-dm-av")).toExist();
+    await expect($("#sc-name")).toHaveText("佐藤 花子");
+  });
+
+  it("opens a new DM or group DM from the + button popover", async () => {
+    await openList(timeline([], { side: dmSide() }));
+    await waitForCount("#slack-side .slack-side-add", 1);
+    await mock("slack_users", [
+      { id: "U1", name: "佐藤 花子", iconUrl: null, selfUser: false },
+      { id: "U2", name: "鈴木 一郎", iconUrl: null, selfUser: false },
+    ]);
+    await mock("slack_open_dm", sideChannel("G99", "佐藤 花子、鈴木 一郎", { private: true, kind: "mpim", memberCount: 2 }));
+    await mock("slack_channel_history", []);
+
+    await $('#slack-side .slack-side-add[data-key="T1/dm-add"]').click();
+    await waitForCount(".dm-new-pop .dm-new-user", 2);
+    await $('.dm-new-pop .dm-new-user[data-uid="U1"]').click();
+    await $('.dm-new-pop .dm-new-user[data-uid="U2"]').click();
+    await $(".dm-new-pop .text-btn.primary").click();
+
+    expect(await waitForCalls("slack_open_dm")).toEqual([{ teamId: workspace.teamId, userIds: ["U1", "U2"] }]);
+    await expect($("#sc-ic .slack-dm-mpim")).toHaveText("2");
+    await expect($("#sc-name")).toHaveText("佐藤 花子、鈴木 一郎");
   });
 });

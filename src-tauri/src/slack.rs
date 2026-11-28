@@ -1321,12 +1321,11 @@ async fn resolve_dm_names(
             (cid, got)
         }
     });
-    let members_by_id: HashMap<String, Vec<String>> =
-        run_limited(member_jobs, HISTORY_CONCURRENCY)
-            .await
-            .into_iter()
-            .filter_map(|(cid, m)| m.map(|list| (cid, list)))
-            .collect();
+    let members_by_id: HashMap<String, Vec<String>> = run_limited(member_jobs, HISTORY_CONCURRENCY)
+        .await
+        .into_iter()
+        .filter_map(|(cid, m)| m.map(|list| (cid, list)))
+        .collect();
 
     // Collect all user IDs needed for 1-to-1 DMs and MPIM members.
     let mut seen = HashSet::new();
@@ -1517,9 +1516,14 @@ pub async fn slack_open_dm(
     }
     let joined = users.join(",");
     let form = [("users", joined), ("return_im", "true".to_owned())];
-    let reply = call(auth.http(), &token, "conversations.open", Payload::Form(&form))
-        .await
-        .map_err(|e| log_failure(command, &team_id, e))?;
+    let reply = call(
+        auth.http(),
+        &token,
+        "conversations.open",
+        Payload::Form(&form),
+    )
+    .await
+    .map_err(|e| log_failure(command, &team_id, e))?;
     let ch_val = &reply["channel"];
     let mut dm = match dm_from_value(ch_val) {
         Some(mut parsed) => {
@@ -1586,10 +1590,15 @@ pub async fn slack_channels(
     let token = token_of(&team_id)
         .await
         .map_err(|e| log_failure(command, &team_id, e))?;
-    let list =
-        fetch_and_keep_channels(auth.http(), &state.channels, &state.timeline, &team_id, &token)
-            .await
-            .map_err(|e| log_failure(command, &team_id, e))?;
+    let list = fetch_and_keep_channels(
+        auth.http(),
+        &state.channels,
+        &state.timeline,
+        &team_id,
+        &token,
+    )
+    .await
+    .map_err(|e| log_failure(command, &team_id, e))?;
     Ok(list.into_iter().filter(|c| !c.is_dm()).collect())
 }
 
@@ -7537,7 +7546,8 @@ mod tests {
 
     #[test]
     fn the_side_menu_lists_the_channels_by_name_without_the_hidden_ones() {
-        let named = |id: &str, name: &str, private: bool| Channel::channel(id.into(), name.into(), private);
+        let named =
+            |id: &str, name: &str, private: bool| Channel::channel(id.into(), name.into(), private);
         let list = vec![
             named("C1", "release", false),
             named("G2", "Ops", true),
@@ -11388,15 +11398,15 @@ mod tests {
             dm_types_for_scopes(Some("channels:read,im:read,mpim:read")),
             Some("im,mpim")
         );
-        assert_eq!(dm_types_for_scopes(Some("channels:read,im:read")), Some("im"));
+        assert_eq!(
+            dm_types_for_scopes(Some("channels:read,im:read")),
+            Some("im")
+        );
         assert_eq!(
             dm_types_for_scopes(Some("channels:read,mpim:read")),
             Some("mpim")
         );
-        assert_eq!(
-            dm_types_for_scopes(Some("channels:read,groups:read")),
-            None
-        );
+        assert_eq!(dm_types_for_scopes(Some("channels:read,groups:read")), None);
     }
 
     #[test]
@@ -11428,7 +11438,11 @@ mod tests {
         let kept = filter_dms(parsed, &unread_ids);
         assert_eq!(ids(&kept), ["D1", "D3", "G10"]);
 
-        let side = side_channels(&kept, &HashSet::new(), &HashMap::from([("D3".to_owned(), 2)]));
+        let side = side_channels(
+            &kept,
+            &HashSet::new(),
+            &HashMap::from([("D3".to_owned(), 2)]),
+        );
         let d3 = side.iter().find(|c| c.id == "D3").unwrap();
         assert_eq!(d3.kind, Some(ConversationKind::Im));
         assert_eq!(d3.unread, 2);

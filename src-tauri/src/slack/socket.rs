@@ -1303,8 +1303,14 @@ mod tests {
             }
             message_payload(e)
         };
-        assert_eq!(event_of(&message(Some("im")), "T1"), Some(event("C1", None)));
-        assert_eq!(event_of(&message(Some("mpim")), "T1"), Some(event("C1", None)));
+        assert_eq!(
+            event_of(&message(Some("im")), "T1"),
+            Some(event("C1", None))
+        );
+        assert_eq!(
+            event_of(&message(Some("mpim")), "T1"),
+            Some(event("C1", None))
+        );
         assert_eq!(event_of(&message(Some("app_home")), "T1"), None);
         assert_eq!(event_of(&message(Some("channel")), "T2"), None);
         let mut no_team = message(Some("channel"));

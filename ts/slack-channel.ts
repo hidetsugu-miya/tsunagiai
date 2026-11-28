@@ -3,6 +3,8 @@
 // Pressing a message or its replies opens the thread (slack-thread.ts), whose back button returns here at the same scroll position. Nothing here reads a channel: the read position is set from the unread list only.
 // The history is read when the channel is pressed, and again when it is pressed once more; a read that fails shows the error and "再読み込み" on a card. Everything is held in memory only.
 // Under the history is a field to post to the channel (S-21, `slack_channel_post`): what is written is kept per channel in memory, and a post that works empties it and reads the history again.
+import type { ConversationKind } from "./bindings/ConversationKind";
+import type { SideChannel } from "./bindings/SideChannel";
 import type { TimelineMessage } from "./bindings/TimelineMessage";
 import { $, tag } from "./dom.js";
 import { formatDay } from "./format.js";
@@ -12,17 +14,21 @@ import { invoke } from "./ipc.js";
 import { createRichEditor } from "./rich-editor.js";
 import { historyItem, watchedKeys } from "./slack-list.js";
 import { openSlackThread } from "./slack-thread.js";
-import { applyReactionChange, loadIcons, onReactionChange, reactionImages, reactionsNode, slackMs } from "./slack-view.js";
+import { applyReactionChange, decorateAvatar, loadIcons, onReactionChange, reactionImages, reactionsNode, slackMs } from "./slack-view.js";
 import { toast } from "./toast.js";
 import { show } from "./view.js";
 
-// The channel whose history is chosen; null while a section of the list is.
+// The channel or DM whose history is chosen; null while a section of the list is.
 interface Chosen {
   teamId: string;
   team: string;
   channel: string;
   name: string;
   private: boolean;
+  kind?: ConversationKind;
+  iconUrl?: string | null;
+  memberCount?: number | null;
+  selfDm?: boolean;
 }
 let chosen: Chosen | null = null;
 // The messages last read for `chosen` (null until the first read ends) and the error of the last read that failed.
@@ -104,7 +110,8 @@ function loadReply() {
 // Posts the chosen channel's text. A failure shows the error as a card (a toast when the channel is no longer on screen) and keeps the text; a success empties the field and reads the history again, at its newest message.
 async function post() {
   if (!chosen || posting !== null) return;
-  const { teamId, channel, name } = chosen;
+  const { teamId, channel, name, kind } = chosen;
+  const label = kind ? name : `#${name}`;
   const key = `${teamId}/${channel}`;
   syncDraft();
   const text = drafts.get(key) ?? "";
@@ -118,12 +125,12 @@ async function post() {
     posting = null;
     drawReply();
     if (shown()) showFailure("slack-channel", `投稿できませんでした: ${e}`);
-    else toast(`#${name} に投稿できませんでした: ${e}`);
+    else toast(`${label} に投稿できませんでした: ${e}`);
     return;
   }
   posting = null;
   drafts.delete(key);
-  if (!shown()) toast(`#${name} に投稿しました`);
+  if (!shown()) toast(`${label} に投稿しました`);
   if (selectedChannel() === key) read(true);
   drawReply();
 }
@@ -174,8 +181,18 @@ function draw(end = false) {
   const key = JSON.stringify([chosen, messages, error, watchedKeys(), new Date().toDateString()]);
   if (key === drawn && !end) return;
   drawn = key;
-  $("sc-ic").innerHTML = chosen.private ? LOCK_SVG : HASH_SVG;
-  $("sc-name").textContent = chosen.name;
+  const ic = $("sc-ic");
+  if (chosen.kind === "mpim") {
+    ic.replaceChildren(tag("span", "slack-dm-mpim", String(chosen.memberCount ?? 2)));
+  } else if (chosen.kind === "im") {
+    const av = tag("span", "avatar slack-dm-av");
+    decorateAvatar(av, chosen.name, chosen.iconUrl ?? null);
+    ic.replaceChildren(av);
+    loadIcons([chosen.iconUrl ?? null]);
+  } else {
+    ic.innerHTML = chosen.private ? LOCK_SVG : HASH_SVG;
+  }
+  $("sc-name").textContent = chosen.selfDm ? `${chosen.name} (自分)` : chosen.name;
   $("sc-team").textContent = chosen.team;
   const box = feed();
   const top = box.scrollTop;
@@ -214,14 +231,24 @@ async function read(toEnd = false) {
   draw((first || toEnd) && messages !== null);
 }
 
-// A channel of the side menu was pressed: its history fills the body, also when a thread is shown. The same channel again reads it once more and keeps the position.
-export function openSlackChannel(teamId: string, team: string, c: { id: string; name: string; private: boolean }) {
+// A channel or DM of the side menu was pressed: its history fills the body, also when a thread is shown. The same channel again reads it once more and keeps the position.
+export function openSlackChannel(teamId: string, team: string, c: Pick<SideChannel, "id" | "name" | "private" | "kind" | "iconUrl" | "memberCount" | "selfDm">) {
   if (selectedChannel() !== `${teamId}/${c.id}`) {
     messages = null;
     error = null;
     scroll = 0;
   }
-  chosen = { teamId, team, channel: c.id, name: c.name, private: c.private };
+  chosen = {
+    teamId,
+    team,
+    channel: c.id,
+    name: c.name,
+    private: c.private,
+    kind: c.kind,
+    iconUrl: c.iconUrl,
+    memberCount: c.memberCount,
+    selfDm: c.selfDm,
+  };
   show("slack-channel");
   drawn = "";
   draw();
