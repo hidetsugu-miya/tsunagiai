@@ -104,7 +104,7 @@ Tests (#491). `cargo test`: in `mail_send.rs`, the message with files (the `mult
 
 ## M-13 iCloud accounts
 
-An iCloud mail address can be added as an account beside the Gmail accounts, with the address and an App-specific password (the owner's request, 2026-11-28; #1571). This is the part of M-13 that adds, checks and removes the account (#1573): the list, the threads, the operations, the sync, the sending and the MCP tools of an iCloud account come with the later parts, and until then an iCloud account is in no list of mail and no calendar, and the Google card shows only Gmail accounts.
+An iCloud mail address can be added as an account beside the Gmail accounts, with the address and an App-specific password (the owner's request, 2026-11-28; #1571). This is the part of M-13 that adds, checks and removes the account (#1573) and the part that shows its inbox and its threads (#1574): the operations, the sync, the sending and the MCP tools of an iCloud account come with the later parts. The threads of an iCloud account are in the list of mail with the Gmail ones; the account is in no calendar, and the Google card shows only Gmail accounts.
 
 iCloud has no mail API and no OAuth for other apps, so the account is IMAP to `imap.mail.me.com:993` over TLS, logged in with the full address and the App-specific password (made at account.apple.com; it needs the two-factor authentication of the Apple Account, and changing the Apple Account's password makes every App-specific password invalid).
 
@@ -118,3 +118,13 @@ The settings have an iCloud tab (A-3) with one card: the header row (the logo, �
 With no account the card says 「アカウントはまだありません」. The password is never shown, logged, written to a file, returned by a command or put in an error text: the screen keeps no copy of it after it has been sent, and Rust passes it only to the IMAP LOGIN and the keychain.
 
 Why. iCloud mail has neither an API nor an OAuth for other apps, so the App-specific password is the only way in; it is tried at once so that a wrong one is never kept, and the state is asked on each showing of the tab because Apple makes every App-specific password invalid when the Apple Account's password changes.
+
+The inbox and the threads (#1574).
+
+- The list: the newest 50 mails of INBOX (the number of threads that Gmail's list reads), with the mails of Sent Messages that belong to the same threads added, one row for each thread. The row (sender, subject, snippet, time, unread) is the same as a Gmail thread's. With no Google account and only iCloud accounts, the list is shown, and the login screen is shown only when there is no account of either kind (decided from the Google accounts of `inbox` and `icloud_accounts`).
+- The thread: the mails are joined in the app by Message-ID, In-Reply-To and References; a mail with none of these headers is a thread of its own. The ID of a thread is made from the Message-ID of its root mail (hexadecimal).
+- Opening does not read: the mails are read with EXAMINE (read only) and BODY.PEEK, so opening a thread changes no flag at iCloud.
+- The body is the HTML when the mail has it, else the text. 「テキストで読む」 takes the text first. The images inside the mail (`cid:`) are embedded when the thread is read. An image from outside is asked about each time (「表示するか」): iCloud gives no mark that vouches for the sender, so nothing is shown without the press (Gmail's mark of mx.google.com has no counterpart).
+- The AI summary (M-8), the choice of the reply's destination (M-10) and the images take the same shape as a Gmail thread's, and are not changed.
+- When an iCloud account could not be read (the password is invalid, or the network failed), the card of the list says so. When the password is invalid, the words are 「App 用パスワードが無効です。設定の iCloud タブで入れ直してください」. The row of Google's login again is not shown.
+- Not in this part (the later parts of M-13): the automatic sync (#4); marking read, deleting, archiving and their undo (#5); sending, replying and attaching files (#6). Until then these operations answer 「iCloud のメールの…にはまだ対応していません」, and so does the call that marks a thread read when it is opened (`set_read`).

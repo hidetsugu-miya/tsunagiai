@@ -185,11 +185,14 @@ export async function load() {
   try {
     const inbox = await invoke("inbox");
     if (seq !== loadSeq) return;
+    // `inbox.accounts` holds the Google accounts only: the login screen is for an owner with no account of either kind (M-13).
+    const noAccount = inbox.accounts.length === 0 && (await invoke("icloud_accounts")).length === 0;
+    if (seq !== loadSeq) return;
     failed = Object.keys(inbox.failed).length > 0;
     loadFailure = failed ? Object.entries(inbox.failed).map(([a, m]) => `${a}: ${m}`).join("、") : null;
     inboxLoaded = true;
     renderAccounts(inbox);
-    if (inbox.accounts.length === 0) return show("login");
+    if (noAccount) return show("login");
     historyIds.clear();
     for (const [account, id] of Object.entries(inbox.historyIds)) historyIds.set(account, id);
     drawThreads(inbox);

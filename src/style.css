@@ -326,6 +326,23 @@ h1, h2 { flex: 1; font-size: calc(15px * var(--fs)); margin: 0; overflow: hidden
 #cal-claude-term { flex: 1; min-height: 0; }
 #cal-side-feed { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 8px 12px; }
 #cal-month { flex: none; padding: 8px 8px 10px; border-bottom: 1px solid var(--line); }
+/* C-9: the guests of the calendar: the field and the candidates under the month calendar, and the chips of the people shown. The panel is built by ts/calendar-guests.ts. */
+#cal-guest { flex: none; display: flex; flex-direction: column; gap: 6px; padding: 8px 8px 10px; border-bottom: 1px solid var(--line); }
+.cal-guest-label { padding: 0 2px; font-size: calc(11px * var(--fs)); font-weight: 600; color: var(--muted); }
+#cal-guest-input { box-sizing: border-box; width: 100%; height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); color: inherit; font: inherit; }
+#cal-guest-input:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.cal-guest-cands { list-style: none; margin: 0; padding: 4px 0; max-height: 180px; overflow-y: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.cal-guest-cand { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 10px; box-sizing: border-box; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.cal-guest-cand:hover, .cal-guest-cand:focus-visible { background: var(--hover); }
+.cal-guest-cand-text { min-width: 0; display: flex; flex-direction: column; }
+.cal-guest-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cal-guest-mail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(11px * var(--fs)); color: var(--muted); }
+.cal-guest-chip { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 0 4px 0 10px; }
+.cal-guest-swatch { flex: none; width: 10px; height: 10px; border-radius: 3px; }
+.cal-guest-chip .icon-btn { flex: none; margin-left: auto; width: 24px; height: 24px; }
+.cal-guest-chip .icon-btn svg { width: 14px; height: 14px; }
+/* C-9: a guest's event is drawn as an event (.cal-event, .cal-chip) in the color of the person (--c), but it is no button. */
+.cal-guest { cursor: default; }
 .cal-side-account { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 30px; margin: 14px 0 2px; padding: 0 8px; box-sizing: border-box; border: 0; border-radius: 8px; background: none; color: var(--ink-soft); font: inherit; font-size: calc(12px * var(--fs)); font-weight: 600; text-align: left; cursor: pointer; }
 #cal-side-feed > .cal-side-account:first-child { margin-top: 0; }
 .cal-side-account:hover { background: var(--hover); }
