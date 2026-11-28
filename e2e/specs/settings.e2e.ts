@@ -252,7 +252,7 @@ describe("settings: Slack", () => {
     await openSettings([], claudeMissing, "slack");
     await $("#slack-help").click();
     const scopes = await $$('[role="dialog"][aria-label="Slack の接続方法"] .scopes code').map((code) => code.getText());
-    expect(scopes).toEqual(["chat:write", "channels:read", "groups:read", "channels:history", "groups:history", "im:history", "mpim:history", "users:read", "files:read", "channels:write", "groups:write", "emoji:read", "reactions:write", "usergroups:read"]);
+    expect(scopes).toEqual(["chat:write", "channels:read", "groups:read", "channels:history", "groups:history", "im:history", "mpim:history", "users:read", "files:read", "channels:write", "groups:write", "im:read", "mpim:read", "im:write", "mpim:write", "emoji:read", "reactions:write", "usergroups:read"]);
     // The sentence on the optional scopes names it as well, outside the list.
     const named = await $$('[role="dialog"][aria-label="Slack の接続方法"] code').map((code) => code.getText());
     expect(named.filter((name) => name === "usergroups:read")).toHaveLength(2);
@@ -474,7 +474,7 @@ describe("settings: Slack リアルタイム更新", () => {
     await $("#slack-socket-help").click();
     const hint = $('[role="dialog"][aria-label="リアルタイム更新の設定方法"]');
     await expect(hint).toBeDisplayed();
-    expect(await hint.$$("code").map((code) => code.getText())).toEqual(["message.channels", "message.groups", "connections:write", "xapp-"]);
+    expect(await hint.$$("code").map((code) => code.getText())).toEqual(["message.channels", "message.groups", "message.im", "message.mpim", "connections:write", "xapp-"]);
   });
 });
 

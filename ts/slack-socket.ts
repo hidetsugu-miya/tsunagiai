@@ -99,7 +99,7 @@ export function initSlackSocket() {
         [
           [appsLink(), " で、User OAuth Token を取ったアプリを開く"],
           ["「Socket Mode」を有効にする"],
-          ["「Event Subscriptions」を有効にし、「Subscribe to events on behalf of users」に ", code("message.channels"), " と ", code("message.groups"), " を足して、保存する（アプリの再インストールを求められたら、する）"],
+          ["「Event Subscriptions」を有効にし、「Subscribe to events on behalf of users」に ", code("message.channels"), "・", code("message.groups"), "・", code("message.im"), "・", code("message.mpim"), " を足して、保存する（アプリの再インストールを求められたら、する）"],
           ["「Basic Information」の「App-Level Tokens」で、", code("connections:write"), " のトークンを作り、", code("xapp-"), " で始まる値を下の欄に貼る"],
           ["つながると、投稿や返信をすぐに Slack の一覧へ出します。つながっている間、一覧の読み直しは 5 分ごとになります（そのほかは 2 分ごと）。切れたときは自動でつなぎ直します"],
         ],

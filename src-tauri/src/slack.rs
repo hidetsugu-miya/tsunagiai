@@ -159,6 +159,20 @@ struct Migration {
     tried: Option<Instant>,
 }
 
+/// An active non-bot member of a workspace, for starting a new DM (S-31).
+#[derive(Serialize, Debug, PartialEq, Clone)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceUser {
+    id: String,
+    name: String,
+    icon_url: Option<String>,
+    self_user: bool,
+}
+
+type WorkspaceUsersCache = Mutex<HashMap<String, (Instant, Vec<WorkspaceUser>)>>;
+
 /// What the commands share.
 #[derive(Default)]
 pub struct SlackState {
@@ -168,6 +182,8 @@ pub struct SlackState {
     pub(crate) files: tokio::sync::Mutex<()>,
     /// Each workspace's channel list, in memory only.
     channels: Arc<ChannelCache>,
+    /// Each workspace's member list for starting a new DM (S-31), in memory only.
+    workspace_users: WorkspaceUsersCache,
     /// What the timeline and the thread keep between two reads, in memory only.
     timeline: Arc<TimelineCache>,
     /// The attached images fetched so far, by workspace and URL, in memory only. Mail's `fetch_images` cannot read them.
@@ -1202,6 +1218,7 @@ pub async fn slack_remove_workspace(
     .await
     .map_err(|e| log_failure(command, &team_id, e))?;
     state.channels.lock().unwrap().remove(&team_id);
+    state.workspace_users.lock().unwrap().remove(&team_id);
     state.timeline.forget(&team_id);
     state.images.forget(&team_id);
     // The Socket Mode connection and its App-Level Token go with the workspace (S-16), and so does its Sentry token (S-29).
@@ -1371,6 +1388,185 @@ async fn resolve_dm_names(
             None => {}
         }
     }
+}
+
+/// Max pages read from `users.list` for the new-DM picker (S-31).
+const USERS_LIST_PAGES: usize = 3;
+/// Max distinct users accepted by `conversations.open` (Slack's limit for a group DM).
+const DM_USERS_MAX: usize = 8;
+
+/// Parses active non-bot users from a `users.list` response page.
+fn workspace_users_of(reply: &Value, own_id: Option<&str>) -> Vec<WorkspaceUser> {
+    reply["members"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|u| {
+            let id = u["id"].as_str().filter(|id| valid_channel(id))?;
+            if u["deleted"] == true || u["is_bot"] == true || id == "USLACKBOT" {
+                return None;
+            }
+            let profile = &u["profile"];
+            let name = first_name(&[
+                &profile["display_name"],
+                &profile["real_name"],
+                &u["real_name"],
+                &u["name"],
+            ])?;
+            let icon = icon_url(profile["image_72"].as_str())
+                .or_else(|| icon_url(profile["image_48"].as_str()));
+            Some(WorkspaceUser {
+                self_user: own_id == Some(id),
+                id: id.to_owned(),
+                name,
+                icon_url: icon,
+            })
+        })
+        .collect()
+}
+
+/// Validates and deduplicates user IDs for `conversations.open` (1 to `DM_USERS_MAX` valid IDs).
+fn valid_dm_users(user_ids: &[String]) -> Result<Vec<String>, String> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for id in user_ids {
+        if !valid_channel(id) {
+            return Err(BAD_TARGET.into());
+        }
+        if seen.insert(id.as_str()) {
+            out.push(id.clone());
+        }
+    }
+    if out.is_empty() || out.len() > DM_USERS_MAX {
+        return Err(BAD_TARGET.into());
+    }
+    Ok(out)
+}
+
+/// Active non-bot members of a workspace for starting a new DM (S-31; `users.list`, cached for `CHANNELS_TTL`).
+#[tauri::command]
+pub async fn slack_users(
+    auth: State<'_, Auth>,
+    state: State<'_, SlackState>,
+    team_id: String,
+) -> Result<Vec<WorkspaceUser>, String> {
+    let command = "slack_users";
+    if token_key(&team_id).is_err() {
+        return Err(log_failure(command, &team_id, BAD_TARGET));
+    }
+    if let Some(cached) = state
+        .workspace_users
+        .lock()
+        .unwrap()
+        .get(&team_id)
+        .filter(|(at, _)| channels_fresh(at.elapsed()))
+        .map(|(_, list)| list.clone())
+    {
+        return Ok(cached);
+    }
+    let token = token_of(&team_id)
+        .await
+        .map_err(|e| log_failure(command, &team_id, e))?;
+    if is_bot_token(&token) {
+        return Err(log_failure(command, &team_id, BOT_TOKEN));
+    }
+    let own = own_user_id(auth.http(), &state.timeline, &team_id, &token).await;
+    let mut all = Vec::new();
+    let mut cursor: Option<String> = None;
+    for _ in 0..USERS_LIST_PAGES {
+        let mut params = vec![("limit", "200".to_owned())];
+        if let Some(c) = cursor.as_deref() {
+            params.push(("cursor", c.to_owned()));
+        }
+        let reply = call(auth.http(), &token, "users.list", Payload::Form(&params))
+            .await
+            .map_err(|e| log_failure(command, &team_id, e))?;
+        all.extend(workspace_users_of(&reply, own.as_deref()));
+        cursor = next_cursor(&reply);
+        if cursor.is_none() {
+            break;
+        }
+    }
+    all.sort_by_cached_key(|u| (u.name.to_lowercase(), u.id.clone()));
+    state
+        .workspace_users
+        .lock()
+        .unwrap()
+        .insert(team_id, (Instant::now(), all.clone()));
+    Ok(all)
+}
+
+/// Opens or resumes a 1-to-1, self or group DM (`conversations.open`) and inserts it into the workspace's cache (S-31).
+#[tauri::command]
+pub async fn slack_open_dm(
+    auth: State<'_, Auth>,
+    state: State<'_, SlackState>,
+    team_id: String,
+    user_ids: Vec<String>,
+) -> Result<SideChannel, String> {
+    let command = "slack_open_dm";
+    if token_key(&team_id).is_err() {
+        return Err(log_failure(command, &team_id, BAD_TARGET));
+    }
+    let users = valid_dm_users(&user_ids).map_err(|e| log_failure(command, &team_id, e))?;
+    let token = token_of(&team_id)
+        .await
+        .map_err(|e| log_failure(command, &team_id, e))?;
+    if is_bot_token(&token) {
+        return Err(log_failure(command, &team_id, BOT_TOKEN));
+    }
+    let joined = users.join(",");
+    let form = [("users", joined), ("return_im", "true".to_owned())];
+    let reply = call(auth.http(), &token, "conversations.open", Payload::Form(&form))
+        .await
+        .map_err(|e| log_failure(command, &team_id, e))?;
+    let ch_val = &reply["channel"];
+    let mut dm = match dm_from_value(ch_val) {
+        Some(mut parsed) => {
+            parsed.is_open = true;
+            parsed
+        }
+        None => {
+            let id = ch_val["id"]
+                .as_str()
+                .filter(|id| valid_channel(id))
+                .ok_or_else(|| log_failure(command, &team_id, "DM を開けませんでした"))?;
+            let is_mpim = users.len() > 1;
+            Channel {
+                id: id.to_owned(),
+                name: if is_mpim {
+                    mpim_fallback_name(ch_val)
+                } else {
+                    users[0].clone()
+                },
+                private: true,
+                kind: Some(if is_mpim {
+                    ConversationKind::Mpim
+                } else {
+                    ConversationKind::Im
+                }),
+                dm_user: (!is_mpim).then(|| users[0].clone()),
+                icon_url: None,
+                member_count: is_mpim.then(|| u32::try_from(users.len()).unwrap_or(u32::MAX)),
+                self_dm: false,
+                is_open: true,
+            }
+        }
+    };
+    let mut slice = [dm];
+    resolve_dm_names(auth.http(), &state.timeline, &team_id, &token, &mut slice).await;
+    dm = slice.into_iter().next().unwrap();
+    upsert_kept_channel(&state.channels, &team_id, dm.clone());
+    Ok(SideChannel {
+        id: dm.id,
+        name: dm.name,
+        private: dm.private,
+        unread: 0,
+        kind: dm.kind,
+        icon_url: dm.icon_url,
+        member_count: dm.member_count,
+        self_dm: dm.self_dm.then_some(true),
+    })
 }
 
 /// The channels (excluding DMs, S-28) the workspace's user is in. The list is kept for `CHANNELS_TTL`; `refresh` asks Slack again.
@@ -11236,5 +11432,37 @@ mod tests {
         let d3 = side.iter().find(|c| c.id == "D3").unwrap();
         assert_eq!(d3.kind, Some(ConversationKind::Im));
         assert_eq!(d3.unread, 2);
+    }
+
+    #[test]
+    fn workspace_users_leave_out_bots_and_deleted_and_mark_self() {
+        let reply = json!({
+            "ok": true,
+            "members": [
+                {"id": "U1", "name": "me", "profile": {"display_name": "田中 太郎", "image_72": "https://a.slack-edge.com/me.png"}},
+                {"id": "U2", "name": "sato", "profile": {"real_name": "佐藤 花子", "image_48": "https://secure.gravatar.com/s.png"}},
+                {"id": "U3", "name": "bot", "is_bot": true, "profile": {"real_name": "Bot"}},
+                {"id": "U4", "name": "gone", "deleted": true, "profile": {"real_name": "Gone"}},
+                {"id": "USLACKBOT", "name": "slackbot", "profile": {"real_name": "Slackbot"}}
+            ]
+        });
+        let users = workspace_users_of(&reply, Some("U1"));
+        assert_eq!(users.len(), 2);
+        assert!(users[0].self_user);
+        assert_eq!(users[0].name, "田中 太郎");
+        assert!(!users[1].self_user);
+        assert_eq!(users[1].name, "佐藤 花子");
+    }
+
+    #[test]
+    fn valid_dm_users_deduplicates_and_enforces_bounds() {
+        assert_eq!(
+            valid_dm_users(&["U1".into(), "U2".into(), "U1".into()]).unwrap(),
+            ["U1", "U2"]
+        );
+        assert!(valid_dm_users(&[]).is_err());
+        assert!(valid_dm_users(&["bad-id".into()]).is_err());
+        let nine: Vec<String> = (1..=9).map(|n| format!("U{n}")).collect();
+        assert!(valid_dm_users(&nine).is_err());
     }
 }

@@ -4,6 +4,8 @@ import type { AppInfo } from "./bindings/AppInfo";
 import type { AttachedFile } from "./bindings/AttachedFile";
 import type { BrowsedDir } from "./bindings/BrowsedDir";
 import type { Channel } from "./bindings/Channel";
+import type { SideChannel } from "./bindings/SideChannel";
+import type { WorkspaceUser } from "./bindings/WorkspaceUser";
 import type { CalendarChoices } from "./bindings/CalendarChoices";
 import type { CreatedEvent } from "./bindings/CreatedEvent";
 import type { EventNotice } from "./bindings/EventNotice";
@@ -341,6 +343,10 @@ export interface Commands {
   // J-2 (#874): creates a ticket (changes Jira) from the project, the issue type, the summary and the description as Markdown (empty for none), and puts it in the sprint when `sprintId` is given. The answer is its key, with `sprintError` when the ticket was made but could not go into the sprint.
   jira_create_issue: { args: { environment: string | null; project: string; projectId: string; issueTypeId: string; summary: string; markdown: string; sprintId: number | null }; result: JiraCreated };
   slack_channels: { args: { teamId: string; refresh: boolean }; result: Channel[] };
+  // Active non-bot members of a workspace for starting a new DM (S-31; `users.list`, cached in memory).
+  slack_users: { args: { teamId: string }; result: WorkspaceUser[] };
+  // Opens or resumes a 1-to-1, self or group DM (1 to 8 users) via `conversations.open` and returns its side-menu entry (S-31).
+  slack_open_dm: { args: { teamId: string; userIds: string[] }; result: SideChannel };
   // The newest 10 unread rows of each joined channel (no direct messages) of every workspace, newest first: the unread messages (S-8) and the threads with unread replies (S-14, each with `unreadReplies`), and `watched`, the watched threads (S-13, each with `watch`, the newest activity first); `failed` are workspaces whose read failed (the messages their earlier reads kept are still listed),
   // `missing` the scopes a token lacks (users:read, files:read, channels:write, groups:write among them), `refreshSecs` the wait until the next read, `pendingChannels` the channels no read has reached yet,
   // `unreadTotal` the unread messages among all those held and the unread replies (the Slack button's badge), `unreadChannels` the channels with something unread, each with its number of unread messages, the newest one (`to`) that "既読にする" sets the position to, and its threads with unread replies. Messages are kept in memory only.

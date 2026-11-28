@@ -403,6 +403,8 @@ pub fn run() {
             slack::slack_add_workspace,
             slack::slack_remove_workspace,
             slack::slack_channels,
+            slack::slack_users,
+            slack::slack_open_dm,
             slack::slack_timeline,
             slack::slack_mark_read,
             slack::slack_watch,
