@@ -17,8 +17,14 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
   // The same sprint with a ticket that is done: the list leaves it out until 「すべてのステータス」 is chosen (J-2, #1543).
   const withDone = jiraIssues([jiraIssue("EX-1", "Write the page", "In Progress", "indeterminate"), jiraIssue("EX-2", "Fix the list", "Done", "done"), jiraIssue("EX-3", "Plan the work", "To Do")]);
   const OPEN = "::open::";
+  const NONE = "::none::";
+  // The tickets of a sprint with two people and one that no one has, and the credential's user as `jira_myself` answers it (J-2, #1544).
+  const mia = { assignee: "Mia", assigneeAccountId: "acc-mia" };
+  const ken = { assignee: "Ken", assigneeAccountId: "acc-ken" };
+  const owned = jiraIssues([jiraIssue("EX-1", "Write the page", "In Progress", "indeterminate", mia), jiraIssue("EX-2", "Fix the list", "To Do", "new", ken), jiraIssue("EX-3", "Plan the work", "To Do"), jiraIssue("EX-7", "Review it", "In Review", "indeterminate", mia)]);
+  const me = { accountId: "acc-mia", displayName: "Mia", emailAddress: null };
   // A connection with one scrum board, two sprints and a backlog.
-  const jiraFixtures = (extra: Record<string, unknown> = {}) => ({ jira_settings: connected, jira_boards: [board, jiraBoard(2, "Example kanban", "kanban")], jira_sprints: [sprint12, sprint13], jira_issues_of: issuesOf, jira_backlog: backlog, ...extra });
+  const jiraFixtures = (extra: Record<string, unknown> = {}) => ({ jira_settings: connected, jira_myself: { accountId: null, displayName: "", emailAddress: null }, jira_boards: [board, jiraBoard(2, "Example kanban", "kanban")], jira_sprints: [sprint12, sprint13], jira_issues_of: issuesOf, jira_backlog: backlog, ...extra });
 
   const paneMode = (label: string) => $(`#orca-files-bar [aria-label="${label}"]`);
   // The app with the file pane open on the example-app project.
@@ -616,6 +622,98 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     expect(await callsOf("jira_sprint_issues")).toHaveLength(2);
   });
 
+  it("puts the status and the assignee side by side in the second line of the bar (J-2, #1544)", async () => {
+    await openJira(jiraFixtures({ jira_issues_of: { 12: owned } }));
+    await waitForCount("#orca-jira-list .orca-jira-issue", 4);
+    await expect(select("orca-jira-assignee")).toHaveAttribute("aria-label", "担当者");
+    const boxes = await browser.execute(() => {
+      const box = (id: string) => {
+        const r = document.getElementById(id)!.getBoundingClientRect();
+        return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+      };
+      return { sprint: box("orca-jira-sprint"), status: box("orca-jira-status"), assignee: box("orca-jira-assignee") };
+    });
+    expect(boxes.assignee.top).toBeGreaterThanOrEqual(boxes.sprint.bottom);
+    expect(Math.abs(boxes.assignee.top - boxes.status.top)).toBeLessThan(2);
+    expect(boxes.assignee.left).toBeGreaterThanOrEqual(boxes.status.right);
+  });
+
+  it("starts with the credential's user as the assignee, asks for them once, and counts what is left (J-2, #1544)", async () => {
+    await openJira(jiraFixtures({ jira_issues_of: { 12: owned }, jira_myself: me }));
+    await waitForCount("#orca-jira-list .orca-jira-issue", 2);
+    expect(await callsOf("jira_myself")).toEqual([here]);
+    expect(await sectionsOf()).toEqual([["s12", "EX-1", "EX-7"]]);
+    expect(await textsOf(".orca-jira-count")).toEqual(["2 件"]);
+    expect(await optionsOf("orca-jira-assignee")).toEqual([["", "すべての担当者"], ["acc-mia", "Mia"], ["acc-ken", "Ken"], [NONE, "未割り当て"]]);
+    expect(await browser.execute(() => (document.getElementById("orca-jira-assignee") as HTMLSelectElement).value)).toBe("acc-mia");
+    expect(await count(CARDS)).toBe(0);
+  });
+
+  it("starts with every assignee when the first section has no ticket of the user, or when the user is not known (J-2, #1544)", async () => {
+    await openJira(jiraFixtures({ jira_issues_of: { 12: owned }, jira_myself: { accountId: "acc-zed", displayName: "Zed", emailAddress: null } }));
+    await waitForCount("#orca-jira-list .orca-jira-issue", 4);
+    expect(await browser.execute(() => (document.getElementById("orca-jira-assignee") as HTMLSelectElement).value)).toBe("");
+    expect(await optionsOf("orca-jira-assignee")).toEqual([["", "すべての担当者"], ["acc-mia", "Mia"], ["acc-ken", "Ken"], [NONE, "未割り当て"]]);
+    expect(await textsOf(".orca-jira-count")).toEqual(["4 件"]);
+    // A user with no account id: every assignee, and nothing in the log.
+    await mock("jira_myself", { accountId: null, displayName: "", emailAddress: null });
+    await project("example-api").click();
+    await waitForCalls("jira_myself");
+    await waitForCount("#orca-jira-list .orca-jira-issue", 4);
+    expect(await browser.execute(() => (document.getElementById("orca-jira-assignee") as HTMLSelectElement).value)).toBe("");
+    expect((await logged()).filter((l) => l.source === "orca-jira")).toEqual([]);
+  });
+
+  it("starts with every assignee, one line of the log and no card, when jira_myself fails (J-2, #1544)", async () => {
+    await openJira(jiraFixtures({ jira_issues_of: { 12: owned }, jira_myself: rejects("Jira が認証を拒否しました（403）") }));
+    await waitForCount("#orca-jira-list .orca-jira-issue", 4);
+    expect(await browser.execute(() => (document.getElementById("orca-jira-assignee") as HTMLSelectElement).value)).toBe("");
+    expect(await count(CARDS)).toBe(0);
+    await waitForLog("Jira が認証を拒否しました（403）");
+    expect((await logged()).filter((l) => l.level === "error" && l.source === "orca-jira")).toHaveLength(1);
+  });
+
+  it("narrows every section to a person, to the tickets with no one, or to everyone, and counts what is left (J-2, #1544)", async () => {
+    await openJira(jiraFixtures({ jira_issues_of: { 12: owned, 13: issuesOf[13] }, jira_myself: me }));
+    await waitForCount("#orca-jira-list .orca-jira-issue", 2);
+    await pick("orca-jira-sprint", "all");
+    await waitForCalls("jira_sprint_issues", 2);
+    await pick("orca-jira-assignee", "acc-ken");
+    await waitForCount("#orca-jira-list .orca-jira-issue", 1);
+    expect(await sectionsOf()).toEqual([["s12", "EX-2"], ["s13"]]);
+    expect(await textsOf(".orca-jira-count")).toEqual(["1 件", "0 件"]);
+    await pick("orca-jira-assignee", NONE);
+    await waitForCount("#orca-jira-list .orca-jira-issue", 2);
+    expect(await sectionsOf()).toEqual([["s12", "EX-3"], ["s13", "EX-4"]]);
+    await pick("orca-jira-assignee", "");
+    await waitForCount("#orca-jira-list .orca-jira-issue", 5);
+    expect(await textsOf(".orca-jira-count")).toEqual(["4 件", "1 件"]);
+    // The two filters work together.
+    await pick("orca-jira-assignee", "acc-mia");
+    await pick("orca-jira-status", "In Review");
+    await waitForCount("#orca-jira-list .orca-jira-issue", 1);
+    expect(await sectionsOf()).toEqual([["s12", "EX-7"], ["s13"]]);
+    expect(await textsOf(".orca-jira-count")).toEqual(["1 件", "0 件"]);
+    expect(await callsOf("jira_myself")).toHaveLength(1);
+  });
+
+  it("keeps the assignee that was chosen when everything is read again, and starts again for another project (J-2, #1544)", async () => {
+    await openJira(jiraFixtures({ jira_issues_of: { 12: owned }, jira_myself: me }));
+    await waitForCount("#orca-jira-list .orca-jira-issue", 2);
+    await pick("orca-jira-assignee", "");
+    await waitForCount("#orca-jira-list .orca-jira-issue", 4);
+    await $("#orca-jira-reload").click();
+    await waitForCalls("jira_sprint_issues", 2);
+    await waitForCount("#orca-jira-list .orca-jira-issue", 4);
+    expect(await browser.execute(() => (document.getElementById("orca-jira-assignee") as HTMLSelectElement).value)).toBe("");
+    expect(await callsOf("jira_myself")).toHaveLength(1);
+    await project("example-api").click();
+    await waitForCalls("jira_myself", 2);
+    expect(await callsOf("jira_myself")).toEqual([here, { environment: null, project: "proj_example-api" }]);
+    await waitForCount("#orca-jira-list .orca-jira-issue", 2);
+    expect(await browser.execute(() => (document.getElementById("orca-jira-assignee") as HTMLSelectElement).value)).toBe("acc-mia");
+  });
+
   it("reads the sprints and the backlog of another scrum board when it is chosen (J-2)", async () => {
     await openJira(jiraFixtures({ jira_boards: [board, jiraBoard(2, "Second board")], jira_sprints: [sprint12] }));
     await waitForCount("#orca-jira-list .orca-jira-issue", 3);
@@ -1000,6 +1098,22 @@ describe("orca: the Jira part of the file pane (J-2)", () => {
     ]);
     await expect(editButton(FIELD.assignee)).toHaveText("未割り当て");
     await expect(editButton(FIELD.assignee)).toHaveElementClass("none");
+  });
+
+  it("gives the list the account of the person that the ticket is assigned to, so the assignee select finds it (J-2, #1544)", async () => {
+    await openEditable();
+    await mock("jira_assignable", [{ accountId: "a1", displayName: "Ann" }]);
+    await mock("jira_assign", null);
+    await editButton(FIELD.assignee).click();
+    await waitForCount('.menu[role="menu"]', 1);
+    await (await menuItem(1)).click();
+    await waitForCalls("jira_assign");
+    await expect(editButton(FIELD.assignee)).toHaveText("Ann");
+    expect(await optionsOf("orca-jira-assignee")).toEqual([["", "すべての担当者"], ["a1", "Ann"], [NONE, "未割り当て"]]);
+    await pick("orca-jira-assignee", "a1");
+    await waitForCount("#orca-jira-list .orca-jira-issue", 1);
+    expect(await sectionsOf()).toEqual([["s12", "EX-1"]]);
+    expect(await rowOf("EX-1")).toMatchObject({ assignee: "Ann" });
   });
 
   it("gives the ticket a priority of the list that Jira allows it, and says so when there is none to choose (J-2)", async () => {

@@ -154,7 +154,7 @@ function editStatus(t: JiraTab, issue: JiraIssueDetail, anchor: HTMLButtonElemen
 }
 
 function editAssignee(t: JiraTab, issue: JiraIssueDetail, anchor: HTMLButtonElement) {
-  const to = (accountId: string | null, name: string | null) => () => name === issue.assignee || void write(t, { assignee: name }, () => invoke("jira_assign", { ...at(t), key: t.key, accountId }), () => applyJiraChange(t.key, { assignee: name }));
+  const to = (accountId: string | null, name: string | null) => () => name === issue.assignee || void write(t, { assignee: name }, () => invoke("jira_assign", { ...at(t), key: t.key, accountId }), () => applyJiraChange(t.key, { assignee: name, assigneeAccountId: accountId }));
   void menuOf(
     anchor,
     () => invoke("jira_assignable", { ...at(t), key: t.key }),

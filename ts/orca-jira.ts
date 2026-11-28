@@ -2,6 +2,7 @@
 // The part follows the project of the worktree that the pane shows (`Place`: its target and its project key, #1394): every command takes them, so the connection that is read is the project's own, and another project reads everything again from the start.
 // `jira_settings` is read first (it asks Jira nothing): with no site or no token saved the part shows the form of the connection in its place (J-1, #1395: the site's URL, the email address, the API token, 「保存」 and 「接続を試す」), and a saved connection is changed or deleted with the gear of the bar, which opens the same form. Then the boards (`jira_boards`: the scrum ones and the team-managed ones, `simple`; a kanban board is left out), the sprints of the board (`jira_sprints`; a team-managed board whose sprints are off is Jira's refusal, drawn in the place of the sprints) and, for the sprints or the backlog that the choice names, the tickets, one section after another (`jira_sprint_issues`, `jira_backlog`). A board with no sprint shows its backlog. The board that is chosen is saved for the project (`jira_set_board`) and shown the next time. A section reads, fails and is read again on its own.
 // While the form is shown for a project with no connection (not from the gear), the connections of the other projects stand above it, one row each with 「使う」 (J-1, #1425): `jira_connections` is read when that form is shown, and `jira_copy` makes the project's connection of the row's. A failed read leaves no row and goes to the log only.
+// The bar has two lines (#1543, #1544): the first holds the board, the sprints and the buttons, the second the status and the assignee. The assignee select (`jira_myself`, #1544) starts with the account that the credential belongs to; when the first section that is read has no ticket of that account, or `jira_myself` fails (a line of the log, no card), it starts with every assignee. Its choices are every assignee, the people of the tickets read so far (by `accountId`) and 「未割り当て」.
 // A press on a row opens the ticket as a tab of the work pane (orca-jira-tab.ts), and 「＋」 opens the tab of a new ticket (#874).
 // Everything is read when the part comes to be shown, when 「再読み込み」 is pressed, after a save of the connection, and, while the first read failed, when the window gets the focus back; nothing is read at an interval.
 import type { JiraBoard } from "./bindings/JiraBoard";
@@ -67,6 +68,11 @@ const sections = new Map<string, Section>();
 const OPEN = "::open::";
 let sprintPick = "";
 let statusPick = OPEN;
+// The choice of the assignee: "" is every assignee, `NONE` the tickets with no one, any other value an `accountId`; `null` until the start is settled (the account of `jira_myself`, or every assignee). It is kept like the status, and another project starts again. `assigneeAuto` is true while the start is that account and no section has been read yet to confirm it; `names` holds the display names of the accounts met.
+const NONE = "::none::";
+let assigneePick: string | null = null;
+let assigneeAuto = false;
+const names = new Map<string, string>();
 // The newest read: an answer of an older one is dropped.
 let seq = 0;
 // Whether the part is shown (the pane shown with this part chosen).
@@ -99,6 +105,25 @@ function statuses(): string[] {
 // Whether a ticket passes the choice of the status.
 const passesStatus = (i: JiraIssue) => statusPick === "" || (statusPick === OPEN ? i.statusCategory !== "done" : i.status === statusPick);
 
+// Whether a ticket passes the choice of the assignee (compared by `accountId`).
+const passesAssignee = (i: JiraIssue) => assigneePick === null || assigneePick === "" || i.assigneeAccountId === (assigneePick === NONE ? null : assigneePick);
+
+// The people of the tickets read so far ([accountId, name], in the order they were met), and the chosen one even when no ticket has them now.
+function people(): [string, string][] {
+  const found = new Map<string, string>();
+  for (const s of sections.values()) for (const i of s.issues) if (i.assigneeAccountId !== null && i.assignee !== null && !found.has(i.assigneeAccountId)) found.set(i.assigneeAccountId, i.assignee);
+  if (assigneePick !== null && assigneePick !== "" && assigneePick !== NONE && !found.has(assigneePick)) found.set(assigneePick, names.get(assigneePick) ?? assigneePick);
+  return [...found];
+}
+
+// Keeps the account of `jira_myself` as the start only when the first section that is read has a ticket of it; with none, every assignee is shown, so that the list does not start empty. Later sections and a choice of the owner change nothing.
+function settleAssignee(issues: JiraIssue[]) {
+  for (const i of issues) if (i.assigneeAccountId !== null && i.assignee !== null) names.set(i.assigneeAccountId, i.assignee);
+  if (!assigneeAuto) return;
+  assigneeAuto = false;
+  if (!issues.some((i) => i.assigneeAccountId === assigneePick)) assigneePick = "";
+}
+
 // Fills a select with `options` ([value, text]) when they are not the ones it has, and chooses `value`; a select is not rebuilt while it is open.
 function fill(select: HTMLSelectElement, options: [string, string][], value: string) {
   const key = JSON.stringify(options);
@@ -123,11 +148,15 @@ function drawBar() {
   $("orca-jira-board").hidden = !withBoards;
   $("orca-jira-sprint").hidden = !ready || sprints.length === 0;
   $("orca-jira-status").hidden = !ready || statuses().length === 0;
+  $("orca-jira-assignee").hidden = !ready || ![...sections.values()].some((s) => s.issues.length > 0);
+  // The second line of the bar holds the two selects, and has no room of its own while both are hidden.
+  $("orca-jira-filters").hidden = $("orca-jira-status").hidden && $("orca-jira-assignee").hidden;
   $("orca-jira-reload").hidden = stage === "idle";
   $("orca-jira-new").hidden = !ready || boardId === null;
   if (withBoards) fill($<HTMLSelectElement>("orca-jira-board"), boards.map((b) => [String(b.id), b.name]), String(boardId));
   if (ready && sprints.length > 0) fill($<HTMLSelectElement>("orca-jira-sprint"), [[ALL, "すべてのスプリント"], ...sprints.map((s): [string, string] => [String(s.id), s.name]), [BACKLOG, "バックログ"]], sprintPick);
   if (ready) fill($<HTMLSelectElement>("orca-jira-status"), [["", "すべてのステータス"], [OPEN, "未完了"], ...statuses().map((s): [string, string] => [s, s])], statusPick);
+  if (ready) fill($<HTMLSelectElement>("orca-jira-assignee"), [["", "すべての担当者"], ...people(), [NONE, "未割り当て"]], assigneePick ?? "");
 }
 
 // A row that waits for a read.
@@ -183,7 +212,7 @@ function sectionNode(key: string) {
   head.append(span("orca-jira-name", name));
   if (sprint) head.append(span("orca-jira-state", sprint.state === "active" ? "進行中" : "予定"));
   const section = sections.get(key);
-  const rows = section?.issues.filter(passesStatus) ?? [];
+  const rows = section?.issues.filter(passesStatus).filter(passesAssignee) ?? [];
   if (section?.state === "done") head.append(span("orca-jira-count", `${rows.length} 件`));
   node.append(head);
   if (section === undefined || section.state === "loading") node.append(pending("読み込んでいます…"));
@@ -288,6 +317,8 @@ async function save() {
   conn = saved;
   formOpen = false;
   boardId = null;
+  assigneePick = null;
+  assigneeAuto = false;
   filledFor = null;
   connState = null;
   // The form closes at once, and the part waits for the boards.
@@ -327,6 +358,8 @@ async function copyFrom(from: JiraConnection) {
   conn = saved;
   formOpen = false;
   boardId = null;
+  assigneePick = null;
+  assigneeAuto = false;
   filledFor = null;
   connState = null;
   copies = [];
@@ -395,6 +428,7 @@ async function readSection(run: number, key: string) {
     const read = key === BACKLOG ? await invoke("jira_backlog", { ...here, boardId: id }) : await invoke("jira_sprint_issues", { ...here, sprintId: Number(key.slice(1)) });
     if (run !== seq) return;
     sections.set(key, { state: "done", issues: read.issues, truncated: read.truncated, error: null });
+    settleAssignee(read.issues);
   } catch (e) {
     if (run !== seq) return;
     sections.set(key, { state: "failed", issues: [], truncated: false, error: String(e) });
@@ -438,6 +472,22 @@ async function readBoard(run: number) {
   await readSections(run);
 }
 
+// Asks who the credential is (once, while the choice of the assignee is not settled): that account is the start, and a failure (a line of the log, no card) or an answer with no account id starts with every assignee. The run `run` asked for it; an answer of another run is dropped.
+async function readMyself(run: number, here: JiraPlace) {
+  let id: string | null = null;
+  try {
+    const user = await invoke("jira_myself", here);
+    id = user.accountId;
+    if (id !== null) names.set(id, user.displayName);
+  } catch (e) {
+    if (run !== seq) return;
+    logError("orca-jira", e);
+  }
+  if (run !== seq) return;
+  assigneePick = id ?? "";
+  assigneeAuto = id !== null;
+}
+
 // Reads the boards of a saved connection and the board that is shown (the one saved for the project, else the first), and then its sprints and sections; with no connection saved, shows the form of it.
 async function load(run: number, here: JiraPlace, settings: JiraSettings) {
   conn = settings;
@@ -447,6 +497,8 @@ async function load(run: number, here: JiraPlace, settings: JiraSettings) {
     draw();
     return void readCopies(run, here);
   }
+  // The account is asked beside the boards, and the first section is read after both.
+  const mine = assigneePick === null ? readMyself(run, here) : null;
   try {
     const all = await invoke("jira_boards", here);
     if (run !== seq) return;
@@ -458,6 +510,8 @@ async function load(run: number, here: JiraPlace, settings: JiraSettings) {
     stage = "failed";
     return draw();
   }
+  await mine;
+  if (run !== seq) return;
   await readBoard(run);
 }
 
@@ -500,6 +554,9 @@ export function syncOrcaJira(shown: boolean, next: JiraPlace | null) {
     sprintNote = null;
     sprintPick = "";
     statusPick = OPEN;
+    assigneePick = null;
+    assigneeAuto = false;
+    names.clear();
     boards = [];
     sprints = [];
     sections.clear();
@@ -574,6 +631,11 @@ export function initOrcaJira(on: { open: (key: string, boardId: number) => void;
   };
   $<HTMLSelectElement>("orca-jira-status").onchange = (e) => {
     statusPick = (e.target as HTMLSelectElement).value;
+    draw();
+  };
+  $<HTMLSelectElement>("orca-jira-assignee").onchange = (e) => {
+    assigneePick = (e.target as HTMLSelectElement).value;
+    assigneeAuto = false;
     draw();
   };
 }
