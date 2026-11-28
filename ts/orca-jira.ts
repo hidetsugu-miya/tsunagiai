@@ -1,4 +1,4 @@
-// The Jira part of the file pane of the Orca screen (J-2, #870): the tickets of the Jira that J-1 connects, by sprint; the backlog is a choice of the sprint select and is read only when it is chosen (#1407). Each ticket is a row of two lines: its summary (two lines at most) and, under it, its key, its status, its assignee and its priority; a ticket that is done (its status category) has its summary muted. The tickets belong to no worktree, so the part hides the heading of the pane, as the database part does (A-43).
+// The Jira part of the file pane of the Orca screen (J-2, #870): the tickets of the Jira that J-1 connects, by sprint; the backlog is a choice of the sprint select and is read only when it is chosen (#1407). Each ticket is a row of two lines: its summary (two lines at most) and, under it, its key, its status and its assignee (no priority, #1543); a ticket that is done (its status category) has its summary muted. The tickets belong to no worktree, so the part hides the heading of the pane, as the database part does (A-43).
 // The part follows the project of the worktree that the pane shows (`Place`: its target and its project key, #1394): every command takes them, so the connection that is read is the project's own, and another project reads everything again from the start.
 // `jira_settings` is read first (it asks Jira nothing): with no site or no token saved the part shows the form of the connection in its place (J-1, #1395: the site's URL, the email address, the API token, 「保存」 and 「接続を試す」), and a saved connection is changed or deleted with the gear of the bar, which opens the same form. Then the boards (`jira_boards`: the scrum ones and the team-managed ones, `simple`; a kanban board is left out), the sprints of the board (`jira_sprints`; a team-managed board whose sprints are off is Jira's refusal, drawn in the place of the sprints) and, for the sprints or the backlog that the choice names, the tickets, one section after another (`jira_sprint_issues`, `jira_backlog`). A board with no sprint shows its backlog. The board that is chosen is saved for the project (`jira_set_board`) and shown the next time. A section reads, fails and is read again on its own.
 // While the form is shown for a project with no connection (not from the gear), the connections of the other projects stand above it, one row each with 「使う」 (J-1, #1425): `jira_connections` is read when that form is shown, and `jira_copy` makes the project's connection of the row's. A failed read leaves no row and goes to the log only.
@@ -63,9 +63,10 @@ let boardId: number | null = null;
 let sprints: JiraSprint[] = [];
 let sprintNote: string | null = null;
 const sections = new Map<string, Section>();
-// The choice of the sprint (the id as text, `all` or `backlog`) and of the status ("" is every status). They are kept while the part is read again.
+// The choice of the sprint (the id as text, `all` or `backlog`) and of the status ("" is every status, `OPEN` the tickets whose category is not `done`, which is the choice the part starts with; any other value is a status name). They are kept while the part is read again, and another project starts with the defaults.
+const OPEN = "::open::";
 let sprintPick = "";
-let statusPick = "";
+let statusPick = OPEN;
 // The newest read: an answer of an older one is dropped.
 let seq = 0;
 // Whether the part is shown (the pane shown with this part chosen).
@@ -91,9 +92,12 @@ function wantedKeys(): string[] {
 function statuses(): string[] {
   const names = new Set<string>();
   for (const s of sections.values()) for (const i of s.issues) names.add(i.status);
-  if (statusPick !== "") names.add(statusPick);
+  if (statusPick !== "" && statusPick !== OPEN) names.add(statusPick);
   return [...names];
 }
+
+// Whether a ticket passes the choice of the status.
+const passesStatus = (i: JiraIssue) => statusPick === "" || (statusPick === OPEN ? i.statusCategory !== "done" : i.status === statusPick);
 
 // Fills a select with `options` ([value, text]) when they are not the ones it has, and chooses `value`; a select is not rebuilt while it is open.
 function fill(select: HTMLSelectElement, options: [string, string][], value: string) {
@@ -123,7 +127,7 @@ function drawBar() {
   $("orca-jira-new").hidden = !ready || boardId === null;
   if (withBoards) fill($<HTMLSelectElement>("orca-jira-board"), boards.map((b) => [String(b.id), b.name]), String(boardId));
   if (ready && sprints.length > 0) fill($<HTMLSelectElement>("orca-jira-sprint"), [[ALL, "すべてのスプリント"], ...sprints.map((s): [string, string] => [String(s.id), s.name]), [BACKLOG, "バックログ"]], sprintPick);
-  if (ready) fill($<HTMLSelectElement>("orca-jira-status"), [["", "すべてのステータス"], ...statuses().map((s): [string, string] => [s, s])], statusPick);
+  if (ready) fill($<HTMLSelectElement>("orca-jira-status"), [["", "すべてのステータス"], [OPEN, "未完了"], ...statuses().map((s): [string, string] => [s, s])], statusPick);
 }
 
 // A row that waits for a read.
@@ -165,7 +169,6 @@ function issueRow(issue: JiraIssue) {
   row.onclick = () => boardId !== null && openIssue(issue.key, boardId);
   const meta = tag("div", "orca-jira-meta");
   meta.append(span("orca-jira-key", issue.key), span("orca-jira-status", issue.status), span("orca-jira-assignee", issue.assignee ?? "未割り当て"));
-  if (issue.priority !== null) meta.append(span("orca-jira-priority", issue.priority));
   row.append(span("orca-jira-summary", issue.summary), meta);
   return row;
 }
@@ -180,7 +183,7 @@ function sectionNode(key: string) {
   head.append(span("orca-jira-name", name));
   if (sprint) head.append(span("orca-jira-state", sprint.state === "active" ? "進行中" : "予定"));
   const section = sections.get(key);
-  const rows = section?.issues.filter((i) => statusPick === "" || i.status === statusPick) ?? [];
+  const rows = section?.issues.filter(passesStatus) ?? [];
   if (section?.state === "done") head.append(span("orca-jira-count", `${rows.length} 件`));
   node.append(head);
   if (section === undefined || section.state === "loading") node.append(pending("読み込んでいます…"));
@@ -496,7 +499,7 @@ export function syncOrcaJira(shown: boolean, next: JiraPlace | null) {
     boardId = null;
     sprintNote = null;
     sprintPick = "";
-    statusPick = "";
+    statusPick = OPEN;
     boards = [];
     sprints = [];
     sections.clear();

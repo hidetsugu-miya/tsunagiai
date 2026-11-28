@@ -168,7 +168,7 @@ function editPriority(t: JiraTab, issue: JiraIssueDetail, anchor: HTMLButtonElem
   void menuOf(
     anchor,
     () => invoke("jira_priorities", { ...at(t), key: t.key }),
-    (p) => ({ label: p.name, color: "var(--muted)", current: p.name === issue.priority, pick: () => p.name === issue.priority || void write(t, { priority: p.name }, () => invoke("jira_set_priority", { ...at(t), key: t.key, priorityId: p.id }), () => applyJiraChange(t.key, { priority: p.name })) }),
+    (p) => ({ label: p.name, color: "var(--muted)", current: p.name === issue.priority, pick: () => p.name === issue.priority || void write(t, { priority: p.name }, () => invoke("jira_set_priority", { ...at(t), key: t.key, priorityId: p.id }), () => {}) }),
   );
 }
 
