@@ -46,13 +46,11 @@ const MCP_TODO_DRAFT_FILE: &str = "mcp-todo-draft.json";
 const CALENDAR_MCP_ARG: &str = "--calendar";
 /// The argument that makes `tsunagiai-mcp` offer the tools of the Todo draft pane only (`TODO_DRAFT_TOOLS`, S-18).
 const TODO_DRAFT_MCP_ARG: &str = "--todo-draft";
-/// A-37: the orchestrator of a formation is the pane whose id is this prefix and the formation's name (the screen names its pane so), and it runs in `formations/{name}/` of the config directory, not in `claude-code/`.
-const FORMATION_ID_PREFIX: &str = "formation:";
 const FORMATION_CLAUDE_MD_FILE: &str = "CLAUDE.md";
 /// The text of the orchestrator's `CLAUDE.md`: its role and its steps, with `{name}` where its own name goes. It holds nothing that comes from outside.
 const FORMATION_CLAUDE_MD: &str = include_str!("formation_claude.md");
 const FORMATION_NAME_MARK: &str = "{name}";
-/// A-51: the pane of a plugin of the Plugins tab is the pane `plugin:{folder}/{n}` (the screen names its pane so, as for `formation:`): it runs in that plugin's folder of `plugins::plugins_dir`, not in `claude-code/`. `n` tells the panes of one plugin apart.
+/// A-51: the pane of a plugin of the Plugins tab is the pane `plugin:{folder}/{n}` (the screen names its pane so): it runs in that plugin's folder of `plugins::plugins_dir`, not in `claude-code/`. `n` tells the panes of one plugin apart.
 const PLUGIN_ID_PREFIX: &str = "plugin:";
 /// A-41: the skill that older versions wrote into `.claude/skills/` of the orchestrator's folder, which `write_formation_files` removes. The leader reads the owner's plugins (`plugins::plugins_dir`) instead.
 const LEADER_SKILL_FOLDER: &str = "feature-dev";
@@ -167,20 +165,13 @@ fn auto_script(claude: &Path, mcp_config: &Path, flags: &str) -> String {
     )
 }
 
-/// What a start may ask for: `auto` runs tools with no question, so it is never given Claude Code's own tools (Bash would run unasked), and the orchestrator has its own script and mode (A-37).
+/// What a start may ask for: `auto` runs tools with no question, so it is never given Claude Code's own tools (Bash would run unasked).
 fn check_permission_mode(
-    formation: bool,
     builtin_tools: bool,
     mode: ClaudeCodePermissionMode,
 ) -> Result<(), String> {
-    if mode == ClaudeCodePermissionMode::Manual {
-        return Ok(());
-    }
-    if builtin_tools {
+    if mode != ClaudeCodePermissionMode::Manual && builtin_tools {
         return Err("auto mode のペインでは、Claude Code 自身のツールは使えません".to_owned());
-    }
-    if formation {
-        return Err("オーケストレーターの権限モードは、画面からは選べません".to_owned());
     }
     Ok(())
 }
@@ -203,11 +194,6 @@ fn formation_script(claude: &Path, mcp_config: &Path, name: &str, plugins: &Path
 /// The `CLAUDE.md` of the orchestrator named `name`: its own name is the one the children's first instructions call it by.
 fn formation_claude_md(name: &str) -> String {
     FORMATION_CLAUDE_MD.replace(FORMATION_NAME_MARK, name)
-}
-
-/// The name of the formation whose orchestrator the pane `id` is, or none for any other pane.
-fn formation_of(id: &str) -> Option<&str> {
-    id.strip_prefix(FORMATION_ID_PREFIX)
 }
 
 /// The folder name of the plugin whose pane the id `plugin:{folder}/{n}` is (A-51), none for any other pane. An id that starts with `plugin:` and has no folder or no number is refused, so it never runs as a pane of another folder. `folder` is a text of the screen: `plugins::plugin_dir` checks it.
@@ -233,7 +219,7 @@ fn check_plugin_pane(plugin: bool, builtin_tools: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// The arguments of `/bin/sh`: the script, then `--plugin-dir {folder}` when the pane has a skill, then the first instruction `prompt`. A pane's is given as `--append-system-prompt {prompt}` (A-36, #1293): it is the system prompt, so it is not shown in the terminal as a first message that Claude answers (measured: a value that starts with `-` stays the one value of the flag, also after `--mcp-config`). The orchestrator's (`formation`, A-37) is a work to start, so it stays the one positional argument of `claude [prompt]`, after a `--`: the script ends with `--mcp-config`, which takes several values, and would take the prompt for one of them (measured: `claude --mcp-config a.json "x"` reads `x` as a config file), and the `--` also keeps a prompt from being read as an option. The shell is not asked to read the prompt: it is one element of the list, and the script passes it on as `"$@"`.
+/// The arguments of `/bin/sh`: the script, then `--plugin-dir {folder}` when the pane has a skill, then the first instruction `prompt`. A pane's is given as `--append-system-prompt {prompt}` (A-36, #1293): it is the system prompt, so it is not shown in the terminal as a first message that Claude answers (measured: a value that starts with `-` stays the one value of the flag, also after `--mcp-config`). The orchestrator's (`formation`, A-37, started by `formation_start`) is a work to start, so it stays the one positional argument of `claude [prompt]`, after a `--`: the script ends with `--mcp-config`, which takes several values, and would take the prompt for one of them (measured: `claude --mcp-config a.json "x"` reads `x` as a config file), and the `--` also keeps a prompt from being read as an option. The shell is not asked to read the prompt: it is one element of the list, and the script passes it on as `"$@"`.
 fn launch_args(
     script: &Path,
     plugin_dir: Option<&Path>,
@@ -401,7 +387,7 @@ pub struct FormationStart {
     pub cwd: PathBuf,
 }
 
-/// The start of the orchestrator on this machine, for `tsunagiai-mcp` at `mcp` (the running one): the files written as the app writes them for its own pane (`write_formation_files`), and the command that runs the script. `claude` is found as the panes find it. `projects` are the repositories of its formation, all of this machine (`local`): they are its first instruction, passed as `claude [prompt]` as in the pane of the orchestrator in the app, so nothing has to be typed into the terminal (a typed text would wait behind Claude Code's question whether to trust the folder, which the owner answers on the screen, and which nothing here answers). With no project there is no instruction. A name that `first_prompt` refuses is an error before any file is written.
+/// The start of the orchestrator on this machine, for `tsunagiai-mcp` at `mcp` (the running one), in a terminal of this machine's Orca (A-37, #1579): the files written (`write_formation_files`), and the command that runs the script. `claude` is found as the panes find it. `projects` are the repositories of its formation, all of this machine (`local`): they are its first instruction, passed as `claude [prompt]`, so nothing has to be typed into the terminal (a typed text would wait behind Claude Code's question whether to trust the folder, which the owner answers on the screen, and which nothing here answers). With no project there is no instruction. A name that `first_prompt` refuses is an error before any file is written.
 pub fn formation_start(
     config: &Path,
     name: &str,
@@ -573,79 +559,9 @@ fn stop_later(pgid: i32, ended: Arc<AtomicBool>) {
     std::thread::spawn(move || stop_groups(&[(pgid, ended)], GRACE));
 }
 
-/// The title that the program in a pane's terminal last wrote (OSC 0 or 2), as the pane's reader keeps it; `None` until it writes one.
-type Title = Arc<Mutex<Option<String>>>;
-
-/// The longest part of an unfinished title sequence that is kept for the next read; a longer one is no title.
-const TITLE_CARRY_LIMIT: usize = 1024;
-
-/// Finds the titles in the text a terminal prints (`ESC ] 0 ; title BEL`, `ESC ] 2 ; title ESC \`), also when a read cuts one in two (#915: Claude Code writes `✳` first in it while it waits for input, `formation::title_waits`).
-#[derive(Default)]
-struct TitleScan {
-    carry: String,
-}
-
-impl TitleScan {
-    /// Takes the next text and answers the last complete title in it, if there is one.
-    fn feed(&mut self, text: &str) -> Option<String> {
-        // Only a read that follows a cut one is joined to it; the others are scanned as they are, with no copy of the output.
-        let joined;
-        let all = if self.carry.is_empty() {
-            text
-        } else {
-            joined = std::mem::take(&mut self.carry) + text;
-            joined.as_str()
-        };
-        let mut last = None;
-        let mut rest = all;
-        while let Some(at) = rest.find('\x1b') {
-            let from_escape = &rest[at..];
-            let Some(body) = from_escape.strip_prefix("\x1b]") else {
-                if from_escape.len() == 1 {
-                    self.keep(from_escape);
-                    break;
-                }
-                rest = &from_escape[1..];
-                continue;
-            };
-            let Some(end) = body.find(['\x07', '\x1b']) else {
-                self.keep(from_escape);
-                break;
-            };
-            let after = &body[end + 1..];
-            if body.as_bytes()[end] == 0x1b {
-                if after.is_empty() {
-                    self.keep(from_escape);
-                    break;
-                }
-                if !after.starts_with('\\') {
-                    rest = &body[end..];
-                    continue;
-                }
-            }
-            if let Some(("0" | "2", title)) = body[..end].split_once(';') {
-                last = Some(title.to_owned());
-            }
-            rest = if body.as_bytes()[end] == 0x1b {
-                &after[1..]
-            } else {
-                after
-            };
-        }
-        last
-    }
-
-    fn keep(&mut self, tail: &str) {
-        if tail.len() <= TITLE_CARRY_LIMIT {
-            self.carry = tail.to_owned();
-        }
-    }
-}
-
 /// A pane's process. Dropping it closes the terminal; the plugin folder of the pane's skill goes with it.
 struct Session {
     seq: u64,
-    title: Title,
     master: Box<dyn MasterPty + Send>,
     input: mpsc::Sender<String>,
     pgid: i32,
@@ -660,7 +576,6 @@ struct Reader {
     sink: Sink,
     pgid: i32,
     ended: Arc<AtomicBool>,
-    title: Title,
 }
 
 #[derive(Default)]
@@ -690,16 +605,11 @@ impl Reader {
         let mut buffer = vec![0u8; READ_BUFFER];
         let mut pending = Vec::new();
         let mut taken = true;
-        // Only the leader of a formation has its title read (`formation_title`).
-        let mut scan = formation_of(id).map(|_| TitleScan::default());
         loop {
             match self.reader.read(&mut buffer) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
                     let data = take_text(&mut pending, &buffer[..n]);
-                    if let Some(title) = scan.as_mut().and_then(|scan| scan.feed(&data)) {
-                        *self.title.lock().unwrap_or_else(|e| e.into_inner()) = Some(title);
-                    }
                     if !data.is_empty() && !(self.sink)(ClaudeCodeEvent::Output { data }) {
                         taken = false;
                         break;
@@ -804,10 +714,8 @@ fn open(
             }
         }
     });
-    let title = Title::default();
     let session = Session {
         seq,
-        title: title.clone(),
         master: pair.master,
         input,
         pgid,
@@ -820,7 +728,6 @@ fn open(
         sink,
         pgid,
         ended,
-        title,
     };
     Ok((session, reader))
 }
@@ -860,23 +767,6 @@ impl ClaudeCode {
         }
     }
 
-    /// Types `text` into the terminal of the orchestrator of the formation `name` (the pane `formation:{name}`), as it is: a failure when it has no process, or has ended, so that a reply for the leader is never taken for sent when nobody is there to read it (A-41).
-    pub fn input_formation(&self, name: &str, text: String) -> Result<(), String> {
-        check_input(&text)?;
-        let gone = || {
-            "リーダーの Claude Code が動いていません。リーダーを始めてから、もう一度送ってください"
-                .to_owned()
-        };
-        let sessions = self.inner.lock();
-        let session = sessions
-            .get(format!("{FORMATION_ID_PREFIX}{name}").as_str())
-            .ok_or_else(gone)?;
-        if session.ended.load(Ordering::SeqCst) {
-            return Err(gone());
-        }
-        session.input.send(text).map_err(|_| gone())
-    }
-
     /// Gives the terminal of `id` a new size; nothing happens when it has ended.
     fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
         let sessions = self.inner.lock();
@@ -906,30 +796,6 @@ impl ClaudeCode {
         };
         if let Some(session) = session {
             stop_later(session.pgid, session.ended.clone());
-        }
-    }
-
-    /// The title that the leader of the formation `name` (the pane `formation:{name}`) last wrote in its terminal; `None` when it has no process or has written none (#915).
-    pub fn formation_title(&self, name: &str) -> Option<String> {
-        let sessions = self.inner.lock();
-        let session = sessions.get(format!("{FORMATION_ID_PREFIX}{name}").as_str())?;
-        let title = session
-            .title
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        title
-    }
-
-    /// Ends the process of the orchestrator of the formation `name` (the pane `formation:{name}`), whichever start made it: the formation is deleted (A-37), so no pane is left to close it with its number.
-    /// It returns only when the process group has ended or has been sent the KILL (the grace of `stop_groups` is waited for on this thread, unlike `close`), because the folder of the formation is deleted after it: a tool that the orchestrator started must not write into the folder after that.
-    pub fn close_formation(&self, name: &str) {
-        let session = self
-            .inner
-            .lock()
-            .remove(format!("{FORMATION_ID_PREFIX}{name}").as_str());
-        if let Some(session) = session {
-            stop_groups(&[(session.pgid, session.ended.clone())], GRACE);
         }
     }
 
@@ -974,12 +840,11 @@ fn pane_prompt(prompt: Option<String>) -> Result<Option<String>, String> {
         .transpose()
 }
 
-/// What a start needs: the files written, the sign-in read, the skill's plugin folder made. `plugin_dir` is the folder of the plugin whose pane it is (A-51), where the pane runs instead of `claude-code/`. `formation` is the name of the formation whose orchestrator it is (A-37): its own folder and script, the built-in tools always on, and the projects saved with its formation (`formation.json`) as its first instruction.
+/// What a start needs: the files written, the sign-in read, the skill's plugin folder made. `plugin_dir` is the folder of the plugin whose pane it is (A-51), where the pane runs instead of `claude-code/`.
 #[allow(clippy::too_many_arguments)]
 fn prepare(
     config: &Path,
     exe: &Path,
-    formation: Option<&str>,
     plugin_dir: Option<PathBuf>,
     builtin_tools: bool,
     permission_mode: ClaudeCodePermissionMode,
@@ -987,7 +852,7 @@ fn prepare(
     prompt: Option<String>,
     (cols, rows): (u16, u16),
 ) -> Result<(Spec, Option<CallPlugin>), String> {
-    check_permission_mode(formation.is_some(), builtin_tools, permission_mode)?;
+    check_permission_mode(builtin_tools, permission_mode)?;
     check_plugin_pane(plugin_dir.is_some(), builtin_tools)?;
     let mcp = checked_mcp_binary(exe)?;
     let claude = claude_path()?;
@@ -995,30 +860,16 @@ fn prepare(
     let plugin = skill
         .map(|s| skills::plugin_for(config, &s.name, s.screen))
         .transpose()?;
-    let (script, cwd, prompt) = if let Some(name) = formation {
-        let prompt =
-            crate::formation::first_prompt(&crate::formation::read_projects(config, name)?)?;
-        (
-            write_formation_files(config, name, &claude, &mcp, &crate::plugins::plugins_dir()?)?,
-            crate::formation::dir(config, name),
-            prompt,
-        )
-    } else {
-        (
-            write_files(config, &claude, &mcp, builtin_tools, permission_mode)?,
-            plugin_dir.unwrap_or_else(|| claude_code_dir(config)),
-            prompt,
-        )
-    };
+    let script = write_files(config, &claude, &mcp, builtin_tools, permission_mode)?;
     let spec = Spec {
         program: "/bin/sh".to_owned(),
         args: launch_args(
             &script,
             plugin.as_ref().map(CallPlugin::path),
             prompt,
-            formation.is_some(),
+            false,
         ),
-        cwd,
+        cwd: plugin_dir.unwrap_or_else(|| claude_code_dir(config)),
         env: connection.env(),
         cols,
         rows,
@@ -1026,8 +877,8 @@ fn prepare(
     Ok((spec, plugin))
 }
 
-/// Starts Claude Code in a pseudo terminal for the pane `id` (the pane `formation:{name}` is the orchestrator of the formation `name`, A-37; the pane `plugin:{folder}/{n}` runs in the folder `folder` of the owner's plugins with Claude Code's own tools, A-51): its output and its end go through `channel`. The orchestrator's first instruction names the projects saved with its formation, which Rust reads itself. `builtin_tools` leaves Claude Code's own tools on (the screens give it only the tools of `tsunagiai-mcp` otherwise), `permission_mode` is `manual`, `auto` (#1074: for the calendar pane, with the calendar tools only) or `auto-todo-draft` (#1148: for the pane of a Todo's draft, with that screen's tools only); every mode but `manual` with `builtin_tools`, or for the orchestrator, is refused,
-/// `skill` is a saved skill that it is given, and `prompt` is its first instruction (A-36, #976, #1293: passed as `--append-system-prompt {prompt}`, so it is not shown in the terminal; the orchestrator takes none from the screen, and its own is passed as `claude [prompt]` after a `--`). A failure is the message the pane shows. An `id` that has a process is ended first. The answer is the number of this start, which `claude_code_close` takes with the id.
+/// Starts Claude Code in a pseudo terminal for the pane `id` (the pane `plugin:{folder}/{n}` runs in the folder `folder` of the owner's plugins with Claude Code's own tools, A-51): its output and its end go through `channel`. `builtin_tools` leaves Claude Code's own tools on (the screens give it only the tools of `tsunagiai-mcp` otherwise), `permission_mode` is `manual`, `auto` (#1074: for the calendar pane, with the calendar tools only) or `auto-todo-draft` (#1148: for the pane of a Todo's draft, with that screen's tools only); every mode but `manual` with `builtin_tools` is refused,
+/// `skill` is a saved skill that it is given, and `prompt` is its first instruction (A-36, #976, #1293: passed as `--append-system-prompt {prompt}`, so it is not shown in the terminal). A failure is the message the pane shows. An `id` that has a process is ended first. The answer is the number of this start, which `claude_code_close` takes with the id.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn claude_code_start(
@@ -1055,7 +906,6 @@ pub async fn claude_code_start(
         let (spec, plugin) = prepare(
             &config,
             &exe,
-            formation_of(&id),
             plugin_dir,
             builtin_tools,
             permission_mode,
@@ -1267,25 +1117,16 @@ mod tests {
     }
 
     #[test]
-    fn auto_is_refused_with_the_built_in_tools_and_for_the_orchestrator() {
+    fn auto_is_refused_with_the_built_in_tools() {
         use ClaudeCodePermissionMode::{Auto, Manual};
         // manual is as it was, whatever the pane is.
-        for (formation, builtin_tools) in
-            [(false, false), (false, true), (true, false), (true, true)]
-        {
-            assert_eq!(
-                check_permission_mode(formation, builtin_tools, Manual),
-                Ok(())
-            );
+        for builtin_tools in [false, true] {
+            assert_eq!(check_permission_mode(builtin_tools, Manual), Ok(()));
         }
-        assert_eq!(check_permission_mode(false, false, Auto), Ok(()));
-        assert!(check_permission_mode(false, true, Auto)
+        assert_eq!(check_permission_mode(false, Auto), Ok(()));
+        assert!(check_permission_mode(true, Auto)
             .unwrap_err()
             .contains("ツール"));
-        assert!(check_permission_mode(true, false, Auto)
-            .unwrap_err()
-            .contains("オーケストレーター"));
-        assert!(check_permission_mode(true, true, Auto).is_err());
     }
 
     #[test]
@@ -1369,14 +1210,10 @@ mod tests {
         ] {
             assert!(read(bad).is_err(), "{bad}");
         }
-        assert_eq!(check_permission_mode(false, false, AutoTodoDraft), Ok(()));
-        assert!(check_permission_mode(false, true, AutoTodoDraft)
+        assert_eq!(check_permission_mode(false, AutoTodoDraft), Ok(()));
+        assert!(check_permission_mode(true, AutoTodoDraft)
             .unwrap_err()
             .contains("ツール"));
-        assert!(check_permission_mode(true, false, AutoTodoDraft)
-            .unwrap_err()
-            .contains("オーケストレーター"));
-        assert!(check_permission_mode(true, true, AutoTodoDraft).is_err());
         assert_ne!(Auto, AutoTodoDraft);
     }
 
@@ -1539,22 +1376,6 @@ mod tests {
         assert!(pane_prompt(Some("あ".repeat(20_000))).is_ok());
         let err = pane_prompt(Some("あ".repeat(20_001))).unwrap_err();
         assert!(err.contains("20000"), "{err}");
-    }
-
-    #[test]
-    fn a_pane_is_the_orchestrator_of_the_formation_its_id_names() {
-        assert_eq!(formation_of("formation:api-work"), Some("api-work"));
-        assert_eq!(formation_of("formation:formation"), Some("formation"));
-        // A name that is no formation's reaches `write_formation_files`, which refuses it.
-        assert_eq!(formation_of("formation:"), Some(""));
-        for id in [
-            "formation",
-            "claude-code-1",
-            "database-claude",
-            "x-formation:a",
-        ] {
-            assert_eq!(formation_of(id), None, "{id}");
-        }
     }
 
     #[test]
@@ -2122,65 +1943,6 @@ mod tests {
     }
 
     #[test]
-    fn the_scan_gives_the_last_title_of_osc_0_and_2_ended_by_bel_or_st() {
-        let mut scan = TitleScan::default();
-        assert_eq!(scan.feed("plain text"), None);
-        assert_eq!(
-            scan.feed("\u{1b}]0;✳ Claude Code\u{7}"),
-            Some("✳ Claude Code".into())
-        );
-        assert_eq!(
-            scan.feed("\u{1b}]2;◐ work\u{1b}\\ \u{1b}]0;✳ done\u{7}"),
-            Some("✳ done".into())
-        );
-        assert_eq!(scan.feed("\u{1b}]2;◐ work\u{1b}\\"), Some("◐ work".into()));
-        // Other sequences are no title: a link (OSC 8), a query (OSC 11), and a color.
-        assert_eq!(
-            scan.feed("\u{1b}]8;id=a;https://x\u{7}\u{1b}]11;?\u{7}\u{1b}[31m"),
-            None
-        );
-        // An empty title is a title: the program cleared it.
-        assert_eq!(scan.feed("\u{1b}]0;\u{7}"), Some(String::new()));
-    }
-
-    #[test]
-    fn the_scan_joins_a_title_that_a_read_cut_in_two() {
-        let text = "\u{1b}]0;✳ Claude\u{1b}\\";
-        for cut in 1..text.len() {
-            if !text.is_char_boundary(cut) {
-                continue;
-            }
-            let mut scan = TitleScan::default();
-            assert_eq!(scan.feed(&text[..cut]), None, "cut at {cut}");
-            assert_eq!(
-                scan.feed(&text[cut..]),
-                Some("✳ Claude".into()),
-                "cut at {cut}"
-            );
-        }
-        // A cut that falls inside a sequence that is no title ends it too.
-        let mut scan = TitleScan::default();
-        assert_eq!(scan.feed("\u{1b}"), None);
-        assert_eq!(scan.feed("[0m\u{1b}]0;a\u{7}"), Some("a".into()));
-    }
-
-    #[test]
-    fn the_scan_drops_what_is_not_a_title_and_what_is_too_long() {
-        let mut scan = TitleScan::default();
-        // An ESC that ends a body but is not followed by a backslash aborts the sequence.
-        assert_eq!(
-            scan.feed("\u{1b}]0;lost\u{1b}[0m\u{1b}]0;kept\u{7}"),
-            Some("kept".into())
-        );
-        assert_eq!(
-            scan.feed(&format!("\u{1b}]0;{}", "a".repeat(TITLE_CARRY_LIMIT))),
-            None
-        );
-        assert_eq!(scan.feed("tail\u{7}"), None);
-        assert_eq!(scan.feed("\u{1b}]0;next\u{7}"), Some("next".into()));
-    }
-
-    #[test]
     fn a_byte_that_is_not_utf8_becomes_the_replacement_character() {
         let mut pending = Vec::new();
         assert_eq!(take_text(&mut pending, b"a\xffb"), "a\u{FFFD}b");
@@ -2319,43 +2081,6 @@ mod tests {
         code.input("a", "hello\r".to_owned());
         let (text, _) = until(&rx, "got:hello");
         assert!(text.contains("got:hello"), "{text:?}");
-    }
-
-    #[test]
-    fn the_reply_for_a_leader_reaches_the_terminal_of_its_formation_in_order_and_fails_where_nobody_reads(
-    ) {
-        let code = ClaudeCode::default();
-        // No pane, and a pane of another formation, take nothing.
-        assert!(code.input_formation("api-work", "x".to_owned()).is_err());
-        let (sink, rx) = collecting();
-        code.start(
-            "formation:api-work",
-            &spec("read line; echo \"got:$line\""),
-            None,
-            sink,
-        )
-        .unwrap();
-        assert!(code.input_formation("other", "x".to_owned()).is_err());
-        // The text, and then Enter in a send of its own, as a reply is typed.
-        code.input_formation("api-work", "reply-text".to_owned())
-            .unwrap();
-        code.input_formation("api-work", "\r".to_owned()).unwrap();
-        let (text, _) = until(&rx, "got:reply-text");
-        assert!(text.contains("got:reply-text"), "{text:?}");
-        // More than one send of a pane takes is refused.
-        let long = "あ".repeat(INPUT_LIMIT + 1);
-        assert!(code.input_formation("api-work", long).is_err());
-    }
-
-    #[test]
-    fn a_leader_whose_process_has_ended_takes_no_reply() {
-        let code = ClaudeCode::default();
-        let (sink, rx) = collecting();
-        code.start("formation:api-work", &spec("echo done"), None, sink)
-            .unwrap();
-        until(&rx, "done");
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        assert!(code.input_formation("api-work", "x".to_owned()).is_err());
     }
 
     #[test]

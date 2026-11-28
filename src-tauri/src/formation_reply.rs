@@ -11,8 +11,7 @@ use ts_rs::TS;
 
 use crate::{
     auth::config_dir,
-    claude_code::ClaudeCode,
-    formation::{self, LOCAL},
+    formation,
     formation_page::{self, Card, CardKind, DecisionPage, PageKind, Subject},
     orca,
 };
@@ -450,14 +449,7 @@ pub fn paste_of(text: &str) -> Result<String, String> {
     Ok(paste)
 }
 
-/// Puts `text` into the leader's terminal of the formation `name` of this Mac (the pane `formation:{name}`): the paste, a pause, then Enter.
-async fn send_here(sessions: &ClaudeCode, name: &str, paste: String) -> Result<(), String> {
-    sessions.input_formation(name, paste)?;
-    tokio::time::sleep(ENTER_PAUSE).await;
-    sessions.input_formation(name, ENTER.to_owned())
-}
-
-/// Puts `text` into the leader's terminal `handle` in the Orca of the saved environment `environment`.
+/// Puts `text` into the leader's terminal `handle` in the Orca of `environment`, this Mac's or a saved environment's: the paste, a pause, then Enter.
 async fn send_orca(environment: &str, handle: &str, paste: String) -> Result<(), String> {
     orca::type_in_steps(environment, handle, &[paste, ENTER.to_owned()], ENTER_PAUSE).await
 }
@@ -526,12 +518,11 @@ impl Drop for Sending {
     }
 }
 
-/// Sends the owner's `answers`, `verdict` and `revision` to the page that waits on the child `child` of the formation `name` (A-41) as the reply, into the leader's terminal, and takes the page off the waiting. `at_ms` is the time of the mark the screen drew the page for: a page that was replaced meanwhile is refused, because the answers belong to the page that was shown. The page is read again, so the reply is made of what is there now; nothing is sent when a required card has no answer or when the verdict is missing or does not fit the answers. A formation of this Mac has its leader in the app's own pseudo terminal; one of a saved environment has it in the terminal of that PC's Orca, and the page's record is on that PC. The page is read for its cards alone (`page_input_with_time`: its evidence is not resolved, because the reply holds none of it). A failure carries the message, and the page stays waiting; when the reply was sent and only the mark failed, the next press marks the page and sends nothing (`deliver`).
+/// Sends the owner's `answers`, `verdict` and `revision` to the page that waits on the child `child` of the formation `name` (A-41) as the reply, into the leader's terminal, and takes the page off the waiting. `at_ms` is the time of the mark the screen drew the page for: a page that was replaced meanwhile is refused, because the answers belong to the page that was shown. The page is read again, so the reply is made of what is there now; nothing is sent when a required card has no answer or when the verdict is missing or does not fit the answers. The leader is in a terminal of the Orca of the formation's PC (`Meta::orchestrator_terminal`, this Mac's too since #1579), and the page's record of a saved environment is on that PC. The page is read for its cards alone (`page_input_with_time`: its evidence is not resolved, because the reply holds none of it). A failure carries the message, and the page stays waiting; when the reply was sent and only the mark failed, the next press marks the page and sends nothing (`deliver`).
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn formation_page_answer(
     app: tauri::AppHandle,
-    sessions: tauri::State<'_, ClaudeCode>,
     name: String,
     child: String,
     at_ms: i64,
@@ -541,7 +532,6 @@ pub async fn formation_page_answer(
 ) -> Result<(), String> {
     let dir = config_dir(&app)?;
     let version = app.package_info().version.to_string();
-    let sessions = sessions.inner().clone();
     formation::check_name(&name)?;
     formation::check_name(&child)?;
     let _sending = Sending::take(&name, &child)?;
@@ -562,17 +552,12 @@ pub async fn formation_page_answer(
     let reply = build_reply(&page, &answers, verdict, &revision)?;
     let paste = paste_of(&terminal_text(&child, &reply))?;
     let key = (name.clone(), child.clone(), at);
-    let leader_of = name.clone();
     deliver(
         key,
         async || {
-            if environment == LOCAL {
-                send_here(&sessions, &leader_of, paste).await
-            } else {
-                let handle = orchestrator
-                    .ok_or_else(|| "リーダーのターミナルがまだ始まっていません".to_owned())?;
-                send_orca(&environment, &handle, paste).await
-            }
+            let handle = orchestrator
+                .ok_or_else(|| "リーダーのターミナルがまだ始まっていません".to_owned())?;
+            send_orca(&environment, &handle, paste).await
         },
         async move || {
             orca::blocking(move || {

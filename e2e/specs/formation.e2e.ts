@@ -1,4 +1,4 @@
-import { boot, callsOf, count, decisionCard, decisionOption, decisionPage, formationChild, formationConsent, formationEntry, formationEnvironments, formationList, formationMessage, holds, inbox, listedChild, mock, onceId, orcaOverview, orcaRow, orcaTerminal, orcaWorktree, rejects, release, sendClaudeCode, sendStream, sendTerm, streamList, textsOf, timers, waitForCalls, waitForCard, waitForCount, CARDS, CARD, WARN_CARDS } from "../support";
+import { boot, callsOf, count, decisionCard, decisionOption, decisionPage, formationChild, formationConsent, formationEntry, formationEnvironments, formationList, formationMessage, holds, inbox, listedChild, mock, onceId, orcaOverview, orcaRow, orcaTerminal, orcaWorktree, rejects, release, sendStream, sendTerm, streamList, textsOf, timers, waitForCalls, waitForCard, waitForCount, CARDS, CARD, WARN_CARDS } from "../support";
 import { pickItem } from "../orca-support";
 
 import type { DecisionPage } from "../../ts/bindings/DecisionPage";
@@ -7,13 +7,17 @@ import type { FormationList } from "../../ts/bindings/FormationList";
 // The text of each element as it is, with the spaces that `textsOf` trims (a line of git's status starts with one).
 const rawTextsOf = (selector: string) => browser.execute((s) => [...document.querySelectorAll(s)].map((e) => e.textContent ?? ""), selector);
 
-// A-37: the orchestration of the development screen: the formations in the list of the Orca screen, and the leader and the flow in place of the work pane. The leader's pane is Claude Code of A-36 (`kind: "formation"`), so its process is the mocked `claude_code_start`.
+// A-37: the orchestration of the development screen: the formations in the list of the Orca screen, and the leader and the flow in place of the work pane. The leader is a terminal of the Orca of the formation's PC, this Mac's too (#1579), which Rust makes (`formation_orchestrator`, answered by `e2e/fixtures.js`) and the screen mirrors or streams as a child's.
 const visible = (selector: string) => browser.execute((s) => document.querySelector(s)?.getClientRects().length !== 0 && !document.querySelector<HTMLElement>(s)!.hidden, selector);
 const pressed = (selector: string) => browser.execute((s) => document.querySelector(s)!.getAttribute("aria-pressed"), selector);
 const ground = (selector: string) => browser.execute((s) => getComputedStyle(document.querySelector(s)!).backgroundColor, selector);
-const starts = async () => (await callsOf("claude_code_start")).length;
-// The press is made in the page: the driver takes the focus to the button after its click, which a real press does before.
-const waitForStarts = (n: number) => browser.waitUntil(async () => (await starts()) === n, { timeoutMsg: `claude_code_start was not called ${n} times` });
+// How many times the screen asked Rust for the terminal of the leader of the formation `name` (`formation_orchestrator`).
+const starts = async (name = "formation") => (await callsOf("formation_orchestrator")).filter((c) => (c as { name: string }).name === name).length;
+const waitForStarts = (n: number, name = "formation") => browser.waitUntil(async () => (await starts(name)) === n, { timeoutMsg: `formation_orchestrator was not called ${n} times for ${name}` });
+// The text of the leader's terminal that is shown.
+const leaderText = () => $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText();
+// What Orca answers for a terminal that left its list (`NOT_LISTED` of ts/orca-terminal.ts).
+const GONE_TERMINAL = "宛先のターミナルは終了したか、見つかりません。一覧を読み直してください";
 
 // A list with one project that has a session with no pane, so the project is a row of the list and pressing it shows the work pane of Orca with nothing to read.
 const ORCA_LIST = () => orcaOverview([orcaRow("api", "main", "Write the docs", { handle: null, paneKey: null })]);
@@ -145,16 +149,26 @@ describe("development screen: orchestration", () => {
     await expect($("#orca-list-toggle")).toHaveAttribute("aria-expanded", "true");
   });
 
-  it("starts the orchestrator with the pane id of its formation, Claude Code's own tools, no skill and no project, in the size of the left pane", async () => {
+  it("asks for the leader's terminal in this Mac's Orca and mirrors it there, with no pseudo terminal", async () => {
+    await boot({ inbox: inbox(), orca_terminal_read: ["$ claude", "> orchestrator ready"] });
     await openFormation();
-    const [start] = await waitForCalls("claude_code_start");
-    expect(start).toMatchObject({ id: "formation:formation", builtinTools: true, permissionMode: "manual", skill: null });
-    const { cols, rows } = (start as { viewport: { cols: number; rows: number } }).viewport;
-    expect(cols).toBeGreaterThan(30);
-    expect(rows).toBeGreaterThan(8);
-    await sendClaudeCode({ kind: "output", data: "orchestrator ready" });
-    await browser.waitUntil(async () => (await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("orchestrator ready"));
-    for (const command of ["orca_stream_terminal", "orca_terminal_read", "orca_stream_input"]) expect(await callsOf(command)).toEqual([]);
+    expect(await waitForCalls("formation_orchestrator", 1)).toEqual([{ name: "formation", restart: false }]);
+    // This Mac's Orca is not paired here, so it is not streamed: the terminal is mirrored, with no environment, as the Orca screen's of this Mac.
+    expect((await waitForCalls("orca_terminal_read"))[0]).toMatchObject({ handle: "term_leader_formation" });
+    expect((await callsOf("orca_terminal_read")).every((c) => (c as { environment?: string | null }).environment == null)).toBe(true);
+    await browser.waitUntil(async () => (await leaderText()).includes("orchestrator ready"), { timeoutMsg: "the terminal of the leader never showed" });
+    for (const command of ["claude_code_start", "orca_stream_terminal"]) expect(await callsOf(command)).toEqual([]);
+  });
+
+  it("types into the leader's terminal in this Mac's Orca", async () => {
+    await boot({ inbox: inbox(), orca_terminal_read: ["$ claude", "> orchestrator ready"] });
+    await openFormation();
+    await browser.waitUntil(async () => (await leaderText()).includes("orchestrator ready"));
+    const input = await mock("orca_terminal_input", null);
+    await browser.keys(["c", "d"]);
+    await browser.waitUntil(async () => (await callsOf(input)).map((c) => (c as { text: string }).text).join("") === "cd", { timeoutMsg: "the keys were not sent" });
+    expect((await callsOf(input)).every((c) => (c as { handle: string }).handle === "term_leader_formation")).toBe(true);
+    expect(await callsOf("claude_code_input")).toEqual([]);
   });
 
   it("does not start the orchestrator again when a project is pressed, or the screen is left, and the formation is shown again", async () => {
@@ -173,18 +187,20 @@ describe("development screen: orchestration", () => {
     await $("#nav-orca").click();
     await browser.pause(300);
     expect(await starts()).toBe(1);
-    expect(await callsOf("claude_code_close")).toEqual([]);
   });
 
-  it("starts the orchestrator again when it is shown again after its process ended", async () => {
-    await boot({ inbox: inbox(), orca_overview: ORCA_LIST() });
+  // #943: Claude Code ends, the terminal ends with it and leaves the list of this Mac's Orca: the screen reads no more, and asks Rust for the leader again when the formation is shown next.
+  it("asks for the leader again when it is shown again after its terminal left the list of the Orca", async () => {
+    await boot({ inbox: inbox(), orca_overview: ORCA_LIST(), orca_terminal_read: ["> orchestrator ready"], ...timers({ orcaMirror: MIRROR }) });
     await openFormation();
     await waitForStarts(1);
-    await sendClaudeCode({ kind: "ended", message: "Claude Code が終わりました", clean: true });
+    const read = await mock("orca_terminal_read", rejects(GONE_TERMINAL));
+    await waitForCalls(read, 1);
+    await browser.pause(MIRROR * 4);
+    expect(await callsOf(read)).toHaveLength(1);
     await $(PROJECT).click();
     await $(ROW("formation")).click();
     await waitForStarts(2);
-    expect(await callsOf("claude_code_close")).toEqual([]);
   });
 
   it("starts nothing for the orchestrator while no formation is selected", async () => {
@@ -592,7 +608,10 @@ describe("orchestration mode: the panes beside the list", () => {
 const selectedCard = () => browser.execute(() => [...document.querySelectorAll<HTMLElement>('#formation-flow-list [aria-pressed="true"]')].map((e) => e.dataset.child ?? null));
 const card = (name: string) => $(`#formation-flow-list [data-child="${name}"]`);
 const screenText = () => $("#formation-teammate-term .orca-term-box:not([hidden]) .xterm-rows").getText();
-const readHandles = async () => [...new Set((await callsOf("orca_terminal_read")).map((c) => (c as { handle: string }).handle))];
+// The reads of the children's terminals: the leader's terminal of this Mac (`term_leader_{name}` of `e2e/fixtures.js`) is mirrored too while the leader's tab is shown (#1579).
+const childReads = async () => (await callsOf("orca_terminal_read")).filter((c) => !(c as { handle: string }).handle.startsWith("term_leader_"));
+const readHandles = async () => [...new Set((await childReads()).map((c) => (c as { handle: string }).handle))];
+const waitForChildRead = () => browser.waitUntil(async () => (await childReads()).length > 0, { timeoutMsg: "no terminal of a child was read" });
 const MIRROR = 250;
 
 // No tab of a child is open when a formation is opened (#1165), and most of these specs look at a child's terminal: the card of the child that waits the longest, else of the first that works, is pressed, as the owner presses the card of the child to talk to.
@@ -779,7 +798,7 @@ describe("orchestration mode: the session of a child", () => {
     await expect($("#formation-tab-leader-main")).toHaveAttribute("aria-selected", "true");
     await expect($("#formation-term")).toBeDisplayed();
     await expect($("#formation-teammate-term")).not.toBeDisplayed();
-    expect(await callsOf("orca_terminal_read")).toEqual([]);
+    expect(await childReads()).toEqual([]);
     // The heading has no button that follows a child.
     expect(await count("#formation-follow")).toBe(0);
   });
@@ -859,7 +878,8 @@ describe("orchestration mode: the session of a child", () => {
 
   it("mirrors the terminal of the selected child, and reads the one shown only", async () => {
     await openSession(mixed());
-    const [first] = await waitForCalls("orca_terminal_read");
+    await waitForChildRead();
+    const [first] = await childReads();
     expect(first).toEqual({ handle: "term_web-update" });
     await browser.waitUntil(async () => (await screenText()).includes("確認します"));
     await card("batch-update").click();
@@ -884,7 +904,7 @@ describe("orchestration mode: the session of a child", () => {
   it("mirrors a child of a saved environment that the Orca screen does not stream, reading and typing in that environment, and the one of this Mac as before", async () => {
     await openSession([formationChild("a-update", "working"), formationChild("lab-update", "waiting", { minutes: 3, environment: "mac-studio" })]);
     // The follow selects the child that waits: it runs in the saved environment.
-    expect((await waitForCalls("orca_terminal_read"))[0]).toEqual({ handle: "term_lab-update", environment: "mac-studio" });
+    expect((await waitForChildRead(), (await childReads())[0])).toEqual({ handle: "term_lab-update", environment: "mac-studio" });
     await browser.waitUntil(async () => (await screenText()).includes("確認します"));
     const input = await mock("orca_terminal_input", null);
     await browser.execute(() => document.querySelector<HTMLElement>('#formation-flow-list [data-child="lab-update"]')!.click());
@@ -920,7 +940,7 @@ describe("orchestration mode: the session of a child", () => {
     await browser.waitUntil(async () => (await screenText()).includes("確認します"), { timeoutMsg: "the streamed screen never showed" });
     // The color of the stream is drawn (red is the color 1 of the palette).
     expect(await browser.execute(() => document.querySelectorAll("#formation-teammate-term .xterm-fg-1").length)).toBeGreaterThan(0);
-    expect(await callsOf("orca_terminal_read")).toEqual([]);
+    expect(await childReads()).toEqual([]);
   });
 
   it("sends the keys typed in a streamed terminal through orca_stream_input", async () => {
@@ -1011,12 +1031,12 @@ describe("orchestration mode: the session of a child", () => {
 
   it("stops reading the terminal of a child that is gone from the list, opens no other tab by itself, and reads the next one when its card is pressed", async () => {
     await openSession(mixed());
-    await waitForCalls("orca_terminal_read");
+    await waitForChildRead();
     await mock("formation_children", [formationChild("batch-update", "working")]);
     await browser.waitUntil(async () => (await cardNames()).join() === "batch-update");
     await mock("orca_terminal_read", ["$ next"]);
     await browser.pause(MIRROR * 3);
-    expect(await callsOf("orca_terminal_read")).toEqual([]);
+    expect(await childReads()).toEqual([]);
     await expect($("#formation-term")).toBeDisplayed();
     await card("batch-update").click();
     await browser.waitUntil(async () => (await readHandles()).join() === "term_batch-update");
@@ -1028,12 +1048,12 @@ describe("orchestration mode: the session of a child", () => {
     await expect($("#formation-term")).toBeDisplayed();
     await mock("orca_terminal_read", ["$ none"]);
     await browser.pause(MIRROR * 3);
-    expect(await callsOf("orca_terminal_read")).toEqual([]);
+    expect(await childReads()).toEqual([]);
   });
 
   it("reads no terminal while the mode is left, and reads it again when the mode is shown", async () => {
     await openSession(mixed());
-    await waitForCalls("orca_terminal_read");
+    await waitForChildRead();
     await $(PROJECT).click();
     await mock("orca_terminal_read", ["$"]);
     await browser.pause(MIRROR * 3);
@@ -1041,7 +1061,7 @@ describe("orchestration mode: the session of a child", () => {
     await $(ROW("formation")).click();
     await browser.waitUntil(async () => (await cardNames()).length === 5);
     await card("web-update").click();
-    expect((await waitForCalls("orca_terminal_read"))[0]).toEqual({ handle: "term_web-update" });
+    expect((await waitForChildRead(), (await childReads())[0])).toEqual({ handle: "term_web-update" });
     await $("#nav-mail").click();
     await mock("orca_terminal_read", ["$"]);
     await browser.pause(MIRROR * 3);
@@ -1133,7 +1153,7 @@ describe("orchestration mode: close a child from its card", () => {
 
   it("closes the child by its formation and name without force on 停止, and takes its card and its session away", async () => {
     await openSession(mixed());
-    await waitForCalls("orca_terminal_read");
+    await waitForChildRead();
     expect(await readHandles()).toEqual(["term_web-update"]);
     const close = await mock("formation_close_child", gone);
     await mock("formation_children", without("web-update"));
@@ -1486,7 +1506,7 @@ describe("orchestration mode: the list of the formations", () => {
     expect((await waitForCalls("formation_children", 1))[0]).toEqual({ name: "formation" });
     expect(await headName()).toBe("formation");
     expect(await textsOf("#formation-flow-root .formation-card-name")).toEqual(["formation"]);
-    expect((await waitForCalls("claude_code_start", 1))[0]).toMatchObject({ id: "formation:formation" });
+    expect((await waitForCalls("formation_orchestrator", 1))[0]).toEqual({ name: "formation", restart: false });
     await expect($("#formation-orchestrator")).toBeDisplayed();
   });
 
@@ -1503,30 +1523,32 @@ describe("orchestration mode: the list of the formations", () => {
     expect(await textsOf("#formation-list-feed")).toEqual([""]);
   });
 
-  it("shows the orchestrator and the flow of the formation that is pressed, and ends no process", async () => {
-    await openList();
+  it("shows the orchestrator and the flow of the formation that is pressed, and closes no terminal", async () => {
+    await openList({ orca_terminal_read: ["> first formation"] });
     await waitForStarts(1);
-    await sendClaudeCode({ kind: "output", data: "first formation" });
-    await browser.waitUntil(async () => (await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("first formation"));
+    await browser.waitUntil(async () => (await leaderText()).includes("first formation"));
     await mock("formation_children", [formationChild("api-update", "working")]);
+    await mock("orca_terminal_read", ["> second formation"]);
     await row("won-2485").click();
     expect(await pressedRows()).toEqual(["won-2485"]);
-    await waitForStarts(2);
-    expect(await callsOf("claude_code_start")).toMatchObject([{ id: "formation:formation", builtinTools: true }, { id: "formation:won-2485", builtinTools: true, skill: null }]);
+    await waitForStarts(1, "won-2485");
     expect(await headName()).toBe("won-2485");
     expect(await textsOf("#formation-flow-root .formation-card-name")).toEqual(["won-2485"]);
-    // The other formation's screen is not drawn, and its process is not ended.
-    expect(await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).not.toContain("first formation");
-    expect(await callsOf("claude_code_close")).toEqual([]);
+    // The other formation's terminal is not drawn: the shown one is the leader's of this formation.
+    await browser.waitUntil(async () => (await leaderText()).includes("second formation"));
+    expect(await leaderText()).not.toContain("first formation");
+    expect((await callsOf("orca_terminal_read")).every((c) => (c as { handle: string }).handle === "term_leader_won-2485")).toBe(true);
     await browser.waitUntil(async () => (await callsOf("formation_children")).some((c) => (c as { name: string }).name === "won-2485"));
     await browser.waitUntil(async () => (await cardNames()).join() === "api-update");
-    // Pressed again, the first formation is drawn as it was and starts nothing.
+    // Pressed again, the first formation's terminal is shown and read again, and nothing is asked.
+    const again = await mock("orca_terminal_read", ["> first formation"]);
     await row("formation").click();
-    await browser.waitUntil(async () => (await $("#formation-term .orca-term-box:not([hidden]) .xterm-rows").getText()).includes("first formation"));
+    await browser.waitUntil(async () => (await leaderText()).includes("first formation"));
+    expect((await callsOf(again)).every((c) => (c as { handle: string }).handle === "term_leader_formation")).toBe(true);
     await browser.pause(300);
-    expect(await starts()).toBe(2);
+    expect(await starts()).toBe(1);
+    expect(await starts("won-2485")).toBe(1);
     expect(await headName()).toBe("formation");
-    expect(await callsOf("claude_code_close")).toEqual([]);
   });
 
   it("reads the children of the shown formation only", async () => {
@@ -1569,7 +1591,7 @@ describe("orchestration mode: the list of the formations", () => {
   it("selects nothing when the one that is shown leaves the list, and reads no children", async () => {
     await openList({ formation_list: listedFirst() });
     await row("mail-summary").click();
-    await waitForStarts(2);
+    await waitForStarts(1, "mail-summary");
     await mock("formation_list", formationList([formationEntry("api-work", { minutes: 3 }), formationEntry("formation")]));
     await browser.waitUntil(async () => (await rowNames()).join() === "api-work,formation");
     expect(await pressedRows()).toEqual([]);
@@ -1579,7 +1601,7 @@ describe("orchestration mode: the list of the formations", () => {
     const before = (await callsOf("formation_children")).length;
     await browser.pause(READ * 3);
     expect((await callsOf("formation_children")).length).toBe(before);
-    expect(await starts()).toBe(2);
+    expect(await callsOf("formation_orchestrator")).toHaveLength(2);
   });
 
   it("reads the list for its rows while the development screen is shown, and reads it no more once the screen is left", async () => {
@@ -1732,7 +1754,7 @@ describe("orchestration mode: the dialog that makes a formation", () => {
     await browser.waitUntil(async () => (await pressedRows()).join() === "mail-api");
     expect(await rowNames()).toContain("mail-api");
     expect(await headName()).toBe("mail-api");
-    await browser.waitUntil(async () => (await callsOf("claude_code_start")).some((c) => (c as { id: string }).id === "formation:mail-api"));
+    await waitForStarts(1, "mail-api");
     await browser.waitUntil(async () => (await callsOf("formation_children")).some((c) => (c as { name: string }).name === "mail-api"));
     await expect($(CARDS)).not.toExist();
     // The projects are of two environments: Rust refuses that mix with its own reason, so no consent is asked for it.
@@ -2203,8 +2225,9 @@ describe("orchestration mode: delete a formation", () => {
   });
 
   it("deletes `formation` as any other, and selects nothing when it is the shown one", async () => {
-    await openList();
+    await openList(timers({ formationFlow: READ, orcaMirror: MIRROR }));
     await waitForStarts(1);
+    await waitForCalls("orca_terminal_read", 1);
     const del = await mock("formation_delete", done);
     await mock("formation_list", without("formation"));
     await mock("formation_children", []);
@@ -2213,10 +2236,13 @@ describe("orchestration mode: delete a formation", () => {
     expect(await waitForCalls(del)).toEqual([{ name: "formation", force: false, shown: [] }]);
     await browser.waitUntil(async () => (await rowNames()).join() === "won-2485,mail-summary");
     expect(await pressedRows()).toEqual([]);
-    expect(await callsOf("claude_code_close")).toMatchObject([{ id: "formation:formation" }]);
     await expect($("#formation-orchestrator")).not.toBeDisplayed();
     await expect($("#formation-flow")).not.toBeDisplayed();
     expect(await starts()).toBe(1);
+    // Rust closed the leader's terminal: the screen reads it no more.
+    const reads = (await callsOf("orca_terminal_read")).length;
+    await browser.pause(MIRROR * 4);
+    expect((await callsOf("orca_terminal_read")).length).toBe(reads);
   });
 
   it("asks first, with the name, and calls nothing on キャンセル", async () => {
@@ -2245,9 +2271,9 @@ describe("orchestration mode: delete a formation", () => {
   });
 
   it("selects nothing and stops reading the deleted one's children when the shown one is deleted", async () => {
-    await openList({ formation_list: listedFirst() });
+    await openList({ formation_list: listedFirst(), ...timers({ formationFlow: READ, orcaMirror: MIRROR }) });
     await row("won-2485").click();
-    await waitForStarts(2);
+    await waitForStarts(1, "won-2485");
     await waitForCalls("formation_children", 2);
     const del = await mock("formation_delete", done);
     await mock("formation_list", formationList(listedFirst().formations.filter((f) => f.name !== "won-2485")));
@@ -2259,19 +2285,20 @@ describe("orchestration mode: delete a formation", () => {
     expect(await pressedRows()).toEqual([]);
     await expect($("#formation-orchestrator")).not.toBeDisplayed();
     await expect($("#formation-flow")).not.toBeDisplayed();
-    // The terminal of the deleted formation's orchestrator is dropped, and no new start is made.
-    expect(await callsOf("claude_code_close")).toMatchObject([{ id: "formation:won-2485" }]);
-    expect(await starts()).toBe(2);
+    // The terminal of the deleted formation's orchestrator is dropped and read no more, and nothing is asked again.
+    expect(await starts("won-2485")).toBe(1);
     // The read of the deleted formation's children stops, and no other formation is read in its place.
     const before = (await callsOf("formation_children")).length;
+    const reads = (await callsOf("orca_terminal_read")).length;
     await browser.pause(READ * 3);
     expect((await callsOf("formation_children")).length).toBe(before);
+    expect((await callsOf("orca_terminal_read")).length).toBe(reads);
   });
 
   it("says why a child was refused, and keeps the formation, its row and what is shown", async () => {
     await openList();
     await row("won-2485").click();
-    await waitForStarts(2);
+    await waitForStarts(1, "won-2485");
     const message = "子「api-update」を閉じられないので、フォーメーション「won-2485」を削除していません（閉じ終えた子は閉じたままです）。worktree にコミットしていない変更か、追跡していないファイルがあります。消さずに残しました。消してよいか、オーナーに確かめてください";
     await mock("formation_delete", rejects(message));
     await ask("won-2485");
@@ -2280,7 +2307,6 @@ describe("orchestration mode: delete a formation", () => {
     expect(await rowNames()).toEqual(["formation", "won-2485", "mail-summary"]);
     expect(await pressedRows()).toEqual(["won-2485"]);
     expect(await headName()).toBe("won-2485");
-    expect(await callsOf("claude_code_close")).toEqual([]);
     // The card stays when another row is pressed, until its close button is pressed.
     await row("formation").click();
     expect(await count(CARDS)).toBe(1);
@@ -2291,7 +2317,7 @@ describe("orchestration mode: delete a formation", () => {
   it("says why the children were kept and what is lost, keeps the formation, and calls nothing more on キャンセル", async () => {
     await openList();
     await row("won-2485").click();
-    await waitForStarts(2);
+    await waitForStarts(1, "won-2485");
     const del = await mock("formation_delete", kept);
     await ask("won-2485");
     await yes().click();
@@ -2311,7 +2337,6 @@ describe("orchestration mode: delete a formation", () => {
     expect(await pressedRows()).toEqual(["won-2485"]);
     await expect(row("won-2485")).not.toHaveAttribute("aria-busy", "true");
     await expect($(CARDS)).not.toExist();
-    expect(await callsOf("claude_code_close")).toEqual([]);
     await $('.pop[role="alertdialog"] .text-btn:not(.danger)').click();
     await expect(confirm()).not.toExist();
     expect(await callsOf(del)).toHaveLength(1);
@@ -2357,7 +2382,6 @@ describe("orchestration mode: delete a formation", () => {
     await yes().click();
     await waitForCard(message);
     expect(await rowNames()).toEqual(["formation", "won-2485", "mail-summary"]);
-    expect(await callsOf("claude_code_close")).toEqual([]);
   });
 
   it("deletes one formation once while the deletion is on its way, and marks its row busy", async () => {
@@ -2421,17 +2445,17 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
   const SHOWN = { ...timers({ formationFlow: READ, orcaMirror: MIRROR }), orca_terminal_read: ["$ claude", "> リーダーです"], formation_consents: [formationConsent("mac-studio")] };
 
   it("asks for the terminal of the formation and mirrors it in that environment, with no pseudo terminal", async () => {
-    await openList({ formation_list: remote(), formation_orchestrator: terminal(), ...SHOWN }, "studio-work");
+    await openList({ formation_list: remote(), formation_leaders: { "studio-work": terminal() }, ...SHOWN }, "studio-work");
     expect(await waitForCalls("formation_orchestrator", 1)).toEqual([{ name: "studio-work", restart: false }]);
     expect((await waitForCalls("orca_terminal_read"))[0]).toEqual({ handle: "term_orch", environment: "mac-studio" });
     await browser.waitUntil(async () => (await orchestratorText()).includes("リーダーです"), { timeoutMsg: "the terminal of the orchestrator never showed" });
     expect(await headName()).toBe("studio-work");
     await expect($(CARDS)).not.toExist();
-    expect(await starts()).toBe(0);
+    expect(await callsOf("claude_code_start")).toEqual([]);
   });
 
   it("types into the terminal of the orchestrator in that environment", async () => {
-    await openList({ formation_list: remote(), formation_orchestrator: terminal(), ...SHOWN }, "studio-work");
+    await openList({ formation_list: remote(), formation_leaders: { "studio-work": terminal() }, ...SHOWN }, "studio-work");
     await browser.waitUntil(async () => (await orchestratorText()).includes("リーダーです"));
     const input = await mock("orca_terminal_input", null);
     await browser.keys(["c", "d"]);
@@ -2441,37 +2465,37 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
 
   it("streams it when the Orca screen streams that environment, and reads nothing", async () => {
     const overview = orcaOverview([], [], { target: "Studio", environments: ["Studio"] });
-    await openList({ formation_list: remote("Studio"), formation_orchestrator: terminal("Studio"), orca_overview: overview, formation_consents: [formationConsent("Studio")] }, null);
+    await openList({ formation_list: remote("Studio"), formation_leaders: { "studio-work": terminal("Studio") }, orca_overview: overview, formation_consents: [formationConsent("Studio")] }, null);
     await waitForCalls("orca_stream_open");
     await sendStream(streamList([], []));
     await row("studio-work").click();
     expect(await waitForCalls("orca_stream_terminal")).toMatchObject([{ handle: "term_orch" }]);
     expect(await callsOf("orca_terminal_read")).toEqual([]);
-    expect(await starts()).toBe(0);
   });
 
   // #943: Claude Code ends, the terminal ends with it (the sentence replaces the login shell) and leaves the list of its Orca. The screen reads no more, keeps the last screen, and asks Rust for the leader again when the formation is shown next.
   it("stops reading a mirrored terminal that its Orca no longer lists, and asks for the leader again when the formation is pressed next", async () => {
-    await openList({ formation_list: remote(), formation_orchestrator: terminal(), ...SHOWN }, "studio-work");
+    await openList({ formation_list: remote(), formation_leaders: { "studio-work": terminal() }, ...SHOWN }, "studio-work");
     await browser.waitUntil(async () => (await orchestratorText()).includes("リーダーです"));
     const read = await mock("orca_terminal_read", rejects("宛先のターミナルは終了したか、見つかりません。一覧を読み直してください"));
     await waitForCalls(read, 1);
     await browser.pause(MIRROR * 4);
     expect(await callsOf(read)).toHaveLength(1);
     expect(await orchestratorText()).toContain("リーダーです");
-    const asked = await mock("formation_orchestrator", { environment: "mac-studio", handle: "term_orch2" });
-    await mock("orca_terminal_read", ["$ claude", "> 新しいリーダーです"]);
+    // Another formation is shown first; its leader is in this Mac's Orca.
     await row("formation").click();
     await waitForStarts(1);
+    const asked = await mock("formation_orchestrator", { environment: "mac-studio", handle: "term_orch2" });
+    const reads = await mock("orca_terminal_read", ["$ claude", "> 新しいリーダーです"]);
     await row("studio-work").click();
     expect(await waitForCalls(asked, 1)).toEqual([{ name: "studio-work", restart: false }]);
     await browser.waitUntil(async () => (await orchestratorText()).includes("新しいリーダーです"), { timeoutMsg: "the new terminal of the leader never showed" });
-    expect((await callsOf("orca_terminal_read")).every((c) => (c as { handle: string }).handle === "term_orch2")).toBe(true);
+    expect((await callsOf(reads)).filter((c) => (c as { environment?: string }).environment === "mac-studio").every((c) => (c as { handle: string }).handle === "term_orch2")).toBe(true);
   });
 
   it("asks for the leader again when the stream of its terminal has ended, and not while it is still listed", async () => {
     const overview = orcaOverview([], [], { target: "Studio", environments: ["Studio"] });
-    await openList({ formation_list: remote("Studio"), formation_orchestrator: terminal("Studio"), orca_overview: overview, formation_consents: [formationConsent("Studio")] }, null);
+    await openList({ formation_list: remote("Studio"), formation_leaders: { "studio-work": terminal("Studio") }, orca_overview: overview, formation_consents: [formationConsent("Studio")] }, null);
     await waitForCalls("orca_stream_open");
     await sendStream(streamList([], []));
     await row("studio-work").click();
@@ -2482,7 +2506,7 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
     await waitForStarts(1);
     await row("studio-work").click();
     await browser.pause(300);
-    expect(await callsOf("formation_orchestrator")).toHaveLength(1);
+    expect(await starts("studio-work")).toBe(1);
     await sendTerm({ kind: "ended", message: "このターミナルは一覧にありません" });
     const asked = await mock("formation_orchestrator", { environment: "Studio", handle: "term_orch2" });
     await row("formation").click();
@@ -2494,7 +2518,7 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
   // The children of such a formation are in its PC's `children.json`, which Rust reads through Orca (#860): the screen asks by the name of the formation, as for this Mac's, and draws the answer, whose children are in that environment.
   it("reads the children of the formation of a saved environment by its name, draws them, and reads their terminals in that environment", async () => {
     const children = [formationChild("api-update", "working", { environment: "mac-studio" }), formationChild("docs-update", "planned", { environment: "mac-studio" })];
-    await openList({ formation_list: remote(), formation_children: children, formation_orchestrator: terminal(), ...SHOWN }, "studio-work");
+    await openList({ formation_list: remote(), formation_children: children, formation_leaders: { "studio-work": terminal() }, ...SHOWN }, "studio-work");
     expect((await waitForCalls("formation_children", 1))[0]).toEqual({ name: "studio-work" });
     await browser.waitUntil(async () => (await cardNames()).length === 2, { timeoutMsg: "the children of the formation never showed" });
     expect(await cardNames()).toEqual(["api-update", "docs-update"]);
@@ -2504,65 +2528,66 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
     await card("api-update").click();
     await browser.waitUntil(async () => (await callsOf("orca_terminal_read")).some((c) => (c as { handle: string }).handle === "term_api-update" && (c as { environment?: string }).environment === "mac-studio"), { timeoutMsg: "the terminal of the child was not read in its environment" });
     expect(await callsOf("formation_orchestrator")).toHaveLength(1);
-    expect(await starts()).toBe(0);
+    expect(await callsOf("claude_code_start")).toEqual([]);
   });
 
-  it("asks only for the formations of a saved environment, and starts the pseudo terminal of this Mac's as before", async () => {
-    await openList({ formation_list: remote(), formation_orchestrator: terminal(), ...SHOWN }, "formation");
+  it("asks for the leader of each formation once, this Mac's in this Mac's Orca and the saved environment's in that one", async () => {
+    await openList({ formation_list: remote(), formation_leaders: { "studio-work": terminal() }, ...SHOWN }, "formation");
     await waitForStarts(1);
-    expect(await callsOf("formation_orchestrator")).toEqual([]);
+    expect(await callsOf("formation_orchestrator")).toEqual([{ name: "formation", restart: false }]);
+    await browser.waitUntil(async () => (await callsOf("orca_terminal_read")).some((c) => (c as { handle: string }).handle === "term_leader_formation"));
     await row("studio-work").click();
-    await waitForCalls("formation_orchestrator", 1);
+    await waitForStarts(1, "studio-work");
+    await browser.waitUntil(async () => (await callsOf("orca_terminal_read")).some((c) => (c as { handle: string; environment?: string }).handle === "term_orch" && (c as { environment?: string }).environment === "mac-studio"));
     await browser.waitUntil(async () => (await orchestratorText()).includes("リーダーです"));
-    // Back on this Mac's: its process is shown again, nothing is started, and the other terminal is not asked for again.
+    // Back on this Mac's: its terminal is shown again, and neither is asked for again.
     await row("formation").click();
     await browser.waitUntil(async () => (await headName()) === "formation");
     await row("studio-work").click();
     await browser.pause(300);
-    expect(await starts()).toBe(1);
-    expect(await callsOf("formation_orchestrator")).toHaveLength(1);
-    expect(await callsOf("claude_code_close")).toEqual([]);
+    expect(await callsOf("formation_orchestrator")).toHaveLength(2);
+    expect(await callsOf("claude_code_start")).toEqual([]);
   });
 
   it("says on a card why the terminal could not be made, and asks again when the formation is pressed again", async () => {
     const reason = "リーダーを起動できません（環境「mac-studio」）: Orca がターミナルの handle を答えませんでした";
-    await openList({ formation_list: remote(), ...SHOWN }, null);
+    // This Mac's formation is shown first: its leader is there already when the failure is mocked.
+    await openList({ formation_list: remote(), ...SHOWN }, "formation");
+    await waitForStarts(1);
     await mock("formation_orchestrator", rejects(reason));
     await row("studio-work").click();
     await waitForCalls("formation_orchestrator", 1);
     await waitForCard(reason);
     await expect($(CARDS)).toHaveAttribute("role", "alert");
     expect(await count(WARN_CARDS)).toBe(0);
-    expect(await callsOf("orca_terminal_read")).toEqual([]);
+    expect((await callsOf("orca_terminal_read")).filter((c) => (c as { environment?: string }).environment === "mac-studio")).toEqual([]);
     await browser.pause(300);
     expect(await callsOf("formation_orchestrator")).toHaveLength(1);
     await mock("formation_orchestrator", terminal());
     await row("formation").click();
-    await waitForStarts(1);
-    // Another formation is shown: the card is gone, and a new failure would make a new one.
+    await browser.waitUntil(async () => (await headName()) === "formation");
+    // Another formation is shown: the card is gone, nothing is asked for it, and a new failure would make a new one.
     await waitForCount(CARDS, 0);
     await row("studio-work").click();
     expect(await waitForCalls("formation_orchestrator", 1)).toEqual([{ name: "studio-work", restart: false }]);
     await expect($(CARDS)).not.toExist();
     await browser.waitUntil(async () => (await orchestratorText()).includes("リーダーです"));
-    expect(await callsOf("claude_code_close")).toEqual([]);
   });
 
   // #893: a formation made before the owner's consent for its PC asks for it when it is opened.
   const remoteDialog = () => $('.formation-consent-pop[role="dialog"]');
 
   it("asks for the consent of the PC when a formation of it is opened with none, and starts nothing before the answer", async () => {
-    await openList({ formation_list: remote(), formation_orchestrator: terminal(), ...SHOWN, formation_consents: [] }, "studio-work");
+    await openList({ formation_list: remote(), formation_leaders: { "studio-work": terminal() }, ...SHOWN, formation_consents: [] }, "studio-work");
     await expect(remoteDialog()).toBeDisplayed();
     await expect($(".formation-consent-pop h3")).toHaveText("「mac-studio」に tsunagiai-mcp を置きますか？");
     expect(await textsOf(".formation-consent-pop .text-btn")).toEqual(["やめる", "同意する"]);
     await browser.pause(300);
     expect(await callsOf("formation_orchestrator")).toEqual([]);
-    expect(await starts()).toBe(0);
   });
 
   it("goes on with the terminal of the orchestrator once the owner agrees", async () => {
-    await openList({ formation_list: remote(), formation_orchestrator: terminal(), ...SHOWN, formation_consents: [] }, "studio-work");
+    await openList({ formation_list: remote(), formation_leaders: { "studio-work": terminal() }, ...SHOWN, formation_consents: [] }, "studio-work");
     const consent = await mock("formation_consent", formationConsent("mac-studio"));
     await expect(remoteDialog()).toBeDisplayed();
     await $(".formation-consent-pop .text-btn.primary").click();
@@ -2573,7 +2598,7 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
   });
 
   it("closes the dialog and does nothing when the owner declines, with no failure in the pane", async () => {
-    await openList({ formation_list: remote(), formation_orchestrator: terminal(), ...SHOWN, formation_consents: [] }, "studio-work");
+    await openList({ formation_list: remote(), formation_leaders: { "studio-work": terminal() }, ...SHOWN, formation_consents: [] }, "studio-work");
     const consent = await mock("formation_consent", formationConsent("mac-studio"));
     await expect(remoteDialog()).toBeDisplayed();
     await $(".formation-consent-pop .text-btn:not(.primary)").click();
@@ -2585,7 +2610,7 @@ describe("orchestration mode: the orchestrator of a formation of a saved environ
   });
 
   it("asks nothing of a PC that has the consent, and nothing of a formation of this Mac", async () => {
-    await openList({ formation_list: remote(), formation_orchestrator: terminal(), ...SHOWN }, "studio-work");
+    await openList({ formation_list: remote(), formation_leaders: { "studio-work": terminal() }, ...SHOWN }, "studio-work");
     await waitForCalls("formation_orchestrator", 1);
     expect(await callsOf("formation_consents")).toHaveLength(1);
     await expect(remoteDialog()).not.toExist();

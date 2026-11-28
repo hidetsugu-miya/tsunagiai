@@ -2833,7 +2833,7 @@ async fn send_keys(
     check_accepted(&result)
 }
 
-/// Types each of `steps` into the terminal `handle` of the saved environment `environment` as it is, one `terminal.send` after another over one WebSocket, with `pause` between two. The reply to a decision page is a bracketed paste and then Enter, which must not arrive in the same send (A-41).
+/// Types each of `steps` into the terminal `handle` of the Orca of `environment` as it is, one `terminal.send` after another, with `pause` between two: this Mac's (`local`, #1579) over its unix socket, a saved environment's over one WebSocket. The reply to a decision page is a bracketed paste and then Enter, which must not arrive in the same send (A-41).
 pub(crate) async fn type_in_steps(
     environment: &str,
     handle: &str,
@@ -2843,6 +2843,20 @@ pub(crate) async fn type_in_steps(
     check_handle(handle)?;
     for step in steps {
         check_keys(step)?;
+    }
+    if environment == crate::formation::LOCAL {
+        for (i, step) in steps.iter().enumerate() {
+            if i > 0 {
+                tokio::time::sleep(pause).await;
+            }
+            let result = crate::orca_link::local_call(
+                "terminal.send",
+                input_params(handle, step, "tsunagiai", None),
+            )
+            .await?;
+            check_accepted(&result)?;
+        }
+        return Ok(());
     }
     let mut link = crate::orca_link::connect_environment(environment.to_owned()).await?;
     send_steps(&mut link, handle, steps, pause).await

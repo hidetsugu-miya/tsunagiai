@@ -359,6 +359,8 @@ const computed = {
   orca_title_set: ({ target, key, title }) => (title.trim() === "" ? {} : { [target]: { [key]: title.trim() } }),
   // A-8: the titles left once the keys are taken out, as Rust answers when it held no other title.
   orca_titles_forget: () => ({}),
+  // A-37 (#1579): the terminal of the leader of a formation, from the fixture `formation_leaders` ({ "{name}": the answer of `formation_orchestrator` }), else one of this Mac's Orca named for the formation. A spec that wants one answer for every formation mocks `formation_orchestrator`.
+  formation_orchestrator: ({ name }) => fixtures.formation_leaders?.[name] ?? { environment: "local", handle: `term_leader_${name}` },
   orca_browse_dir: ({ path }) => {
     const resolvedPath = path.trim() === "" || path.trim() === "~" ? "/home/dev" : path;
     if (!(resolvedPath in browseTree)) throw "Orca のフォルダの一覧を読めません";
