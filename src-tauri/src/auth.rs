@@ -27,7 +27,7 @@ use crate::{
 
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-const SCOPE: &str = "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events.owned";
+const SCOPE: &str = "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events.owned https://www.googleapis.com/auth/directory.readonly";
 // The refresh tokens live under this name, so it must stay equal to `identifier` in tauri.conf.json. The old name is read by `keychain`.
 pub(crate) const KEYRING_SERVICE: &str = "jp.mysis.tsunagiai";
 const REVOKE_URL: &str = "https://oauth2.googleapis.com/revoke";
@@ -170,9 +170,7 @@ impl Auth {
     /// Revokes the account's grant at Google (a failure is logged, not fatal), then forgets its token, its listing and the data kept of it.
     async fn remove(&self, dir: &Path, account: &str) -> Result<(), String> {
         let list = accounts::load_accounts(dir)?.unwrap_or_default();
-        if !list.iter().any(|a| a.address == account) {
-            return Err("登録されていないアカウントです".into());
-        }
+        check_removable(&list, account)?;
         if let Some(token) = blocking_read(account).await? {
             if let Err(e) = revoke(&self.http, REVOKE_URL, &token).await {
                 eprintln!("tsunagiai: revoke account={account} status=- error={e}");
@@ -195,7 +193,6 @@ impl Auth {
     /// Returns the logged-in account's email address.
     async fn login(&self, app: &AppHandle, login_hint: Option<&str>) -> Result<String, String> {
         let dir = config_dir(app)?;
-        let existing = accounts::load_accounts(&dir)?.unwrap_or_default();
         let client = load_client(&dir)?;
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -246,10 +243,7 @@ impl Auth {
         let access = access_token_of(res)?;
         let email = self.fetch_email(&access).await?;
         keychain::write(KEYRING_SERVICE, &email, &refresh_token)?;
-        accounts::save_accounts(
-            &dir,
-            &accounts::with_account(existing, accounts::Account::gmail(&email)),
-        )?;
+        add_gmail_account(&dir, &email)?;
         self.access.lock().unwrap().insert(email.clone(), access);
         Ok(email)
     }
@@ -381,6 +375,27 @@ fn access_token_of(res: TokenResponse) -> Result<String, String> {
 
 fn is_registered(list: &[String], account: &str) -> bool {
     list.iter().any(|a| a == account)
+}
+
+/// Only a listed Gmail account has a Google token to revoke: an iCloud account is removed through `icloud.rs`.
+fn check_removable(list: &[accounts::Account], account: &str) -> Result<(), String> {
+    match list.iter().find(|a| a.address == account) {
+        None => Err("登録されていないアカウントです".into()),
+        Some(a) if a.kind != accounts::AccountKind::Gmail => {
+            Err("Google のアカウントではありません".into())
+        }
+        Some(_) => Ok(()),
+    }
+}
+
+/// Lists `email` as a Gmail account. The list is read again here, right before the write, because the browser login
+/// takes minutes and an account of another kind may have been added meanwhile; every kind is kept.
+fn add_gmail_account(dir: &Path, email: &str) -> Result<(), String> {
+    let list = accounts::load_accounts(dir)?.unwrap_or_default();
+    accounts::save_accounts(
+        dir,
+        &accounts::with_account(list, accounts::Account::gmail(email)),
+    )
 }
 
 pub fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -580,6 +595,48 @@ mod tests {
         assert!(is_registered(&list, "a@example.com"));
         assert!(!is_registered(&list, "todoist"));
         assert!(!is_registered(&[], "a@example.com"));
+    }
+
+    #[test]
+    fn only_a_listed_gmail_account_can_be_removed_here() {
+        let list = vec![
+            accounts::Account::gmail("a@example.com"),
+            accounts::Account::icloud("i@icloud.com"),
+        ];
+        assert_eq!(check_removable(&list, "a@example.com"), Ok(()));
+        let err = check_removable(&list, "i@icloud.com").unwrap_err();
+        assert!(err.contains("Google のアカウントではありません"), "{err}");
+        let err = check_removable(&list, "x@example.com").unwrap_err();
+        assert!(err.contains("登録されていない"), "{err}");
+    }
+
+    #[test]
+    fn a_login_keeps_the_account_another_kind_added_meanwhile() {
+        let dir = std::env::temp_dir().join(format!("tsunagiai-test-login-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        accounts::save_accounts(&dir, &[accounts::Account::gmail("a@example.com")]).unwrap();
+        // An iCloud account is added while the browser login is open.
+        accounts::save_accounts(
+            &dir,
+            &[
+                accounts::Account::gmail("a@example.com"),
+                accounts::Account::icloud("i@icloud.com"),
+            ],
+        )
+        .unwrap();
+        add_gmail_account(&dir, "b@example.com").unwrap();
+        // Logging in again with the same address keeps one row.
+        add_gmail_account(&dir, "b@example.com").unwrap();
+        let list = accounts::load_accounts(&dir).unwrap().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            list,
+            vec![
+                accounts::Account::gmail("a@example.com"),
+                accounts::Account::icloud("i@icloud.com"),
+                accounts::Account::gmail("b@example.com"),
+            ]
+        );
     }
 
     /// A directory without accounts.json: no account is registered, so neither call reaches the keychain.
