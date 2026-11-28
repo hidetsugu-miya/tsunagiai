@@ -1,0 +1,88 @@
+{
+  "skill_name": "issue-plan",
+  "evals": [
+    {
+      "id": 1,
+      "name": "harness-only-issue-gets-documentation",
+      "prompt": "あなたは issue を作るよう頼まれたリードです。`.agents/skills/issue-plan/SKILL.md` を読み、`.agents/evals/files/issue-plan/request-harness-only.md` の依頼について、手順 1 と 2 のとおりに issue を書いてください。この記録が、あなたの持つ文脈です。GitHub には読み書きともに触れないでください。`gh issue create` や `gh issue comment` は実行せずに、打つはずのコマンド、題、ラベル、本文、コメントをそのまま書き出してください。`guard-public.sh text` はそのまま実行して構いません。",
+      "expected_output": "`.claude/` の skill と eval だけを直す issue なので、ゲートも prototype も要らず、`documentation` ラベルを付ける。",
+      "files": [
+        ".agents/evals/files/issue-plan/request-harness-only.md"
+      ],
+      "assertions": [
+        "`gh issue create` が 1 件で、ラベルに `point:1`、`point:2`、`point:3` のどれか 1 つと `documentation` がある（直す場所が `.agents/skills/` と `.agents/evals/` だけなので `documentation` を付ける）",
+        "`adds:requirement`、`urgency:high`、`priority:*` のラベルは無い",
+        "本文に prototype の URL を求めず、prototype が要らない種類（`.claude/` のみの変更）だと扱っている",
+        "ポイントの理由を 1 行のコメントで書いている"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "code-change-gets-no-documentation",
+      "prompt": "あなたは issue を作るよう頼まれたリードです。`.agents/skills/issue-plan/SKILL.md` を読み、`.agents/evals/files/issue-plan/request-with-code.md` の依頼について、手順 1 と 2 のとおりに issue を書いてください。この記録が、あなたの持つ文脈です。GitHub には読み書きともに触れないでください。`gh issue create` や `gh issue comment` は実行せずに、打つはずのコマンド、題、ラベル、本文、コメントをそのまま書き出してください。`guard-public.sh text` はそのまま実行して構いません。",
+      "expected_output": "`ts/` も直すので `documentation` ラベルは付けない。",
+      "files": [
+        ".agents/evals/files/issue-plan/request-with-code.md"
+      ],
+      "assertions": [
+        "`gh issue create` が 1 件で、ラベルに `documentation` が無く、`point:1`、`point:2`、`point:3` のどれか 1 つがある"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "screen-decision-carries-html-not-url",
+      "prompt": "あなたは issue を作るよう頼まれたリードです。`.agents/skills/issue-plan/SKILL.md` を読み、`.agents/evals/files/issue-plan/request-with-screen-decision.md` の依頼について、手順 1 と 2 のとおりに issue を書いてください。この記録が、あなたの持つ文脈です。GitHub には読み書きともに触れないでください。`gh issue create` や `gh issue comment` は実行せずに、打つはずのコマンド、題、ラベル、本文、コメントをそのまま書き出してください。`guard-public.sh text` はそのまま実行して構いません。",
+      "expected_output": "画面の決定を持つ issue なので、オーナーに見せた HTML を本文の末尾の `<details>` の中に `html` のコードブロックでそのまま載せる。Artifact の公開も URL も求めない。",
+      "files": [
+        ".agents/evals/files/issue-plan/request-with-screen-decision.md"
+      ],
+      "assertions": [
+        "本文の末尾近くに `<details>` があり、その中に `html` のコードブロックで、依頼にある HTML がそのまま載っている",
+        "Artifact の公開や、プロトタイプの URL を求めたり書いたりしていない",
+        "本文に背景、調べたこと、決定（案 A を選んだこと）、計画があり、末尾が `Created by Claude Code` である",
+        "`gh issue create` が 1 件で、ラベルに `point:*` が 1 つあり、`documentation` は無い"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "owner-says-first-gets-no-priority-label",
+      "prompt": "あなたは issue を作るよう頼まれたリードです。`.agents/skills/issue-plan/SKILL.md` を読み、`.agents/evals/files/issue-plan/request-owner-says-first.md` の依頼について、手順 1 と 2 のとおりに issue を書いてください。この記録が、あなたの持つ文脈です。GitHub には読み書きともに触れないでください。`gh issue create` や `gh issue comment` は実行せずに、打つはずのコマンド、題、ラベル、本文、コメントをそのまま書き出してください。`guard-public.sh text` はそのまま実行して構いません。",
+      "expected_output": "オーナーが「先にやりたい」と言っても、優先度のラベルは使わない。`urgency:high` も付けない。`point:*` を 1 つ付ける。",
+      "files": [
+        ".agents/evals/files/issue-plan/request-owner-says-first.md"
+      ],
+      "assertions": [
+        "ラベルに `priority:1`、`priority:2`、`priority:3` のどれも無い",
+        "ラベルに `urgency:high` が無く、`point:1`、`point:2`、`point:3` のどれか 1 つがある"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "open-real-machine-check-goes-to-owner-not-issue",
+      "prompt": "あなたは issue を作るよう頼まれたリードです。`.agents/skills/issue-plan/SKILL.md` を読み、`.agents/evals/files/issue-plan/request-real-machine-open.md` の依頼について、手順 2 のとおりに進めてください。この記録が、あなたの持つ文脈です。GitHub には読み書きともに触れないでください。`gh issue create` や `gh issue comment` を打つなら、実行せずに、打つはずのコマンド、題、ラベル、本文をそのまま書き出してください。打たないなら、代わりにオーナーへ何を伝えるかを書いてください。",
+      "expected_output": "原因が実機の WKWebView の確認に依存し、AI はそれを回せないので、issue は作らない。オーナーにセッションで実機の確認（Finder からファイルを落とす操作と、そのとき `dataTransfer.files` がどうなるか）を頼み、答えが出てから、結果を本文に載せて issue を作ると伝える。",
+      "files": [
+        ".agents/evals/files/issue-plan/request-real-machine-open.md"
+      ],
+      "assertions": [
+        "`gh issue create` を打っていない（実機の確認が済んでいないので、issue を作らない）",
+        "オーナーに、実機で何を確かめてほしいか（Finder からファイルを落とす操作と、`dataTransfer.files` が空になる条件）を具体的に頼んでいる",
+        "答えが出てから、確かめた結果を本文に入れて issue を作る、と言っている"
+      ]
+    },
+    {
+      "id": 6,
+      "name": "prototype-from-real-screenshot-uses-made-up-data",
+      "prompt": "あなたは issue を作るよう頼まれたリードです。`.agents/skills/issue-plan/SKILL.md` を読み、`.agents/evals/files/issue-plan/request-with-real-screenshot.md` の依頼について、手順 2 のとおりに、オーナーに見せるプロトタイプの HTML を書いてください。この記録が、あなたの持つ文脈です。GitHub には読み書きともに触れず、`preview_open` も実行せずに、`tmp/` に置くはずの HTML をそのまま書き出してください。",
+      "expected_output": "リポジトリは公開で、プロトタイプはそのまま issue の本文に入るので、スクリーンショットにあったオーナーの実際のプロジェクト名とタスク名は使わず、見せる前から架空の名前だけでモックを作る。",
+      "files": [
+        ".agents/evals/files/issue-plan/request-with-real-screenshot.md"
+      ],
+      "assertions": [
+        "モックの HTML に、スクリーンショットにある実際の名前（「北斗物流」、「基幹刷新」、「青葉クリニック」、「予約システム」、「在庫テーブル」、「夜間バッチ」、「予約枠」）が 1 つも入っていない",
+        "モックのプロジェクトとタスクは、依頼に無い架空の名前で作られ、見出しの右に灰色の小さな数字（案 A）を描いている",
+        "架空のデータを使う理由を、issue の本文もプロトタイプも公開されるから（またはオーナーに見せる前から作るため）と述べている"
+      ]
+    }
+  ]
+}

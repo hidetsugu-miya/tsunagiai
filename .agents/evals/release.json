@@ -1,0 +1,64 @@
+{
+  "skill_name": "release",
+  "evals": [
+    {
+      "id": 1,
+      "name": "lead-reruns-a-runner-failure",
+      "prompt": "あなたは implement の実行の手順 7 に来たリードで、release-preparer が `merged` を返し、release-watcher を起動したところです。`.agents/skills/release/SKILL.md` を読み、release-watcher が `.agents/evals/files/release/watcher-return.md` の JSON を返したときに、リードがすることを決めてください。コマンドは実行せず、打つはずのコマンドを順に書き、判断の根拠も書いてください。GitHub には読み書きともに触れないでください。",
+      "expected_output": "ログがランナーの停止だけを示すので、コミットに原因は無い。リードが `gh run view 9876543210 --log-failed` で確かめ、`gh run rerun 9876543210 --failed` で再実行し、release-watcher をもう一度起動する。手でタグは打たない。",
+      "files": [
+        ".agents/evals/files/release/watcher-return.md"
+      ],
+      "assertions": [
+        "リード自身が `gh run view 9876543210 --log-failed` などで原因を確かめている（release-watcher には任せない）",
+        "ランナーの失敗なので `gh run rerun 9876543210 --failed` を打つ",
+        "再実行のあと、release-watcher をもう一度起動する",
+        "手でタグを打たず、`--admin` も使わない"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "lead-files-an-issue-for-an-unphotographed-screen",
+      "prompt": "あなたは implement の実行の手順 7 に来たリードで、release-preparer を起動したところです。`.agents/skills/release/SKILL.md` を読み、release-preparer が `.agents/evals/files/release/preparer-return.md` の JSON を返したときに、リードがすることを決めてください。コマンドは実行せず、打つはずのコマンドや呼ぶスキルを順に書いてください。同じ画面の開いた issue を探すコマンドは空の一覧を返すものとします。GitHub には読み書きともに触れないでください。",
+      "expected_output": "`merged` を確かめたあと、`unphotographed` の「Slack 一覧」について、リードが `issue-plan` で issue を立て（label `documentation`）、そのあと release-watcher を起動する。",
+      "files": [
+        ".agents/evals/files/release/preparer-return.md"
+      ],
+      "assertions": [
+        "同じ画面の開いた issue を探したうえで、`unphotographed` の「Slack 一覧」について、リード自身が `issue-plan` で issue を立てると書いている（label `documentation`）",
+        "issue を立てたあとで release-watcher を起動すると書いている"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "lead-launches-the-watcher-again-for-a-follow-up",
+      "prompt": "あなたは implement の実行の手順 7 に来たリードで、release-watcher を起動したところです。`.agents/skills/release/SKILL.md` を読み、release-watcher が `.agents/evals/files/release/watcher-released.md` の JSON を返し、リードが `plan-release.py release` を打つと `.agents/evals/files/release/plan-release-after.md` の出力になったときに、リードがすることを決めてください。コマンドは実行せず、打つはずのコマンドや起動するサブエージェントを順に書いてください。GitHub には読み書きともに触れないでください。",
+      "expected_output": "`follow_up`（v0.94.1）がまだ残っているので、リードは release-watcher をもう一度、その `follow_up` のために起動する。同じものがもう一度出たらオーナーに伝える。手でタグは打たない。",
+      "files": [
+        ".agents/evals/files/release/watcher-released.md",
+        ".agents/evals/files/release/plan-release-after.md"
+      ],
+      "assertions": [
+        "`follow_up` が残っているので、release-watcher をもう一度起動すると書いている（`released` で終わらせない）",
+        "その起動のあとにも同じ `follow_up` が出たらオーナーに伝えると書いている",
+        "リード自身が `watch-ci.sh` やコメントの投稿を行わず、手でタグも打たない"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "lead-comments-on-the-open-issue-of-the-same-screen",
+      "prompt": "あなたは implement の実行の手順 7 に来たリードで、release-preparer を起動したところです。`.agents/skills/release/SKILL.md` を読み、release-preparer が `.agents/evals/files/release/preparer-return.md` の JSON を返し、リードが同じ画面の開いた issue を探すと `.agents/evals/files/release/open-issues-slack-list.md` の出力になったときに、リードがすることを決めてください。コマンドは実行せず、打つはずのコマンドや呼ぶスキルを順に書いてください。GitHub には読み書きともに触れないでください。",
+      "expected_output": "`merged` を確かめたあと、「Slack 一覧」の開いた issue（#1488）がすでにあるので、新しい issue は立てず、その issue にコメントを足す。そのあと release-watcher を起動する。",
+      "files": [
+        ".agents/evals/files/release/preparer-return.md",
+        ".agents/evals/files/release/open-issues-slack-list.md"
+      ],
+      "assertions": [
+        "同じ画面の開いた issue を探すコマンド（`gh issue list --state open --label documentation --search \"Slack 一覧 in:title\"` など）を打つと書いている",
+        "#1488 にコメントを足すと書いている",
+        "`issue-plan` で新しい issue を立てない",
+        "そのあとで release-watcher を起動すると書いている"
+      ]
+    }
+  ]
+}

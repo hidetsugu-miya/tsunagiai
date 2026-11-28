@@ -1,0 +1,279 @@
+# Rules for the review before a push
+
+## Roles
+
+### Reviewers find, release-verifier decides, `range-check.sh` checks the range of a fix of a merged version's non-blocking findings, and `pre-git.sh` gates
+
+Reviewers (security, performance, code) find and rate findings, and edit nothing.
+release-verifier decides whether a finding is real and whether it stops the release, checks the CI and E2E records with `check-ci.sh` and `check-e2e.sh`, and writes the pass record of a reviewed HEAD.
+It reads the code for blocking findings, and for a Low only when its text suggests the definition of blocking. Other Lows pass through as report-only and stay unfixed on the branch after the pass, and release-verifier sorts each of them as `issue`, `drop` or `local` ("Fix blocking findings inside the review…" below).
+`range-check.sh` is the mechanical check of a fix that holds only the non-blocking findings of an already merged version: it does for that range what release-verifier did, with no launch, and writes the pass record when the check passes ("Fix only the non-blocking findings of a merged version…" below; at the owner's instruction, 2026-11-18; #932: the range check passed 15 times in 15, and never changed a result. It replaces the instruction of 2026-10-29, which had release-verifier do it).
+`pre-git.sh` is the mechanical gate: it checks the CI, E2E and pass records of HEAD, runs none of the checks itself, and never judges a finding.
+Without this split, the reviewers and the verifier both checked whether a finding was fixed, and the verifier read the code for every Low.
+
+```text
+Good: a reviewer reports a finding -> release-verifier reads the code and rates it -> pre-git.sh checks the record
+Good: a fix of a merged version's Lows -> range-check.sh checks the diff against the list of findings -> pre-git.sh checks the record
+Bad:  the reviewer and release-verifier both check in round 2 that the same finding is fixed
+Bad:  launch release-verifier only to check that a fix of a merged version's Lows stays inside the files of the findings
+```
+
+## Flow
+
+### Start E2E and the reviewers together on the HEAD to be reviewed, and launch release-verifier when both are back
+
+Start `.agents/tools/run-e2e.sh` (in the background; `e2e.md`) and the reviewers in the same message, and launch `release-verifier` only when both have come back (at the owner's instruction, 2026-11-12; #485. It replaces "E2E passes before the reviewers start", under which the reviewers waited for E2E).
+E2E runs on the HEAD of every branch (at the owner's instruction, 2026-11-21; #1207. It undoes #1023 of 2026-11-19, which ran E2E once, when the Release PR was prepared), except one where `.agents/tools/check-records.sh` passes: its diff holds only files that no static check or E2E reads (`testing.md`), so run neither `run-e2e.sh` nor `run-ci.sh`, start the reviewers alone, and launch `release-verifier` when they are back. The review is never exempt this way (at the owner's instruction, 2026-11-27; #1502).
+After `e2e:build`, `run-e2e.sh` runs `.agents/tools/run-ci.sh` (static checks and unit tests; it stops at the first failing check) beside the wdio run, unless HEAD already has a passing CI record (`check-ci.sh`), and both write their records as before (#420).
+The CI runs beside E2E and not before it because it never failed in its 113 records since 2026-11-09, so waiting for it only added its time (median 24 seconds) to every HEAD. Measured on 2026-11-14 (#420), a run of E2E took 159 to 161 seconds alone and 159 to 160 seconds with clippy and `cargo test` beside it, with no failure and no `script_timeouts` in either.
+`release-verifier` checks CI and E2E of HEAD through `check-records.sh` (the records, or the exemption), so it is not launched on a HEAD whose CI or E2E failed. In the first round, the reviewers' replies and the CI or E2E failure go straight to the fix, and the release-verifier that follows the second round rates them.
+A failed CI or E2E is handled as a blocking finding of the first round: find the cause (the log of the failed gate in `.claude/ci/{HEAD SHA}.log`; `run-e2e.sh --only {spec}` runs a failed E2E spec alone, `e2e.md`), fix it, and put the fix into the diff of the second round with the other blocking fixes.
+A failure that passes when run again (an E2E spec that passes alone with `run-e2e.sh --only` or in a second full run, or a CI check) is flaky: its cause is not in the diff under review. When the reviewers had no blocking finding and the failure was flaky, run `run-e2e.sh` again (it runs CI again only when HEAD has no passing CI record), and launch release-verifier when it passes; the rerun is not a round. A code fix for an E2E-only failure is read in the second round.
+A flaky failure is never left as chance (at the owner's instruction, 2026-11-21; #1212): the run that meets it files a `bug` issue through `issue-plan` for each spec, or each CI check, with the title 「flaky: {spec name}」 or 「flaky: {check name}」, the labels `importance:low` and `point:2` or `point:3`, no prototype (`issues.md`), and in the body the failure (the test and its error), the path of its log, what was ruled out and the diagnostics (the verification), and the fix to try (the design); when that spec or check already has an open issue, the failure goes there as a comment. The fix step before the next Release PR takes it, never the run that filed it ("Turn each Low of a merged pull request into an issue…" below).
+
+```text
+Good: commit -> run-e2e.sh (background, with run-ci.sh beside wdio) and the reviewers together -> release-verifier
+Good: the diff holds only `.agents/rules/` and `requirements/` -> check-records.sh passes -> the reviewers alone, no run-e2e.sh and no run-ci.sh -> release-verifier
+Good: E2E fails in the first round -> no release-verifier -> fix with the reviewers' blocking findings -> run-e2e.sh and code-reviewer together -> release-verifier
+Good: E2E alone fails and the spec passes with run-e2e.sh --only -> run-e2e.sh again passes (CI is not run again) -> release-verifier, and the flaky test is filed as an issue
+Bad:  run-ci.sh and then run-e2e.sh, one after the other, on the HEAD to be reviewed
+Bad:  launch release-verifier while run-e2e.sh is still running
+Bad:  check-records.sh passes, so the review is skipped too (it frees CI and E2E only)
+Bad:  launch release-verifier on a HEAD whose CI or E2E failed, only to rate the findings
+Bad:  a spec fails once and passes alone -> it is called chance, and no issue is filed
+```
+
+### In the first round, review the whole range to be pushed, with only the reviewers that are needed
+
+The range is `@{u}..HEAD`, or `origin/main..HEAD` when there is no upstream. The pull request of an `implement` run holds the commits of several issues, and it is reviewed once, as one range (at the owner's instruction, 2026-11-09; Discussion #293).
+Always launch performance-reviewer and code-reviewer.
+Launch security-reviewer only when the diff touches any of the following.
+- Authentication, tokens, the keychain
+- Communication leaving the app (destinations, deciding which URLs to fetch)
+- CSP, the iframe sandbox, showing the mail body
+- Adding a Tauri command, and validating values received from outside
+
+Launch the chosen reviewers in parallel in a single message, and pass their replies as they are to release-verifier.
+`pre-git.sh` stops a push with no pass record for HEAD, unless only release work follows a pass record in the range or the base of the range (see "Release-only commits").
+After the pass, the branch goes to main through its pull request (`issues.md`).
+At the owner's instruction (2026-10-29). Running the security review every time produced too many reviews.
+
+```text
+Good: the diff is only screen wording -> two reviewers, performance and code -> release-verifier
+Bad:  the diff is only screen wording -> three reviews
+```
+
+### In the second and third rounds, review only the fixed diff, with only the reviewers that are needed
+
+The range runs from the HEAD reviewed in the previous round to the new HEAD (`{previous HEAD}..HEAD`). The fix may hold non-blocking fixes too ("Fix blocking findings inside the review…" below); the reviewers read the whole diff of the fix.
+Always launch code-reviewer.
+Launch performance-reviewer only when it has an open blocking finding.
+Launch security-reviewer only when it has an open blocking finding, or when the fixing diff touches any of the conditions of the first round.
+Start `run-e2e.sh` (with its CI) and these reviewers together on the new HEAD, as in the first round.
+Pass the reviewers the list of blocking findings still open, so that they do not report them again. They look only for new blocking findings that the fixing diff created.
+Whether an open finding is fixed is confirmed only by release-verifier, which gets the open blocking findings and the replies of this round.
+When the whole range was reviewed again, fine-grained findings that had not appeared before came up new every time, and the review never ended.
+
+```text
+Good: second round -> range a1b2c3d..HEAD, code-reviewer and the one reviewer that had a High, with the list of first-round High findings attached
+Bad:  second round -> review the range origin/main..HEAD from scratch
+Bad:  second round -> relaunch all three reviewers to check that their findings are fixed
+```
+
+### After three rounds with a blocking finding left, redesign instead of patching
+
+A third failure means the design is the problem, not the next line to fix (at the owner's instruction, 2026-11-03).
+A failure of E2E alone, with no blocking finding from the reviewers, does not count as a round.
+Stop fixing finding by finding, and do this without asking the owner:
+1. Gather every finding of every round, blocking and not, and name what they have in common.
+2. Redesign what they touch against the goal the owner asked for, keeping that goal as it is.
+3. Implement it, and start a new cycle from the first round, with the whole range to be pushed.
+
+After two redesigns, if the third cycle also ends its third round with a blocking finding left, stop and tell the owner what does not converge. This is the only reason to stop a review for the owner.
+
+```text
+Good: third round fails -> all findings together -> redesign -> first round on the whole range
+Bad:  third round fails -> ask the owner whether to run a fourth round
+Bad:  third round fails -> fix the one finding left and run a fourth round
+```
+
+### Leave product decisions to the owner, and everything else to the agents
+
+The owner gives the requirements and accepts the result.
+Design, implementation, the handling of findings and the review flow are decided by the agents, without asking.
+A force push or a history rewrite still needs asking first.
+
+## Severity
+
+### Rate a finding by what the user loses, and let release-verifier correct the rating
+
+The reviewers rate by the definitions in `.agents/agents/`. A code review High needs real harm in ordinary use: data lost or broken, a feature that does not work, or a requirement not met in ordinary use.
+A rare input with little harm, or existing behavior this push does not make worse, is Low.
+release-verifier rates again, by those definitions, each finding it read, and its rating decides whether the finding blocks. It never needs the owner for this. It gives the reason with `path:line`.
+On 2026-11-03 a third round stopped for a High that was rare, small in harm and already in main, because the definition had only the kind of finding and not its harm.
+
+```text
+Good: a message over 10,000 characters is cut with no note, as main already does -> Low, left as it is after the pass
+Bad:  the same finding -> High, because any spec gap is High
+```
+
+## What to fix
+
+### Fix blocking findings inside the review, and leave non-blocking findings alone after the pass
+
+The blocking ones are security Critical and High, performance High, and code review High.
+When the first round fails, fix the blocking findings and, in the same fix, the non-blocking findings (Medium and Low) that serve the goal of the change, and send the fix to the next round (at the owner's instruction, 2026-11-12; #485. It replaces the instruction of 2026-10-29, "do not fix non-blocking findings during the review", which cost a second pass of the same files after the verdict).
+The second-round reviewers get the whole diff of that fix, the non-blocking fixes included.
+When a round passes, fix nothing more: push with the non-blocking findings (Medium and Low) that are left (at the owner's instruction, 2026-11-19; #1012. It replaces the part of the instructions of 2026-10-29 and of 2026-11-12, #485, that had them fixed after the pass and sent through `range-check.sh`: in the night runs of 2026-11-13 to 2026-11-19, 3 of 5 ran CI and E2E once more for a Low fix after the pass, which added 5.0 to 11.2 minutes, and the run that left its Low alone added none).
+From the second round on, the reviewers look for no non-blocking finding: they report only the new blocking findings that the fixing diff created (`.agents/agents/`; at the owner's instruction, 2026-11-21; #1211. It replaces "a non-blocking finding that first appears in the second round or later is left the same way", under which such findings were reported and never used).
+When a round passes with non-blocking findings, release-verifier sorts each of them as `issue` (it disagrees with a requirement or with the owner's instruction, or it can become a bug) or `drop` (otherwise, such as taste, an optimization with no effect, or the form of a generated file), with a one-line reason (at the owner's instruction, 2026-11-21; #1211). A non-blocking finding of security-reviewer is never sorted `issue`: it is `local` (decided by the agent, 2026-11-21, at the owner's leave; #1211).
+List each finding that was not fixed (its ID, `path:line`, a one-line gist and its sorting) in the completion report. Review findings go to no public place before the merge (`issues.md`, "Reach main only through a pull request with `Closes #n`"); after it, the ones sorted `issue` go into issues of their own ("Turn each Low of a merged pull request into an issue…" below). Do not ask the owner.
+Decline a finding that does not serve the goal in the first-round fix, and state it with the reason in the completion report: nothing outside the owner's goal is done (at the owner's instruction, 2026-11-03).
+When a finding has several ways to fix it, choose the recommended one and state it in the completion report.
+
+```text
+Good: High and Low found in round 1 -> fix both in one commit -> round 2 reads the whole fix -> pass -> push
+Good: round 1 passes with a Low -> release-verifier sorts it -> push, and list the Low with its sorting in the completion report
+Bad:  round 1 fails with a High and a Low, and the Low is left unfixed
+Bad:  round 2 reports a new Low (from round 2 on, only the new blocking findings of the fixing diff are reported)
+Bad:  pass -> fix the Low -> run-e2e.sh again -> push
+Bad:  pass -> push with the Low left, and ask the owner whether to fix it
+```
+
+### Turn each Low of a merged pull request into an issue, and fix it once three reviews have pointed it out
+
+After the merge of a pull request whose review passed with non-blocking findings, the session that merged it files each finding that release-verifier sorted `issue`, one issue for each finding, through `issue-plan` (at the owner's instruction, 2026-11-28. It replaces the one issue for each pull request, 「PR #{n} のレビューで残った Low」, of 2026-11-21; #1211).
+Before it makes an issue, it looks for the same finding (the same path and the same defect) among the open issues whose title starts with 「Low: 」 and whose author is the owner (`gh issue list --state open --search "Low: in:title" --json number,title,author,body`). When there is one, it makes no issue: it comments on it, starting with 「再指摘: PR #{n}」, with the reviewer's original text as data, inside a quote.
+The title of a new issue is 「Low: {path} {gist}」, and its labels are `importance:low`, `point:2` (never `point:5` or `point:8`, so that `issue-plan` step 3 never splits it), and `documentation` only when the finding is where `issue-plan` gives that label (documentation, `.agents/agents/`, `.agents/evals/`, `.agents/rules/` or `.agents/skills/`).
+Its body holds the finding with its ID, `path:line`, gist and fix, and the reviewer's original text as data, inside a quote. Each path is relative to the repository root, and every body and comment passes `guard-public.sh text` before `gh` (`publishing.md`); when it refuses, nothing is made and the refusal is reported.
+The count of a Low issue is 1 plus the number of comments of the owner that start with 「再指摘:」 (the `gh` of a session runs under the owner's account). A Low issue is fixed only when its count is 3 or more, that is, when the reviews of three pull requests have pointed it out; one with less stays open.
+A non-blocking finding of security-reviewer (`local`) never goes to GitHub, because the repository is public (`publishing.md`, `issues.md`): it stays in the completion report only (ID, `path:line` and gist), and is fixed only on the owner's word (decided by the agent, 2026-11-21, at the owner's leave; #1211).
+When no finding is sorted `issue`, no issue and no comment is made. A finding whose fix needs a design decision of the owner, or a real-machine check that the AI cannot run, is not filed: it is put to the owner as a question in the report of `implement`, and the session that gets the answer makes the issue with the answer in its body (`issues.md`, "Make an issue only once…"; at the owner's instruction, 2026-11-25).
+Before each Release PR, `implement` fixes up to three items in all of the Low issues with a count of 3 or more, the flaky issues ("Start E2E and the reviewers together…" above) and the retrospective issues (「振り返り:」, #1213), on one branch, so that they go out in the same version (`.agents/skills/implement/SKILL.md`, step 6, which settles how they are counted and taken; at the owner's instruction, 2026-11-21; #1212, which replaces the five findings of #1211). A flaky issue filed in the same run waits for the next one. An item whose fix needs such a decision or check is not taken and is put to the owner as a question.
+Before #1211 the findings of a pass were kept only in the completion report, so none was fixed.
+
+```text
+Good: PR #1300 passes with R-2 sorted `issue` (`ts/orca-files.ts`, a defect no open Low issue has) and P-1 sorted `drop` -> merge -> issue 「Low: ts/orca-files.ts 落とし先の強調が消えない」 with R-2, count 1, and it stays open
+Good: PR #1310 passes with a Low on the same defect of the same path -> merge -> a comment 「再指摘: PR #1310」 with the reviewer's text on that issue, and no new issue -> its count is 2
+Good: the count of an issue reaches 3 -> before the Release PR implement fixes it
+Bad:  a new issue for a finding that an open Low issue already has
+Bad:  implement takes a Low issue with a count of 2
+Bad:  every finding is sorted `drop`, and an issue is made anyway
+Bad:  the findings go to GitHub before the pull request has merged
+Bad:  a security Medium goes into a Low issue (it is `local`: the completion report only)
+Bad:  implement takes three Lows while a flaky issue and a retrospective issue are open (with all three kinds open, it takes one of each)
+```
+
+### Fix only the non-blocking findings of a merged version with the range check
+
+A pull request that holds only fixes of non-blocking findings of an already merged version is not sent through the reviewers, and release-verifier is not launched.
+Its normal route is step 6 of `implement`, which takes the findings from the issues of the section above. A branch of that step that also holds a flaky fix, a retrospective fix or any path outside the list goes through the first round instead, because such a fix may change the product or the harness (decided by the agent, 2026-11-21, at the owner's leave; #1212). A finding of the branch under review is not fixed this way ("Fix blocking findings inside the review…" above).
+Write the fixed findings in a file outside the tracked tree, one to a line (`tmp/` of the worktree, which is gitignored, because `range-check.sh` needs a clean tree), each line holding the `path` or `path:line` of the finding (for example `[L-1] ts/slack.ts:120 no empty reply`).
+A file that goes with the fix of a finding (a test, a spec, a requirement or a rule that describes the behavior) may be written as a line with the ID of the original finding (for example `[L-1] e2e/specs/inbox.e2e.ts test that goes with the fix of L-1`). A change that has nothing to do with a finding must not be written in the list.
+Commit the fix, run `run-e2e.sh` unless `check-records.sh` passes (the CI and E2E records of the new HEAD, or a diff of files that no check reads only, are needed), and run `range-check.sh origin/main {list file}` by the main checkout's path, from the worktree (`worktree.md`).
+The passed commit is `origin/main`, which needs no pass record because a commit of main passed this gate when it entered main.
+`range-check.sh` stops, with the reason on stderr and exit 1, unless all of these hold: the working tree is clean, the passed commit has a pass record or is `origin/main` or its ancestor, it is an ancestor of HEAD and not HEAD, `check-records.sh` passes on HEAD from the passed commit (HEAD's CI and E2E records, or a diff of files that no check reads only), and every path of `git diff --name-only --no-renames {passed HEAD} HEAD` appears in the list. It prints each path outside the list, and that diff goes through the first-round flow. It does not review the content of the findings.
+When all hold, it writes the pass record for the new HEAD with `.agents/hooks/record-review.sh`.
+A fix made inside a failed round is not this: it is part of the blocking fix, and the second round reads it.
+At the owner's instruction (2026-10-29). Running a review for every small fix produced too many reviews. Since 2026-11-19 (#1012) it serves only a merged version's findings, because a pass is no longer followed by a fix on the same branch.
+The check of the pass record (`pre-git.sh`) stays. The writers are release-verifier and `range-check.sh` alone, so that no other command can let a change through.
+
+```text
+Good: the Low issue #1305 「Low: ts/slack.ts 空の返信を送る前に確かめていない」 has a count of 3 -> step 6 of implement fixes it on the new branch `fix/pre-release-20261125-1030`, and commits -> run-e2e.sh -> `range-check.sh origin/main tmp/review-lows.txt` -> pass record -> push
+Bad:  fix the Low of a merged version and run the performance and code reviews again
+Bad:  fix the Low of a merged version and launch release-verifier to check the range
+Bad:  fix a Low of the branch that just passed, and run `range-check.sh {passed HEAD} {list file}` (leave it, and list it in the completion report)
+Bad:  add a new feature to a fix of a merged version's Lows and push with only the range check (a path outside the list stops it)
+```
+
+### Keep fixes to the minimum at the finding's location
+
+Do not rebuild things the findings do not mention, and do not make improvements on the side.
+A rebuilt diff produces new findings in the second round.
+
+## CI and E2E records
+
+### Run CI and E2E before release-verifier, on every HEAD
+
+Unless `check-records.sh` passes on it ("Flow" above), run `.agents/tools/run-e2e.sh` on a HEAD while the reviewers read it, and hand the HEAD to release-verifier when it and the reviewers are back; its CI (`run-ci.sh`) runs beside wdio and writes the CI record (`testing.md`, `e2e.md`). `run-ci.sh` alone writes the same record where no E2E is run.
+release-verifier and `pre-git.sh` call `.agents/tools/check-records.sh`, which passes when `check-ci.sh` and `check-e2e.sh` find a passing, clean record for HEAD (`.claude/ci/{HEAD SHA}`, `.claude/e2e/{HEAD SHA}`) with the version of that commit, or when the diff from the newest commit with both records (or else the base) to HEAD holds only files that no check reads (`testing.md`). Without either, release-verifier fails.
+Reviewers cannot confirm screen behavior by reading the diff, and `pre-git.sh` runs none of the checks, so a push is stopped when neither the record of HEAD nor the exemption holds.
+
+```text
+Good: commit -> run-e2e.sh (its CI beside wdio) and the reviewers together -> fix High -> run-e2e.sh and the second-round review together -> release-verifier -> pass
+Bad:  launch release-verifier without running CI or E2E, where check-records.sh does not pass
+Bad:  start run-ci.sh after the reviewers have read the code, and fix its failure under them
+```
+
+### Rerun CI and E2E every time a commit is added
+
+A commit that fixes a non-blocking finding (Medium or Low) is also a new HEAD, so rerun `run-e2e.sh` (and with it `run-ci.sh`), unless `check-records.sh` passes, before handing it to release-verifier, or to `range-check.sh` for a fix of a merged version's findings.
+The records are per HEAD SHA, and the previous HEAD's record cannot be used for the new HEAD.
+
+```text
+Good: round 1 fails -> fix the High and the Low in one commit -> run-e2e.sh (its CI beside wdio) with the second-round review -> release-verifier
+Good: a merged version's Low fixed and committed -> run-e2e.sh (its CI beside wdio) -> range-check.sh origin/main -> push
+Bad:  after a fix of a Low, push with the previous HEAD's CI or E2E record
+```
+
+## Release-only commits
+
+### Let a release-only commit keep the pass
+
+The commits of the Release PR make a new HEAD (at the owner's instruction, 2026-11-09; Discussion #293: the source holds no version, so no version line is exempt). They need no review pass record and no release-verifier launch (an Opus launch for a mechanical check), and no CI or E2E record either, because the diff holds nothing that the static checks or E2E read (at the owner's instruction, 2026-11-18; #931. Before it, the records were needed on that HEAD, because they are per HEAD; `testing.md`).
+`pre-git.sh` takes, for the review, the newest commit of the push range that has a pass record, or else the base of the range, which already passed this gate when it reached the remote, and runs `.agents/tools/release-only-diff.sh {that commit} HEAD`. A HEAD that has its own pass record needs no such diff. `post-checks.sh` does the same from `origin/main`. CI and E2E go through `check-records.sh` with the same base, and it passes more files than these three (`testing.md`). The diff counts as release-only when it holds only:
+- `README.md`, `CHANGELOG.md` and anything under `docs/`
+
+Any other path, or a deleted or missing side, is offending, and the push stops with the paths listed.
+A feature branch that takes in a moved main is not release-only, and it goes through the first round.
+Only release-verifier and `range-check.sh` still write pass records.
+
+```text
+Good: release/next writes CHANGELOG -> push (the diff is release-only, so no CI, E2E or pass record is asked)
+Bad:  a feature branch merges main with other commits in -> push without a review
+Bad:  release/next also changes a file under `src-tauri/` -> push without run-e2e.sh (the diff is not release-only)
+```
+
+## Scope of a version
+
+### Do not add features to a version that has entered review
+
+Move a feature requested during the review to the next version.
+When the owner decides to put it in that version, first tell them that the version's review restarts from the first round.
+In v0.10.1, features kept being added during the review, and the range to read and the findings grew.
+
+## Pass record
+
+### Only release-verifier and `range-check.sh` write the pass record
+
+The record is `.claude/reviews/{HEAD SHA}` in the main checkout, and `.agents/hooks/record-review.sh` writes it.
+`guard-review.sh` stops anyone other than release-verifier from touching these two, by the words of the command or the path of the file, with two exceptions (at the owner's instruction, 2026-11-25; #1375): a read-only command (`cat`, `head`, `grep`, `rg`, `sed -n`, `git diff`, `git show` or `git log`, run alone, with no chaining, redirection or substitution), and a Write, Edit or MultiEdit of `record-review*.sh` or `guard-review.sh` in a worktree under `.claude/worktrees/`. The main checkout's copy of the record script stays stopped, so a fix reaches it by the merge; running the script and writing `.claude/reviews/` stay stopped too.
+`record-review.sh` writes nothing and exits 2 when its stdin is empty or its first line does not start with `判定: 合格` (at the owner's instruction, 2026-11-25; #1375), so a record never holds a missing verdict; release-verifier gives the whole verdict on stdin (`.agents/agents/release-verifier.md`, step 8).
+`range-check.sh` calls `record-review.sh` itself after its checks, and the command that runs it names neither, so the guard lets it pass (at the owner's instruction, 2026-11-18; #932. It replaces "only release-verifier" of 2026-10-29).
+
+```text
+Good: release-verifier calls record-review.sh
+Good: the main agent runs range-check.sh, which calls record-review.sh after its checks
+Good: a session reads record-review.sh with `cat`, or edits its copy in its own worktree
+Bad:  a session edits the main checkout's copy of record-review.sh, or runs it with `bash`
+Bad:  the main agent creates a file in .claude/reviews/, or calls record-review.sh itself
+```
+
+## After the push
+
+### After pushing a version tag or finding a merged Release PR, watch the release through to the end before you report completion
+
+Confirm that the `release` run of the tag succeeded and that the GitHub Release has its files. The merge of the Release PR starts that run itself (`release.yml`; at the owner's instruction, 2026-11-09; #303), so the agent that merges it, or finds the merge, watches it too.
+If it failed, find the cause with `--log-failed` and act as `.agents/skills/release/SKILL.md` says ("After the Release PR is merged": rerun a failure of the runner or the network with `gh run rerun {run ID} --failed`, fix any other cause with the next patch version), and report that result too.
+The merge of any other pull request starts no release, so there is nothing to watch (the workflows of a push to main, `rust-cache.yml` and `pages.yml`, may still run).
+
+```sh
+.agents/tools/watch-ci.sh             # waits for the release run of HEAD (a tagged commit) to appear and to end; on failure prints the cause log and exits non-zero
+.agents/tools/watch-ci.sh {commit}    # the same for a given commit: after a merge of the Release PR, `git fetch origin main` and pass `follow_up.commit` (or `tag_due.commit`) of `plan-release.py release`, because HEAD is not its merge commit
+.agents/tools/watch-ci.sh {run ID}    # waits for one run only
+```
+
+```text
+Good: push the tag -> confirm that the release succeeded -> report completion
+Bad:  push the tag -> report completion right away
+```
