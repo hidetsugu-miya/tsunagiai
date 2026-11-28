@@ -154,7 +154,7 @@ export function initReply(reloadThread: (target: ReplyTarget) => Promise<void>) 
   reload = reloadThread;
   mode().onchange = () => fill(mode().value as Mode);
   recipients.init();
-  attachments = mailAttachments($("mail-reply"), $("mail-reply-attach"), $<HTMLButtonElement>("mail-reply-attach-open"), "mail-reply");
+  attachments = mailAttachments($("mail-reply"), $("mail-reply-attach"), $<HTMLButtonElement>("mail-reply-attach-open"), "mail-reply", () => target?.account ?? "");
   $("mail-reply-body").append(editor.el);
   $("mail-reply-send").onclick = send;
   $("mail-reply-discard").onclick = discard;

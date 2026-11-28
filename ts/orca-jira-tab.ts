@@ -154,7 +154,7 @@ function editStatus(t: JiraTab, issue: JiraIssueDetail, anchor: HTMLButtonElemen
 }
 
 function editAssignee(t: JiraTab, issue: JiraIssueDetail, anchor: HTMLButtonElement) {
-  const to = (accountId: string | null, name: string | null) => () => name === issue.assignee || void write(t, { assignee: name }, () => invoke("jira_assign", { ...at(t), key: t.key, accountId }), () => applyJiraChange(t.key, { assignee: name }));
+  const to = (accountId: string | null, name: string | null) => () => name === issue.assignee || void write(t, { assignee: name }, () => invoke("jira_assign", { ...at(t), key: t.key, accountId }), () => applyJiraChange(t.key, { assignee: name, assigneeAccountId: accountId }));
   void menuOf(
     anchor,
     () => invoke("jira_assignable", { ...at(t), key: t.key }),
@@ -168,7 +168,7 @@ function editPriority(t: JiraTab, issue: JiraIssueDetail, anchor: HTMLButtonElem
   void menuOf(
     anchor,
     () => invoke("jira_priorities", { ...at(t), key: t.key }),
-    (p) => ({ label: p.name, color: "var(--muted)", current: p.name === issue.priority, pick: () => p.name === issue.priority || void write(t, { priority: p.name }, () => invoke("jira_set_priority", { ...at(t), key: t.key, priorityId: p.id }), () => applyJiraChange(t.key, { priority: p.name })) }),
+    (p) => ({ label: p.name, color: "var(--muted)", current: p.name === issue.priority, pick: () => p.name === issue.priority || void write(t, { priority: p.name }, () => invoke("jira_set_priority", { ...at(t), key: t.key, priorityId: p.id }), () => {}) }),
   );
 }
 

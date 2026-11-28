@@ -103,9 +103,9 @@ declare global {
 let onceCount = 0;
 export const onceId = () => `once-${++onceCount}`;
 
-// The fixture that shortens the timers a spec waits for (ts/e2e-timers.ts, e2e/fixtures.js), in milliseconds: `orcaClock` is the Orca list's read while the screen is shown (10 s in the app), `orcaMirror` the read of a terminal's screen (1 s) `databaseProfiles` the read of the connections that the database screen does while it is shown, and its edit pane (2 s) `formationFlow` the read of the children by the flow pane of the orchestration mode (3 s) `lspSettings` the read of the language servers' settings while the language server part of the file pane is shown (2 s), `machineResources` the read of the load of the machines for the footer (5 s) and `machineUsage` the read of the rate limits of the AI (60 s), `calendarNotice` the clock of the notice of an event (C-8, 60 s, and its read of the week is 5 times as long).
+// The fixture that shortens the timers a spec waits for (ts/e2e-timers.ts, e2e/fixtures.js), in milliseconds: `orcaClock` is the Orca list's read while the screen is shown (10 s in the app), `orcaMirror` the read of a terminal's screen (1 s) `databaseProfiles` the read of the connections that the database screen does while it is shown, and its edit pane (2 s) `formationFlow` the read of the children by the flow pane of the orchestration mode (3 s) `lspSettings` the read of the language servers' settings while the language server part of the file pane is shown (2 s), `machineResources` the read of the load of the machines for the footer (5 s), `calendarNotice` the clock of the notice of an event (C-8, 60 s, and its read of the week is 5 times as long).
 // A wait for a period to pass is that period times 1.2. Put it in the fixtures of `boot`: `boot({ ...timers({ orcaMirror: 250 }) })`.
-export const timers = (periods: { orcaClock?: number; orcaMirror?: number; databaseProfiles?: number; formationFlow?: number; lspSettings?: number; machineResources?: number; machineUsage?: number; calendarNotice?: number }) => ({ e2e_timers: periods });
+export const timers = (periods: { orcaClock?: number; orcaMirror?: number; databaseProfiles?: number; formationFlow?: number; lspSettings?: number; machineResources?: number; calendarNotice?: number }) => ({ e2e_timers: periods });
 
 // The app asks for its data while loading, before a spec can mock anything: hand it over through the fixture layer (e2e/fixtures.js) and reload.
 // Mocks and recorded calls are page state, so a reload also clears them; call `mock` after `boot`.
@@ -263,9 +263,9 @@ export const today = isoDate(new Date());
 
 export const account = "me@example.com";
 
-export const thread = (id: string, subject: string, unread: boolean): ThreadItem => ({
+export const thread = (id: string, subject: string, unread: boolean, owner = account): ThreadItem => ({
   id,
-  account,
+  account: owner,
   from: "Alice <alice@example.com>",
   fromName: "Alice",
   fromAddress: "alice@example.com",
@@ -281,6 +281,17 @@ export const inbox = (threads = [thread("t1", "First unread", true), thread("t2"
   needsLogin: [],
   failed: {},
   historyIds: { [account]: "100" },
+});
+
+// An iCloud account (M-13) with no Google account: the same three threads as `inbox()`, owned by it, and the position of its sync.
+export const icloudAccount = "me@icloud.com";
+
+export const icloudInbox = (): Inbox => ({
+  accounts: [],
+  threads: [thread("i1", "First unread", true, icloudAccount), thread("i2", "Second unread", true, icloudAccount), thread("i3", "Already read", false, icloudAccount)],
+  needsLogin: [],
+  failed: {},
+  historyIds: { [icloudAccount]: "1700:5" },
 });
 
 // Waits until the detail view holds its thread: before that it shows the row's subject and a note in the body's place.
@@ -357,9 +368,9 @@ export function weekOfToday(firstDay = 0): Week {
     weekStart: isoDate(start),
     allDay: [{ day, ...info("Holiday", "11月3日（火）終日", "unknown", { calendar: "Holidays" }) }],
     timed: [
-      { day, startMin: 600, endMin: 660, col: 0, cols: 1, ...info("Team sync", "11月2日（月）10:00 - 11:00", "accepted", detail) },
-      { day, startMin: 720, endMin: 780, col: 0, cols: 1, ...info("Maybe lunch", "11月2日（月）12:00 - 13:00", "tentative") },
-      { day, startMin: 840, endMin: 900, col: 0, cols: 1, ...info("Unanswered", "11月2日（月）14:00 - 15:00", "needsAction") },
+      { day, startMin: 600, endMin: 660, left: 0, width: 1000, layer: 0, ...info("Team sync", "11月2日（月）10:00 - 11:00", "accepted", detail) },
+      { day, startMin: 720, endMin: 780, left: 0, width: 1000, layer: 0, ...info("Maybe lunch", "11月2日（月）12:00 - 13:00", "tentative") },
+      { day, startMin: 840, endMin: 900, left: 0, width: 1000, layer: 0, ...info("Unanswered", "11月2日（月）14:00 - 15:00", "needsAction") },
     ],
     needsLogin: [],
     failed: {},
@@ -609,7 +620,7 @@ export const databaseProfile = (id: string, name: string, extra: Partial<Databas
 // The Jira data of J-2 as the commands answer it: a board, a sprint (the dates are none), a ticket and the tickets of a sprint or of the backlog.
 export const jiraBoard = (id: number, name: string, type = "scrum"): JiraBoard => ({ id, name, type });
 export const jiraSprint = (id: number, name: string, state = "active"): JiraSprint => ({ id, name, state, startDate: null, endDate: null });
-export const jiraIssue = (key: string, summary: string, status: string, statusCategory = "new", extra: Partial<JiraIssue> = {}): JiraIssue => ({ key, summary, status, statusCategory, assignee: null, priority: null, ...extra });
+export const jiraIssue = (key: string, summary: string, status: string, statusCategory = "new", extra: Partial<JiraIssue> = {}): JiraIssue => ({ key, summary, status, statusCategory, assignee: null, assigneeAccountId: null, ...extra });
 export const jiraIssues = (issues: JiraIssue[], truncated = false): JiraIssues => ({ issues, truncated });
 // A project and an issue type as `jira_projects` and `jira_issue_types` answer them (#874).
 export const jiraProject = (id: string, key: string, name: string): JiraProject => ({ id, key, name });

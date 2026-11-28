@@ -25,6 +25,9 @@ let claudePopup = false;
 
 export const accountList = () => accounts;
 
+// Every account whose mail the list shows: the Google accounts, and the iCloud accounts the list syncs (M-13: `Inbox.accounts` holds the Google ones only, and `historyIds` has an entry for each account that loaded; an unlink takes its entry out).
+export const mailAccountSet = () => new Set([...accounts, ...historyIds.keys()]);
+
 // Closes the popup if it is Claude's (Claude can no longer be used).
 export function closeClaudePopup() {
   if (claudePopup) closePopup();

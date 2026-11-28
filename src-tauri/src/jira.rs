@@ -61,7 +61,7 @@ const MAX_BOARDS: usize = 200;
 const MAX_SPRINTS: usize = 100;
 const MAX_ISSUES: usize = 500;
 /// The fields of a ticket that `JiraIssue` holds, and nothing else is asked for.
-const ISSUE_FIELDS: &str = "fields=summary,status,assignee,priority";
+const ISSUE_FIELDS: &str = "fields=summary,status,assignee";
 /// One ticket (J-2, #871): its fields and its description in REST API v3 (ADF), its sprint in the Agile API, and its comments.
 const ISSUE_PATH: &str = "/rest/api/3/issue";
 const AGILE_ISSUE_PATH: &str = "/rest/agile/1.0/issue";
@@ -132,6 +132,9 @@ pub struct JiraConnection {
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
 #[serde(rename_all = "camelCase")]
 pub struct JiraUser {
+    /// Jira's id of the account (the list's assignee filter compares it, J-2, #1544); `null` when Jira gave none.
+    #[serde(default)]
+    pub account_id: Option<String>,
     #[serde(default)]
     pub display_name: String,
     #[serde(default)]
@@ -169,7 +172,7 @@ pub struct JiraSprint {
     pub end_date: Option<String>,
 }
 
-/// A ticket as the list draws it. `statusCategory` is the key of the status's category: `new`, `indeterminate` or `done` (`undefined` when Jira gave none). `assignee` is the display name, `null` when unassigned, and `priority` is `null` when the project has none.
+/// A ticket as the list draws it. `statusCategory` is the key of the status's category: `new`, `indeterminate` or `done` (`undefined` when Jira gave none). `assignee` is the display name and `assigneeAccountId` the account's id (J-2, #1544), both `null` when unassigned. The list draws no priority (J-2, #1543).
 #[derive(Serialize, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -180,7 +183,7 @@ pub struct JiraIssue {
     pub status: String,
     pub status_category: String,
     pub assignee: Option<String>,
-    pub priority: Option<String>,
+    pub assignee_account_id: Option<String>,
 }
 
 /// The tickets of a sprint or of a backlog. `truncated` is true when there were more than the command reads (`MAX_ISSUES`).
@@ -450,6 +453,7 @@ struct RawCategory {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RawUser {
+    account_id: Option<String>,
     display_name: Option<String>,
 }
 
@@ -461,6 +465,7 @@ struct RawPriority {
 fn issue_of(raw: RawIssue) -> JiraIssue {
     let fields = raw.fields.unwrap_or_default();
     let status = fields.status;
+    let assignee_account_id = fields.assignee.as_ref().and_then(|u| u.account_id.clone());
     JiraIssue {
         key: raw.key,
         summary: fields.summary.unwrap_or_default(),
@@ -471,7 +476,7 @@ fn issue_of(raw: RawIssue) -> JiraIssue {
             .unwrap_or_else(|| "undefined".to_owned()),
         status: status.and_then(|s| s.name).unwrap_or_default(),
         assignee: fields.assignee.and_then(|u| u.display_name),
-        priority: fields.priority.and_then(|p| p.name),
+        assignee_account_id,
     }
 }
 
@@ -543,10 +548,17 @@ fn detail_of(
     comments: Vec<RawComment>,
     comments_truncated: bool,
 ) -> JiraIssueDetail {
-    let (description, labels, parent) = raw
+    let (description, labels, parent, priority) = raw
         .fields
         .as_mut()
-        .map(|f| (f.description.take(), f.labels.take(), f.parent.take()))
+        .map(|f| {
+            (
+                f.description.take(),
+                f.labels.take(),
+                f.parent.take(),
+                f.priority.take().and_then(|p| p.name),
+            )
+        })
         .unwrap_or_default();
     let issue = issue_of(raw);
     JiraIssueDetail {
@@ -556,7 +568,7 @@ fn detail_of(
         status: issue.status,
         status_category: issue.status_category,
         assignee: issue.assignee,
-        priority: issue.priority,
+        priority,
         sprint,
         labels: labels.unwrap_or_default(),
         parent: parent.map(|p| JiraParent {
@@ -1770,6 +1782,19 @@ pub async fn jira_backlog(
         .map_err(|e| log_failure("jira_backlog", LOG_ACCOUNT, e))
 }
 
+/// Who the credential of the project belongs to (J-2, #1544): the list's default assignee. Asks Jira, changes nothing.
+#[tauri::command]
+pub async fn jira_myself(
+    app: AppHandle,
+    environment: Option<String>,
+    project: String,
+) -> Result<JiraUser, String> {
+    let read =
+        async { fetch_user(&project_conn(&app, environment.as_deref(), &project).await?).await };
+    read.await
+        .map_err(|e| log_failure("jira_myself", LOG_ACCOUNT, e))
+}
+
 /// A ticket for its tab (J-2, #871): its description and comments read as Markdown, and the fields of its right column. `key` is checked to be a ticket key before anything is asked.
 #[tauri::command]
 pub async fn jira_issue(
@@ -2141,14 +2166,16 @@ mod tests {
         assert_eq!(
             ok,
             Ok(JiraUser {
+                account_id: Some("1".into()),
                 display_name: "Example User".into(),
                 email_address: Some("me@example.com".into())
             })
         );
-        // A scoped token may be given no email address.
+        // A scoped token may be given no email address, and an answer may have no account id.
         assert_eq!(
             user_of(200, r#"{"displayName":"Example User"}"#),
             Ok(JiraUser {
+                account_id: None,
                 display_name: "Example User".into(),
                 email_address: None
             })
@@ -2590,6 +2617,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn myself_is_asked_with_the_credential_and_gives_the_account_id() {
+        let body = r#"{"accountId":"5b10ac8d82e05b22cc7d4ef5","displayName":"Mia","emailAddress":"m@example.com"}"#;
+        let (site, seen) = serve_each(vec![json_answer(body)]).await;
+        let conn = basic_conn(&site).await;
+        let user = fetch_user(&conn).await.unwrap();
+        assert_eq!(user.account_id.as_deref(), Some("5b10ac8d82e05b22cc7d4ef5"));
+        assert_eq!(user.display_name, "Mia");
+        let requests = seen.await.unwrap();
+        assert!(
+            requests[0].starts_with("get /rest/api/3/myself http/1.1"),
+            "{}",
+            requests[0]
+        );
+        assert!(
+            requests[0].contains("authorization: basic bwvazxhhbxbszs5jb206dg9r"),
+            "{}",
+            requests[0]
+        );
+    }
+
+    #[tokio::test]
     async fn check_reports_a_rejected_credential() {
         let (site, _seen) = serve_once(
             "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
@@ -2774,7 +2822,7 @@ mod tests {
     }
 
     #[test]
-    fn issue_of_takes_the_five_fields_and_leaves_out_what_jira_did_not_give() {
+    fn issue_of_takes_the_four_fields_and_leaves_out_what_jira_did_not_give() {
         let raw = |json: &str| serde_json::from_str::<RawIssue>(json).unwrap();
         assert_eq!(
             issue_of(raw(
@@ -2786,10 +2834,10 @@ mod tests {
                 status: "In Progress".into(),
                 status_category: "indeterminate".into(),
                 assignee: Some("Mia Krystof".into()),
-                priority: Some("High".into()),
+                assignee_account_id: Some("1".into()),
             }
         );
-        // An unassigned ticket has a null assignee, and a project may have no priority field.
+        // The priority of Jira's answer is not kept by the list. An unassigned ticket has a null assignee and a null account id.
         assert_eq!(
             issue_of(raw(
                 r#"{"key":"HSP-2","fields":{"summary":"s","status":{"name":"Done","statusCategory":{"key":"done"}},"assignee":null}}"#
@@ -2800,7 +2848,7 @@ mod tests {
                 status: "Done".into(),
                 status_category: "done".into(),
                 assignee: None,
-                priority: None,
+                assignee_account_id: None,
             }
         );
         assert_eq!(
@@ -2811,7 +2859,7 @@ mod tests {
                 status: String::new(),
                 status_category: "undefined".into(),
                 assignee: None,
-                priority: None,
+                assignee_account_id: None,
             }
         );
     }
@@ -2916,8 +2964,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_tickets_of_a_sprint_and_of_a_backlog_come_with_the_five_fields() {
-        let body = r#"{"expand":"schema,names","startAt":0,"maxResults":50,"total":2,"issues":[{"key":"HSP-1","fields":{"summary":"One","status":{"name":"To Do","statusCategory":{"key":"new"}},"assignee":{"displayName":"Mia"},"priority":{"name":"Low"}}},{"key":"HSP-2","fields":{"summary":"Two","status":{"name":"Done","statusCategory":{"key":"done"}},"assignee":null,"priority":null}}]}"#;
+    async fn the_tickets_of_a_sprint_and_of_a_backlog_come_with_the_four_fields() {
+        let body = r#"{"expand":"schema,names","startAt":0,"maxResults":50,"total":2,"issues":[{"key":"HSP-1","fields":{"summary":"One","status":{"name":"To Do","statusCategory":{"key":"new"}},"assignee":{"accountId":"acc-1","displayName":"Mia"},"priority":{"name":"Low"}}},{"key":"HSP-2","fields":{"summary":"Two","status":{"name":"Done","statusCategory":{"key":"done"}},"assignee":null,"priority":null}}]}"#;
         // One answer each: the total is reached on the first page, so no second page is asked.
         let (site, seen) = serve_each(vec![json_answer(body), json_answer(body)]).await;
         let conn = basic_conn(&site).await;
@@ -2927,16 +2975,20 @@ mod tests {
         assert!(!sprint.truncated);
         assert_eq!(sprint.issues[0].key, "HSP-1");
         assert_eq!(sprint.issues[0].assignee.as_deref(), Some("Mia"));
+        assert_eq!(
+            sprint.issues[0].assignee_account_id.as_deref(),
+            Some("acc-1")
+        );
+        assert_eq!(sprint.issues[1].assignee_account_id, None);
         assert_eq!(sprint.issues[1].status_category, "done");
-        assert_eq!(sprint.issues[1].priority, None);
         let requests = seen.await.unwrap();
         assert!(
-            requests[0].starts_with("get /rest/agile/1.0/sprint/12/issue?fields=summary,status,assignee,priority&startat=0&maxresults=50 http/1.1"),
+            requests[0].starts_with("get /rest/agile/1.0/sprint/12/issue?fields=summary,status,assignee&startat=0&maxresults=50 http/1.1"),
             "{}",
             requests[0]
         );
         assert!(
-            requests[1].starts_with("get /rest/agile/1.0/board/7/backlog?fields=summary,status,assignee,priority&startat=0&maxresults=50 http/1.1"),
+            requests[1].starts_with("get /rest/agile/1.0/board/7/backlog?fields=summary,status,assignee&startat=0&maxresults=50 http/1.1"),
             "{}",
             requests[1]
         );

@@ -3,4 +3,8 @@
 /**
  * Who the credential belongs to, as Jira answered the test.
  */
-export type JiraUser = { displayName: string, emailAddress: string | null, };
+export type JiraUser = { 
+/**
+ * Jira's id of the account (the list's assignee filter compares it, J-2, #1544); `null` when Jira gave none.
+ */
+accountId: string | null, displayName: string, emailAddress: string | null, };

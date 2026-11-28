@@ -1,27 +1,19 @@
-// The load of the machines and the use of the AI in the footer (A-48): for this Mac and for each saved environment, its CPU, its memory and its Claude and Antigravity (weekly), and, pressed, the pane "リソース" from the right with the whole of them.
-// Rust reads Orca (`machine_resources` every 5 seconds, `machine_usage` every 60 seconds); this module only reads those commands and draws, as text. A read does not start while the window is hidden or while the one before it is not back, and the machines drawn are always the last answer, so a saved environment that left the list is not drawn or read again.
-import type { AiUsage } from "./bindings/AiUsage";
+// The load of the machines in the footer (A-48): for this Mac and for each saved environment, its CPU and its memory, and, pressed, the pane "リソース" from the right with the whole of them.
+// Rust reads Orca (`machine_resources` every 5 seconds); this module only reads that command and draws, as text. A read does not start while the window is hidden or while the one before it is not back, and the machines drawn are always the last answer, so a saved environment that left the list is not drawn or read again.
 import type { MachineResources } from "./bindings/MachineResources";
-import type { MachineUsage } from "./bindings/MachineUsage";
-import type { UsageWindow } from "./bindings/UsageWindow";
 import { $, el, span, tag } from "./dom.js";
 import { periodMs } from "./e2e-timers.js";
 import { closeOtherPanes, registerPane } from "./footer.js";
-import { hhmm, WEEKDAYS } from "./format.js";
-import { ANTIGRAVITY_SVG, CLAUDE_SVG } from "./icons.js";
 import { invoke } from "./ipc.js";
 
 const RESOURCES_MS = 5_000;
-const USAGE_MS = 60_000;
 // A number at or over this is drawn in orange.
 const HOT = 80;
 const NONE = "—";
 
 // The last answers; null until the first one is back.
 let resources: MachineResources[] | null = null;
-let usage: MachineUsage[] | null = null;
 let readingResources = false;
-let readingUsage = false;
 
 const isOpen = () => !$("resource-pane").hidden;
 
@@ -31,42 +23,16 @@ const num = (value: number | null) => {
   return node;
 };
 
-// The share used of an AI's window, when Orca says the AI is readable (status ok) and gives the window.
-const usedOf = (ai: AiUsage | undefined, which: "session" | "weekly") => (ai?.status === "ok" ? (ai[which]?.usedPercent ?? null) : null);
-
 const stat = (label: string, value: number | null) => {
   const node = span("stat", "");
   node.append(`${label} `, num(value));
   return node;
 };
 
-// The mark of an AI, in the AI's color (the shape is the AI's, the color is `--claude` or `--google`).
-function aiIcon(kind: string) {
-  const node = tag("span", "stat-icon");
-  node.dataset.ai = kind;
-  node.innerHTML = kind === "claude" ? CLAUDE_SVG : ANTIGRAVITY_SVG;
-  return node;
-}
-
-// The weekly of an AI as its mark and a number; the mark's image label gives the name to a reader that does not see the shape, so the name and the number are read together.
-function aiStat(name: string, kind: string, value: AiUsage | undefined) {
-  const node = span("stat-ai", "");
-  const icon = aiIcon(kind);
-  icon.setAttribute("role", "img");
-  icon.setAttribute("aria-label", name);
-  node.append(icon, num(usedOf(value, "weekly")));
-  return node;
-}
-
 function machineChip(m: MachineResources) {
   const chip = span("stat-machine", "");
   const ok = m.error === null;
   chip.append(tag("b", "stat-name", m.name), stat("CPU", ok ? m.cpuPercent : null), stat("メモリ", ok ? m.memoryPercent : null));
-  // The AI of this machine: the row of the usage with the same environment, drawn once the first reading is back. A machine that gave nothing has only dashes, the AI's too.
-  if (usage) {
-    const mine = ok ? usage.find((u) => u.environment === m.environment) : undefined;
-    chip.append(aiStat("Claude", "claude", mine?.claude), aiStat("Antigravity", "antigravity", mine?.antigravity));
-  }
   return chip;
 }
 
@@ -92,27 +58,6 @@ function row(label: string, value: number | null, sub = "") {
 
 const gb = (bytes: number) => Number((bytes / 1024 ** 3).toFixed(1));
 
-const resetText = (ms: number) => {
-  const d = new Date(ms);
-  return `${WEEKDAYS[d.getDay()]} ${hhmm(d.getHours() * 60 + d.getMinutes())} にリセット`;
-};
-
-const windowRow = (label: string, ai: AiUsage | undefined, which: "session" | "weekly") => {
-  const w: UsageWindow | null = ai?.status === "ok" ? (ai[which] ?? null) : null;
-  return row(label, w?.usedPercent ?? null, w?.resetsAt != null ? resetText(w.resetsAt) : "");
-};
-
-function aiGroup(name: string, kind: string, ai: AiUsage | undefined) {
-  const group = el("res-group");
-  const title = el("res-group-name");
-  title.append(aiIcon(kind), name);
-  group.append(title);
-  // The window of 5 hours only where Orca gives one.
-  if (ai?.status === "ok" && ai.session) group.append(windowRow("5 時間", ai, "session"));
-  group.append(windowRow("weekly", ai, "weekly"));
-  return group;
-}
-
 function machineSection(m: MachineResources) {
   const section = tag("section", "res-machine");
   section.append(tag("h3", "", m.name));
@@ -120,11 +65,6 @@ function machineSection(m: MachineResources) {
   const load = ok && m.loadAverage !== null && m.cores !== null ? `${m.loadAverage.toFixed(2)} / ${m.cores} コア` : "";
   const bytes = ok && m.usedBytes !== null && m.totalBytes !== null ? `${gb(m.usedBytes)} / ${gb(m.totalBytes)} GB` : "";
   section.append(row("CPU", ok ? m.cpuPercent : null, load), row("メモリ", ok ? m.memoryPercent : null, bytes));
-  if (usage) {
-    // A machine that gave nothing has only dashes, the AI's too.
-    const mine = ok ? usage.find((u) => u.environment === m.environment) : undefined;
-    section.append(aiGroup("Claude", "claude", mine?.claude), aiGroup("Antigravity", "antigravity", mine?.antigravity));
-  }
   return section;
 }
 
@@ -152,19 +92,6 @@ async function readResources() {
   }
 }
 
-async function readUsage() {
-  if (document.hidden || readingUsage) return;
-  readingUsage = true;
-  try {
-    usage = await invoke("machine_usage");
-    draw();
-  } catch {
-    // Nothing to draw again.
-  } finally {
-    readingUsage = false;
-  }
-}
-
 function close() {
   $("resource-pane").hidden = true;
   $("footer-stats").setAttribute("aria-expanded", "false");
@@ -177,7 +104,6 @@ function toggle() {
   $("footer-stats").setAttribute("aria-expanded", "true");
   drawPane();
   readResources();
-  readUsage();
 }
 
 export function initMachineStats() {
@@ -190,7 +116,5 @@ export function initMachineStats() {
     if (isOpen() && !$("resource-pane").contains(target) && !$("footer-stats").contains(target)) close();
   });
   readResources();
-  readUsage();
   setInterval(readResources, periodMs("machineResources", RESOURCES_MS));
-  setInterval(readUsage, periodMs("machineUsage", USAGE_MS));
 }

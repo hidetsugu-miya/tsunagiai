@@ -2,6 +2,7 @@
 import type { CalendarChoice } from "./bindings/CalendarChoice";
 import type { CalendarChoices } from "./bindings/CalendarChoices";
 import { closeDetail } from "./calendar-detail.js";
+import { initCalendarGuests, pruneGuests } from "./calendar-guests.js";
 import { $, el, tag } from "./dom.js";
 import { avatarColor, initials } from "./format.js";
 import { CHEVRON_SVG } from "./icons.js";
@@ -36,8 +37,10 @@ function togglePanel() {
   layoutPanel();
 }
 
-export function initCalendarSide(changed: () => void) {
+// `guestsChanged` redraws the week when the guests of C-9 change.
+export function initCalendarSide(changed: () => void, guestsChanged: (weekStart: string | null) => void) {
   onChanged = changed;
+  initCalendarGuests(guestsChanged);
   const toggle = listToggle("カレンダー一覧", togglePanel);
   toggle.id = "cal-bar-toggle";
   $("cal-bar").prepend(toggle);
@@ -122,6 +125,8 @@ export async function loadCalendarChoices(refresh: boolean) {
     const read = await invoke("calendar_choices");
     if (mine !== seq) return;
     loaded = true;
+    // C-9: a guest of an account that is gone from the screen is taken off. An account that must log in again or failed is still on it.
+    pruneGuests([...read.accounts.map((a) => a.account), ...read.needsLogin, ...Object.keys(read.failed)]);
     // The same calendars as drawn: leave the panel alone, so a refresh does not take the focus from a box.
     if (JSON.stringify(read) === JSON.stringify(choices)) return;
     choices = read;

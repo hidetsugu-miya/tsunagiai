@@ -36,6 +36,14 @@ const MAX_PAGES: usize = 10;
 /// A shorter event is laid out as if it lasted this long, so it stays visible.
 /// Keep in step with `MIN_EVENT_MIN` in `ts/calendar.ts`.
 const MIN_MINUTES: u32 = 20;
+/// The width of a day's column in the unit of `TimedItem.left` and `width`: thousandths.
+const FULL: u32 = 1000;
+/// An event that starts this many minutes or more after an event it overlaps is laid over it, not beside it (C-1).
+const OVERLAY_AFTER_MIN: u32 = 30;
+/// How far an event is moved right for each event it lies over in its column, at most (it is also at most a quarter of the column).
+const INDENT: u32 = FULL / 8;
+/// An event is moved right by at most this many steps, so its box keeps a width however many lie under it.
+const MAX_INDENT_STEPS: usize = 3;
 
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -449,7 +457,7 @@ pub struct AllDayItem {
     info: Info,
 }
 
-/// A timed event on one day of the week, in minutes from local midnight, with its column among overlapping events.
+/// A timed event on one day of the week, in minutes from local midnight, with where its box lies among overlapping events (C-1).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -458,10 +466,22 @@ pub struct TimedItem {
     day: usize,
     start_min: u32,
     end_min: u32,
-    col: usize,
-    cols: usize,
+    /// The box's left edge and width, in thousandths of the day column's width.
+    /// Absent in a cache an older version wrote, which held `col` and `cols` instead (0 and 1000, the whole column).
+    #[serde(default)]
+    left: u32,
+    #[serde(default = "full_width")]
+    width: u32,
+    /// The stacking order among the day's events: an event that starts later is above the ones it overlaps, so a higher number is drawn later.
+    /// Absent in a cache an older version wrote (0).
+    #[serde(default)]
+    layer: u32,
     #[serde(flatten)]
     info: Info,
+}
+
+fn full_width() -> u32 {
+    FULL
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -985,44 +1005,83 @@ fn is_duplicate(seen: &mut HashSet<(String, When)>, e: &RawEvent) -> bool {
     !e.ical_uid.is_empty() && !seen.insert((e.ical_uid.clone(), e.when.clone()))
 }
 
-/// Column of each span, and the number of columns of the cluster of chained overlapping spans it belongs to.
+/// Where the box of an event lies in its day (see `TimedItem`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Place {
+    left: u32,
+    width: u32,
+    layer: u32,
+}
+
+/// Where each span of one day lies, as the calendar of Google lays overlapping events out (C-1).
 /// `spans` are `(start, end)` minutes, `end` exclusive; the result follows the input order.
-fn assign_columns(spans: &[(u32, u32)]) -> Vec<(usize, usize)> {
+/// Events that overlap in a chain make a cluster, and a cluster has as many columns as it needs.
+/// An event goes into the first column whose running events all started `OVERLAY_AFTER_MIN` minutes or more before it, else into a new column: so events that start together or close together lie side by side, and one that starts later lies over the events that run in its column, moved right.
+/// A box ends at the left edge of the first column to its right that has an event during its time, else at the right edge of the day.
+fn place_events(spans: &[(u32, u32)]) -> Vec<Place> {
     let mut order: Vec<_> = (0..spans.len()).collect();
     // The longer of two events starting together goes first, so it takes the left column.
     order.sort_by_key(|&i| (spans[i].0, Reverse(spans[i].1)));
-    let mut out = vec![(0, 0); spans.len()];
-    let (mut cluster_start, mut cluster_end) = (0, 0);
-    let mut col_ends: Vec<u32> = vec![];
-    for (n, &i) in order.iter().enumerate() {
-        let (start, end) = spans[i];
-        if n > cluster_start && start >= cluster_end {
-            for &m in &order[cluster_start..n] {
-                out[m].1 = col_ends.len();
-            }
-            cluster_start = n;
-            col_ends.clear();
-        }
-        let col = col_ends
-            .iter()
-            .position(|&e| e <= start)
-            .unwrap_or(col_ends.len());
-        if col == col_ends.len() {
-            col_ends.push(end);
-        } else {
-            col_ends[col] = end;
-        }
-        out[i].0 = col;
-        cluster_end = if n == cluster_start {
-            end
-        } else {
-            cluster_end.max(end)
+    let mut out = vec![
+        Place {
+            left: 0,
+            width: FULL,
+            layer: 0
         };
-    }
-    for &m in &order[cluster_start..] {
-        out[m].1 = col_ends.len();
+        spans.len()
+    ];
+    let mut from = 0;
+    while from < order.len() {
+        let mut cluster_end = spans[order[from]].1;
+        let mut to = from + 1;
+        while to < order.len() && spans[order[to]].0 < cluster_end {
+            cluster_end = cluster_end.max(spans[order[to]].1);
+            to += 1;
+        }
+        place_cluster(spans, &order[from..to], from as u32, &mut out);
+        from = to;
     }
     out
+}
+
+/// `place_events` for one cluster: `members` are its spans in start order, and their layers count from `first_layer`.
+fn place_cluster(spans: &[(u32, u32)], members: &[usize], first_layer: u32, out: &mut [Place]) {
+    let mut columns: Vec<Vec<usize>> = vec![];
+    // The column of each member, and how many events run in it when the member starts.
+    let mut slots = Vec::with_capacity(members.len());
+    for &i in members {
+        let start = spans[i].0;
+        let fits = |c: &Vec<usize>| {
+            c.iter()
+                .all(|&j| spans[j].1 <= start || spans[j].0 + OVERLAY_AFTER_MIN <= start)
+        };
+        let col = columns.iter().position(fits).unwrap_or(columns.len());
+        if col == columns.len() {
+            columns.push(vec![]);
+        }
+        let running = columns[col].iter().filter(|&&j| spans[j].1 > start).count();
+        columns[col].push(i);
+        slots.push((col, running));
+    }
+    let n = columns.len() as u32;
+    let edge = |c: usize| c as u32 * FULL / n;
+    let step = INDENT.min(FULL / n / 4);
+    for (k, (&i, &(col, running))) in members.iter().zip(&slots).enumerate() {
+        let (start, end) = spans[i];
+        let left = edge(col) + step * running.min(MAX_INDENT_STEPS) as u32;
+        let right = (col + 1..columns.len())
+            .find(|&c| {
+                columns[c]
+                    .iter()
+                    .any(|&j| spans[j].0 < end && spans[j].1 > start)
+            })
+            .map_or(FULL, edge);
+        out[i] = Place {
+            left,
+            width: right - left,
+            layer: first_layer + k as u32,
+        };
+    }
 }
 
 /// Puts the events of the week starting `start` (a local date in `tz`) on its seven days.
@@ -1065,8 +1124,9 @@ fn build_week<Tz: TimeZone>(
                             day,
                             start_min: minutes(s.max(day_start)),
                             end_min: minutes(end.min(day_end)),
-                            col: 0,
-                            cols: 1,
+                            left: 0,
+                            width: FULL,
+                            layer: 0,
                             info: info.clone(),
                         });
                     }
@@ -1080,8 +1140,8 @@ fn build_week<Tz: TimeZone>(
             .iter()
             .map(|t| (t.start_min, t.end_min.max(t.start_min + MIN_MINUTES)))
             .collect();
-        for (t, (col, cols)) in on_day.into_iter().zip(assign_columns(&spans)) {
-            (t.col, t.cols) = (col, cols);
+        for (t, p) in on_day.into_iter().zip(place_events(&spans)) {
+            (t.left, t.width, t.layer) = (p.left, p.width, p.layer);
         }
     }
     (all_day, timed)
@@ -1629,6 +1689,447 @@ fn owned_only(found: &mut CalendarChoices) {
         a.calendars.retain(|c| c.mine);
     }
     found.accounts.retain(|a| !a.calendars.is_empty());
+}
+
+// ---- other people: the directory and their weeks (C-9) ----
+
+/// `people.searchDirectoryPeople` of the People API: the people of the organization an account belongs to.
+const DIRECTORY_URL: &str = "https://people.googleapis.com/v1/people:searchDirectoryPeople";
+/// How many people one account answers with.
+const DIRECTORY_PAGE_SIZE: &str = "10";
+/// The longest text searched for, in characters.
+const SEARCH_MAX: usize = 100;
+/// `freebusy.query`: when a person is busy, which a calendar shared as free/busy only gives.
+const FREE_BUSY_URL: &str = "https://www.googleapis.com/calendar/v3/freeBusy";
+/// The `fields` of the events of another person: when, and the title if it is shared. Nothing else of theirs is read.
+const PERSON_EVENT_FIELDS: &str = "nextPageToken,items(id,summary,iCalUID,start,end)";
+/// The title of an event whose title the person does not share, and of a busy time.
+const BUSY_TITLE: &str = "予定あり";
+
+/// A person of an account's directory.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct DirectoryPerson {
+    /// The account whose directory found the person, which reads their week.
+    account: String,
+    name: String,
+    email: String,
+}
+
+/// The people that `calendar_search_people` found. Accounts needing login or failing to search are listed, not fatal.
+#[derive(Serialize, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct DirectoryPeople {
+    people: Vec<DirectoryPerson>,
+    /// Accounts that must log in again (including: the directory scope is not granted yet).
+    needs_login: Vec<String>,
+    /// Accounts whose directory could not be searched, with the error to show.
+    failed: HashMap<String, String>,
+}
+
+/// The week of another person, in the shape of `Week` without the accounts' failures.
+/// Each event is laid out among the person's own events only.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub struct PersonWeek {
+    /// Local date (YYYY-MM-DD) of the day the week starts on.
+    week_start: String,
+    all_day: Vec<AllDayItem>,
+    timed: Vec<TimedItem>,
+    /// The account that reads the week must log in again; no event is given.
+    needs_login: bool,
+}
+
+#[derive(Deserialize, Default)]
+struct ApiMetadata {
+    #[serde(default)]
+    primary: bool,
+}
+
+#[derive(Deserialize)]
+struct ApiPersonName {
+    #[serde(default, rename = "displayName")]
+    display_name: String,
+    #[serde(default)]
+    metadata: ApiMetadata,
+}
+
+#[derive(Deserialize)]
+struct ApiPersonEmail {
+    #[serde(default)]
+    value: String,
+    #[serde(default)]
+    metadata: ApiMetadata,
+}
+
+#[derive(Deserialize)]
+struct ApiPerson {
+    #[serde(default)]
+    names: Vec<ApiPersonName>,
+    #[serde(default, rename = "emailAddresses")]
+    email_addresses: Vec<ApiPersonEmail>,
+}
+
+#[derive(Deserialize)]
+struct PeoplePage {
+    #[serde(default)]
+    people: Vec<ApiPerson>,
+}
+
+/// The person as the screen lists them: the primary address (else the first valid one) and the primary name (else the address).
+/// `None` for an entry with no valid address, which no calendar can be read of.
+fn found_person(account: &str, person: ApiPerson) -> Option<DirectoryPerson> {
+    let email = person
+        .email_addresses
+        .iter()
+        .filter(|e| valid_guest(e.value.trim()))
+        .min_by_key(|e| !e.metadata.primary)?
+        .value
+        .trim();
+    let name = person
+        .names
+        .iter()
+        .filter(|n| !n.display_name.trim().is_empty())
+        .min_by_key(|n| !n.metadata.primary)
+        .map_or(email, |n| n.display_name.trim());
+    Some(DirectoryPerson {
+        account: account.to_owned(),
+        name: name.to_owned(),
+        email: email.to_owned(),
+    })
+}
+
+/// The people of every account in one list, a person found by several accounts once (the case of the address does not count).
+fn merge_people(lists: Vec<Vec<DirectoryPerson>>) -> Vec<DirectoryPerson> {
+    let mut seen = HashSet::new();
+    lists
+        .into_iter()
+        .flatten()
+        .filter(|p| seen.insert(p.email.to_lowercase()))
+        .collect()
+}
+
+/// The text to search for, trimmed. An empty text finds no one.
+fn check_search(text: &str) -> Result<&str, String> {
+    let text = text.trim();
+    if text.chars().count() > SEARCH_MAX {
+        return Err(format!("検索する文字は {SEARCH_MAX} 文字までです"));
+    }
+    Ok(text)
+}
+
+/// The query of `searchDirectoryPeople`: names and addresses of the organization's profiles.
+fn directory_query(text: &str) -> [(&str, &str); 4] {
+    [
+        ("query", text),
+        ("readMask", "names,emailAddresses"),
+        ("sources", "DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE"),
+        ("pageSize", DIRECTORY_PAGE_SIZE),
+    ]
+}
+
+/// A 403 for a missing scope: the stored login predates the scope that the call needs.
+fn scope_missing(message: &str) -> bool {
+    message.contains("ACCESS_TOKEN_SCOPE_INSUFFICIENT")
+        || message.contains("insufficient authentication scopes")
+}
+
+/// What a failed directory search of one account means: a re-login for an old grant, else the message.
+fn directory_failure(status: Option<u16>, message: &str) -> Failure {
+    if status == Some(403) {
+        if scope_missing(message) {
+            return Failure::NeedsLogin;
+        }
+        if message.contains("accessNotConfigured") || message.contains("SERVICE_DISABLED") {
+            return Failure::Message(
+                "Google People API が有効になっていません。Google Cloud コンソールで、このプロジェクトの People API を有効にしてください"
+                    .into(),
+            );
+        }
+    }
+    Failure::Message(message.to_owned())
+}
+
+/// The people of one account's directory that match `text`. `Ok(None)` means `account` must log in again.
+async fn search_account(
+    dir: &Path,
+    auth: &Auth,
+    account: &str,
+    text: &str,
+) -> Result<Option<Vec<DirectoryPerson>>, ApiError> {
+    let Some(page) = send_json_refreshing::<PeoplePage>(
+        dir,
+        auth,
+        account,
+        Method::GET,
+        DIRECTORY_URL,
+        &directory_query(text),
+        None,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(
+        page.people
+            .into_iter()
+            .filter_map(|p| found_person(account, p))
+            .collect(),
+    ))
+}
+
+/// The people that match `text` in the directory of every account, the accounts searched at once.
+async fn search_people(dir: &Path, auth: &Auth, text: &str) -> Result<DirectoryPeople, String> {
+    let command = "calendar_search_people";
+    let mut found = DirectoryPeople {
+        people: Vec::new(),
+        needs_login: Vec::new(),
+        failed: HashMap::new(),
+    };
+    if text.is_empty() {
+        return Ok(found);
+    }
+    let accounts = auth
+        .accounts(dir)
+        .map_err(|e| log_failure(command, "-", e))?;
+    let jobs = accounts
+        .iter()
+        .map(|account| {
+            let (dir, auth) = (dir.to_owned(), auth.clone());
+            let (account, text) = (account.clone(), text.to_owned());
+            async move { search_account(&dir, &auth, &account, &text).await }
+        })
+        .collect();
+    let results = join_all(jobs)
+        .await
+        .map_err(|e| log_failure(command, "-", e))?;
+    let mut lists = Vec::new();
+    for (account, result) in accounts.into_iter().zip(results) {
+        match result {
+            Ok(Some(people)) => lists.push(people),
+            Ok(None) => found.needs_login.push(account),
+            Err(e) => {
+                let status = e.status;
+                let message = log_failure(command, &account, e);
+                match directory_failure(status, &message) {
+                    Failure::NeedsLogin => found.needs_login.push(account),
+                    Failure::Message(m) => {
+                        found.failed.insert(account, m);
+                    }
+                }
+            }
+        }
+    }
+    found.people = merge_people(lists);
+    Ok(found)
+}
+
+/// The people of the accounts' organizations whose name or address matches `text` (C-9).
+/// Accounts needing login or failing to search are listed, not fatal. An empty text finds no one.
+#[tauri::command]
+pub async fn calendar_search_people(
+    app: AppHandle,
+    auth: State<'_, Auth>,
+    text: String,
+) -> Result<DirectoryPeople, String> {
+    let text = check_search(&text)?;
+    let dir = config_dir(&app).map_err(|e| log_failure("calendar_search_people", "-", e))?;
+    search_people(&dir, &auth, text).await
+}
+
+/// The calendar of a person, as `calendar_events` reads it: their address is its ID, and it is not the user's.
+fn person_entry(email: &str) -> CalendarEntry {
+    CalendarEntry {
+        id: email.to_owned(),
+        selected: true,
+        background_color: None,
+        summary: None,
+        access_role: None,
+    }
+}
+
+/// The events of a person's calendar with a title: one the person does not share is titled `BUSY_TITLE`.
+fn busy_when_untitled(mut events: Vec<RawEvent>) -> Vec<RawEvent> {
+    for e in &mut events {
+        if e.summary.trim().is_empty() {
+            e.summary = BUSY_TITLE.to_owned();
+        }
+    }
+    events
+}
+
+/// Whether the events of another person's calendar may be answered by `freebusy.query` instead:
+/// the user may see when the person is busy but not the events (403), or the calendar is not on the user's side (404).
+/// A missing scope is a re-login, and a rate limit would hit `freebusy.query` as well.
+fn shows_only_busy(status: Option<u16>, message: &str) -> bool {
+    matches!(status, Some(403 | 404))
+        && !scope_missing(message)
+        && !message.to_lowercase().contains("ratelimitexceeded")
+}
+
+fn free_busy_body(min: &str, max: &str, email: &str) -> Value {
+    json!({ "timeMin": min, "timeMax": max, "items": [{ "id": email }] })
+}
+
+#[derive(Deserialize)]
+struct BusyRange {
+    start: String,
+    end: String,
+}
+
+#[derive(Deserialize)]
+struct FreeBusyError {
+    #[serde(default)]
+    reason: String,
+}
+
+#[derive(Deserialize, Default)]
+struct FreeBusyCalendar {
+    #[serde(default)]
+    busy: Vec<BusyRange>,
+    /// Set (with a 200) when the user may not even see when the person is busy, or the calendar does not exist.
+    #[serde(default)]
+    errors: Vec<FreeBusyError>,
+}
+
+#[derive(Deserialize)]
+struct FreeBusyAnswer {
+    #[serde(default)]
+    calendars: HashMap<String, FreeBusyCalendar>,
+}
+
+/// The busy times of the one calendar asked for, as events titled `BUSY_TITLE`. A time that does not parse is dropped.
+fn busy_events(
+    answer: FreeBusyAnswer,
+    account: &str,
+    person: &CalendarEntry,
+) -> Result<Vec<RawEvent>, String> {
+    let unreadable =
+        |reason: &str| format!("{} の予定を読み込めませんでした（{reason}）", person.id);
+    let calendar = answer
+        .calendars
+        .into_values()
+        .next()
+        .ok_or_else(|| unreadable("答えがありません"))?;
+    if let Some(error) = calendar.errors.first() {
+        return Err(unreadable(&error.reason));
+    }
+    Ok(calendar
+        .busy
+        .into_iter()
+        .enumerate()
+        .filter_map(|(n, b)| {
+            let api = ApiEvent {
+                id: format!("busy{n}"),
+                organizer: None,
+                summary: BUSY_TITLE.to_owned(),
+                ical_uid: String::new(),
+                start: ApiTime {
+                    date: None,
+                    date_time: Some(b.start),
+                },
+                end: ApiTime {
+                    date: None,
+                    date_time: Some(b.end),
+                },
+                attendees: Vec::new(),
+                hangout_link: None,
+                location: None,
+                description: None,
+            };
+            RawEvent::from_api(api, account, person)
+        })
+        .collect())
+}
+
+/// Events in `[min, max)` of another person's calendar, read with the token of `account`: the events (`events.list`) when the user may see them,
+/// else when the person is busy (`freebusy.query`). `Ok(None)` means `account` must log in again.
+async fn person_events(
+    dir: &Path,
+    auth: &Auth,
+    account: &str,
+    person: &CalendarEntry,
+    min: &str,
+    max: &str,
+) -> Result<Option<Vec<RawEvent>>, ApiError> {
+    match calendar_events(dir, auth, account, person, min, max, PERSON_EVENT_FIELDS).await {
+        Ok(found) => Ok(found.map(busy_when_untitled)),
+        Err(e) if shows_only_busy(e.status, &e.message) => {
+            let body = free_busy_body(min, max, &person.id);
+            let Some(answer) = send_json_refreshing::<FreeBusyAnswer>(
+                dir,
+                auth,
+                account,
+                Method::POST,
+                FREE_BUSY_URL,
+                &[],
+                Some(&body),
+            )
+            .await?
+            else {
+                return Ok(None);
+            };
+            Ok(Some(busy_events(answer, account, person)?))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// A person that `calendar_person_week` may read: a valid address, and an account that is logged in.
+fn check_person(accounts: &[String], account: &str, email: &str) -> Result<(), String> {
+    if !valid_guest(email) {
+        return Err(format!("アドレスが不正です: {email}"));
+    }
+    check_choice(accounts, account, email)
+}
+
+/// The week containing `date` (YYYY-MM-DD, local), starting on `first_day`, of the person whose address is `email`, read with the token of `account`, the one whose directory found them (C-9).
+/// The events are laid out among the person's own; one whose title is not shared is titled 予定あり, and a calendar that shows only when the person is busy gives those only.
+#[tauri::command]
+pub async fn calendar_person_week(
+    app: AppHandle,
+    auth: State<'_, Auth>,
+    account: String,
+    email: String,
+    date: String,
+    first_day: u8,
+) -> Result<PersonWeek, String> {
+    let command = "calendar_person_week";
+    let date: NaiveDate = date
+        .parse()
+        .map_err(|_| format!("日付が不正です: {date}"))?;
+    let start = week_start(date, first_day)?;
+    let (min, max) = week_bounds(&Local, start).ok_or("週の範囲を求められません")?;
+    let dir = config_dir(&app).map_err(|e| log_failure(command, "-", e))?;
+    let accounts = auth
+        .accounts(&dir)
+        .map_err(|e| log_failure(command, "-", e))?;
+    check_person(&accounts, &account, &email)?;
+    let mut week = PersonWeek {
+        week_start: start.to_string(),
+        all_day: Vec::new(),
+        timed: Vec::new(),
+        needs_login: false,
+    };
+    match person_events(&dir, &auth, &account, &person_entry(&email), &min, &max).await {
+        Ok(Some(events)) => (week.all_day, week.timed) = build_week(&Local, start, events),
+        Ok(None) => week.needs_login = true,
+        Err(e) => {
+            let status = e.status;
+            let message = log_failure(command, &account, e);
+            match classify(status, &message) {
+                Failure::NeedsLogin => week.needs_login = true,
+                Failure::Message(m) => return Err(m),
+            }
+        }
+    }
+    Ok(week)
 }
 
 const TITLE_MAX: usize = 1024;
@@ -2976,7 +3477,7 @@ mod tests {
             (segs[0].day, segs[0].start_min, segs[0].end_min),
             (4, 600, 690)
         );
-        assert_eq!((segs[0].col, segs[0].cols), (0, 1));
+        assert_eq!((segs[0].left, segs[0].width, segs[0].layer), (0, 1000, 0));
     }
 
     #[test]
@@ -3020,40 +3521,86 @@ mod tests {
     }
 
     #[test]
-    fn overlapping_timed_events_share_the_column_width() {
+    fn overlapping_timed_events_get_their_place() {
         let a = timed("2026-10-29T15:00:00+09:00", "2026-10-29T18:00:00+09:00");
         let b = timed("2026-10-29T15:00:00+09:00", "2026-10-29T16:00:00+09:00");
         let c = timed("2026-10-29T17:00:00+09:00", "2026-10-29T17:30:00+09:00");
         let (_, segs) = build_week(&jst(), date("2026-10-25"), vec![a, b, c]);
-        let got: Vec<_> = segs.iter().map(|s| (s.col, s.cols)).collect();
-        // a takes column 0, b column 1, c reuses column 1 once b has ended.
-        assert_eq!(got, vec![(0, 2), (1, 2), (1, 2)]);
+        let got: Vec<_> = segs.iter().map(|s| (s.left, s.width, s.layer)).collect();
+        // a and b start together and lie side by side. c starts two hours after a, so it lies over a, moved right, and reaches the right edge because b is over.
+        assert_eq!(got, vec![(0, 500, 0), (500, 500, 1), (125, 875, 2)]);
+    }
+
+    fn placed(spans: &[(u32, u32)]) -> Vec<(u32, u32, u32)> {
+        place_events(spans)
+            .iter()
+            .map(|p| (p.left, p.width, p.layer))
+            .collect()
     }
 
     #[test]
-    fn assign_columns_separates_clusters() {
-        // [0,60) and [30,90) overlap; [90,120) starts as the cluster ends.
-        let got = assign_columns(&[(0, 60), (30, 90), (90, 120)]);
-        assert_eq!(got, vec![(0, 2), (1, 2), (0, 1)]);
-        assert_eq!(assign_columns(&[]), vec![]);
+    fn events_that_start_together_lie_side_by_side() {
+        let got = placed(&[(0, 180), (0, 60), (0, 60)]);
+        assert_eq!(got, vec![(0, 333, 0), (333, 333, 1), (666, 334, 2)]);
+        assert_eq!(placed(&[]), vec![]);
     }
 
     #[test]
-    fn assign_columns_keeps_input_order_and_chains_overlaps() {
-        // [0,40) overlaps [30,70) overlaps [60,100), but the first and the last do not overlap.
-        let got = assign_columns(&[(60, 100), (0, 40), (30, 70)]);
-        assert_eq!(got, vec![(0, 2), (0, 2), (1, 2)]);
+    fn an_event_starting_30_minutes_later_lies_over_and_one_starting_sooner_does_not() {
+        // [0,60) and [30,90): the second starts 30 minutes later, so it lies over the first, moved right.
+        assert_eq!(
+            placed(&[(0, 60), (30, 90)]),
+            vec![(0, 1000, 0), (125, 875, 1)]
+        );
+        // [29,90) starts one minute too soon, so it takes a column of its own.
+        assert_eq!(
+            placed(&[(0, 60), (29, 90)]),
+            vec![(0, 500, 0), (500, 500, 1)]
+        );
+    }
+
+    #[test]
+    fn clusters_are_placed_apart() {
+        // [0,60) and [30,90) overlap; [90,120) starts as the cluster ends, so it has the whole width.
+        let got = placed(&[(0, 60), (30, 90), (90, 120)]);
+        assert_eq!(got, vec![(0, 1000, 0), (125, 875, 1), (0, 1000, 2)]);
+    }
+
+    #[test]
+    fn a_later_event_reaches_the_right_edge_when_the_columns_there_are_free() {
+        // The cluster has 3 columns, but nothing runs in the other two when the fourth event starts.
+        let got = placed(&[(0, 180), (0, 60), (0, 60), (120, 180)]);
+        assert_eq!(
+            got,
+            vec![(0, 333, 0), (333, 333, 1), (666, 334, 2), (83, 917, 3)]
+        );
+    }
+
+    #[test]
+    fn places_follow_the_input_order_and_chain_overlaps() {
+        // [0,40) and [60,100) do not overlap, but both overlap [30,70), so the three are one cluster.
+        let got = placed(&[(60, 100), (0, 40), (30, 70)]);
+        assert_eq!(got, vec![(125, 875, 2), (0, 1000, 0), (125, 875, 1)]);
+    }
+
+    #[test]
+    fn the_move_to_the_right_stops_after_three_steps() {
+        let got = placed(&[(0, 300), (30, 300), (60, 300), (90, 300), (120, 300)]);
+        let lefts: Vec<_> = got.iter().map(|p| p.0).collect();
+        let widths: Vec<_> = got.iter().map(|p| p.1).collect();
+        assert_eq!(lefts, vec![0, 125, 250, 375, 375]);
+        assert_eq!(widths, vec![1000, 875, 750, 625, 625]);
     }
 
     #[test]
     fn short_events_are_laid_out_with_a_minimum_length() {
-        // A zero-length event still occupies MIN_MINUTES, so one starting inside it must not share its column.
+        // A zero-length event still occupies MIN_MINUTES, so one starting inside it must not lie over it.
         let a = timed("2026-10-29T10:00:00+09:00", "2026-10-29T10:00:00+09:00");
         let b = timed("2026-10-29T10:10:00+09:00", "2026-10-29T11:00:00+09:00");
         let (_, segs) = build_week(&jst(), date("2026-10-25"), vec![a, b]);
         assert_eq!(segs[0].end_min, 600);
-        assert_eq!((segs[0].col, segs[0].cols), (0, 2));
-        assert_eq!((segs[1].col, segs[1].cols), (1, 2));
+        assert_eq!((segs[0].left, segs[0].width), (0, 500));
+        assert_eq!((segs[1].left, segs[1].width), (500, 500));
     }
 
     #[test]
@@ -3474,6 +4021,9 @@ mod tests {
             (None, None, None)
         );
         assert_eq!((i.attendees, i.accepted), (0, 0));
+        // The cache held `col` and `cols`; the box takes the whole column until the week is read again.
+        let t = &w.timed[0];
+        assert_eq!((t.left, t.width, t.layer), (0, 1000, 0));
     }
 
     #[test]
@@ -3505,8 +4055,9 @@ mod tests {
                 day: 2,
                 start_min: 60,
                 end_min: 120,
-                col: 0,
-                cols: 1,
+                left: 0,
+                width: FULL,
+                layer: 0,
                 info: info(start, Some("#fff"), ResponseStatus::Unknown),
             }],
             needs_login: vec![],
@@ -4852,5 +5403,355 @@ mod tests {
     /// `serve_once` answers for any path; this puts the event after its `.../events`.
     fn event_url_of(events_url: &str, id: &str) -> String {
         format!("{events_url}/{id}")
+    }
+
+    // ---- other people: the directory and their weeks (C-9) ----
+
+    fn person(account: &str, name: &str, email: &str) -> DirectoryPerson {
+        DirectoryPerson {
+            account: account.into(),
+            name: name.into(),
+            email: email.into(),
+        }
+    }
+
+    /// A 200 answer holding `body`, with its true length.
+    fn ok_json(body: &str) -> &'static str {
+        Box::leak(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .into_boxed_str(),
+        )
+    }
+
+    fn get_from<T: DeserializeOwned>(
+        url: &str,
+        query: &[(&str, &str)],
+    ) -> Result<Option<T>, crate::gmail::ApiError> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(crate::gmail::send_json::<T>(
+                &reqwest::Client::new(),
+                Method::GET,
+                "token",
+                url,
+                query,
+                None,
+                0,
+            ))
+    }
+
+    #[test]
+    fn the_directory_answer_is_read_as_people_with_an_address() {
+        let page: PeoplePage = serde_json::from_str(
+            r#"{"people":[
+              {"resourceName":"people/1","names":[{"displayName":"山田 太郎","metadata":{"primary":true}}],
+               "emailAddresses":[{"value":"yamada@example.com","metadata":{"primary":true}}]},
+              {"resourceName":"people/2","names":[{"displayName":"旧姓"},{"displayName":"山本 花子","metadata":{"primary":true}}],
+               "emailAddresses":[{"value":"old@example.com"},{"value":" hanako@example.com ","metadata":{"primary":true}}]},
+              {"resourceName":"people/3","names":[{"displayName":"山口 次郎"}],
+               "emailAddresses":[{"value":"not an address"},{"value":"jiro@example.com"}]},
+              {"resourceName":"people/4","names":[{"displayName":"名前だけ"}]},
+              {"resourceName":"people/5","emailAddresses":[{"value":"noname@example.com"}]},
+              {"resourceName":"people/6","names":[{"displayName":"  "}],"emailAddresses":[{"value":"blank@example.com"}]}
+            ],"totalSize":6}"#,
+        )
+        .unwrap();
+        let found: Vec<_> = page
+            .people
+            .into_iter()
+            .filter_map(|p| found_person("a@example.com", p))
+            .map(|p| (p.name, p.email))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("山田 太郎", "yamada@example.com"),
+                // The primary entries win over the earlier ones, and the address is trimmed.
+                ("山本 花子", "hanako@example.com"),
+                // An invalid address is skipped for the next valid one.
+                ("山口 次郎", "jiro@example.com"),
+                // No name, or a blank one, shows the address; no address finds no one.
+                ("noname@example.com", "noname@example.com"),
+                ("blank@example.com", "blank@example.com"),
+            ]
+            .map(|(n, e)| (n.to_owned(), e.to_owned()))
+        );
+        // An answer with no people at all is an empty list.
+        let empty: PeoplePage = serde_json::from_str("{}").unwrap();
+        assert!(empty.people.is_empty());
+    }
+
+    #[test]
+    fn a_person_found_by_two_accounts_is_listed_once_by_the_first() {
+        let merged = merge_people(vec![
+            vec![
+                person("a@example.com", "山田", "Yamada@Example.com"),
+                person("a@example.com", "山本", "yamamoto@example.com"),
+            ],
+            vec![
+                person("b@example.com", "山田 太郎", "yamada@example.com"),
+                person("b@example.com", "山口", "yamaguchi@example.com"),
+            ],
+        ]);
+        let emails: Vec<_> = merged.iter().map(|p| p.email.as_str()).collect();
+        assert_eq!(
+            emails,
+            [
+                "Yamada@Example.com",
+                "yamamoto@example.com",
+                "yamaguchi@example.com"
+            ]
+        );
+        assert_eq!(merged[0].account, "a@example.com");
+    }
+
+    #[test]
+    fn the_searched_text_is_trimmed_and_limited() {
+        assert_eq!(check_search("  山田 "), Ok("山田"));
+        assert_eq!(check_search("   "), Ok(""));
+        assert_eq!(
+            check_search(&"あ".repeat(SEARCH_MAX)).map(str::len),
+            Ok(300)
+        );
+        let error = check_search(&"あ".repeat(SEARCH_MAX + 1)).unwrap_err();
+        assert!(error.contains("100 文字まで"), "{error}");
+    }
+
+    #[test]
+    fn the_directory_request_reaches_the_server_as_built_and_the_answer_is_read() {
+        let ok = ok_json(
+            r#"{"people":[{"names":[{"displayName":"山"}],"emailAddresses":[{"value":"y@example.com"}]}],"nextPageToken":"t","totalSize":99}"#,
+        );
+        let (url, server) = serve_once(ok);
+        let page = get_from::<PeoplePage>(&url, &directory_query("山田 & 太郎"))
+            .unwrap()
+            .unwrap();
+        let request = server.join().unwrap();
+        let line = request.lines().next().unwrap();
+        assert!(line.starts_with("GET /calendars/c/events?"), "{line}");
+        // The text is escaped as one value, and the three fixed parameters follow.
+        assert!(
+            line.contains("query=%E5%B1%B1%E7%94%B0+%26+%E5%A4%AA%E9%83%8E")
+                || line.contains("query=%E5%B1%B1%E7%94%B0%20%26%20%E5%A4%AA%E9%83%8E"),
+            "{line}"
+        );
+        assert!(line.contains("readMask=names%2CemailAddresses"), "{line}");
+        assert!(
+            line.contains("sources=DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE"),
+            "{line}"
+        );
+        assert!(line.contains("pageSize=10"), "{line}");
+        assert!(request
+            .to_lowercase()
+            .contains("authorization: bearer token"));
+        let found = found_person("a@example.com", page.people.into_iter().next().unwrap());
+        assert_eq!(found, Some(person("a@example.com", "山", "y@example.com")));
+    }
+
+    #[test]
+    fn a_403_for_an_old_scope_while_searching_means_login_again() {
+        let denied = "HTTP/1.1 403 Forbidden\r\nContent-Length: 148\r\nConnection: close\r\n\r\n{\"error\":{\"code\":403,\"message\":\"Request had insufficient authentication scopes.\",\"status\":\"PERMISSION_DENIED\",\"details\":[{\"reason\":\"ACCESS_TOKEN_SCOPE_INSUFFICIENT\"}]}}";
+        let (url, server) = serve_once(denied);
+        let e = get_from::<PeoplePage>(&url, &directory_query("x"))
+            .err()
+            .unwrap();
+        server.join().unwrap();
+        assert_eq!(e.status, Some(403));
+        assert_eq!(directory_failure(e.status, &e.message), Failure::NeedsLogin);
+    }
+
+    #[test]
+    fn other_directory_failures_keep_their_message() {
+        let off = "SERVICE_DISABLED People API has not been used in project";
+        match directory_failure(Some(403), off) {
+            Failure::Message(m) => assert!(m.contains("People API が有効になっていません"), "{m}"),
+            other => panic!("{other:?}"),
+        }
+        // A scope is a re-login whichever way Google words it.
+        assert_eq!(
+            directory_failure(Some(403), "Request had insufficient authentication scopes."),
+            Failure::NeedsLogin
+        );
+        // A 403 for another reason, and any other status, are shown as they came.
+        for (status, text) in [
+            (Some(403), "domain profile is not available"),
+            (Some(500), "ACCESS_TOKEN_SCOPE_INSUFFICIENT"),
+            (None, "network"),
+        ] {
+            assert_eq!(
+                directory_failure(status, text),
+                Failure::Message(text.into())
+            );
+        }
+    }
+
+    fn api_event(json: &str) -> ApiEvent {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn an_event_of_another_person_with_no_title_is_titled_busy() {
+        let entry = person_entry("yamada@example.com");
+        let read =
+            |json: &str| RawEvent::from_api(api_event(json), "a@example.com", &entry).unwrap();
+        let day = r#""start":{"dateTime":"2026-11-24T10:00:00+09:00"},"end":{"dateTime":"2026-11-24T11:00:00+09:00"}"#;
+        let events = busy_when_untitled(vec![
+            read(&format!(r#"{{"id":"1","summary":"顧客訪問",{day}}}"#)),
+            read(&format!(r#"{{"id":"2",{day}}}"#)),
+            read(&format!(r#"{{"id":"3","summary":"  ",{day}}}"#)),
+        ]);
+        let titles: Vec<_> = events.iter().map(|e| e.summary.as_str()).collect();
+        assert_eq!(titles, ["顧客訪問", "予定あり", "予定あり"]);
+        // The person's calendar is not the user's, so nothing on it can be changed, and it is named by the address.
+        assert!(events.iter().all(|e| !e.editable));
+        assert_eq!(events[0].calendar, "yamada@example.com");
+        assert_eq!(events[0].calendar_id, "yamada@example.com");
+    }
+
+    #[test]
+    fn only_a_calendar_that_may_hide_its_events_falls_back_to_free_busy() {
+        assert!(shows_only_busy(Some(403), "Forbidden"));
+        assert!(shows_only_busy(Some(404), "Not Found"));
+        // A missing scope is a re-login, and a rate limit would hit freebusy as well.
+        assert!(!shows_only_busy(
+            Some(403),
+            "ACCESS_TOKEN_SCOPE_INSUFFICIENT"
+        ));
+        assert!(!shows_only_busy(
+            Some(403),
+            "Request had insufficient authentication scopes."
+        ));
+        assert!(!shows_only_busy(
+            Some(403),
+            "Rate Limit Exceeded: rateLimitExceeded"
+        ));
+        assert!(!shows_only_busy(Some(500), "Forbidden"));
+        assert!(!shows_only_busy(Some(401), "Forbidden"));
+        assert!(!shows_only_busy(None, "Forbidden"));
+    }
+
+    fn free_busy(json: &str) -> FreeBusyAnswer {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn busy_times_become_events_titled_busy_in_the_week() {
+        let entry = person_entry("yamada@example.com");
+        let answer = free_busy(
+            r#"{"calendars":{"yamada@example.com":{"busy":[
+              {"start":"2026-11-24T01:00:00Z","end":"2026-11-24T02:00:00Z"},
+              {"start":"broken","end":"2026-11-24T05:00:00Z"},
+              {"start":"2026-11-26T05:00:00Z","end":"2026-11-26T06:30:00Z"}]}}}"#,
+        );
+        let events = busy_events(answer, "a@example.com", &entry).unwrap();
+        // The time that does not parse is dropped.
+        assert_eq!(events.len(), 2);
+        assert!(events
+            .iter()
+            .all(|e| e.summary == "予定あり" && !e.editable));
+        // Monday 23rd starts the week: 10:00 JST on Tuesday and 14:00 JST on Thursday.
+        let (all_day, timed) = build_week(&jst(), date("2026-11-23"), events);
+        assert!(all_day.is_empty());
+        let spans: Vec<_> = timed
+            .iter()
+            .map(|t| (t.day, t.start_min, t.end_min, t.info.summary.as_str()))
+            .collect();
+        assert_eq!(
+            spans,
+            [(1, 600, 660, "予定あり"), (3, 840, 930, "予定あり")]
+        );
+    }
+
+    #[test]
+    fn a_free_busy_answer_with_an_error_or_without_the_calendar_is_a_failure() {
+        let entry = person_entry("yamada@example.com");
+        let denied = free_busy(
+            r#"{"calendars":{"yamada@example.com":{"errors":[{"domain":"global","reason":"notFound"}],"busy":[]}}}"#,
+        );
+        let error = busy_events(denied, "a@example.com", &entry).unwrap_err();
+        assert!(error.contains("yamada@example.com"), "{error}");
+        assert!(error.contains("notFound"), "{error}");
+        let none = busy_events(free_busy("{}"), "a@example.com", &entry).unwrap_err();
+        assert!(none.contains("答えがありません"), "{none}");
+        // A calendar with nothing busy is an empty week, not a failure.
+        let free = free_busy(r#"{"calendars":{"yamada@example.com":{"busy":[]}}}"#);
+        assert!(busy_events(free, "a@example.com", &entry)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn the_free_busy_request_reaches_the_server_as_built() {
+        let ok = ok_json(
+            r#"{"calendars":{"y@example.com":{"busy":[{"start":"2026-11-24T01:00:00Z","end":"2026-11-24T02:00:00Z"}]}}}"#,
+        );
+        let (url, server) = serve_once(ok);
+        let body = free_busy_body(
+            "2026-11-22T15:00:00Z",
+            "2026-11-29T15:00:00Z",
+            "y@example.com",
+        );
+        let answer = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(crate::gmail::send_json::<FreeBusyAnswer>(
+                &reqwest::Client::new(),
+                Method::POST,
+                "token",
+                &url,
+                &[],
+                Some(&body),
+                0,
+            ))
+            .unwrap()
+            .unwrap();
+        let request = server.join().unwrap();
+        let (head, sent) = request.split_once("\r\n\r\n").unwrap();
+        assert!(head.starts_with("POST /calendars/c/events"), "{head}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(sent).unwrap(),
+            json!({"timeMin":"2026-11-22T15:00:00Z","timeMax":"2026-11-29T15:00:00Z","items":[{"id":"y@example.com"}]})
+        );
+        let events = busy_events(answer, "a@example.com", &person_entry("y@example.com")).unwrap();
+        assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn the_events_of_a_person_are_asked_for_by_title_and_time_only() {
+        // The call that reads a person's calendar is the one of the week with the narrow fields.
+        let fields = PERSON_EVENT_FIELDS;
+        for kept in ["id", "summary", "iCalUID", "start", "end"] {
+            assert!(fields.contains(kept), "{kept}");
+        }
+        for never in ["description", "location", "attendees", "hangoutLink"] {
+            assert!(!fields.contains(never), "{never}");
+        }
+        // The address of a person is one path segment of the events URL.
+        let url = events_url("yamada@example.com").unwrap();
+        assert!(
+            url.ends_with("/events") && url.contains("yamada@example.com"),
+            "{url}"
+        );
+    }
+
+    #[test]
+    fn a_person_is_read_only_with_a_valid_address_and_a_registered_account() {
+        let accounts = vec!["a@example.com".to_owned()];
+        assert_eq!(
+            check_person(&accounts, "a@example.com", "y@example.com"),
+            Ok(())
+        );
+        for bad in ["", "y", "y@localhost", "a b@example.com", "y@example.com\n"] {
+            let error = check_person(&accounts, "a@example.com", bad).unwrap_err();
+            assert!(error.contains("アドレスが不正です"), "{bad}: {error}");
+        }
+        let error = check_person(&accounts, "other@example.com", "y@example.com").unwrap_err();
+        assert!(error.contains("登録されていないアカウント"), "{error}");
     }
 }

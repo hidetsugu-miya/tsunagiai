@@ -11,6 +11,7 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tsunagiai_lib::{
+    accounts,
     auth::Auth,
     calendar::{self, CalendarCache, EditedEvent, NewEvent, Outcome},
     claude_code,
@@ -20,7 +21,7 @@ use tsunagiai_lib::{
     formation_server::{self, PushRequest},
     gmail, identity,
     lsp::{self, LspServerSettings},
-    lsp_plugin, orca_preview, preview_plugin,
+    lsp_plugin, mail, orca_preview, preview_plugin,
     screen_bridge::{self, Request as ScreenRequest},
     skills::{self, Skill, SkillScreen},
     todoist,
@@ -28,6 +29,18 @@ use tsunagiai_lib::{
 
 fn relogin(account: &str) -> String {
     format!("{account} は再ログインが必要です。つなぎAIアプリで再ログインしてください")
+}
+
+/// What a mail tool answers when the account must enter its secret again: Gmail's login, or the App-specific password of an iCloud account (M-13).
+fn mail_relogin(dir: &std::path::Path, account: &str) -> String {
+    match accounts::kind(dir, account) {
+        Ok(accounts::AccountKind::Icloud) => relogin_icloud(account),
+        _ => relogin(account),
+    }
+}
+
+fn relogin_icloud(account: &str) -> String {
+    format!("{account} は App 用パスワードが無効です。つなぎAIアプリの設定の iCloud タブで入れ直してください")
 }
 
 fn json(value: &impl Serialize) -> Result<String, String> {
@@ -600,8 +613,8 @@ struct PreviewOpenArgs {
     file: String,
 }
 
-/// What `preview_open` answers once the app took the request: the tab is opened by the app, not by this server.
-const PREVIEW_ASKED: &str = "つなぎAIにプレビューのタブを開くよう頼みました";
+/// What `preview_open` answers once the app took the request: the window is opened by the app, not by this server.
+const PREVIEW_ASKED: &str = "つなぎAIにプレビューを別ウィンドウで開くよう頼みました";
 
 struct Tsunagiai {
     auth: Auth,
@@ -888,7 +901,7 @@ fn start_orchestrator(name: &str, projects: &[String]) -> String {
 #[tool_router]
 impl Tsunagiai {
     #[tool(
-        description = "List the inbox threads of every account, newest first. Accounts that must log in again are in needsLogin, accounts that failed to load are in failed.",
+        description = "List the inbox threads of every account (Gmail and iCloud), newest first. Gmail accounts that must log in again are in needsLogin, accounts that failed to load are in failed (an iCloud account whose App-specific password iCloud refuses is there, with the reason).",
         annotations(read_only_hint = true)
     )]
     async fn list_inbox(&self) -> Result<String, String> {
@@ -908,10 +921,10 @@ impl Tsunagiai {
     async fn get_thread(&self, Parameters(a): Parameters<ThreadArgs>) -> Result<String, String> {
         // A text consumer gets no image data, so nothing is ever kept in this cache.
         let images = gmail::InlineCache::default();
-        let thread = gmail::fetch_thread(&self.dir, &self.auth, &images, &a.account, &a.id, true)
+        let thread = mail::fetch_thread(&self.dir, &self.auth, &images, &a.account, &a.id, true)
             .await
             .map_err(|e| gmail::log_failure("get_thread", &a.account, e))?
-            .ok_or_else(|| relogin(&a.account))?;
+            .ok_or_else(|| mail_relogin(&self.dir, &a.account))?;
         json(&thread)
     }
 
@@ -920,10 +933,10 @@ impl Tsunagiai {
         annotations(idempotent_hint = true, destructive_hint = false)
     )]
     async fn archive(&self, Parameters(a): Parameters<ThreadArgs>) -> Result<String, String> {
-        gmail::archive_thread(&self.dir, &self.auth, &a.account, &a.id)
+        mail::archive_thread(&self.dir, &self.auth, &a.account, &a.id)
             .await
             .map_err(|e| gmail::log_failure("archive", &a.account, e))?
-            .ok_or_else(|| relogin(&a.account))?;
+            .ok_or_else(|| mail_relogin(&self.dir, &a.account))?;
         Ok("アーカイブしました".into())
     }
 
@@ -932,10 +945,10 @@ impl Tsunagiai {
         annotations(idempotent_hint = true, destructive_hint = false)
     )]
     async fn set_read(&self, Parameters(a): Parameters<SetReadArgs>) -> Result<String, String> {
-        gmail::set_thread_read(&self.dir, &self.auth, &a.account, &a.id, a.read)
+        mail::set_thread_read(&self.dir, &self.auth, &a.account, &a.id, a.read)
             .await
             .map_err(|e| gmail::log_failure("set_read", &a.account, e))?
-            .ok_or_else(|| relogin(&a.account))?;
+            .ok_or_else(|| mail_relogin(&self.dir, &a.account))?;
         Ok(if a.read {
             "既読にしました"
         } else {
@@ -945,14 +958,14 @@ impl Tsunagiai {
     }
 
     #[tool(
-        description = "Move a thread to the trash. It can be restored in Gmail.",
+        description = "Move a thread to the trash (Gmail's Trash, iCloud's Deleted Messages), from where it can be restored in the mail app.",
         annotations(destructive_hint = true)
     )]
     async fn trash(&self, Parameters(a): Parameters<ThreadArgs>) -> Result<String, String> {
-        gmail::trash_thread(&self.dir, &self.auth, &a.account, &a.id)
+        mail::trash_thread(&self.dir, &self.auth, &a.account, &a.id)
             .await
             .map_err(|e| gmail::log_failure("trash", &a.account, e))?
-            .ok_or_else(|| relogin(&a.account))?;
+            .ok_or_else(|| mail_relogin(&self.dir, &a.account))?;
         Ok("ゴミ箱へ移動しました".into())
     }
 
@@ -1310,7 +1323,7 @@ impl Tsunagiai {
     }
 
     #[tool(
-        description = "Open an HTML file of a worktree as a preview tab in the development screen of the app (つなぎAI), so that the owner sees the page you wrote without looking for the file. Give the absolute path of the worktree (the folder you are working in) and the path of the file from it, for example worktree \"/Users/me/work/app\" and file \"docs/report.html\". Only an .html file (whatever the case) inside the worktree opens, and no part of its path may start with a dot. The worktree must be one that Orca lists for the project; any other is refused by the app. The tab is opened in the app of the owner, also when this Claude Code runs on another PC that the app is connected to, and the answer only says that the app took the request: the owner looks at the screen. It saves and sends nothing outside the app. It fails, in Japanese, when the path breaks a rule above, or when the app is not running, is not connected to this PC, or refuses the request (the answer says what each way answered)."
+        description = "Open an HTML file of a worktree as a preview in a window of its own of the app (つなぎAI), never as a tab of the development screen, so that the owner sees the page you wrote without looking for the file. Give the absolute path of the worktree (the folder you are working in) and the path of the file from it, for example worktree \"/Users/me/work/app\" and file \"docs/report.html\". Only an .html file (whatever the case) inside the worktree opens, and no part of its path may start with a dot. The worktree must be one that Orca lists for the project; any other is refused by the app. The window is opened by the app of the owner, also when this Claude Code runs on another PC that the app is connected to, and the answer only says that the app took the request: the owner looks at the screen. It saves and sends nothing outside the app. It fails, in Japanese, when the path breaks a rule above, or when the app is not running, is not connected to this PC, or refuses the request (the answer says what each way answered)."
     )]
     async fn preview_open(
         &self,
@@ -1808,20 +1821,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
+    use tsunagiai_lib::accounts;
+
     use super::{
         calendar_answer, calendar_arg, calendar_router, child_plugin_args, db_test_answer,
         event_done_answer, form_opened, form_refused, formation_arg, formation_start_arg, lsp_arg,
-        lsp_environment, lsp_router, preview_arg, preview_router, project_args, router,
-        screen_allowed, screen_read_answer, screen_text_answer, skill_get_answer,
-        skill_list_answer, skill_save_answer, skill_summary, todo_draft_arg, todo_draft_router,
-        todoist_answer, CalendarDeleteEventArgs, CalendarEventArgs, CalendarSetShownArgs,
-        CalendarShowSlotsArgs, CalendarUpdateEventArgs, DbProfileSaveArgs, FormationAgent,
-        FormationFilesArgs, FormationGitArgs, FormationLaunchArgs, FormationPlanArgs,
-        FormationReadArgs, FormationStatusArgs, FormationWorktreesArgs, LspMode, LspServerArgs,
-        LspServerSaveArgs, LspServerSettings, LspSshHostArgs, NewEvent, PreviewOpenArgs,
-        ScreenReadArgs, ScreenWriteArgs, Skill, SkillGetArgs, SkillSaveArgs, SkillScreen,
-        TodoistAddTaskArgs, Tsunagiai, LSP_SSH_HOST_TOOL, LSP_TOOLS, TODO_DRAFT_SCREEN,
+        lsp_environment, lsp_router, mail_relogin, preview_arg, preview_router, project_args,
+        relogin, relogin_icloud, router, screen_allowed, screen_read_answer, screen_text_answer,
+        skill_get_answer, skill_list_answer, skill_save_answer, skill_summary, todo_draft_arg,
+        todo_draft_router, todoist_answer, CalendarDeleteEventArgs, CalendarEventArgs,
+        CalendarSetShownArgs, CalendarShowSlotsArgs, CalendarUpdateEventArgs, DbProfileSaveArgs,
+        FormationAgent, FormationFilesArgs, FormationGitArgs, FormationLaunchArgs,
+        FormationPlanArgs, FormationReadArgs, FormationStatusArgs, FormationWorktreesArgs, LspMode,
+        LspServerArgs, LspServerSaveArgs, LspServerSettings, LspSshHostArgs, NewEvent,
+        PreviewOpenArgs, ScreenReadArgs, ScreenWriteArgs, Skill, SkillGetArgs, SkillSaveArgs,
+        SkillScreen, TodoistAddTaskArgs, Tsunagiai, LSP_SSH_HOST_TOOL, LSP_TOOLS,
+        TODO_DRAFT_SCREEN,
     };
+
+    #[test]
+    fn a_mail_tool_asks_an_icloud_account_for_its_app_password_and_a_gmail_one_for_a_login() {
+        let dir =
+            std::env::temp_dir().join(format!("tsunagiai-test-{}-mcp-relogin", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        accounts::save_accounts(
+            &dir,
+            &[
+                accounts::Account::gmail("a@example.com"),
+                accounts::Account::icloud("b@icloud.com"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            mail_relogin(&dir, "a@example.com"),
+            relogin("a@example.com")
+        );
+        assert_eq!(
+            mail_relogin(&dir, "b@icloud.com"),
+            relogin_icloud("b@icloud.com")
+        );
+        assert!(mail_relogin(&dir, "b@icloud.com").contains("iCloud タブ"));
+        // An address that is not listed is treated as Gmail's, as the backend does.
+        assert_eq!(
+            mail_relogin(&dir, "x@example.com"),
+            relogin("x@example.com")
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn a_save_without_an_id_is_a_new_connection_and_the_script_is_kept_as_given() {
@@ -2093,6 +2139,7 @@ mod tests {
             "absolute path of the worktree",
             ".html",
             "dot",
+            "window of its own",
             "another PC",
             "in Japanese",
         ] {

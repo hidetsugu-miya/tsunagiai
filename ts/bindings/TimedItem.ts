@@ -2,9 +2,19 @@
 import type { ResponseStatus } from "./ResponseStatus";
 
 /**
- * A timed event on one day of the week, in minutes from local midnight, with its column among overlapping events.
+ * A timed event on one day of the week, in minutes from local midnight, with where its box lies among overlapping events (C-1).
  */
-export type TimedItem = { day: number, startMin: number, endMin: number, col: number, cols: number, summary: string, 
+export type TimedItem = { day: number, startMin: number, endMin: number, 
+/**
+ * The box's left edge and width, in thousandths of the day column's width.
+ * Absent in a cache an older version wrote, which held `col` and `cols` instead (0 and 1000, the whole column).
+ */
+left: number, width: number, 
+/**
+ * The stacking order among the day's events: an event that starts later is above the ones it overlaps, so a higher number is drawn later.
+ * Absent in a cache an older version wrote (0).
+ */
+layer: number, summary: string, 
 /**
  * The ID of the event (of one occurrence of a repeating event), and of the calendar it is on, for `calendar_update_event` and `calendar_delete_event` (C-7).
  * Absent in a cache an older version wrote (empty text).

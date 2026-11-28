@@ -5,7 +5,7 @@ import type { ProjectItem } from "./bindings/ProjectItem";
 import type { TaskItem } from "./bindings/TaskItem";
 import type { TaskHit } from "./bindings/TaskHit";
 import type { Todo } from "./bindings/Todo";
-import { accountList } from "./accounts.js";
+import { mailAccountSet } from "./accounts.js";
 import { $ } from "./dom.js";
 import { isoDate } from "./format.js";
 import { screenOn } from "./menu-state.js";
@@ -176,7 +176,7 @@ export function dueLabel(due: { date: string; time: string | null }) {
 
 // The thread a task links to, only when it is of an account tsunagiai has: a description can name any address.
 export const linkedMail = (t: TaskItem, accounts: Set<string | undefined>) => (t.mail && accounts.has(t.mail.account) ? t.mail : null);
-export const accountSet = () => new Set(accountList());
+export const accountSet = () => mailAccountSet();
 
 // Whether a text field holds what the user is typing (a field of the open task, or a name being edited in the list); a redraw would replace it with Todoist's older value.
 // The subtask field and the comment field count only while they have text: the first is emptied on Enter, and the redraw must show the subtask just added; the second is emptied once its comment is sent.

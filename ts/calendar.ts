@@ -1,5 +1,6 @@
 // The calendar screen: a week of the selected calendars' events, kept in memory and fetched in the background.
 import type { AllDayItem } from "./bindings/AllDayItem";
+import type { DirectoryPerson } from "./bindings/DirectoryPerson";
 import type { Info } from "./bindings/Info";
 import type { TimedItem } from "./bindings/TimedItem";
 import type { Week } from "./bindings/Week";
@@ -10,6 +11,7 @@ import { initCalendarClaude } from "./calendar-claude.js";
 import { drawSlots } from "./calendar-slots.js";
 import { bindEvent, closeDetail, endEvents, eventNode, startEvents } from "./calendar-detail.js";
 import { closeMonthPop, followCalendarWeek, initCalendarMonth, refreshCalendarDay, showCalendarMonth } from "./calendar-month.js";
+import { forgetGuestReads, drawGuestNotices, GUEST_LEFT, GUEST_SPAN, guestColor, guestWeek, loadGuestWeeks, OWN_SHARE, shownGuests } from "./calendar-guests.js";
 import { forgetCalendarChoices, initCalendarSide, loadCalendarChoices } from "./calendar-side.js";
 import { $, el } from "./dom.js";
 import { addDays, avatarColor, hhmm, isoDate, pad2, WEEKDAYS } from "./format.js";
@@ -23,6 +25,8 @@ import { show } from "./view.js";
 const HOUR_PX = 64;
 // Keep in step with MIN_MINUTES in calendar.rs.
 const MIN_EVENT_MIN = 20;
+// The width of a box, in thousandths of the day column's, from which it shows its time: more than two boxes side by side.
+const TIME_MIN_WIDTH = 600;
 const CAL_REFRESH_MS = 5 * 60 * 1000;
 
 // The day the week starts on (0 = Sunday to 6 = Saturday), read from the backend once; null until it is asked for. No week is fetched before it is known.
@@ -83,6 +87,7 @@ export function resetCalendar(dropKept: boolean) {
   calRefresh = true;
   forgetCalendarChoices();
   forgetOwnedCalendars();
+  forgetGuestReads();
 }
 
 // Forgets the weeks drawn and fetched so far (not the calendar lists behind them).
@@ -124,31 +129,85 @@ function eventButton(className: string, e: AllDayItem | TimedItem) {
   return b;
 }
 
-function eventBox(e: TimedItem) {
+// When the event ends, in ms, kept on its node for `drawPast`: a timed item's end on its own day, and the end of the last day of an all-day event (the day of the item for a cache of an older version, which has no end).
+const timedEndAt = (weekStart: string, e: TimedItem) => {
+  const d = addDays(weekStart, e.day);
+  d.setMinutes(e.endMin);
+  return d.getTime();
+};
+const allDayEndAt = (weekStart: string, e: AllDayItem) => addDays(/^\d{4}-\d{2}-\d{2}$/.test(e.end) ? e.end : isoDate(addDays(weekStart, e.day)), 1).getTime();
+
+// A title cut to CAL_NAME_MAX characters, counted by code point so an emoji is never split in half.
+function cutName(name: string) {
+  const chars = [...name];
+  return chars.length > CAL_NAME_MAX ? `${chars.slice(0, CAL_NAME_MAX).join("")}…` : name;
+}
+
+function eventBox(e: TimedItem, weekStart: string) {
   const box = eventButton(`cal-event${responseClass(e.response)}`, e);
+  // While a guest is shown (C-9) the user's own events keep the left share of the column.
+  const share = shownGuests().length > 0 ? OWN_SHARE : 1;
+  box.dataset.endAt = String(timedEndAt(weekStart, e));
   box.style.top = `${(e.startMin / 60) * HOUR_PX}px`;
   box.style.height = `${(Math.max(e.endMin - e.startMin, MIN_EVENT_MIN) / 60) * HOUR_PX - 1}px`;
-  box.style.left = `${(e.col / e.cols) * 100}%`;
-  box.style.width = `${100 / e.cols}%`;
+  box.style.left = `${(e.left / 10) * share}%`;
+  box.style.width = `${(e.width / 10) * share}%`;
   box.style.setProperty("--c", eventColor(e));
   box.title = `${e.summary}\n${e.account}`;
-  const name = e.summary || "(件名なし)";
-  // Counted by code point, so an emoji is never split in half.
-  const chars = [...name];
-  box.append(el("cal-name", chars.length > CAL_NAME_MAX ? `${chars.slice(0, CAL_NAME_MAX).join("")}…` : name));
+  box.append(el("cal-name", cutName(e.summary || "(件名なし)")));
   // Under 45 minutes has no room for a second line, so the title takes the only one.
   if (e.endMin - e.startMin < 45) box.classList.add("short");
-  // Side-by-side boxes are too narrow for the time; a long title would push it out of sight anyway.
-  else if (e.cols === 1) box.append(el("cal-time", `${hhmm(e.startMin)} - ${hhmm(e.endMin)}`));
+  // A box narrower than this (side by side with others) has no room for the time; a long title would push it out of sight anyway.
+  else if (e.width * share >= TIME_MIN_WIDTH) box.append(el("cal-time", `${hhmm(e.startMin)} - ${hhmm(e.endMin)}`));
   return box;
 }
 
-function allDayChip(e: AllDayItem) {
+// The box of a guest's timed event (C-9): in the guest's strip at the right of the column, and not a button, since the detail of another person's event is not shown.
+function guestBox(guest: DirectoryPerson, k: number, n: number, e: TimedItem, weekStart: string) {
+  const box = el("cal-event cal-guest");
+  box.dataset.guest = guest.email;
+  box.dataset.endAt = String(timedEndAt(weekStart, e));
+  const strip = GUEST_SPAN / n;
+  box.style.top = `${(e.startMin / 60) * HOUR_PX}px`;
+  box.style.height = `${(Math.max(e.endMin - e.startMin, MIN_EVENT_MIN) / 60) * HOUR_PX - 1}px`;
+  box.style.left = `${GUEST_LEFT + k * strip + (e.left / 1000) * strip}%`;
+  box.style.width = `${(e.width / 1000) * strip}%`;
+  box.style.setProperty("--c", guestColor(guest));
+  box.title = `${e.summary}\n${guest.name || guest.email}`;
+  box.append(el("cal-name", cutName(e.summary)));
+  // A guest's strip has no room for a second line.
+  box.classList.add("short");
+  // A press on it only closes an open detail (the detail closes on a press elsewhere, but not on a box).
+  box.onclick = () => closeDetail();
+  return box;
+}
+
+// The chip of a guest's all-day event (C-9).
+function guestChip(guest: DirectoryPerson, e: AllDayItem, weekStart: string) {
+  const c = el("cal-chip cal-guest", e.summary || "(件名なし)");
+  c.dataset.guest = guest.email;
+  c.dataset.endAt = String(allDayEndAt(weekStart, e));
+  c.style.setProperty("--c", guestColor(guest));
+  c.title = `${e.summary}\n${guest.name || guest.email}`;
+  c.onclick = () => closeDetail();
+  return c;
+}
+
+function allDayChip(e: AllDayItem, weekStart: string) {
   const c = eventButton(`cal-chip${responseClass(e.response)}`, e);
+  c.dataset.endAt = String(allDayEndAt(weekStart, e));
   c.textContent = e.summary || "(件名なし)";
   c.style.setProperty("--c", eventColor(e));
   c.title = `${e.summary}\n${e.account}`;
   return c;
+}
+
+// Fades the events that have ended (C-1), at each draw of the week and at each tick of the clock.
+function drawPast() {
+  const now = Date.now();
+  document.querySelectorAll<HTMLElement>("[data-end-at]").forEach((n) => {
+    n.classList.toggle("past", Number(n.dataset.endAt) <= now);
+  });
 }
 
 // The current-time line in today's column and its label in the time gutter, if the shown week holds today.
@@ -207,13 +266,19 @@ function renderWeek(w: Week) {
       return cell;
     }),
   );
+  // The weeks of the guests shown (C-9) that were read for this week, in the order the guests were chosen.
+  const guests = shownGuests().flatMap((g, k) => {
+    const week = guestWeek(g, w.weekStart);
+    return week ? [{ g, k, week }] : [];
+  });
   $("cal-allday").replaceChildren(
     el("cal-allday-label", "終日"),
     ...days.map((_, i) => {
       const cell = el("cal-cell");
       // An empty place of the band makes an all-day event (C-5); a chip is the detail's own.
       cell.onclick = (e) => e.target === cell && openCreate(w.weekStart, i, true, 0);
-      cell.append(...w.allDay.filter((e) => e.day === i).map(allDayChip));
+      cell.append(...w.allDay.filter((e) => e.day === i).map((e) => allDayChip(e, w.weekStart)));
+      for (const { g, week } of guests) cell.append(...week.allDay.filter((e) => e.day === i).map((e) => guestChip(g, e, w.weekStart)));
       return cell;
     }),
   );
@@ -229,11 +294,14 @@ function renderWeek(w: Week) {
       const col = el("cal-col");
       // An empty place of the column makes an event of the hour pressed (C-5); an event box is the detail's own.
       col.onclick = (e) => e.target === col && openCreate(w.weekStart, i, false, Math.floor((e.clientY - col.getBoundingClientRect().top) / HOUR_PX) * 60);
-      col.append(...w.timed.filter((e) => e.day === i).map(eventBox));
+      // Drawn from the lowest layer, so a box that starts later is above the ones it overlaps (and the selected box, which has its own z-index, stays above all).
+      col.append(...w.timed.filter((e) => e.day === i).sort((a, b) => a.layer - b.layer).map((e) => eventBox(e, w.weekStart)));
+      for (const { g, k, week } of guests) col.append(...week.timed.filter((e) => e.day === i).sort((a, b) => a.layer - b.layer).map((e) => guestBox(g, k, shownGuests().length, e, w.weekStart)));
       return col;
     }),
   );
   drawNow();
+  drawPast();
   // An account that must log in again is told by a card, once, until it has logged in.
   setRelogin("calendar", w.needsLogin, (a) => `${a} はカレンダーを読むため再ログインが必要です`, addAccount);
   // A detail open on an event of the old draw follows it into this one.
@@ -307,6 +375,8 @@ export async function loadCalendar(refresh = false, follow = false, ahead = true
   if (seq !== calSeq) return;
   const key = weekKey(calDate, first);
   if (follow && calShown?.weekStart === key) followCalendarWeek();
+  // The guests of C-9 are read with the week, and again at each refresh of it.
+  loadGuestWeeks(key, first);
   const kept = calCache.get(key);
   if (kept) {
     if (calShown?.weekStart !== key) renderWeek(kept);
@@ -366,6 +436,11 @@ function shownChangedByClaude() {
   choiceChanged();
 }
 
+// The guests of C-9 changed, or a week of theirs arrived: the shown week is drawn again when it is the one concerned (null: whatever is shown).
+const guestsChanged = (weekStart: string | null) => {
+  if (calShown && (weekStart === null || weekStart === calShown.weekStart)) renderWeek(calShown);
+};
+
 const moveWeek = (date: string) => {
   closeDetail();
   closeCreate();
@@ -374,8 +449,11 @@ const moveWeek = (date: string) => {
 };
 
 export function initCalendar() {
-  new MutationObserver(drawWeekNotices).observe($("calendar"), { attributes: true, attributeFilter: ["hidden"] });
-  initCalendarSide(choiceChanged);
+  new MutationObserver(() => {
+    drawWeekNotices();
+    drawGuestNotices();
+  }).observe($("calendar"), { attributes: true, attributeFilter: ["hidden"] });
+  initCalendarSide(choiceChanged, guestsChanged);
   initCalendarMonth(moveWeek);
   initCalendarClaude();
   onScreenChanged("calendar", eventChangedByClaude);
@@ -393,6 +471,7 @@ export function initCalendar() {
     () => {
       if (currentScreen() !== "calendar") return;
       drawNow();
+      drawPast();
       refreshCalendarDay();
     },
     60000,

@@ -19,6 +19,7 @@ pub mod formation_reply;
 pub mod formation_server;
 pub mod ghostty;
 pub mod gmail;
+pub mod icloud;
 pub mod identity;
 pub mod image_senders;
 pub mod images;
@@ -27,6 +28,7 @@ mod keychain;
 pub mod lsp;
 pub mod lsp_plugin;
 pub mod machine_stats;
+pub mod mail;
 pub mod mail_address;
 pub mod mail_attach;
 pub mod mail_send;
@@ -309,6 +311,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             auth::login,
             auth::remove_account,
+            icloud::icloud_accounts,
+            icloud::icloud_check,
+            icloud::icloud_add_account,
+            icloud::icloud_remove_account,
             calendar::calendar_week,
             calendar::calendar_cached,
             calendar::calendar_first_day,
@@ -317,6 +323,8 @@ pub fn run() {
             calendar::calendar_notices,
             calendar::calendar_choices,
             calendar::calendar_owned,
+            calendar::calendar_search_people,
+            calendar::calendar_person_week,
             calendar::calendar_create_event,
             calendar::calendar_update_event,
             calendar::calendar_delete_event,
@@ -355,6 +363,7 @@ pub fn run() {
             jira::jira_sprints,
             jira::jira_sprint_issues,
             jira::jira_backlog,
+            jira::jira_myself,
             jira::jira_issue,
             jira::jira_transitions,
             jira::jira_transition,
@@ -465,7 +474,6 @@ pub fn run() {
             orca_attach::orca_drop_file,
             orca_browse::orca_browse_dir,
             machine_stats::machine_resources,
-            machine_stats::machine_usage,
             orca_pairing::orca_pairing_status,
             orca_pairing::orca_pairing_save,
             orca_pairing::orca_pairing_revoke,
@@ -558,6 +566,8 @@ pub fn run() {
             database::database_sql_csv,
             database::database_disconnect,
             database::database_connections,
+            database::favorites::database_favorites,
+            database::favorites::database_favorite_set,
             markdown_patch::markdown_split,
             markdown_patch::markdown_patch,
             ghostty::ghostty_saved,

@@ -17,6 +17,7 @@ use ts_rs::TS;
 
 use crate::auth::{config_dir, Auth};
 use crate::gmail::{log_failure, send_json_refreshing, thread_url, ApiError};
+use crate::mail;
 use crate::mail_address::split_address;
 use crate::markdown_patch::is_empty_paragraph;
 
@@ -78,7 +79,7 @@ struct Attachment {
 
 /// What of a mail passed the checks, ready to go into the headers.
 #[derive(Debug)]
-struct Checked {
+pub(crate) struct Checked {
     from: String,
     to: Vec<String>,
     cc: Vec<String>,
@@ -91,9 +92,9 @@ struct Checked {
 
 /// The headers that put a reply in its thread.
 #[derive(Debug, PartialEq)]
-struct ReplyHeaders {
-    in_reply_to: String,
-    references: Vec<String>,
+pub(crate) struct ReplyHeaders {
+    pub(crate) in_reply_to: String,
+    pub(crate) references: Vec<String>,
 }
 
 fn has_break_or_control(s: &str) -> bool {
@@ -200,8 +201,8 @@ fn reply_subject(subject: &str) -> String {
     }
 }
 
-/// Whether a file may be attached: it has a name that fits a header and some bytes, and it keeps the files of the mail (`held` bytes already) within Gmail's limit.
-pub(crate) fn check_attachment(name: &str, size: u64, held: u64) -> Result<(), String> {
+/// Whether a file may be attached: it has a name that fits a header and some bytes, and it keeps the files of the mail (`held` bytes already) within `limit`, the total that the account's backend takes (`mail::attachment_limit`).
+pub(crate) fn check_attachment(name: &str, size: u64, held: u64, limit: u64) -> Result<(), String> {
     if name.trim().is_empty() {
         return Err("ファイル名がありません".into());
     }
@@ -214,25 +215,23 @@ pub(crate) fn check_attachment(name: &str, size: u64, held: u64) -> Result<(), S
     if size == 0 {
         return Err(format!("{} は空のファイルです", shown(name)));
     }
-    if held.saturating_add(size) > MAX_ATTACHMENTS {
-        return Err(format!(
-            "添付の合計は {} MB までです",
-            MAX_ATTACHMENTS / 1024 / 1024
-        ));
+    if held.saturating_add(size) > limit {
+        return Err(too_large(limit));
     }
     Ok(())
 }
 
+fn too_large(limit: u64) -> String {
+    format!("添付の合計は {} MB までです", limit / 1024 / 1024)
+}
+
 /// The files the screen gave, decoded and checked one by one against the limit of the whole.
-fn check_attachments(files: &[OutgoingAttachment]) -> Result<Vec<Attachment>, String> {
+fn check_attachments(files: &[OutgoingAttachment], limit: u64) -> Result<Vec<Attachment>, String> {
     // Four characters are three bytes: refuse before any decode makes a copy.
-    let base64_limit = MAX_ATTACHMENTS / 3 * 4 + 4;
+    let base64_limit = limit / 3 * 4 + 4;
     let sent: u64 = files.iter().map(|f| f.data.len() as u64).sum();
     if sent > base64_limit {
-        return Err(format!(
-            "添付の合計は {} MB までです",
-            MAX_ATTACHMENTS / 1024 / 1024
-        ));
+        return Err(too_large(limit));
     }
     let mut held = 0;
     let mut out = Vec::with_capacity(files.len());
@@ -240,7 +239,7 @@ fn check_attachments(files: &[OutgoingAttachment]) -> Result<Vec<Attachment>, St
         let bytes = STANDARD
             .decode(&file.data)
             .map_err(|_| format!("{} を読めません", shown(&file.name)))?;
-        check_attachment(&file.name, bytes.len() as u64, held)?;
+        check_attachment(&file.name, bytes.len() as u64, held, limit)?;
         held += bytes.len() as u64;
         out.push(Attachment {
             name: file.name.clone(),
@@ -250,8 +249,8 @@ fn check_attachments(files: &[OutgoingAttachment]) -> Result<Vec<Attachment>, St
     Ok(out)
 }
 
-/// Checks everything the screen gave, before anything is asked of Gmail.
-fn check(account: &str, mail: &OutgoingMail) -> Result<Checked, String> {
+/// Checks everything the screen gave, before anything is asked of the mail service. `limit` is the total of the files that the account's backend takes.
+pub(crate) fn check(account: &str, mail: &OutgoingMail, limit: u64) -> Result<Checked, String> {
     let from =
         format_mailbox(account).map_err(|_| "差出人のアドレスが正しくありません".to_owned())?;
     if mail.to.len() + mail.cc.len() + mail.bcc.len() == 0 {
@@ -273,7 +272,7 @@ fn check(account: &str, mail: &OutgoingMail) -> Result<Checked, String> {
         subject: format_subject(&subject)?,
         body: mail.body.clone(),
         markdown: mail.markdown.unwrap_or(false),
-        attachments: check_attachments(mail.attachments.as_deref().unwrap_or_default())?,
+        attachments: check_attachments(mail.attachments.as_deref().unwrap_or_default(), limit)?,
     })
 }
 
@@ -339,13 +338,20 @@ fn reply_headers(messages: &[ReplyMessage]) -> Result<ReplyHeaders, String> {
         .rev()
         .find(|m| !m.label_ids.iter().any(|l| l == "DRAFT"))
         .ok_or("返信先のメッセージがありません")?;
-    let id = last
-        .header("Message-ID")
+    threading_headers(last.header("Message-ID"), last.header("References"))
+}
+
+/// The headers of a reply to a message that has the Message-ID `message_id` (`<id>`) and the header `references`: its Message-ID, and its References followed by that Message-ID.
+/// The values come from a received mail (Gmail's or iCloud's), so each is checked.
+pub(crate) fn threading_headers(
+    message_id: Option<&str>,
+    references: Option<&str>,
+) -> Result<ReplyHeaders, String> {
+    let id = message_id
         .map(str::trim)
         .filter(|id| valid_message_id(id))
         .ok_or("返信先のメッセージ ID を読めません")?;
-    let mut references: Vec<String> = last
-        .header("References")
+    let mut references: Vec<String> = references
         .map(|r| valid_ids(r).map(str::to_owned).collect())
         .unwrap_or_default();
     if references.last().map(String::as_str) != Some(id) {
@@ -579,12 +585,32 @@ fn attachment_part(file: &Attachment) -> String {
     )
 }
 
-/// The RFC 5322 message.
+/// The headers that SMTP leaves to the sender (Gmail's API adds them itself): the time, and the Message-ID by which the copy of the mail in the sent folder is found again (M-13).
+pub(crate) struct SmtpHeaders {
+    pub message_id: String,
+    pub date: String,
+}
+
+/// The RFC 5322 message that goes to Gmail's API, which reads `Bcc` and strips it.
 fn render(c: &Checked, reply: Option<&ReplyHeaders>) -> String {
+    render_with(c, reply, None)
+}
+
+/// The message that goes over SMTP: with `Date` and `Message-ID`, and with no `Bcc` header, because SMTP sends the headers as they are and every recipient would read it (the Bcc addresses are only in the envelope).
+pub(crate) fn render_smtp(c: &Checked, reply: Option<&ReplyHeaders>, smtp: &SmtpHeaders) -> String {
+    render_with(c, reply, Some(smtp))
+}
+
+fn render_with(c: &Checked, reply: Option<&ReplyHeaders>, smtp: Option<&SmtpHeaders>) -> String {
     let mut m = format!("From: {}\r\n", c.from);
+    if let Some(s) = smtp {
+        m += &format!("Date: {}\r\nMessage-ID: {}\r\n", s.date, s.message_id);
+    }
     m += &recipients("To", &c.to).unwrap_or_default();
     m += &recipients("Cc", &c.cc).unwrap_or_default();
-    m += &recipients("Bcc", &c.bcc).unwrap_or_default();
+    if smtp.is_none() {
+        m += &recipients("Bcc", &c.bcc).unwrap_or_default();
+    }
     m += &format!("Subject: {}\r\n", c.subject);
     if let Some(r) = reply {
         m += &format!("In-Reply-To: {}\r\n", r.in_reply_to);
@@ -602,6 +628,18 @@ fn render(c: &Checked, reply: Option<&ReplyHeaders>) -> String {
         m += &format!("--{MIXED_BOUNDARY}--\r\n");
     }
     m
+}
+
+/// The addresses of every recipient (To, Cc and Bcc) as the SMTP envelope names them, each once (the case is ignored). Call it after `check`, which has checked each entry.
+pub(crate) fn envelope_addresses(mail: &OutgoingMail) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for entry in mail.to.iter().chain(&mail.cc).chain(&mail.bcc) {
+        let address = split_address(entry).address.trim().to_owned();
+        if !out.iter().any(|a| a.eq_ignore_ascii_case(&address)) {
+            out.push(address);
+        }
+    }
+    out
 }
 
 /// The body of the `messages.send` request.
@@ -642,7 +680,7 @@ pub async fn send(
     account: &str,
     mail: &OutgoingMail,
 ) -> Result<Option<bool>, ApiError> {
-    let checked = check(account, mail)?;
+    let checked = check(account, mail, MAX_ATTACHMENTS)?;
     let reply = match &mail.reply_thread_id {
         Some(id) => match fetch_reply_headers(dir, auth, account, id).await? {
             Some(headers) => Some(headers),
@@ -676,7 +714,7 @@ pub async fn send_mail(
     mail: OutgoingMail,
 ) -> Result<Option<bool>, String> {
     let dir = config_dir(&app).map_err(|e| log_failure("send_mail", &account, e))?;
-    send(&dir, &auth, &account, &mail)
+    mail::send(&dir, &auth, &account, &mail)
         .await
         .map_err(|e| log_failure("send_mail", &account, e))
 }
@@ -776,7 +814,7 @@ mod tests {
         m: &OutgoingMail,
         reply: Option<&ReplyHeaders>,
     ) -> Result<String, String> {
-        Ok(render(&check(account, m)?, reply))
+        Ok(render(&check(account, m, MAX_ATTACHMENTS)?, reply))
     }
 
     /// The lines of the header part, unfolded.
@@ -1003,7 +1041,7 @@ mod tests {
         for bad in ["", "abc/def", "abc?x=1", "../x"] {
             m.reply_thread_id = Some(bad.into());
             assert_eq!(
-                check("me@example.com", &m).unwrap_err(),
+                check("me@example.com", &m, MAX_ATTACHMENTS).unwrap_err(),
                 "スレッド ID が不正です"
             );
         }
@@ -1519,35 +1557,59 @@ mod tests {
     }
 
     #[test]
+    fn the_envelope_lists_every_recipient_once_and_the_smtp_message_has_no_bcc_header() {
+        let mut m = mail(&["a@example.com", "Bob <b@example.com>"], "s", "b");
+        m.cc = vec!["A@Example.com".into()];
+        m.bcc = vec!["hidden@example.com".into()];
+        assert_eq!(
+            envelope_addresses(&m),
+            ["a@example.com", "b@example.com", "hidden@example.com"]
+        );
+        let checked = check("me@example.com", &m, MAX_ATTACHMENTS).unwrap();
+        let smtp = SmtpHeaders {
+            message_id: "<id@example.com>".into(),
+            date: "Sat, 28 Nov 2026 07:00:00 +0000".into(),
+        };
+        let over_smtp = render_smtp(&checked, None, &smtp);
+        assert!(!over_smtp.contains("hidden@example.com"));
+        assert!(over_smtp
+            .contains("Date: Sat, 28 Nov 2026 07:00:00 +0000\r\nMessage-ID: <id@example.com>\r\n"));
+        // The message for Gmail's API still names Bcc, which Gmail strips, and has neither header.
+        let for_gmail = render(&checked, None);
+        assert!(for_gmail.contains("Bcc: hidden@example.com"));
+        assert!(!for_gmail.contains("Message-ID") && !for_gmail.contains("Date:"));
+    }
+
+    #[test]
     fn the_limit_is_on_the_total_of_the_files() {
         let limit = MAX_ATTACHMENTS;
-        assert!(check_attachment("a", limit, 0).is_ok());
-        assert!(check_attachment("a", limit + 1, 0).is_err());
-        assert!(check_attachment("a", 1, limit - 1).is_ok());
+        assert!(check_attachment("a", limit, 0, MAX_ATTACHMENTS).is_ok());
+        assert!(check_attachment("a", limit + 1, 0, MAX_ATTACHMENTS).is_err());
+        assert!(check_attachment("a", 1, limit - 1, MAX_ATTACHMENTS).is_ok());
         assert_eq!(
-            check_attachment("a", 1, limit),
+            check_attachment("a", 1, limit, MAX_ATTACHMENTS),
             Err("添付の合計は 25 MB までです".into())
         );
-        assert!(check_attachment("a", 1, u64::MAX).is_err());
+        assert!(check_attachment("a", 1, u64::MAX, MAX_ATTACHMENTS).is_err());
     }
 
     #[test]
     fn a_name_and_a_size_are_checked() {
         assert_eq!(
-            check_attachment("", 1, 0),
+            check_attachment("", 1, 0, MAX_ATTACHMENTS),
             Err("ファイル名がありません".into())
         );
         assert_eq!(
-            check_attachment(" \t", 1, 0),
+            check_attachment(" \t", 1, 0, MAX_ATTACHMENTS),
             Err("ファイル名がありません".into())
         );
         assert_eq!(
-            check_attachment("empty.txt", 0, 0),
+            check_attachment("empty.txt", 0, 0, MAX_ATTACHMENTS),
             Err("empty.txt は空のファイルです".into())
         );
-        assert!(check_attachment(&"あ".repeat(85), 1, 0).is_ok());
+        assert!(check_attachment(&"あ".repeat(85), 1, 0, MAX_ATTACHMENTS).is_ok());
         let long = "あ".repeat(86);
-        assert!(check_attachment(&long, 1, 0)
+        assert!(check_attachment(&long, 1, 0, MAX_ATTACHMENTS)
             .unwrap_err()
             .starts_with("ファイル名が長すぎます（255 バイトまで）"));
     }
@@ -1557,18 +1619,18 @@ mod tests {
         let half = vec![7u8; MAX_ATTACHMENTS as usize / 2 + 1];
         let over = with_files(vec![file("a", &half), file("b", &half)]);
         assert_eq!(
-            check("me@example.com", &over).unwrap_err(),
+            check("me@example.com", &over, MAX_ATTACHMENTS).unwrap_err(),
             "添付の合計は 25 MB までです"
         );
         let just = vec![7u8; MAX_ATTACHMENTS as usize / 2];
         let ok = with_files(vec![file("a", &just), file("b", &just)]);
-        assert!(check("me@example.com", &ok).is_ok());
+        assert!(check("me@example.com", &ok, MAX_ATTACHMENTS).is_ok());
         let flood = with_files(vec![OutgoingAttachment {
             name: "a".into(),
             data: "A".repeat(MAX_ATTACHMENTS as usize / 3 * 4 + 8),
         }]);
         assert_eq!(
-            check("me@example.com", &flood).unwrap_err(),
+            check("me@example.com", &flood, MAX_ATTACHMENTS).unwrap_err(),
             "添付の合計は 25 MB までです"
         );
         let broken = with_files(vec![OutgoingAttachment {
@@ -1576,11 +1638,16 @@ mod tests {
             data: "***".into(),
         }]);
         assert_eq!(
-            check("me@example.com", &broken).unwrap_err(),
+            check("me@example.com", &broken, MAX_ATTACHMENTS).unwrap_err(),
             "a.txt を読めません"
         );
         assert_eq!(
-            check("me@example.com", &with_files(vec![file("e", b"")])).unwrap_err(),
+            check(
+                "me@example.com",
+                &with_files(vec![file("e", b"")]),
+                MAX_ATTACHMENTS
+            )
+            .unwrap_err(),
             "e は空のファイルです"
         );
     }

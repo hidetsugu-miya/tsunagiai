@@ -1,4 +1,4 @@
-// The inbox list: loading, syncing with Gmail, and taking a row out (archive / trash) with its undo.
+// The inbox list: loading, syncing with Gmail and iCloud, and taking a row out (archive / trash) with its undo.
 import type { Inbox } from "./bindings/Inbox";
 import type { Sync } from "./bindings/Sync";
 import type { ThreadItem } from "./bindings/ThreadItem";
@@ -78,7 +78,7 @@ async function undoRemove() {
 let loadSeq = 0;
 // Loads in flight; a sync stays out of their way.
 let loading = 0;
-// Per account, the mailbox history ID as of the last load or sync: where the next sync starts.
+// Per account, the sync position as of the last load or sync: where the next sync starts. A string only the account's own backend reads; it is kept and given back as it is.
 export const historyIds = new Map<string, string>();
 
 // Set when a load answers: until then the list shows the loading note.
@@ -185,11 +185,14 @@ export async function load() {
   try {
     const inbox = await invoke("inbox");
     if (seq !== loadSeq) return;
+    // `inbox.accounts` holds the Google accounts only: the login screen is for an owner with no account of either kind (M-13).
+    const noAccount = inbox.accounts.length === 0 && (await invoke("icloud_accounts")).length === 0;
+    if (seq !== loadSeq) return;
     failed = Object.keys(inbox.failed).length > 0;
     loadFailure = failed ? Object.entries(inbox.failed).map(([a, m]) => `${a}: ${m}`).join("、") : null;
     inboxLoaded = true;
     renderAccounts(inbox);
-    if (inbox.accounts.length === 0) return show("login");
+    if (noAccount) return show("login");
     historyIds.clear();
     for (const [account, id] of Object.entries(inbox.historyIds)) historyIds.set(account, id);
     drawThreads(inbox);
@@ -271,7 +274,7 @@ const SYNC_MS = 10000;
 let syncFails = 0;
 let syncing = false;
 
-// Brings the list up to date with Gmail through `sync`, without leaving the current view.
+// Brings the list up to date with Gmail and iCloud through `sync`, without leaving the current view.
 // A load that is due (a failed one, or one asked for by a sync that needs a login) comes first: it may leave no history IDs to sync from.
 async function syncAll() {
   if (loading || document.hidden) return;

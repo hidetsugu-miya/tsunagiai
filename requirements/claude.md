@@ -2,7 +2,7 @@
 
 ## A-1 Claude integration
 
-A local MCP server (`tsunagiai-mcp`, stdio) lets Claude list, read, archive, mark read and trash inbox threads, and list events
+A local MCP server (`tsunagiai-mcp`, stdio) lets Claude list, read, archive, mark read and trash inbox threads (of Gmail and iCloud accounts, M-13), and list events
 
 The language servers of a project of the Orca screen (A-34, #960) are read and written by four tools, so that Claude Code can set them up (the owner's decision of 2026-11-18, #957). They go through the functions of `src-tauri/src/lsp.rs` that the app's own save uses (`read_settings`, `save_server`, `delete_server`, `set_ssh_host`), so every check of a save applies, the file `lsp-settings.json` keeps its shape, and a change is read and written under one lock. Each takes `environment` (`local` is this Mac, which the app saves as no environment; any other text is the name of a saved environment) and `project` (the id of the repository in Orca, the key of A-34) and answers the settings of that project as saved (`environment`, `project`, `sshHost` and `servers`, in the names of `lsp_settings` of A-34).
 - `lsp_settings` (`read_only_hint`): reads them, `servers` being `[{language, name, autoStart, command, mount, service}]` with one server for each language, and none (`servers` is empty, `sshHost` none) for a project with nothing saved (#1243). A key that a save would refuse (empty, a control character) is refused.

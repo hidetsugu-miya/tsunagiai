@@ -51,8 +51,6 @@ export const EDIT_SVG = icon("edit", '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d
 export const OUTDENT_SVG = icon("outdent", '<path d="M3 5h18M13 12h8M3 19h18"/><path d="M8 9l-4 3 4 3"/>');
 export const FOLDER_SVG = icon("folder", '<path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/>');
 export const CLAUDE_SVG = icon("claude", '<path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/>');
-// A-48: the mark of Antigravity in the footer (an arch with a bar across it).
-export const ANTIGRAVITY_SVG = icon("antigravity", '<path d="M4 20C6 9 9 4 12 4s6 5 8 16"/><path d="M8.5 14h7"/>');
 export const SCRATCHPAD_SVG = icon("scratchpad", '<path d="M5 4h11l3 3v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/><path d="M8 12h8M8 16h5"/>');
 // A-16: an AI CLI other than Claude in the menu of the plus (a four-pointed star).
 export const AGENT_SVG = icon("agent", '<path d="M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2z"/>');
@@ -60,6 +58,8 @@ export const TERMINAL_SVG = icon("terminal", '<rect x="3" y="4" width="18" heigh
 export const TRASH_SVG = icon("trash", '<path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/>');
 export const SUMMARY_SVG = icon("summary", '<path d="M8 3l1.4 3.6L13 8l-3.6 1.4L8 13l-1.4-3.6L3 8l3.6-1.4z"/><path d="M16.5 6H21M16.5 11H21M4 17h17M4 21h11"/>');
 export const SLACK_SVG = icon("slack", '<path d="M9.5 4L8 20M16 4l-1.5 16M4 9h16.5M3.5 15H20"/>');
+// M-13: the logo of the iCloud card of the settings (a cloud).
+export const ICLOUD_SVG = icon("icloud", '<path d="M7 18h10a4 4 0 0 0 .6-7.96A6 6 0 0 0 6.2 9.1 4.5 4.5 0 0 0 7 18z"/>');
 export const KEY_SVG = icon("key", '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3M14 9l2 2"/>');
 export const LINK_SVG = icon("link", '<path d="M9 15l6-6"/><path d="M11 6l1.5-1.5a3.5 3.5 0 0 1 5 5L16 11"/><path d="M13 18l-1.5 1.5a3.5 3.5 0 0 1-5-5L8 13"/>');
 export const LOCK_SVG = icon("lock", '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>');

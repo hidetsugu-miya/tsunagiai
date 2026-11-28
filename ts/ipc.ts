@@ -19,9 +19,11 @@ import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import type { DatabaseRecords } from "./bindings/DatabaseRecords";
 import type { DatabaseCsvSaved } from "./bindings/DatabaseCsvSaved";
 import type { DatabaseSqlRun } from "./bindings/DatabaseSqlRun";
+import type { DatabaseFavorite } from "./bindings/DatabaseFavorite";
 import type { DatabaseStructure } from "./bindings/DatabaseStructure";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
 import type { DecisionPage } from "./bindings/DecisionPage";
+import type { DirectoryPeople } from "./bindings/DirectoryPeople";
 import type { PageAnswer } from "./bindings/PageAnswer";
 import type { PageVerdict } from "./bindings/PageVerdict";
 import type { Effort } from "./bindings/Effort";
@@ -54,10 +56,10 @@ import type { LspPlace } from "./bindings/LspPlace";
 import type { LspRepoSettings } from "./bindings/LspRepoSettings";
 import type { LspStatus } from "./bindings/LspStatus";
 import type { MachineResources } from "./bindings/MachineResources";
-import type { MachineUsage } from "./bindings/MachineUsage";
 import type { MailSummary } from "./bindings/MailSummary";
 import type { OutgoingMail } from "./bindings/OutgoingMail";
 import type { PickedAttachment } from "./bindings/PickedAttachment";
+import type { PersonWeek } from "./bindings/PersonWeek";
 import type { MarkdownParts } from "./bindings/MarkdownParts";
 import type { MarkdownPatchResult } from "./bindings/MarkdownPatchResult";
 import type { MenuEntry } from "./bindings/MenuEntry";
@@ -90,6 +92,8 @@ import type { JiraSettings } from "./bindings/JiraSettings";
 import type { JiraSprint } from "./bindings/JiraSprint";
 import type { JiraTransition } from "./bindings/JiraTransition";
 import type { JiraUser } from "./bindings/JiraUser";
+import type { IcloudAccount } from "./bindings/IcloudAccount";
+import type { IcloudCheck } from "./bindings/IcloudCheck";
 import type { NotionAccount } from "./bindings/NotionAccount";
 import type { OrcaBranchSwitched } from "./bindings/OrcaBranchSwitched";
 import type { OrcaCommitFiles } from "./bindings/OrcaCommitFiles";
@@ -168,6 +172,10 @@ export interface Commands {
   set_calendar_shown: { args: { account: string; calendarId: string; shown: boolean }; result: null };
   // C-5: the calendars an event can be created in (those of each account that the user owns), in the shape of `calendar_choices`.
   calendar_owned: { args: undefined; result: CalendarChoices };
+  // C-9: the people of the accounts' organizations whose name or address matches `text` (an empty text finds no one). `needsLogin` lists the accounts that must log in again (the directory scope is not granted yet).
+  calendar_search_people: { args: { text: string }; result: DirectoryPeople };
+  // C-9: the week containing `date` of the person with the address `email`, read with the token of `account` (the `account` of the person that the search gave). `needsLogin` is true when that account must log in again. An event with no shared title is titled 予定あり.
+  calendar_person_week: { args: { account: string; email: string; date: string; firstDay: number }; result: PersonWeek };
   // C-5: creates the event, with the invitations and the Google Meet it asks for. `null` means the account must log in again (it has not granted the permission to create events).
   calendar_create_event: { args: { event: NewEvent }; result: CreatedEvent | null };
   // C-7: rewrites an event that the user organized, on a calendar the user owns (one occurrence of a repeating event). `null` means the account must log in again.
@@ -189,10 +197,10 @@ export interface Commands {
   set_read: { args: Thread & { read: boolean }; result: boolean | null };
   // Sends the mail from the account (a reply when `replyThreadId` is set). null: that account must log in again. true: sent.
   send_mail: { args: Account & { mail: OutgoingMail }; result: boolean | null };
-  // M-12: whether a file may be added to a mail that holds `held` bytes of files already (a refusal is a Japanese message); the page reads the file only after it was accepted. null: it may.
-  mail_attach_check: { args: { name: string; size: number; held: number }; result: null };
+  // M-12: whether a file may be added to a mail of `account` that holds `held` bytes of files already (a refusal is a Japanese message; the limit is the backend's of the account, Gmail's 25 MB or iCloud's, M-13); the page reads the file only after it was accepted. null: it may.
+  mail_attach_check: { args: Account & { name: string; size: number; held: number }; result: null };
   // M-12: opens the dialog that picks files, and answers them read (the dialog gives the place, never the page); an empty list when it was cancelled.
-  mail_attach_pick: { args: { held: number }; result: PickedAttachment[] };
+  mail_attach_pick: { args: Account & { held: number }; result: PickedAttachment[] };
   fetch_images: { args: { urls: string[] }; result: Record<string, string> };
   image_sender_known: { args: { froms: string[] }; result: string[] };
   remember_image_sender: { args: { from: string }; result: null };
@@ -269,6 +277,14 @@ export interface Commands {
   sentry_assignees: { args: { teamId: string; org: string; issueId: string }; result: SentryAssignees };
   // S-30: assigns the issue (`assignee` is a `value` of `sentry_assignees`: `user:{id}` or `team:{id}`) with the workspace's token.
   sentry_assign: { args: { teamId: string; org: string; issueId: string; assignee: string }; result: null };
+  // M-13: the iCloud accounts (the rows of accounts.json with the kind icloud). Asks iCloud nothing.
+  icloud_accounts: { args: undefined; result: IcloudAccount[] };
+  // M-13: logs in to iCloud with the kept App-specific password and answers whether it works (ok), is refused (needsLogin) or could not be tried (error).
+  icloud_check: { args: { address: string }; result: IcloudCheck };
+  // M-13: tries the login first, and keeps the password and lists the account only when iCloud accepts it (an account already listed has its password entered again); answers the iCloud accounts.
+  icloud_add_account: { args: { address: string; password: string }; result: IcloudAccount[] };
+  // M-13: deletes the password and the row of an iCloud account; answers the iCloud accounts left.
+  icloud_remove_account: { args: { address: string }; result: IcloudAccount[] };
   // The connected Notion workspaces; `reconnect` is true when no token is kept. Asks Notion nothing.
   notion_accounts: { args: undefined; result: NotionAccount[] };
   // Opens the browser for Notion's consent and answers the connected workspace.
@@ -297,6 +313,8 @@ export interface Commands {
   jira_sprint_issues: { args: { environment: string | null; project: string; sprintId: number }; result: JiraIssues };
   // J-2: the backlog of a board in the board's rank (at most 500; `truncated` says there were more).
   jira_backlog: { args: { environment: string | null; project: string; boardId: number }; result: JiraIssues };
+  // J-2 (#1544): who the credential of the project belongs to (`GET /rest/api/3/myself`); the Jira list starts with that account as the assignee.
+  jira_myself: { args: { environment: string | null; project: string }; result: JiraUser };
   // J-2: one ticket for its tab: the fields of its right column, and its description and comments as Markdown (read from ADF; at most 200 comments, `commentsTruncated` says there were more). Fails with Jira's refusal for a key it does not know, and without asking when the key is not a ticket key.
   jira_issue: { args: { environment: string | null; project: string; key: string }; result: JiraIssueDetail };
   // J-2 (#872): the status changes that the ticket can take now, each with the status it leads to.
@@ -419,8 +437,6 @@ export interface Commands {
   orca_browse_dir: { args: { environment: string; path: string }; result: BrowsedDir };
   // A-48: the CPU (the load of a minute per core, in percent) and the memory of this Mac (`environment` null) and of each saved environment, from Orca's `diagnostics.memory`. A machine that fails has its `error` and no figure; the others are still returned. Only reads.
   machine_resources: { args: undefined; result: MachineResources[] };
-  // A-48: the rate limits of Claude and Antigravity (`session` 5 hours, `weekly`) of the same machines, from Orca's `accounts.list`. Orca takes them again after 5 minutes. A machine that does not answer has `unavailable` for both. Only reads.
-  machine_usage: { args: undefined; result: MachineUsage[] };
   // A-10: puts the file `data` (base64, any kind, up to 20 MiB) in `.orca/drops/` of the worktree at `path` of the target `environment`, under its own `name` (a taken name gets `copy`, `copy 2`, ...), and answers `AttachedFile { text, bracketed }`: the text to type for it (the absolute path, one blank after it) and whether the terminal gets it as a bracketed paste (an image) or as typed text. Not tried again: a failure carries its message.
   orca_attach_file: { args: { path: string; name: string; data: string; environment: string | null }; result: AttachedFile };
   orca_drop_taken: { args: { path: string; dir: string; names: string[]; environment: string | null }; result: string[] };
@@ -687,6 +703,8 @@ export interface Commands {
   database_sql_csv: { args: { id: string; database: string; sql: string }; result: DatabaseCsvSaved | null };
   // D-3: closes the connection `id` and ends its script.
   database_disconnect: { args: { id: string }; result: null };
+  database_favorites: { args: { environment: string | null; project: string }; result: DatabaseFavorite[] };
+  database_favorite_set: { args: { environment: string | null; project: string; connection: string; database: string; table: string; on: boolean }; result: DatabaseFavorite[] };
   // D-3: the ids of the connections that are open now.
   database_connections: { args: undefined; result: string[] };
 }

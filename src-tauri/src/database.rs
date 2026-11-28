@@ -9,6 +9,7 @@
 //! The checks of an input (`check`, `upsert`, `password_change`) are pure functions; the keychain is behind `PasswordStore` so that the flows can be tried without it.
 
 pub mod csv;
+pub mod favorites;
 pub mod mysql;
 pub mod records;
 pub mod script;

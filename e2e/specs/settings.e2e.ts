@@ -1,9 +1,9 @@
 import type { NotionAccount } from "../../ts/bindings/NotionAccount";
 import type { SentryConnection } from "../../ts/bindings/SentryConnection";
 import { typeIn } from "../orca-support";
-import { account, boot, copiedTexts, logLine, skill, stubClipboard, checked, chooseAppearance, chooseOption, fontSettings, formationConsent, chooseTheme, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, emitEvent, holds, inbox, mock, rejects, onceId, release, sendClaudeCode, slackLoad, socketStatus, workspace, terminalThemes, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf, CARD, CARDS, waitForLog } from "../support";
+import { account, boot, thread, copiedTexts, logLine, skill, stubClipboard, checked, chooseAppearance, chooseOption, fontSettings, formationConsent, chooseTheme, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, emitEvent, holds, inbox, mock, rejects, onceId, release, sendClaudeCode, slackLoad, socketStatus, workspace, terminalThemes, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf, CARD, CARDS, waitForLog } from "../support";
 
-type Tab = "google" | "calendar" | "todoist" | "slack" | "notion" | "claude" | "skill" | "plugins" | "orca" | "menu" | "font" | "update" | "log";
+type Tab = "google" | "icloud" | "calendar" | "todoist" | "slack" | "notion" | "claude" | "skill" | "plugins" | "orca" | "menu" | "font" | "update" | "log";
 
 // Presses a tab of the settings screen.
 const openTab = (tab: Tab) => $(`#settings-tab-${tab}`).click();
@@ -16,7 +16,7 @@ async function openSettings(missingScopes: string[], claude: unknown = claudeMis
   if (tab !== "google") await openTab(tab);
 }
 
-const TABS: [Tab, string][] = [["google", "Google"], ["calendar", "カレンダー"], ["todoist", "Todoist"], ["slack", "Slack"], ["notion", "Notion"], ["claude", "Claude"], ["skill", "スキル"], ["plugins", "Plugins"], ["orca", "開発"], ["menu", "メニュー"], ["font", "フォント"], ["update", "アップデート"], ["log", "ログ"]];
+const TABS: [Tab, string][] = [["google", "Google"], ["icloud", "iCloud"], ["calendar", "カレンダー"], ["todoist", "Todoist"], ["slack", "Slack"], ["notion", "Notion"], ["claude", "Claude"], ["skill", "スキル"], ["plugins", "Plugins"], ["orca", "開発"], ["menu", "メニュー"], ["font", "フォント"], ["update", "アップデート"], ["log", "ログ"]];
 
 const unlinkButton = () => $('button[aria-label="Example Team の接続を解除"]');
 
@@ -108,8 +108,8 @@ describe("settings: calendar", () => {
     expect(await textsOf("#calendar-items .text-btn")).toEqual(["日", "月", "火", "水", "木", "金", "土"]);
     await expect(dayButton("水")).toHaveAttribute("aria-pressed", "true");
     await expect(dayButton("日")).toHaveAttribute("aria-pressed", "false");
-    // The card follows the Google card.
-    expect(await browser.execute(() => document.querySelector("#google-accounts")?.closest(".card")?.nextElementSibling?.contains(document.getElementById("calendar-items")))).toBe(true);
+    // The card follows the iCloud card, the tab after Google (A-3).
+    expect(await browser.execute(() => document.querySelector("#icloud-accounts")?.closest(".card")?.nextElementSibling?.contains(document.getElementById("calendar-items")))).toBe(true);
   });
 
   it("saves the chosen day with set_calendar_first_day, and the next calendar view asks for weeks with it", async () => {
@@ -2350,6 +2350,203 @@ describe("settings: menu (the メニュー tab, A-50)", () => {
   });
 });
 
+describe("settings: iCloud (M-13)", () => {
+  const first = { address: "hanako@icloud.com" };
+  const second = { address: "taro@me.com" };
+  const ok = { state: "ok" };
+  const lapsed = { state: "needsLogin" };
+  // The list of mail as the inbox gives it with an iCloud thread of `first` added to the Google ones.
+  const withIcloud = () => ({ ...inbox(), threads: [...inbox().threads, thread("i1", "iCloud unread", true, first.address)], historyIds: { ...inbox().historyIds, [first.address]: "1700:5" } });
+  const openIcloud = async (list: unknown[], check: unknown = ok, mail: unknown = inbox()) => {
+    await boot({ inbox: mail, slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, icloud_accounts: list, icloud_check: check });
+    await $("#nav-settings").click();
+    await expect($("#settings")).toBeDisplayed();
+    await openTab("icloud");
+    await waitForCalls("icloud_accounts");
+  };
+  const unlinkOf = (address: string) => $(`button[aria-label="${address} の接続を解除"]`);
+  const addForm = async (address: string, password: string) => {
+    await $("#icloud-address").setValue(address);
+    await $("#icloud-password").setValue(password);
+    await $("#icloud-add-button").click();
+  };
+
+  it("reads the accounts only when the tab is shown, asks iCloud about each, and draws its row with the name, avatar and state", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, icloud_accounts: [first, second], icloud_check: ok });
+    await $("#nav-settings").click();
+    expect(await callsOf("icloud_accounts")).toHaveLength(0);
+    expect(await callsOf("icloud_check")).toHaveLength(0);
+    await openTab("icloud");
+    await waitForCalls("icloud_accounts");
+    expect(await waitForCalls("icloud_check", 2)).toEqual([{ address: first.address }, { address: second.address }]);
+    await waitForText("#icloud-accounts .status", "接続中");
+    expect(await textsOf("#icloud-accounts .item-name")).toEqual([first.address, second.address]);
+    expect(await textsOf("#icloud-accounts .status")).toEqual(["接続中", "接続中"]);
+    await expect($$("#icloud-accounts .status")[0]).toHaveElementClass("ok");
+    await expect($$("#icloud-accounts .avatar")[0]).toHaveText("H");
+    await expect($$("#icloud-accounts .item-meta")[0]).not.toHaveElementClass("warn");
+    await expect($("#icloud-accounts").$("button=入れ直す")).not.toExist();
+  });
+
+  it("has the header row with the logo and the ? hint, the rows and the add form", async () => {
+    await openIcloud([first]);
+    await expect($("#settings-panel-icloud .card-head .logo.icloud svg")).toExist();
+    await expect($("#settings-panel-icloud .card-head h2")).toHaveText(expect.stringContaining("iCloud"));
+    await expect($("#icloud-help")).toHaveAttribute("aria-label", "iCloud アカウントの追加方法");
+    await expect($("#icloud-address")).toHaveAttribute("type", "email");
+    await expect($("#icloud-address")).toHaveAttribute("placeholder", "メールアドレス");
+    await expect($("#icloud-password")).toHaveAttribute("type", "password");
+    await expect($("#icloud-password")).toHaveAttribute("placeholder", "App 用パスワード");
+    await expect($("#icloud-add-button")).toHaveText("追加");
+  });
+
+  it("opens the steps of adding an account from the ? and closes them with the same button", async () => {
+    await openIcloud([]);
+    await $("#icloud-help").click();
+    const hint = $('.pop[role="dialog"]');
+    await expect(hint).toHaveText(expect.stringContaining("App 用パスワード"));
+    await expect(hint).toHaveText(expect.stringContaining("account.apple.com"));
+    await $("#icloud-help").click();
+    await expect(hint).not.toExist();
+  });
+
+  it("says so when no account is added", async () => {
+    await openIcloud([]);
+    await expect($("#icloud-accounts .card-empty")).toHaveText("アカウントはまだありません");
+    expect(await callsOf("icloud_check")).toEqual([]);
+  });
+
+  it("marks an account whose password iCloud refuses as 入れ直しが必要 and offers 入れ直す, and one that could not be asked as 確認できません with the reason", async () => {
+    await openIcloud([first, second], holds);
+    const check = "icloud_check";
+    await waitForCalls(check, 2);
+    expect(await textsOf("#icloud-accounts .status")).toEqual(["確認中", "確認中"]);
+    await release(check, lapsed);
+    await release(check, { state: "error", message: "iCloud に接続できません: timed out" });
+    await waitForText("#icloud-accounts .status", "確認できません");
+    expect(await textsOf("#icloud-accounts .status")).toEqual(["入れ直しが必要", "確認できません"]);
+    await expect($$("#icloud-accounts .status")[0]).toHaveElementClass("warn");
+    expect(await textsOf("#icloud-accounts .item-meta")).toEqual(["App 用パスワードが無効になりました", "iCloud に接続できません: timed out"]);
+    await expect($$("#icloud-accounts .item-meta")[0]).toHaveElementClass("warn");
+    await expect($$("#icloud-accounts .item-meta")[1]).toHaveElementClass("warn");
+    expect(await count("#icloud-accounts .text-btn")).toBe(3);
+    await expect($('button[aria-label="hanako@icloud.com の App 用パスワードを入れ直す"]')).toExist();
+    await expect($('button[aria-label="taro@me.com の App 用パスワードを入れ直す"]')).not.toExist();
+  });
+
+  it("shows the state of a check that failed outright, as 確認できません", async () => {
+    await openIcloud([first], rejects("資格情報の読み取りに失敗"));
+    await waitForText("#icloud-accounts .status", "確認できません");
+    await expect($("#icloud-accounts .item-meta")).toHaveText("資格情報の読み取りに失敗");
+  });
+
+  it("adds an account: sends the address and password, empties both fields, keeps the button off meanwhile, and draws the row as connected", async () => {
+    await openIcloud([]);
+    const add = await mock("icloud_add_account", holds);
+    await addForm("hanako@icloud.com", "abcd-efgh-ijkl-mnop");
+    expect(await waitForCalls(add)).toEqual([{ address: "hanako@icloud.com", password: "abcd-efgh-ijkl-mnop" }]);
+    // The password leaves the field when it is read, before iCloud has answered.
+    await expect($("#icloud-password")).toHaveValue("");
+    await expect($("#icloud-add-button")).toBeDisabled();
+    await release(add, [first]);
+    await waitForText("#icloud-accounts .item-name", first.address);
+    await expect($("#icloud-accounts .status")).toHaveText("接続中");
+    await expect($("#icloud-address")).toHaveValue("");
+    await expect($("#icloud-add-button")).toBeEnabled();
+    // The login just accepted needs no second login to draw the state.
+    expect(await callsOf("icloud_check")).toEqual([]);
+  });
+
+  it("reads the list of mail again after an add, so the mail of the new account shows", async () => {
+    await openIcloud([]);
+    await waitForCount("#unread-threads li", 2);
+    await mock("inbox", withIcloud());
+    await mock("icloud_add_account", [first]);
+    await addForm("hanako@icloud.com", "abcd-efgh-ijkl-mnop");
+    await waitForCalls("inbox");
+    await waitForCount("#unread-threads li", 3);
+  });
+
+  it("drops the rows of an unlinked account at once and reads the list again", async () => {
+    await openIcloud([first], ok, withIcloud());
+    await waitForCount("#unread-threads li", 3);
+    await mock("icloud_remove_account", []);
+    // The read of the list is held, so only what the unlink itself drew can be seen.
+    await mock("inbox", holds);
+    await unlinkOf(first.address).click();
+    await $('[role="alertdialog"]').$("button=解除").click();
+    await waitForCalls("inbox");
+    await waitForCount("#unread-threads li", 2);
+    await release("inbox", inbox());
+    await waitForCount("#unread-threads li", 2);
+  });
+
+  it("shows the failure on a card and leaves the list, the address and an empty password field when iCloud refuses the login", async () => {
+    await openIcloud([first]);
+    await mock("icloud_add_account", rejects("メールアドレスか App 用パスワードが違います"));
+    await addForm("taro@me.com", "wrong-wrong");
+    await expect($(CARD)).toHaveText(expect.stringContaining("メールアドレスか App 用パスワードが違います"));
+    expect(await textsOf("#icloud-accounts .item-name")).toEqual([first.address]);
+    await expect($("#icloud-address")).toHaveValue("taro@me.com");
+    await expect($("#icloud-password")).toHaveValue("");
+    await expect($("#icloud-add-button")).toBeEnabled();
+  });
+
+  it("enters the password of an account again from 入れ直す: the address is put in the form, the password field has the focus, and the add makes the row connected", async () => {
+    await openIcloud([first], lapsed);
+    await waitForText("#icloud-accounts .status", "入れ直しが必要");
+    // A script click: the click of WebDriver moves the focus to the button after the handler ran, which a press of the mouse does not.
+    await browser.execute(() => (document.querySelector("#icloud-accounts .text-btn") as HTMLElement).click());
+    await expect($("#icloud-address")).toHaveValue(first.address);
+    expect(await browser.execute(() => document.activeElement?.id)).toBe("icloud-password");
+    const add = await mock("icloud_add_account", [first]);
+    await $("#icloud-password").setValue("new-new-new-new");
+    await $("#icloud-add-button").click();
+    expect(await waitForCalls(add)).toEqual([{ address: first.address, password: "new-new-new-new" }]);
+    await waitForText("#icloud-accounts .status", "接続中");
+    await expect($("#icloud-accounts").$("button=入れ直す")).not.toExist();
+    expect(await textsOf("#icloud-accounts .item-name")).toEqual([first.address]);
+  });
+
+  it("asks before unlinking: キャンセル sends nothing, 解除 calls icloud_remove_account with the address and draws the rest", async () => {
+    await openIcloud([first, second]);
+    await waitForText("#icloud-accounts .status", "接続中");
+    const remove = await mock("icloud_remove_account", [second]);
+    await unlinkOf(first.address).click();
+    const dialog = $('[role="alertdialog"]');
+    await expect(dialog).toHaveText(expect.stringContaining("App 用パスワードをつなぎAIから削除します。iCloud のメールは残ります。"));
+    await dialog.$("button=キャンセル").click();
+    await expect(dialog).not.toBeDisplayed();
+    expect(await callsOf(remove)).toEqual([]);
+    await unlinkOf(first.address).click();
+    await $('[role="alertdialog"]').$("button=解除").click();
+    expect(await waitForCalls(remove)).toEqual([{ address: first.address }]);
+    await waitForText("#icloud-accounts .item-name", second.address);
+    expect(await textsOf("#icloud-accounts .item-name")).toEqual([second.address]);
+  });
+
+  it("shows a card and keeps the row when the removal fails", async () => {
+    await openIcloud([first]);
+    await waitForText("#icloud-accounts .status", "接続中");
+    await mock("icloud_remove_account", rejects("資格情報の削除に失敗"));
+    await unlinkOf(first.address).click();
+    await $('[role="alertdialog"]').$("button=解除").click();
+    await expect($(CARD)).toHaveText(expect.stringContaining("資格情報の削除に失敗"));
+    expect(await textsOf("#icloud-accounts .item-name")).toEqual([first.address]);
+  });
+
+  it("draws the last answer of a read that was asked again, not the one that was overtaken", async () => {
+    await openIcloud([first], holds);
+    await waitForCalls("icloud_check");
+    await mock("icloud_accounts", [second]);
+    await mock("icloud_check", ok);
+    await openTab("log");
+    await openTab("icloud");
+    await waitForText("#icloud-accounts .item-name", second.address);
+    expect(await textsOf("#icloud-accounts .item-name")).toEqual([second.address]);
+  });
+});
+
 describe("settings: tabs", () => {
   const tab = (name: Tab) => $(`#settings-tab-${name}`);
   const panel = (name: Tab) => $(`#settings-panel-${name}`);
@@ -2366,7 +2563,7 @@ describe("settings: tabs", () => {
       key,
     );
 
-  it("has the twelve tabs in order, in a tablist, each controlling the card it names", async () => {
+  it("has the tabs in order, in a tablist, each controlling the card it names", async () => {
     await openSettings([]);
     await expect($("#settings-tabs")).toHaveAttribute("role", "tablist");
     expect(await textsOf('#settings-tabs [role="tab"]')).toEqual(TABS.map(([, label]) => label));
@@ -2403,8 +2600,8 @@ describe("settings: tabs", () => {
   it("moves to the next tab with the right arrow and the previous one with the left, from the last to the first and back", async () => {
     await openSettings([]);
     await pressArrow("ArrowRight");
-    expect(await selected()).toEqual(["settings-tab-calendar"]);
-    await expect(panel("calendar")).toBeDisplayed();
+    expect(await selected()).toEqual(["settings-tab-icloud"]);
+    await expect(panel("icloud")).toBeDisplayed();
     await expect(panel("google")).not.toBeDisplayed();
     await pressArrow("ArrowLeft");
     await pressArrow("ArrowLeft");
@@ -2418,7 +2615,7 @@ describe("settings: tabs", () => {
     await openSettings([]);
     const focused = () => browser.execute(() => document.activeElement?.id);
     await pressArrow("ArrowRight");
-    expect(await focused()).toBe("settings-tab-calendar");
+    expect(await focused()).toBe("settings-tab-icloud");
     await pressArrow("ArrowLeft");
     await pressArrow("ArrowLeft");
     expect(await focused()).toBe("settings-tab-log");

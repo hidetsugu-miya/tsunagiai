@@ -32,8 +32,8 @@ function readBase64(file: File): Promise<string> {
   });
 }
 
-// `zone` takes dropped and pasted files, `open` (the clip) picks them in the dialog, and `strip` holds the chips (hidden while there is none). A failure shows on the card `card` (A-28).
-export function mailAttachments(zone: HTMLElement, strip: HTMLElement, open: HTMLButtonElement, card: string) {
+// `zone` takes dropped and pasted files, `open` (the clip) picks them in the dialog, and `strip` holds the chips (hidden while there is none). A failure shows on the card `card` (A-28). `account` is the account the mail goes from, whose backend sets the limit of the files (M-13).
+export function mailAttachments(zone: HTMLElement, strip: HTMLElement, open: HTMLButtonElement, card: string, account: () => string) {
   let held: Held[] = [];
   let lastId = 0;
   let busy = false;
@@ -77,7 +77,7 @@ export function mailAttachments(zone: HTMLElement, strip: HTMLElement, open: HTM
       for (const file of files) {
         if (at !== epoch) return;
         const name = file.name || "file";
-        await invoke("mail_attach_check", { name, size: file.size, held: total() });
+        await invoke("mail_attach_check", { account: account(), name, size: file.size, held: total() });
         const data = await readBase64(file);
         if (at !== epoch) return;
         held.push({ id: ++lastId, name, size: file.size, data });
@@ -87,7 +87,7 @@ export function mailAttachments(zone: HTMLElement, strip: HTMLElement, open: HTM
   );
   open.onclick = () =>
     enqueue(async (at) => {
-      const picked = await invoke("mail_attach_pick", { held: total() });
+      const picked = await invoke("mail_attach_pick", { account: account(), held: total() });
       if (at !== epoch) return;
       held.push(...picked.map((p) => ({ id: ++lastId, name: p.name, size: p.size, data: p.data })));
       draw();

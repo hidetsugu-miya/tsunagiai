@@ -4,4 +4,12 @@ import type { ThreadItem } from "./ThreadItem";
 /**
  * What one `sync` found, to apply to the list of that account.
  */
-export type Sync = { "kind": "unchanged" } | { "kind": "changed", threads: Array<ThreadItem>, removed: Array<string>, historyId: string, } | { "kind": "reloaded", threads: Array<ThreadItem>, historyId: string, } | { "kind": "needsLogin" };
+export type Sync = { "kind": "unchanged" } | { "kind": "changed", threads: Array<ThreadItem>, removed: Array<string>, 
+/**
+ * Where the next `sync` starts (see `Inbox::history_ids`).
+ */
+historyId: string, } | { "kind": "reloaded", threads: Array<ThreadItem>, 
+/**
+ * Where the next `sync` starts (see `Inbox::history_ids`).
+ */
+historyId: string, } | { "kind": "needsLogin" };

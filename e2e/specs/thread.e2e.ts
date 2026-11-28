@@ -1,4 +1,4 @@
-import { account, boot, callsOf, claudeKeyReady, claudeLoggedOut, claudeReady, connection, count, holds, inbox, mock, onceId, rejects, release, rowOf, textsOf, threadDetail, threadLoaded, waitForCalls, waitForCount, CARDS, CARD, waitForCard, waitForLog } from "../support";
+import { account, boot, callsOf, claudeKeyReady, icloudAccount, icloudInbox, claudeLoggedOut, claudeReady, connection, count, holds, inbox, mock, onceId, rejects, release, rowOf, textsOf, threadDetail, threadLoaded, waitForCalls, waitForCount, CARDS, CARD, waitForCard, waitForLog } from "../support";
 import type { HeldThread } from "../../ts/bindings/HeldThread";
 import type { ThreadRefresh } from "../../ts/bindings/ThreadRefresh";
 
@@ -146,6 +146,57 @@ describe("thread", () => {
 });
 
 // M-2: an HTML body is drawn in its frame, whose document this page reads. WebKit calls no listener inside it, so the checks read the document the way `routeLinks` does.
+// M-13: a thread of an iCloud account is opened, marked read and acted on with the iCloud address as the account.
+describe("thread of an iCloud account", () => {
+  beforeEach(async () => {
+    await boot({ inbox: icloudInbox(), icloud_accounts: [{ address: icloudAccount }] });
+    await waitForCount("#unread-threads li", 2);
+  });
+
+  it("opens an unread thread with the iCloud address and marks it read with set_read", async () => {
+    const open = await mock("thread", threadDetail("First unread", "Hello from Alice", true));
+    const setRead = await mock("set_read", true);
+    await rowOf("unread-threads", "First unread").$(".subject").click();
+    await threadLoaded();
+    await expect($("#messages .plain")).toHaveText("Hello from Alice");
+    expect(await waitForCalls(open)).toContainEqual({ account: icloudAccount, id: "i1" });
+    expect(await waitForCalls(setRead)).toContainEqual({ account: icloudAccount, id: "i1", read: true });
+    await waitForCount("#unread-threads li", 1);
+  });
+
+  it("sends a reply with the iCloud address as the account and the iCloud thread's ID", async () => {
+    await mock("thread", threadDetail("First unread", "Hello from Alice", false));
+    const send = await mock("send_mail", true);
+    await rowOf("unread-threads", "First unread").$(".subject").click();
+    await threadLoaded();
+    await $("#mail-reply-open").click();
+    const field = $("#mail-reply-body-input .ProseMirror");
+    await browser.waitUntil(async () => (await field.getAttribute("contenteditable")) === "true");
+    await field.click();
+    await browser.keys("Thanks".split(""));
+    await $("#mail-reply-send").click();
+    const [call] = await waitForCalls(send);
+    expect(call).toMatchObject({ account: icloudAccount, mail: { subject: "First unread", body: "Thanks\n", markdown: true, replyThreadId: "i1" } });
+  });
+
+  it("archives and trashes the open thread with the iCloud address", async () => {
+    await mock("thread", threadDetail("First unread", "Hello from Alice", true));
+    await mock("set_read", true);
+    const archive = await mock("archive", true);
+    const trash = await mock("trash", true);
+    await rowOf("unread-threads", "First unread").$(".subject").click();
+    await threadLoaded();
+    await $("#archive").click();
+    expect(await waitForCalls(archive)).toEqual([{ account: icloudAccount, id: "i1" }]);
+    await expect($("#threads")).toBeDisplayed();
+    await rowOf("unread-threads", "Second unread").$(".subject").click();
+    await threadLoaded();
+    await $("#trash").click();
+    expect(await waitForCalls(trash)).toEqual([{ account: icloudAccount, id: "i2" }]);
+    await expect($("#threads")).toBeDisplayed();
+  });
+});
+
 describe("thread HTML body", () => {
   beforeEach(async () => {
     await boot({ inbox: inbox() });

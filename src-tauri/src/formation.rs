@@ -488,11 +488,63 @@ fn check_child_name(config: &Path, formation: &str, name: &str) -> Result<(), St
     check_name(name)?;
     migrate_legacy(config)?;
     let formations = formation_names(config, Some(formation));
+    let others = other_records(config, formation, &formations)?;
+    name_conflict(name, &formations, &others)
+}
+
+/// The records of the formations other than `formation`, in order of name. A record that is there and cannot be read is an error.
+fn other_records(
+    config: &Path,
+    formation: &str,
+    formations: &[String],
+) -> Result<Vec<(String, Vec<Child>)>, String> {
     let mut others = Vec::new();
     for other in formations.iter().filter(|f| *f != formation) {
         others.push((other.clone(), read_record(config, other)?));
     }
-    name_conflict(name, &formations, &others)
+    Ok(others)
+}
+
+/// The worktree that a new child gets is named `{formation}-{child}` (`worktree_name`), and both names may hold `-`, so the children of two formations can come to one name (`web` with `api-1`, and `web-api` with `1`). Orca refuses a second worktree of a name in a repository (`worktree_create_exact_name_taken`) and does not say whose the first is, so the launch looks before it makes anything.
+fn check_worktree_name(
+    config: &Path,
+    formation: &str,
+    environment: &str,
+    repo: &str,
+    name: &str,
+) -> Result<(), String> {
+    migrate_legacy(config)?;
+    let formations = formation_names(config, Some(formation));
+    let others = other_records(config, formation, &formations)?;
+    worktree_name_conflict(formation, environment, repo, name, &others)
+}
+
+/// `others` are the children of the formations other than `formation`. Only a child whose worktree tsunagiai made (`Launch::created`) holds a name, and only in its own repository of its own environment: a planned child has no worktree, a child in a folder that was there made none, and another repository or another PC has a folder of its own.
+fn worktree_name_conflict(
+    formation: &str,
+    environment: &str,
+    repo: &str,
+    name: &str,
+    others: &[(String, Vec<Child>)],
+) -> Result<(), String> {
+    let wanted = worktree_name(formation, name);
+    let holder = others.iter().find_map(|(other, children)| {
+        children
+            .iter()
+            .find(|c| {
+                c.environment == environment
+                    && c.repo == repo
+                    && c.launch.as_ref().is_some_and(|l| l.created)
+                    && worktree_name(other, &c.name) == wanted
+            })
+            .map(|c| (other, &c.name))
+    });
+    match holder {
+        Some((other, child)) => Err(format!(
+            "worktree の名前「{wanted}」が、フォーメーション「{other}」の子「{child}」の worktree と同じになるので、作れません。子の名前を変えてください"
+        )),
+        None => Ok(()),
+    }
 }
 
 /// `others` are the children of the formations other than the one the child is for.
@@ -2184,6 +2236,7 @@ pub fn launch(
             (folder.to_owned(), branch, false, false, 0)
         }
         Target::NewWorktree { branch, base } => {
+            check_worktree_name(config, formation, environment, &repo.name, name)?;
             let worktree_base = worktree_base(config, environment)
                 .map_err(|e| Refusal::failed(STEP_WORKTREE_BASE, e))?;
             prepare_repo(repo, &worktree_base, environment, &|args| orca::write(args))?;
@@ -5708,6 +5761,95 @@ mod tests {
         }
         assert!(name_conflict("a1", &formations, &others).is_ok());
         assert!(name_conflict("alpha-2", &formations, &others).is_ok());
+    }
+
+    fn worktree_name_taken(
+        formation: &str,
+        environment: &str,
+        repo: &str,
+        name: &str,
+        others: &[(String, Vec<Child>)],
+    ) -> Result<(), String> {
+        worktree_name_conflict(formation, environment, repo, name, others)
+    }
+
+    #[test]
+    fn two_formations_that_make_one_worktree_name_are_told_which_child_has_it() {
+        let others = vec![("web".to_owned(), vec![launched("api-1", "r")])];
+        // `web` with `api-1` and `web-api` with `1` are both `web-api-1`.
+        let err = worktree_name_taken("web-api", LOCAL, "r", "1", &others).unwrap_err();
+        assert!(
+            err.contains("「web-api-1」") && err.contains("「web」") && err.contains("「api-1」"),
+            "{err}"
+        );
+        assert!(err.contains("子の名前を変えてください"), "{err}");
+        // The other way round: the later formation is `web`, and the earlier one `web-api`.
+        let others = vec![("web-api".to_owned(), vec![launched("1", "r")])];
+        assert!(worktree_name_taken("web", LOCAL, "r", "api-1", &others).is_err());
+        // Names that differ do not meet.
+        assert!(worktree_name_taken("web-api", LOCAL, "r", "2", &others).is_ok());
+        assert!(worktree_name_taken("web", LOCAL, "r", "api-2", &others).is_ok());
+    }
+
+    #[test]
+    fn a_worktree_name_is_held_only_in_its_own_repository_and_environment_by_a_worktree_tsunagiai_made(
+    ) {
+        let held = |child: Child| vec![("web".to_owned(), vec![child])];
+        let on_pc = |child| in_environment(child, "pc");
+        // Another repository, or another PC, has a folder of its own.
+        let others = held(launched("api-1", "r"));
+        assert!(worktree_name_taken("web-api", LOCAL, "other", "1", &others).is_ok());
+        assert!(worktree_name_taken("web-api", "pc", "r", "1", &others).is_ok());
+        assert!(worktree_name_taken(
+            "web-api",
+            "pc",
+            "r",
+            "1",
+            &held(on_pc(launched("api-1", "r")))
+        )
+        .is_err());
+        assert!(worktree_name_taken(
+            "web-api",
+            LOCAL,
+            "r",
+            "1",
+            &held(on_pc(launched("api-1", "r")))
+        )
+        .is_ok());
+        // A planned child has no worktree, and a child in a folder that was there made none.
+        assert!(
+            worktree_name_taken("web-api", LOCAL, "r", "1", &held(planned("api-1", "r"))).is_ok()
+        );
+        let mut in_folder = launched("api-1", "r");
+        in_folder.launch.as_mut().unwrap().created = false;
+        assert!(worktree_name_taken("web-api", LOCAL, "r", "1", &held(in_folder)).is_ok());
+    }
+
+    #[test]
+    fn the_children_of_the_formation_itself_do_not_meet_in_a_worktree_name() {
+        let config = temp_dir("worktree-names");
+        write_children(&config, "web", &[launched("api-1", "r")]).unwrap();
+        write_children(&config, "web-api", &[launched("2", "r")]).unwrap();
+        // Its own children have the one prefix and differ in the child's name, as `check_child_name` keeps them.
+        assert!(check_worktree_name(&config, "web", LOCAL, "r", "api-1").is_ok());
+        let err = check_worktree_name(&config, "web-api", LOCAL, "r", "1").unwrap_err();
+        assert!(
+            err.contains("「web」") && err.contains("「api-1」"),
+            "{err}"
+        );
+        assert!(check_worktree_name(&config, "web-api", LOCAL, "other", "1").is_ok());
+        // A formation that has no folder yet is counted as the one asking, and reads nothing of its own.
+        assert!(check_worktree_name(&config, "web-api-x", LOCAL, "r", "1").is_ok());
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_broken_record_of_another_formation_stops_a_worktree_name_from_being_taken() {
+        let config = temp_dir("worktree-names-broken");
+        std::fs::create_dir_all(dir(&config, "beta")).unwrap();
+        std::fs::write(dir(&config, "beta").join(CHILDREN_FILE), "not json").unwrap();
+        assert!(check_worktree_name(&config, "alpha", LOCAL, "r", "n").is_err());
+        std::fs::remove_dir_all(&config).unwrap();
     }
 
     #[test]
