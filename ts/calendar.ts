@@ -124,8 +124,17 @@ function eventButton(className: string, e: AllDayItem | TimedItem) {
   return b;
 }
 
-function eventBox(e: TimedItem) {
+// When the event ends, in ms, kept on its node for `drawPast`: a timed item's end on its own day, and the end of the last day of an all-day event (the day of the item for a cache of an older version, which has no end).
+const timedEndAt = (weekStart: string, e: TimedItem) => {
+  const d = addDays(weekStart, e.day);
+  d.setMinutes(e.endMin);
+  return d.getTime();
+};
+const allDayEndAt = (weekStart: string, e: AllDayItem) => addDays(/^\d{4}-\d{2}-\d{2}$/.test(e.end) ? e.end : isoDate(addDays(weekStart, e.day)), 1).getTime();
+
+function eventBox(e: TimedItem, weekStart: string) {
   const box = eventButton(`cal-event${responseClass(e.response)}`, e);
+  box.dataset.endAt = String(timedEndAt(weekStart, e));
   box.style.top = `${(e.startMin / 60) * HOUR_PX}px`;
   box.style.height = `${(Math.max(e.endMin - e.startMin, MIN_EVENT_MIN) / 60) * HOUR_PX - 1}px`;
   box.style.left = `${(e.col / e.cols) * 100}%`;
@@ -143,12 +152,21 @@ function eventBox(e: TimedItem) {
   return box;
 }
 
-function allDayChip(e: AllDayItem) {
+function allDayChip(e: AllDayItem, weekStart: string) {
   const c = eventButton(`cal-chip${responseClass(e.response)}`, e);
+  c.dataset.endAt = String(allDayEndAt(weekStart, e));
   c.textContent = e.summary || "(件名なし)";
   c.style.setProperty("--c", eventColor(e));
   c.title = `${e.summary}\n${e.account}`;
   return c;
+}
+
+// Fades the events that have ended (C-1), at each draw of the week and at each tick of the clock.
+function drawPast() {
+  const now = Date.now();
+  document.querySelectorAll<HTMLElement>("[data-end-at]").forEach((n) => {
+    n.classList.toggle("past", Number(n.dataset.endAt) <= now);
+  });
 }
 
 // The current-time line in today's column and its label in the time gutter, if the shown week holds today.
@@ -213,7 +231,7 @@ function renderWeek(w: Week) {
       const cell = el("cal-cell");
       // An empty place of the band makes an all-day event (C-5); a chip is the detail's own.
       cell.onclick = (e) => e.target === cell && openCreate(w.weekStart, i, true, 0);
-      cell.append(...w.allDay.filter((e) => e.day === i).map(allDayChip));
+      cell.append(...w.allDay.filter((e) => e.day === i).map((e) => allDayChip(e, w.weekStart)));
       return cell;
     }),
   );
@@ -229,11 +247,12 @@ function renderWeek(w: Week) {
       const col = el("cal-col");
       // An empty place of the column makes an event of the hour pressed (C-5); an event box is the detail's own.
       col.onclick = (e) => e.target === col && openCreate(w.weekStart, i, false, Math.floor((e.clientY - col.getBoundingClientRect().top) / HOUR_PX) * 60);
-      col.append(...w.timed.filter((e) => e.day === i).map(eventBox));
+      col.append(...w.timed.filter((e) => e.day === i).map((e) => eventBox(e, w.weekStart)));
       return col;
     }),
   );
   drawNow();
+  drawPast();
   // An account that must log in again is told by a card, once, until it has logged in.
   setRelogin("calendar", w.needsLogin, (a) => `${a} はカレンダーを読むため再ログインが必要です`, addAccount);
   // A detail open on an event of the old draw follows it into this one.
@@ -393,6 +412,7 @@ export function initCalendar() {
     () => {
       if (currentScreen() !== "calendar") return;
       drawNow();
+      drawPast();
       refreshCalendarDay();
     },
     60000,

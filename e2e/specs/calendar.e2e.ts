@@ -1,5 +1,5 @@
 import type { Week } from "../../ts/bindings/Week";
-import { account, boot, calendarChoices, callsOf, copiedTexts, count, holds, inbox, isoDate, meetUrl, mock, ownedCalendars, rejects, release, rfc, stubClipboard, textsOf, waitForCalls, waitForCard, waitForCount, waitForText, weekOfToday, CARD, CARDS, WARN_CARDS } from "../support";
+import { account, boot, calendarChoices, callsOf, copiedTexts, count, holds, inbox, isoDate, meetUrl, mock, ownedCalendars, rejects, release, rfc, setClock, stubClipboard, textsOf, waitForCalls, waitForCard, waitForCount, waitForText, weekOfToday, CARD, CARDS, WARN_CARDS } from "../support";
 
 // The button of the event (a timed box or an all-day chip) with `title`.
 const eventButton = (title: string) => $(`//button[contains(@class, "cal-event") or contains(@class, "cal-chip")][contains(., "${title}")]`);
@@ -1003,5 +1003,80 @@ describe("calendar: create an event", () => {
     await waitForCount(".cal-draft", 1);
     await expect($(".cal-draft")).toHaveText(expect.stringContaining("Kickoff"));
     await expect($('.cal-create [aria-label="タイトル"]')).toHaveValue("Kickoff");
+  });
+});
+
+describe("calendar: events that have ended", () => {
+  // Today is the fourth column (day 3), so a day lies before it and a day after it; the page's clock reads today at 12:00.
+  const first = (new Date().getDay() + 4) % 7;
+  const dayDate = (day: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() + day - 3);
+    return isoDate(d);
+  };
+  const pastWeek = (): Week => {
+    const base = weekOfToday(first);
+    const [sync, lunch, unanswered] = base.timed;
+    const [holiday] = base.allDay;
+    return {
+      ...base,
+      allDay: [
+        holiday,
+        { ...holiday, day: 2, summary: "Yesterday off", end: dayDate(2) },
+        { ...holiday, day: 2, summary: "Trip", end: dayDate(4) },
+      ],
+      timed: [
+        sync,
+        lunch,
+        unanswered,
+        { ...sync, day: 2, startMin: 900, endMin: 960, summary: "Yesterday talk" },
+        { ...lunch, day: 2, summary: "Declined yesterday", response: "declined" },
+        { ...sync, day: 4, startMin: 480, endMin: 540, summary: "Tomorrow talk" },
+      ],
+    };
+  };
+  const openPastWeek = async () => {
+    await boot({ inbox: inbox(), calendar_week: pastWeek() });
+    await setClock(`${isoDate(new Date())}T12:00:00`);
+    await $("#nav-calendar").click();
+    await waitForText("#cal-body .cal-name", "Team sync");
+  };
+
+  it("fades a timed event that ended before now, today's and a day before's, and not one that is on or ahead", async () => {
+    await openPastWeek();
+    await expect(eventButton("Team sync")).toHaveElementClass("past");
+    await expect(eventButton("Yesterday talk")).toHaveElementClass("past");
+    await expect(eventButton("Maybe lunch")).not.toHaveElementClass("past");
+    await expect(eventButton("Unanswered")).not.toHaveElementClass("past");
+    await expect(eventButton("Tomorrow talk")).not.toHaveElementClass("past");
+  });
+
+  it("fades an all-day event whose last day is before today, and not one of today or one that goes on", async () => {
+    await openPastWeek();
+    await expect(eventButton("Yesterday off")).toHaveElementClass("past");
+    await expect(eventButton("Holiday")).not.toHaveElementClass("past");
+    // The chip of the day before today, of an event whose last day is tomorrow.
+    await expect(eventButton("Trip")).not.toHaveElementClass("past");
+  });
+
+  it("keeps a declined event declined when it has ended", async () => {
+    await openPastWeek();
+    await expect(eventButton("Declined yesterday")).toHaveElementClass("past");
+    await expect(eventButton("Declined yesterday")).toHaveElementClass("declined");
+  });
+
+  it("fades an event that ends by the time a week is drawn again", async () => {
+    await openPastWeek();
+    await expect(eventButton("Maybe lunch")).not.toHaveElementClass("past");
+    // Another week is drawn, and then the week kept for today is drawn again at the later time.
+    await mock("calendar_week", { ...weekOfToday(first), weekStart: dayDate(7), allDay: [], timed: [] });
+    await $("#cal-next").click();
+    await waitForCount("#cal-body .cal-event", 0);
+    await setClock(`${isoDate(new Date())}T13:30:00`);
+    await mock("calendar_week", pastWeek());
+    await $("#cal-today").click();
+    await waitForText("#cal-body .cal-name", "Team sync");
+    await expect(eventButton("Maybe lunch")).toHaveElementClass("past");
+    await expect(eventButton("Unanswered")).not.toHaveElementClass("past");
   });
 });
