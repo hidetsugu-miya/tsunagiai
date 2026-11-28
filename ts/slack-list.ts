@@ -7,6 +7,7 @@
 // The list is read at startup and again every `refreshSecs` while the window is visible, on whatever screen (the Slack button's badge follows it); showing the screen reads it only when no read is on its way and the one held is older than `refreshSecs`.
 // Socket Mode (S-16) makes it again from Rust's cache when an event was read, and reads it in full when a connection is made.
 // A read on another screen draws nothing of the list (it is drawn when the screen is shown) and never calls `show()`.
+import type { SideChannel } from "./bindings/SideChannel";
 import type { SideWorkspace } from "./bindings/SideWorkspace";
 import type { Timeline } from "./bindings/Timeline";
 import type { TimelineMessage } from "./bindings/TimelineMessage";
@@ -20,6 +21,7 @@ import { invoke } from "./ipc.js";
 import { screenOn, whileOn } from "./menu-state.js";
 import { setScreen } from "./nav.js";
 import { closeSlackChannel, openSlackChannel, redrawSlackChannel, revealSlackChannel, selectedChannel } from "./slack-channel.js";
+import { openNewDmMenu } from "./slack-dm-new.js";
 import { drawSlackSide, type SlackSection } from "./slack-side.js";
 import { attachmentNode, blocksNode, slackLinkNode } from "./slack-blocks.js";
 import { richNodes } from "./slack-rich.js";
@@ -128,10 +130,39 @@ function drawBadge() {
   drawSide();
 }
 
-// The side menu (S-19), while the Slack screen is shown (the list or a thread).
+// The workspaces whose direct-message subsection is folded (S-31, memory only).
+const dmFoldedTeams = new Set<string>();
+
+// The side menu (S-19, S-31), while the Slack screen is shown (the list or a thread).
 function drawSide() {
   if ($("slack-screen").hidden) return;
-  drawSlackSide({ section, unread: unreadCount, channel: selectedChannel(), workspaces: timeline?.side ?? [], folded: [...foldedTeams] }, { choose: chooseSection, open: openChannel, hide: hideChannel, fold: foldWorkspace });
+  drawSlackSide(
+    {
+      section,
+      unread: unreadCount,
+      channel: selectedChannel(),
+      workspaces: timeline?.side ?? [],
+      folded: [...foldedTeams],
+      dmFolded: [...dmFoldedTeams],
+    },
+    { choose: chooseSection, open: openChannel, hide: hideChannel, fold: foldWorkspace, foldDm, newDm },
+  );
+}
+
+function foldDm(teamId: string) {
+  if (!dmFoldedTeams.delete(teamId)) dmFoldedTeams.add(teamId);
+  drawSide();
+}
+
+function newDm(teamId: string, team: string, anchor: HTMLElement) {
+  openNewDmMenu(anchor, teamId, team, (dm: SideChannel) => {
+    const ws = timeline?.side.find((w) => w.teamId === teamId);
+    if (ws && !ws.channels.some((c) => c.id === dm.id)) {
+      ws.channels.push(dm);
+    }
+    dmFoldedTeams.delete(teamId);
+    openChannel(teamId, team, dm);
+  });
 }
 
 // The heading of a workspace in the side menu was pressed: fold it, or open it again.
@@ -222,7 +253,7 @@ async function saveHidden(command: "slack_hide_channel" | "slack_unhide_channel"
 
 // Keeps the channel off the list, from a row (S-9) or from the side menu (S-19): its rows and its place in the side menu go at once, Rust saves it, and the notice offers to undo it.
 // The list is made again from Rust's cache, which asks Slack nothing (rows that fill the place come from the messages held); on a failed save the rows and the channel come back the same way.
-async function hideChannel(teamId: string, channel: string, channelName: string) {
+async function hideChannel(teamId: string, channel: string, channelName: string, dm = false) {
   // The channel whose history is shown goes from the menu: the list is shown instead.
   if (selectedChannel() === `${teamId}/${channel}`) {
     const shown = !$("slack-channel").hidden;
@@ -230,7 +261,8 @@ async function hideChannel(teamId: string, channel: string, channelName: string)
     if (shown) revealSlackList();
   }
   dropChannel(teamId, channel);
-  if (await saveHidden("slack_hide_channel", teamId, channel)) toast(`#${channelName} を一覧に出さないようにしました`, { label: "元に戻す", run: () => unhideChannel(teamId, channel) });
+  const label = dm ? channelName : `#${channelName}`;
+  if (await saveHidden("slack_hide_channel", teamId, channel)) toast(`${label} を一覧に出さないようにしました`, { label: "元に戻す", run: () => unhideChannel(teamId, channel) });
   load(true);
 }
 
@@ -311,7 +343,8 @@ function rowOf(m: TimelineMessage, key: string, grouped: boolean, open?: (m: Tim
     dot.style.background = workspaceColor(m.team);
     dot.title = m.team;
     avatar.append(dot);
-    meta.append(tag("b", "", m.name), tag("span", "", `#${m.channelName}`));
+    const channelLabel = m.channelKind ? m.channelName : `#${m.channelName}`;
+    meta.append(tag("b", "", m.name), tag("span", "", channelLabel));
   }
   const main = tag("div", "feed-main");
   // A thread that was not read yet, or cannot be, has no message to show.
@@ -326,7 +359,8 @@ function rowOf(m: TimelineMessage, key: string, grouped: boolean, open?: (m: Tim
   const press = tag("button", "feed-open");
   press.type = "button";
   press.dataset.key = key;
-  press.setAttribute("aria-label", `${m.name} #${m.channelName} ${note ?? m.text.trim().slice(0, 80)}`);
+  const ariaChan = m.channelKind ? m.channelName : `#${m.channelName}`;
+  press.setAttribute("aria-label", `${m.name} ${ariaChan} ${note ?? m.text.trim().slice(0, 80)}`);
   // A thread that cannot be read has nothing to open; its bookmark lets it go.
   press.disabled = status === "unreadable";
   press.onclick = (e) => (open ? open(m) : openRow(m, e));
@@ -410,9 +444,9 @@ function readRow(m: TimelineMessage) {
 // Whether pressing "既読にする" changes something (the pane of the footer draws it only then, A-35): its position can be set (the token may write it) and it has an unread message, or it has unread replies, or it is a watched thread that was read and has new replies.
 function readable(m: TimelineMessage) {
   if (m.unreadReplies) return true;
-  if (!m.watch) return m.unread && canWrite(m.teamId);
+  if (!m.watch) return m.unread && canWrite(m.teamId, m.channel, m.channelKind);
   if (m.watch.newReplies > 0 || m.watch.uncounted) return true;
-  return m.watch.status === "ok" && !!m.watch.unreadTo && canWrite(m.teamId);
+  return m.watch.status === "ok" && !!m.watch.unreadTo && canWrite(m.teamId, m.channel, m.channelKind);
 }
 
 // "既読にする": it reads the row without opening the thread. The position of the channel is one, so the older rows of the channel are read too (as S-8 says for a press on the row).
@@ -472,7 +506,7 @@ async function readChannel(c: UnreadChannel) {
 }
 
 // Whether reading the channel changes something: the token of its workspace may write the position and a message is unread, or a thread of it has unread replies (S-14, which need no scope).
-const readChanges = (c: UnreadChannel) => (c.to !== null && canWrite(c.teamId)) || c.threads.length > 0;
+const readChanges = (c: UnreadChannel) => (c.to !== null && canWrite(c.teamId, c.channel)) || c.threads.length > 0;
 
 // The unread replies of the channel's threads count as read here: the rows go at once (one that is still unread itself, when the token cannot write the position, stays without them) and the badge drops by them.
 function seeChannelReplies(teamId: string, channel: string, threads: UnreadChannel["threads"]) {
@@ -500,7 +534,7 @@ function markRead(m: TimelineMessage): Promise<unknown> | undefined {
 
 // Sets the read position of the channel to `to` at once on the screen and tells Slack (`slack_mark_read`). Nothing is sent when the token cannot write the position.
 function moveRead(teamId: string, channel: string, to: string): Promise<unknown> | undefined {
-  if (!timeline || !canWrite(teamId)) return undefined;
+  if (!timeline || !canWrite(teamId, channel)) return undefined;
   const moves = (x: TimelineMessage) => x.unread && x.teamId === teamId && x.channel === channel && notAfter(x.ts, to);
   const movedWatched = timeline.watched.filter(moves).length;
   const moved = timeline.messages.filter(moves).length + movedWatched;
@@ -535,9 +569,16 @@ function moveRead(teamId: string, channel: string, to: string): Promise<unknown>
   return sent;
 }
 
-// Whether the token of a workspace cannot set the read position (`channels:write` or `groups:write` missing).
-const lacksWrite = (x: { scopes: string[] }) => x.scopes.some((s) => s === "channels:write" || s === "groups:write");
-const canWrite = (teamId: string) => !timeline?.missing.some((x) => x.teamId === teamId && lacksWrite(x));
+// Whether the token of a workspace cannot set the read position for the given conversation kind.
+const kindOf = (teamId: string, channel?: string, hint?: SideChannel["kind"]) =>
+  hint ?? (channel ? timeline?.side.find((w) => w.teamId === teamId)?.channels.find((c) => c.id === channel)?.kind : undefined);
+const lacksWriteFor = (x: { scopes: string[] }, kind: SideChannel["kind"]) => {
+  if (kind === "im") return x.scopes.includes("im:write");
+  if (kind === "mpim") return x.scopes.includes("mpim:write");
+  return x.scopes.some((s) => s === "channels:write" || s === "groups:write");
+};
+const canWrite = (teamId: string, channel?: string, hint?: SideChannel["kind"]) =>
+  !timeline?.missing.some((x) => x.teamId === teamId && lacksWriteFor(x, kindOf(teamId, channel, hint)));
 
 // Whether the Slack timestamp `a` is not after `b`, compared as numbers (seconds, then microseconds), not as text.
 function notAfter(a: string, b: string) {
@@ -687,7 +728,16 @@ function groupsOf(messages: TimelineMessage[]) {
 function channelHead(first: TimelineMessage, info: UnreadChannel | undefined, priv: boolean) {
   const head = tag("div", "feed-chan");
   const mark = tag("span", "feed-chan-ic");
-  mark.innerHTML = priv ? LOCK_SVG : HASH_SVG;
+  if (first.channelKind === "mpim") {
+    mark.append(tag("span", "slack-dm-mpim", String(first.channelMemberCount ?? 2)));
+  } else if (first.channelKind === "im") {
+    const av = tag("span", "avatar slack-dm-av");
+    decorateAvatar(av, first.channelName, first.channelIconUrl ?? null);
+    mark.append(av);
+    loadIcons([first.channelIconUrl ?? null]);
+  } else {
+    mark.innerHTML = priv ? LOCK_SVG : HASH_SVG;
+  }
   const dot = tag("i", "feed-ws feed-chan-ws");
   dot.style.background = workspaceColor(first.team);
   head.append(mark, tag("b", "feed-chan-name", first.channelName), dot, tag("span", "feed-chan-team", first.team));
@@ -744,7 +794,7 @@ function unreadNodes(messages: TimelineMessage[], privates: Set<string>, day0: s
     const first = rows[0];
     const info = infos.get(key);
     const priv = privates.has(key);
-    const head = kept(`c/${key}`, JSON.stringify([first.team, first.channelName, priv, info?.messages, info?.to, info?.threads.length, canWrite(first.teamId)]), () => channelHead(first, info, priv));
+    const head = kept(`c/${key}`, JSON.stringify([first.team, first.channelName, first.channelKind, first.channelIconUrl, first.channelMemberCount, priv, info?.messages, info?.to, info?.threads.length, canWrite(first.teamId, first.channel)]), () => channelHead(first, info, priv));
     const nodes: HTMLElement[] = [head];
     let day = "";
     for (const m of rows) {

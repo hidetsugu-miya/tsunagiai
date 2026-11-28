@@ -24,6 +24,10 @@ export const OPTIONAL_KINDS: Record<string, string> = {
   "files:read": "添付画像",
   "channels:write": "公開チャンネルの既読の同期（チャンネルの管理権限も含みます）",
   "groups:write": "非公開チャンネルの既読の同期（チャンネルの管理権限も含みます）",
+  "im:read": "ダイレクトメッセージの一覧",
+  "mpim:read": "グループ DM の一覧",
+  "im:write": "ダイレクトメッセージの既読の同期と新規作成",
+  "mpim:write": "グループ DM の既読の同期と新規作成",
   "emoji:read": "カスタム絵文字のリアクションの画像",
   "reactions:write": "リアクションの付け外し",
 };

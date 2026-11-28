@@ -380,7 +380,7 @@ export function openSlackThread(m: TimelineMessage) {
     drawThreadClaude();
   }
   note(null);
-  $("st-channel").textContent = `#${m.channelName}`;
+  $("st-channel").textContent = m.channelKind ? m.channelName : `#${m.channelName}`;
   $("st-team").textContent = m.team;
   const link = $("st-open");
   const href = secure(m.permalink);
