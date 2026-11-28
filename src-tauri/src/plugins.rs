@@ -102,6 +102,36 @@ pub fn figma_permissions(dir: &Path) -> Value {
     crate::formation_assets::figma_permissions_of(&figma_plugins(dir))
 }
 
+/// The `permissions.deny` rule that stops the agents of a formation from changing the owner's plugins (A-41): Claude Code's `Edit` rule covers every built-in tool that edits files (Edit, Write, MultiEdit, NotebookEdit), and `//` before the path makes it an absolute one (Claude Code's documentation of permissions, "How path patterns match"). The leader and the children run in the auto mode and load the folder with `--plugin-dir`, so a hook or an MCP server that one of them wrote there would run in every later start and be sent to the PCs of saved environments. A folder whose path holds a character of the pattern syntax or of the rule's own (`(`, `)`, `*`, `?`, `[`, `]`, `\\`, `!`, `#`, a control character) is refused: the rule would not name it.
+pub fn edit_deny_rule(dir: &Path) -> Result<String, String> {
+    let path = dir
+        .to_str()
+        .map(|text| text.trim_end_matches('/'))
+        .filter(|text| text.starts_with('/'))
+        .filter(|text| {
+            !text.chars().any(|c| {
+                c.is_control() || matches!(c, '(' | ')' | '*' | '?' | '[' | ']' | '\\' | '!' | '#')
+            })
+        })
+        .ok_or_else(|| {
+            format!(
+                "プラグインのフォルダの場所を、権限の規則に書けません: {}",
+                dir.display()
+            )
+        })?;
+    Ok(format!("Edit(/{path}/**)"))
+}
+
+/// The `permissions` of the settings of a leader or of a Claude Code child (A-41): the Figma rules (`figma_permissions`) and the rule that denies editing the plugins' folder `dir` (`edit_deny_rule`).
+pub fn agent_permissions(dir: &Path) -> Result<Value, String> {
+    let mut permissions = figma_permissions(dir);
+    let rule = edit_deny_rule(dir)?;
+    if let Some(deny) = permissions["deny"].as_array_mut() {
+        deny.push(Value::String(rule));
+    }
+    Ok(permissions)
+}
+
 /// One plugin of the folder (A-51): `folder` is its folder's name, `name` is the name Claude Code calls it by (`manifest_name`, else the folder's), `path` is where the folder is, for the head of the file tree (`~/.local/share/tsunagiai/plugins/{folder}`), and `skills` are the folders of `skills/` that hold a `SKILL.md`, by name.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
@@ -278,7 +308,9 @@ fn too_large() -> String {
 }
 
 /// The text of the file `relative` for the editor: the whole file as UTF-8 up to `FILE_MAX`, with LF line ends (`crlf` says it has CRLF), its language and its signature. A file that is too large, is not UTF-8 or holds a NUL (a binary file), and one whose line ends are mixed, is refused in Japanese.
-fn read_file(root: &Path, relative: &str) -> Result<OrcaFileText, String> {
+///
+/// A file whose signature is `known` (the editor's reread of a text it holds already, every few seconds) is answered with no content: the signature alone, an empty `content` and `language`, and `crlf` false, so that the text does not cross to the screen for nothing, which keeps what it has when the signature is the one it holds.
+fn read_file(root: &Path, relative: &str, known: Option<&str>) -> Result<OrcaFileText, String> {
     let path = resolve(root, relative, false)?.ok_or("ファイルが見つかりません")?;
     let meta = std::fs::metadata(&path).map_err(|e| format!("{relative} を読めません: {e}"))?;
     if !meta.is_file() {
@@ -292,7 +324,16 @@ fn read_file(root: &Path, relative: &str) -> Result<OrcaFileText, String> {
     if text.contains('\0') {
         return Err("バイナリのファイルは開けません".to_owned());
     }
-    editor_text(&text, relative, signature_of(&text))
+    let signature = signature_of(&text);
+    if known == Some(signature.as_str()) {
+        return Ok(OrcaFileText {
+            content: String::new(),
+            crlf: false,
+            signature,
+            language: String::new(),
+        });
+    }
+    editor_text(&text, relative, signature)
 }
 
 /// Saves `content` (LF line ends; `crlf` brings the file's own back) over the file `relative` when the disk still holds the text whose signature is `signature`: else nothing is written and the state says why (`changed`: another text, `missing`: no file, `not-utf8`). The text goes to a temporary file beside the file and is renamed over it, so a failed write leaves the file as it was, and the file keeps its mode.
@@ -382,10 +423,14 @@ pub async fn plugin_files(folder: String, dir: String) -> Result<Vec<PluginEntry
         .map_err(|e| e.to_string())?
 }
 
-/// The text of the file `path` of the plugin `folder` (A-51) for the editor, with its signature; a file that is too large or is not text is refused in Japanese.
+/// The text of the file `path` of the plugin `folder` (A-51) for the editor, with its signature; a file that is too large or is not text is refused in Japanese. With `known`, the signature that the editor holds, a file that still has it is answered with no content (`read_file_unless`).
 #[tauri::command]
-pub async fn plugin_file_read(folder: String, path: String) -> Result<OrcaFileText, String> {
-    tokio::task::spawn_blocking(move || read_file(&plugin_root(&folder)?, &path))
+pub async fn plugin_file_read(
+    folder: String,
+    path: String,
+    known: Option<String>,
+) -> Result<OrcaFileText, String> {
+    tokio::task::spawn_blocking(move || read_file(&plugin_root(&folder)?, &path, known.as_deref()))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -408,6 +453,11 @@ pub async fn plugin_file_write(
 
 #[cfg(test)]
 mod tests {
+    /// `read_file` with no signature held.
+    fn read_text(root: &Path, relative: &str) -> Result<OrcaFileText, String> {
+        read_file(root, relative, None)
+    }
+
     use super::*;
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -469,6 +519,50 @@ mod tests {
             .unwrap_err()
             .contains("を作れません"));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_agents_may_not_edit_the_plugins_folder_and_a_path_the_rule_cannot_name_is_refused() {
+        assert_eq!(
+            edit_deny_rule(Path::new("/Users/x/.local/share/tsunagiai/plugins")).unwrap(),
+            "Edit(//Users/x/.local/share/tsunagiai/plugins/**)"
+        );
+        assert_eq!(
+            edit_deny_rule(Path::new("/Users/x/My Files/plugins/")).unwrap(),
+            "Edit(//Users/x/My Files/plugins/**)"
+        );
+        for bad in [
+            "plugins",
+            "",
+            "/Users/x (old)/plugins",
+            "/Users/x/*/plugins",
+            "/Users/x/[a]/plugins",
+            "/Users/x/a\\b",
+            "/Users/x/!y",
+            "/Users/x/#y",
+            "/Users/x/a\nb",
+        ] {
+            assert!(edit_deny_rule(Path::new(bad)).is_err(), "{bad:?}");
+        }
+        // The rule joins the Figma ones: the lists of a plugin that has the server, then the Edit rule.
+        let dir = temp_dir("agent-permissions");
+        assert_eq!(
+            agent_permissions(&dir).unwrap(),
+            serde_json::json!({"allow": [], "deny": [edit_deny_rule(&dir).unwrap()]})
+        );
+        plugin(&dir, "client-a", Some(r#"{"mcpServers": {"figma": {}}}"#));
+        let permissions = agent_permissions(&dir).unwrap();
+        assert_eq!(permissions["allow"], figma_permissions(&dir)["allow"]);
+        let deny = permissions["deny"].as_array().unwrap();
+        assert_eq!(
+            deny.len(),
+            figma_permissions(&dir)["deny"].as_array().unwrap().len() + 1
+        );
+        assert_eq!(
+            deny.last().unwrap(),
+            &Value::String(edit_deny_rule(&dir).unwrap())
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -816,8 +910,8 @@ mod tests {
         std::os::unix::fs::symlink(root.join("inner"), root.join("dir-in")).unwrap();
         std::os::unix::fs::symlink("nowhere", root.join("dangling")).unwrap();
         // Out: read, list and write are all refused, and the file outside is left as it was.
-        assert!(read_file(&root, "file-out").unwrap_err().contains("の外"));
-        assert!(read_file(&root, "dir-out/o.md")
+        assert!(read_text(&root, "file-out").unwrap_err().contains("の外"));
+        assert!(read_text(&root, "dir-out/o.md")
             .unwrap_err()
             .contains("の外"));
         assert!(list_dir(&root, "dir-out").unwrap_err().contains("の外"));
@@ -831,10 +925,10 @@ mod tests {
             "secret"
         );
         // In: followed.
-        assert_eq!(read_file(&root, "file-in").unwrap().content, "in");
-        assert_eq!(read_file(&root, "dir-in/in.md").unwrap().content, "in");
+        assert_eq!(read_text(&root, "file-in").unwrap().content, "in");
+        assert_eq!(read_text(&root, "dir-in/in.md").unwrap().content, "in");
         // A link that leads nowhere is no file.
-        assert!(read_file(&root, "dangling")
+        assert!(read_text(&root, "dangling")
             .unwrap_err()
             .contains("見つかりません"));
         // The list shows each link as what it leads to, and a link that leaves is still listed (it cannot be opened).
@@ -906,17 +1000,26 @@ mod tests {
                 ("empty.md", ""),
             ],
         );
-        let skill = read_file(&root, "skills/x/SKILL.md").unwrap();
+        let skill = read_text(&root, "skills/x/SKILL.md").unwrap();
         assert_eq!(skill.content, "---\nname: x\n---\n");
         assert_eq!(skill.language, "markdown");
         assert!(!skill.crlf);
         assert_eq!(skill.signature, signature_of("---\nname: x\n---\n"));
-        assert_eq!(read_file(&root, ".mcp.json").unwrap().language, "json");
+        assert_eq!(read_text(&root, ".mcp.json").unwrap().language, "json");
         // CRLF is given as LF, and the signature is the disk's.
-        let crlf = read_file(&root, "crlf.md").unwrap();
+        let crlf = read_text(&root, "crlf.md").unwrap();
         assert_eq!((crlf.content.as_str(), crlf.crlf), ("a\nb\n", true));
         assert_eq!(crlf.signature, signature_of("a\r\nb\r\n"));
-        assert_eq!(read_file(&root, "empty.md").unwrap().content, "");
+        assert_eq!(read_text(&root, "empty.md").unwrap().content, "");
+        // A reread with the signature the editor holds gets no text back, and any other signature gets the text.
+        let same = read_file(&root, "crlf.md", Some(crlf.signature.as_str())).unwrap();
+        assert_eq!(same.signature, crlf.signature);
+        assert_eq!((same.content.as_str(), same.language.as_str()), ("", ""));
+        let other = read_file(&root, "crlf.md", Some("old")).unwrap();
+        assert_eq!(other.content, "a\nb\n");
+        assert_eq!(other.language, crlf.language);
+        // A file that cannot be read is an error with the signature too.
+        assert!(read_file(&root, "none.md", Some("x")).is_err());
         // SHA-256 of "abc".
         assert_eq!(
             signature_of("abc"),
@@ -935,32 +1038,32 @@ mod tests {
         std::fs::write(root.join("bin.dat"), b"a\0b").unwrap();
         std::fs::write(root.join("big.md"), vec![b'a'; FILE_MAX + 1]).unwrap();
         std::fs::write(root.join("limit.md"), vec![b'a'; FILE_MAX]).unwrap();
-        assert!(read_file(&root, "latin.md").unwrap_err().contains("UTF-8"));
-        assert!(read_file(&root, "bin.dat")
+        assert!(read_text(&root, "latin.md").unwrap_err().contains("UTF-8"));
+        assert!(read_text(&root, "bin.dat")
             .unwrap_err()
             .contains("バイナリ"));
-        assert!(read_file(&root, "big.md").unwrap_err().contains("2 MiB"));
+        assert!(read_text(&root, "big.md").unwrap_err().contains("2 MiB"));
         assert_eq!(
-            read_file(&root, "limit.md").unwrap().content.len(),
+            read_text(&root, "limit.md").unwrap().content.len(),
             FILE_MAX
         );
-        assert!(read_file(&root, "mixed.md")
+        assert!(read_text(&root, "mixed.md")
             .unwrap_err()
             .contains("改行コード"));
-        assert!(read_file(&root, "dir")
+        assert!(read_text(&root, "dir")
             .unwrap_err()
             .contains("ファイルではありません"));
-        assert!(read_file(&root, "none.md")
+        assert!(read_text(&root, "none.md")
             .unwrap_err()
             .contains("見つかりません"));
-        assert!(read_file(&root, "../x").is_err());
+        assert!(read_text(&root, "../x").is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn a_save_writes_the_text_when_the_disk_is_as_it_was_read() {
         let root = plugin_with("write", &[("a.md", "one\n"), ("crlf.md", "a\r\nb\r\n")]);
-        let read = read_file(&root, "a.md").unwrap();
+        let read = read_text(&root, "a.md").unwrap();
         let saved = write_file(&root, "a.md", "two\n", false, &read.signature).unwrap();
         assert_eq!(saved.state, OrcaSaveState::Saved);
         assert_eq!(std::fs::read_to_string(root.join("a.md")).unwrap(), "two\n");
@@ -969,7 +1072,7 @@ mod tests {
         let again = write_file(&root, "a.md", "three\n", false, &saved.signature).unwrap();
         assert_eq!(again.state, OrcaSaveState::Saved);
         // The line ends of the file come back.
-        let crlf = read_file(&root, "crlf.md").unwrap();
+        let crlf = read_text(&root, "crlf.md").unwrap();
         let saved = write_file(&root, "crlf.md", "a\nb\nc\n", crlf.crlf, &crlf.signature).unwrap();
         assert_eq!(saved.state, OrcaSaveState::Saved);
         assert_eq!(
@@ -990,7 +1093,7 @@ mod tests {
     #[test]
     fn a_save_is_refused_and_writes_nothing_when_the_disk_changed_or_the_file_is_gone() {
         let root = plugin_with("write-refused", &[("a.md", "one\n"), ("x/b.md", "b")]);
-        let stale = read_file(&root, "a.md").unwrap().signature;
+        let stale = read_text(&root, "a.md").unwrap().signature;
         std::fs::write(root.join("a.md"), "changed elsewhere\n").unwrap();
         let refused = write_file(&root, "a.md", "mine\n", false, &stale).unwrap();
         assert_eq!(refused.state, OrcaSaveState::Changed);
@@ -1029,7 +1132,7 @@ mod tests {
         let root = plugin_with("write-mode", &[("run.sh", "echo 1\n")]);
         std::fs::set_permissions(root.join("run.sh"), std::fs::Permissions::from_mode(0o755))
             .unwrap();
-        let read = read_file(&root, "run.sh").unwrap();
+        let read = read_text(&root, "run.sh").unwrap();
         write_file(&root, "run.sh", "echo 2\n", false, &read.signature).unwrap();
         let mode = std::fs::metadata(root.join("run.sh"))
             .unwrap()

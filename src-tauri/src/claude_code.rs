@@ -367,8 +367,8 @@ fn write_files(
     Ok(dir.join(script))
 }
 
-/// Writes `CLAUDE.md`, `mcp.json`, the launch script (which gives the leader the folder of the owner's plugins, `plugins`, made when it is missing, A-41) and an empty `.claude/settings.json` in `formations/{name}/` of `config`, removes the skill `.claude/skills/feature-dev/` that an older version wrote, and answers the script's path. The other files of the folder stay. `mcp.json` names the formation (`--formation {name}`), so that the tools of `tsunagiai-mcp` read and write the record of that formation only.
-/// The orchestrator reads the project settings of its folder (`--setting-sources user,project`), and it can write there in auto mode: the settings are made empty at each start, so a permission or a hook it added does not stay for the next one.
+/// Writes `CLAUDE.md`, `mcp.json`, the launch script (which gives the leader the folder of the owner's plugins, `plugins`, made when it is missing, A-41) and `.claude/settings.json` (only the rule that denies editing `plugins`) in `formations/{name}/` of `config`, removes the skill `.claude/skills/feature-dev/` that an older version wrote, and answers the script's path. The other files of the folder stay. `mcp.json` names the formation (`--formation {name}`), so that the tools of `tsunagiai-mcp` read and write the record of that formation only.
+/// The orchestrator reads the project settings of its folder (`--setting-sources user,project`: the `.claude/settings.json` of its working folder, which is this folder), and it can write there in auto mode: the settings are made again at each start, so a permission or a hook it added does not stay for the next one. They hold the rule `Edit(//{plugins}/**)` of `permissions.deny` (`plugins::edit_deny_rule`), so that the leader, which loads `plugins` with `--plugin-dir`, cannot put a hook or an MCP server there that every later start would run.
 fn write_formation_files(
     config: &Path,
     name: &str,
@@ -388,7 +388,7 @@ fn write_formation_files(
         SCRIPT_FILE,
         &formation_script(claude, &dir.join(MCP_FILE), name, plugins),
     )?;
-    write_empty_settings(&dir.join(".claude"))?;
+    write_leader_settings(&dir.join(".claude"), plugins)?;
     remove_old_leader_skill(&dir.join(".claude"))?;
     Ok(dir.join(SCRIPT_FILE))
 }
@@ -443,14 +443,18 @@ fn drop_link(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Writes `{}` as `settings.json` in `claude_dir`. The orchestrator can write in its folder, so a link it placed there (the folder, the file or its temporary file) is removed first, and what it leads to is not written.
-fn write_empty_settings(claude_dir: &Path) -> Result<(), String> {
+/// Writes the leader's `settings.json` in `claude_dir`: the deny rule for editing `plugins`. The orchestrator can write in its folder, so a link it placed there (the folder, the file or its temporary file) is removed first, and what it leads to is not written.
+fn write_leader_settings(claude_dir: &Path, plugins: &Path) -> Result<(), String> {
+    let settings = serde_json::to_string_pretty(&serde_json::json!({
+        "permissions": {"deny": [crate::plugins::edit_deny_rule(plugins)?]}
+    }))
+    .map_err(|e| e.to_string())?;
     drop_link(claude_dir)?;
     std::fs::create_dir_all(claude_dir)
         .map_err(|e| format!("{} を作れません: {e}", claude_dir.display()))?;
     drop_link(&claude_dir.join("settings.json.tmp"))?;
     drop_link(&claude_dir.join("settings.json"))?;
-    crate::accounts::write_atomic(claude_dir, "settings.json", "{}")
+    crate::accounts::write_atomic(claude_dir, "settings.json", &settings)
 }
 
 /// Removes `skills/feature-dev/` of `claude_dir`, which an older version wrote as the leader's skill (A-41); the other skills stay, and a link is removed and never followed. A link in the place of `skills/` is removed first, as for the settings, so that what it leads to is not touched.
@@ -1677,6 +1681,14 @@ mod tests {
     }
 
     #[cfg(unix)]
+    /// The settings of a leader whose plugins' folder is `config/plugins`: the one deny rule.
+    fn leader_settings_text(config: &Path) -> String {
+        serde_json::to_string_pretty(&serde_json::json!({
+            "permissions": {"deny": [format!("Edit(/{}/**)", config.join("plugins").display())]}
+        }))
+        .unwrap()
+    }
+
     #[test]
     fn the_orchestrators_settings_are_written_where_a_link_of_its_own_would_not_lead() {
         use std::os::unix::fs::symlink;
@@ -1705,7 +1717,7 @@ mod tests {
             .is_symlink());
         assert_eq!(
             std::fs::read_to_string(dir.join(".claude/settings.json")).unwrap(),
-            "{}"
+            leader_settings_text(&config)
         );
         assert_eq!(
             std::fs::read_to_string(elsewhere.join("settings.json")).unwrap(),
@@ -1724,7 +1736,7 @@ mod tests {
         }
         assert_eq!(
             std::fs::read_to_string(dir.join(".claude/settings.json")).unwrap(),
-            "{}"
+            leader_settings_text(&config)
         );
         assert!(!dir.join(".claude/settings.json.tmp").exists());
         std::fs::remove_dir_all(config).unwrap();
@@ -1776,7 +1788,7 @@ mod tests {
         );
         assert_eq!(
             std::fs::read_to_string(dir.join(".claude/settings.json")).unwrap(),
-            "{}"
+            leader_settings_text(&config)
         );
         assert!(!dir.join(".claude/settings.json.tmp").exists());
         assert_eq!(

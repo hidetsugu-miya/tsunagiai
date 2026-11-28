@@ -1138,12 +1138,12 @@ fn child_settings_file(name: &str) -> String {
     format!("settings-{name}.json")
 }
 
-/// The settings that a Claude Code child's `--settings` takes: the `permissions` for the Figma server of its plugins (`permissions`, A-41, #1162), because the child runs in the auto mode. No hook records its messages: they are read from the Run of Orca (#1238).
+/// The settings that a Claude Code child's `--settings` takes: the `permissions` for the Figma server of its plugins (A-41, #1162) and the rule that denies editing the plugins' folder (`plugins::edit_deny_rule`), because the child runs in the auto mode. No hook records its messages: they are read from the Run of Orca (#1238).
 fn child_settings(permissions: &Value) -> String {
     serde_json::to_string_pretty(&json!({ "permissions": permissions })).unwrap_or_default()
 }
 
-/// Writes the settings of a Claude Code child in the folder of its formation and answers its path: the Figma permissions of each plugin of `plugins` that has the server (`plugins::figma_permissions`), made at each launch. A Codex child has none.
+/// Writes the settings of a Claude Code child in the folder of its formation and answers its path: the Figma permissions of each plugin of `plugins` that has the server and the rule that denies editing `plugins` (`plugins::agent_permissions`), made at each launch. A Codex child has none.
 fn write_child_settings(
     config: &Path,
     formation: &str,
@@ -1155,7 +1155,7 @@ fn write_child_settings(
     accounts::write_atomic(
         &folder,
         &file,
-        &child_settings(&crate::plugins::figma_permissions(plugins)),
+        &child_settings(&crate::plugins::agent_permissions(plugins)?),
     )?;
     Ok(folder.join(file))
 }
@@ -1270,7 +1270,7 @@ fn write_child_files_in(
     accounts::write_atomic(
         &folder,
         &file,
-        &child_settings(&crate::plugins::figma_permissions(&plugins)),
+        &child_settings(&crate::plugins::agent_permissions(&plugins)?),
     )?;
     Ok((plugins, folder.join(file)))
 }
@@ -4915,7 +4915,7 @@ fn terminal_is_gone(
 
 /// The terminal of the orchestrator of `formation`, a formation of a saved environment (A-37): the one the file records when it is still in that Orca's `terminal list` (of every terminal), else a new one. With `restart` the recorded one is closed first, so that the new one starts Claude Code again; one that cannot be closed and is still listed stops the restart, because a new terminal beside it would run a second orchestrator.
 /// A new terminal is made in the floating terminal of that PC's Orca (`FLOATING_WORKTREE`), titled with the formation's name, running `orchestrator_command` with the address of that PC (`host_of`: where the server of A-37 listens), which gives the projects to Claude Code as its first instruction (every project in `local`, as the orchestrator of this Mac has it). The app does not wait for Claude Code and sends it nothing: Claude Code first asks whether to trust the folder (its answer is No, exit), and the owner answers that in the terminal the screen shows, as in the pane of this Mac (A-36), which nothing here answers. Only when the terminal is made and its handle is written in `formation.json` (the screen's polls read the PC's record only of a formation that has one, `Meta::orchestrator_terminal`) does the start succeed; a terminal whose handle cannot be recorded is closed, so none is left running with no record. A recorded handle that is no longer listed stays in the file until the new one replaces it, so that the children the orchestrator launched stay in the screen's reads when the start fails. When Claude Code ends, the terminal ends with it (`orchestrator_command` replaces the login shell), so it leaves that list and the next ask makes a new one (#943).
-/// Before a new terminal is made, `send_plugins` puts the owner's plugins of this PC on that PC (`formation_remote::send_plugins`): a failure stops the start with nothing made.
+/// Before a new terminal is made, `send_plugins` puts the owner's plugins of this PC on that PC (`formation_remote::send_plugins`): a failure stops the start with nothing made. A restart sends them before the leader that runs is closed, so a failure leaves that leader running.
 /// A formation of this Mac has no such terminal (its orchestrator runs in a pseudo terminal of the app): it is refused.
 fn start_orchestrator_with(
     config: &Path,
@@ -4952,6 +4952,10 @@ fn start_orchestrator_with(
     } else {
         None
     };
+    // A restart sends the plugins before it closes the leader that runs, so a failed send leaves that leader as it is.
+    if restart {
+        send_plugins(environment).map_err(failed)?;
+    }
     if let Some(handle) = &meta.orchestrator_terminal {
         let list = read(&all_terminals_args(environment)).map_err(failed)?;
         if restart {
@@ -4977,8 +4981,10 @@ fn start_orchestrator_with(
         None => host_of(environment).map_err(failed)?,
     };
     let create = orchestrator_create_args(formation, environment, &repos, &host)?;
-    // The owner's plugins of this PC are on that PC before the leader starts, which reads them with `--plugin-dir` (#1535).
-    send_plugins(environment).map_err(failed)?;
+    // The owner's plugins of this PC are on that PC before the leader starts, which reads them with `--plugin-dir` (#1535). A restart sent them already.
+    if !restart {
+        send_plugins(environment).map_err(failed)?;
+    }
     let made = write(&create).map_err(failed)?;
     let handle = orca::created_of(&made)
         .handle
@@ -6294,7 +6300,7 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
             settings,
-            json!({"permissions": crate::plugins::figma_permissions(&plugins)})
+            json!({"permissions": crate::plugins::agent_permissions(&plugins).unwrap()})
         );
         assert_eq!(
             settings["permissions"]["allow"][0],
@@ -12087,6 +12093,56 @@ mod tests {
     }
 
     #[test]
+    fn a_restart_whose_plugins_cannot_be_sent_leaves_the_leader_that_runs() {
+        let config = temp_dir("orchestrator-restart-plugins");
+        unstarted_remote_formation(&config, "api-work");
+        update_meta(&config, "api-work", |m| {
+            m.orchestrator_terminal = Some("term_old".into());
+        })
+        .unwrap();
+        let mut orca = Stand::new();
+        orca.listed = json!({"terminals": [{"handle": "term_old"}]});
+        let sent = std::cell::Cell::new(0);
+        let start = |restart: bool, fail: bool| {
+            start_orchestrator_with(
+                &config,
+                "api-work",
+                restart,
+                &|args| orca.run(args),
+                &|args| orca.run(args),
+                &|_| Ok(HOST.to_owned()),
+                &|_| {
+                    sent.set(sent.get() + 1);
+                    if fail {
+                        Err("サーバーにつなげません".to_owned())
+                    } else {
+                        Ok(())
+                    }
+                },
+            )
+        };
+        // The send fails: no terminal is closed or made, and the recorded one stays.
+        assert!(start(true, true)
+            .unwrap_err()
+            .contains("サーバーにつなげません"));
+        assert_eq!(sent.get(), 1);
+        assert!(!orca.steps().contains(&"terminal close".to_owned()));
+        assert!(!orca.steps().contains(&"terminal create".to_owned()));
+        assert_eq!(
+            recorded_terminal(&config, "api-work"),
+            Some("term_old".into())
+        );
+        // It succeeds: sent once, before the close, and the new terminal is made.
+        assert_eq!(start(true, false).unwrap().handle, "term_new");
+        assert_eq!(sent.get(), 2);
+        assert_eq!(
+            orca.steps(),
+            ["terminal list", "terminal close", "terminal create"]
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
     fn a_step_that_fails_says_it_in_one_line_and_records_no_terminal() {
         let config = temp_dir("orchestrator-fails");
         unstarted_remote_formation(&config, "api-work");
@@ -13474,7 +13530,11 @@ mod tests {
                 ["permissions"]
                 .clone()
         };
-        assert_eq!(figma(&settings), json!({"allow": [], "deny": []}));
+        // No plugin has the Figma server: the one deny rule is the one that stops the child from editing the plugins' folder.
+        assert_eq!(
+            figma(&settings),
+            json!({"allow": [], "deny": [format!("Edit(/{}/**)", plugins.display())]})
+        );
         // The settings follow the plugins that the PC holds now: one with the Figma server gets its rules.
         std::fs::create_dir_all(plugins.join("client-a/.claude-plugin")).unwrap();
         std::fs::write(
@@ -13492,7 +13552,7 @@ mod tests {
         assert_eq!(again, settings);
         assert_eq!(
             figma(&settings),
-            crate::plugins::figma_permissions(&plugins)
+            crate::plugins::agent_permissions(&plugins).unwrap()
         );
         assert!(figma(&settings)["allow"][0]
             .as_str()

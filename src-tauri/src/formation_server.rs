@@ -476,9 +476,10 @@ struct DropParams {
     names: Vec<String>,
 }
 
-/// `plugins.begin` and `plugins.commit`: the hash of the set of the owner's plugins and its files with their sizes.
+/// `plugins.begin` and `plugins.commit`: the id of the send, the hash of the set of the owner's plugins and its files with their sizes.
 #[derive(Deserialize)]
 struct PluginsBeginParams {
+    id: String,
     mark: String,
     files: Vec<formation_assets::PluginEntry>,
 }
@@ -486,6 +487,7 @@ struct PluginsBeginParams {
 /// `plugins.write`: pieces of files, each at its place in the file, as base64.
 #[derive(Deserialize)]
 struct PluginsWriteParams {
+    id: String,
     mark: String,
     items: Vec<PluginPiece>,
 }
@@ -711,7 +713,7 @@ fn dispatch(
                 Ok(dir) => dir,
                 Err(e) => return Reply::error(e),
             };
-            match formation_assets::plugins_begin(dir, &params.mark, &params.files) {
+            match formation_assets::plugins_begin(dir, &params.id, &params.mark, &params.files) {
                 Ok(same) => Reply::ok(json!({"same": same})),
                 Err(e) => Reply::error(&e),
             }
@@ -736,7 +738,7 @@ fn dispatch(
             else {
                 return bad_params();
             };
-            match formation_assets::plugins_write(dir, &params.mark, &pieces) {
+            match formation_assets::plugins_write(dir, &params.id, &params.mark, &pieces) {
                 Ok(()) => Reply::ok(json!({"written": pieces.len()})),
                 Err(e) => Reply::error(&e),
             }
@@ -749,7 +751,7 @@ fn dispatch(
                 Ok(dir) => dir,
                 Err(e) => return Reply::error(e),
             };
-            match formation_assets::plugins_commit(dir, &params.mark, &params.files) {
+            match formation_assets::plugins_commit(dir, &params.id, &params.mark, &params.files) {
                 Ok(()) => Reply::ok(json!({"replaced": true})),
                 Err(e) => Reply::error(&e),
             }
@@ -1391,8 +1393,15 @@ impl Client {
     pub async fn plugins_send(&mut self, files: &[(String, Vec<u8>)]) -> Result<bool, String> {
         let mark = formation_assets::plugins_mark_of(files);
         let entries = formation_assets::plugin_entries(files);
+        // A send of its own: two sends of one set to one PC at once (two children launched side by side) do not share the folder that the files arrive in.
+        let mut random = [0u8; 16];
+        getrandom::fill(&mut random).map_err(|_| "乱数を作れません".to_owned())?;
+        let id: String = random.iter().map(|b| format!("{b:02x}")).collect();
         let begun = self
-            .call("plugins.begin", json!({"mark": mark, "files": entries}))
+            .call(
+                "plugins.begin",
+                json!({"id": id, "mark": mark, "files": entries}),
+            )
             .await?;
         let same = begun["same"]
             .as_bool()
@@ -1406,7 +1415,7 @@ impl Client {
             let mut offset = 0usize;
             loop {
                 if budget >= PLUGINS_PIECE || batch.len() >= PLUGINS_BATCH {
-                    self.plugins_flush(&mark, &mut batch).await?;
+                    self.plugins_flush(&id, &mark, &mut batch).await?;
                     budget = 0;
                 }
                 let take = (bytes.len() - offset).min(PLUGINS_PIECE - budget);
@@ -1422,20 +1431,31 @@ impl Client {
                 }
             }
         }
-        self.plugins_flush(&mark, &mut batch).await?;
-        self.call("plugins.commit", json!({"mark": mark, "files": entries}))
-            .await?;
+        self.plugins_flush(&id, &mark, &mut batch).await?;
+        self.call(
+            "plugins.commit",
+            json!({"id": id, "mark": mark, "files": entries}),
+        )
+        .await?;
         Ok(true)
     }
 
-    async fn plugins_flush(&mut self, mark: &str, batch: &mut Vec<Value>) -> Result<(), String> {
+    async fn plugins_flush(
+        &mut self,
+        id: &str,
+        mark: &str,
+        batch: &mut Vec<Value>,
+    ) -> Result<(), String> {
         if batch.is_empty() {
             return Ok(());
         }
         let items = std::mem::take(batch);
-        self.call("plugins.write", json!({"mark": mark, "items": items}))
-            .await
-            .map(|_| ())
+        self.call(
+            "plugins.write",
+            json!({"id": id, "mark": mark, "items": items}),
+        )
+        .await
+        .map(|_| ())
     }
 
     /// Stops the server.
@@ -2826,6 +2846,31 @@ mod tests {
         std::fs::remove_dir_all(&served.config).unwrap();
     }
 
+    #[tokio::test]
+    async fn two_sends_of_one_set_at_once_both_succeed_and_leave_nothing_beside() {
+        let served = served("net-plugins-twice").await;
+        let (mut one, mut two) = (served.client().await, served.client().await);
+        let files = vec![
+            ("a/big.bin".to_owned(), vec![7u8; PLUGINS_PIECE * 2 + 1]),
+            ("b.md".to_owned(), b"b".to_vec()),
+        ];
+        let (first, second) = tokio::join!(one.plugins_send(&files), two.plugins_send(&files));
+        first.unwrap();
+        second.unwrap();
+        assert_eq!(
+            std::fs::read(served.plugins.join("a/big.bin")).unwrap(),
+            files[0].1
+        );
+        let beside: Vec<String> = std::fs::read_dir(&served.config)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".owner-plugins."))
+            .collect();
+        assert_eq!(beside, Vec::<String>::new());
+        served.task.abort();
+        std::fs::remove_dir_all(&served.config).unwrap();
+    }
+
     #[test]
     fn a_pc_that_cannot_tell_its_plugins_folder_and_a_bad_request_are_refused() {
         let config = temp_dir("api-plugins");
@@ -2835,11 +2880,12 @@ mod tests {
         };
         let none = Err("環境変数 HOME がありません".to_owned());
         let mark = "0".repeat(64);
+        let id = "1".repeat(32);
         for method in ["plugins.begin", "plugins.write", "plugins.commit"] {
             let params = if method == "plugins.write" {
-                json!({"mark": mark, "items": []})
+                json!({"id": id, "mark": mark, "items": []})
             } else {
-                json!({"mark": mark, "files": []})
+                json!({"id": id, "mark": mark, "files": []})
             };
             let body = call_with(&none, method, params);
             assert_eq!(body["ok"], false, "{method}");
@@ -2855,10 +2901,14 @@ mod tests {
         let body = call_with(
             &here,
             "plugins.write",
-            json!({"mark": mark, "items": [{"path": "a", "offset": 0, "data": "***"}]}),
+            json!({"id": id, "mark": mark, "items": [{"path": "a", "offset": 0, "data": "***"}]}),
         );
         assert_eq!(body["error"], "引数が正しくありません");
-        let body = call_with(&here, "plugins.begin", json!({"mark": "x", "files": []}));
+        let body = call_with(
+            &here,
+            "plugins.begin",
+            json!({"id": id, "mark": "x", "files": []}),
+        );
         assert!(body["error"].as_str().unwrap().contains("ハッシュ"));
         assert!(!config.join("plugins").exists());
         let _ = std::fs::remove_dir_all(&config);

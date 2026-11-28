@@ -3391,6 +3391,42 @@ describe("settings: plugins (the Plugins tab, A-51)", () => {
     expect(await callsOf(read)).toEqual([]);
   });
 
+  it("reads an open file again with the signature it holds and draws the tree again only when a name changed", async () => {
+    await openReadme();
+    // The disk still holds the text: the answer carries no text, and the editor keeps what it has.
+    const read = await mock("plugin_file_read", text("", "sig-1", ""));
+    expect(((await waitForCalls(read))[0] as { known?: string }).known).toBe("sig-1");
+    expect(await shownText()).toBe("# Readme\n");
+    // The rows of the tree stay the same elements while the entries are the same.
+    const mark = () =>
+      browser.execute(() => {
+        const found = document.querySelector('#plugin-tree .plugin-file[data-path="README.md"]');
+        (window as unknown as { __row?: Element }).__row = found ?? undefined;
+        return found !== null;
+      });
+    const same = () => browser.execute(() => (window as unknown as { __row?: Element }).__row === document.querySelector('#plugin-tree .plugin-file[data-path="README.md"]'));
+    expect(await mark()).toBe(true);
+    const files = await mock("plugin_files", TREE[""]);
+    await waitForCalls(files);
+    await browser.pause(300);
+    expect(await same()).toBe(true);
+    // A new name draws it again.
+    await mock("plugin_files", [...TREE[""], entry("NEW.md")]);
+    await waitForCount("#plugin-tree .plugin-file", 5);
+    expect(await same()).toBe(false);
+  });
+
+  it("says on a card which unsaved typing went when its plugin left the folder", async () => {
+    await openReadme();
+    await typeIn("x", ".plugin-edit-body");
+    await mock("plugins_list", [plugin("beta")]);
+    await openTab("google");
+    await openTab("plugins");
+    await waitForCount("#plugin-list .plugin-row", 1);
+    await expect($(CARD)).toHaveText("保存していない変更を破棄しました: alpha/README.md");
+    expect(await count("#plugin-editors .plugin-edit")).toBe(0);
+  });
+
   it("reads nothing while the tab of the settings is left, and again when it is shown", async () => {
     await openTree();
     const files = await mock("plugin_files", TREE[""]);

@@ -155,18 +155,26 @@ async function readTree(folder: string, say: boolean, dirs: string[] = ["", ...t
     ),
   );
   if (trees.get(folder) !== tree) return;
+  // The tree is drawn again only when a name or a kind changed, so the clock does not rebuild it (and drop the focus of a row) every few seconds.
+  let changed = false;
   for (const answer of answers) {
     if (answer.entries !== null) {
+      if (!sameEntries(tree.dirs.get(answer.dir), answer.entries)) changed = true;
       tree.dirs.set(answer.dir, answer.entries);
       continue;
     }
     if (answer.dir !== "") {
+      changed = true;
       tree.expanded.delete(answer.dir);
       tree.dirs.delete(answer.dir);
     }
     if (say) showFailure("plugin-files", answer.error);
   }
-  if (current?.folder === folder) draw();
+  if (changed && current?.folder === folder) draw();
+}
+
+function sameEntries(old: PluginEntry[] | undefined, now: PluginEntry[]) {
+  return old !== undefined && old.length === now.length && old.every((entry, i) => entry.name === now[i].name && entry.folder === now[i].folder);
 }
 
 // Shows the tree of `plugin` (none: no tree). The tree is read when another plugin comes, and again by `reread`.
@@ -177,11 +185,12 @@ export function showTree(plugin: Plugin | null) {
   if (plugin !== null && changed) void readTree(plugin.folder, true);
 }
 
-// The plugin left the folder: its tree and its editors go.
+// The plugin left the folder: its tree and its editors go; typing that was not saved goes with them, and a card says which.
 export function dropPlugin(folder: string) {
   trees.delete(folder);
   for (const [key, ed] of [...editors]) {
     if (ed.folder !== folder) continue;
+    if (ed.dirty) showFailure("plugin-files", `保存していない変更を破棄しました: ${ed.folder}/${ed.relative}`);
     ed.cm?.destroy();
     ed.el.remove();
     editors.delete(key);
@@ -340,7 +349,8 @@ async function reread(ed: Editor) {
   if (ed.read !== "ready" || ed.dirty || ed.writing) return;
   let text: OrcaFileText;
   try {
-    text = await invoke("plugin_file_read", { folder: ed.folder, path: ed.relative });
+    // The signature that the editor holds: a file that still has it comes back with no text.
+    text = await invoke("plugin_file_read", { folder: ed.folder, path: ed.relative, known: ed.signature });
   } catch {
     return;
   }
