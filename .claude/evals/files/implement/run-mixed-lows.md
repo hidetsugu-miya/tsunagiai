@@ -8,3 +8,4 @@
 2. `release-verifier` の返りの、報告だけの指摘は次のとおり。
    - [R-1] `.claude/evals/retrospective.json:15` 1 件目のラベルの assertion が、skill が求めるラベルを許していない。振り分け：`issue`
    - [R-2] `ts/slack.ts:120` 空の返信を送る前に確かめていない。振り分け：`issue`
+3. 開いている「Low:」の issue は無い（`gh issue list --state open --search "Low: in:title"` の結果は空）。

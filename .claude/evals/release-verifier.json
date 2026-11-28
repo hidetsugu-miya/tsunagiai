@@ -45,6 +45,20 @@
         "判定の CI の行と E2E の行が、`check-records.sh` の `不要（…）` の 2 行をそのまま写している",
         "レビューの手順は省かず、判定を `判定: 合格` で始めて記録のスクリプトに stdin で渡している"
       ]
+    },
+    {
+      "id": 4,
+      "name": "report-only-findings-are-sorted-one-line-each-for-per-finding-issues",
+      "prompt": "あなたは release-verifier です。`.claude/agents/release-verifier.md` を読み、`.claude/evals/files/release-verifier/lows-scene.md` の場面について、判定の「止めない指摘（報告のみ）」の行を書き出してください。あわせて、呼び出し側のリードが、マージのあとに `issue` に振り分けた指摘をどう GitHub に載せるかを、この定義が述べているとおりに一行で書いてください。この記録が、あなたの持つ実行の文脈です。コマンドは実行せず、書き出すものをそのまま書いてください。",
+      "expected_output": "R-1 は `issue`、R-2 は `drop`、S-1 は `local` として、1 件 1 行で `path:line` と一行の要旨と振り分けの理由を書く。リードは `issue` の指摘を 1 つの issue にまとめず、1 件ずつ issue にするか、同じ指摘の開いた issue があればそこへのコメントで数える。",
+      "files": [
+        ".claude/evals/files/release-verifier/lows-scene.md"
+      ],
+      "assertions": [
+        "止めない指摘が 1 件 1 行で、R-1 は `issue`、R-2 は `drop`、S-1 は `local` に振り分けられ、それぞれに `path:line` と一行の要旨と一行の理由がある",
+        "S-1（security-reviewer の指摘）を `issue` にしていない",
+        "リードの扱いを、`issue` の指摘ごとに 1 件の issue にする（1 つの issue にまとめない）か、同じ指摘の開いた issue があればそこにコメントで数える、と書いている"
+      ]
     }
   ]
 }

@@ -4,29 +4,31 @@
     {
       "id": 1,
       "name": "harness-only-lows-get-documentation",
-      "prompt": "あなたは implement の実行の手順 5 で PR をマージしたリードです。`.claude/skills/implement/SKILL.md` の手順 5 と、そこが指す `.claude/rules/review.md` の該当節を読み、`.claude/evals/files/implement/run-harness-lows.md` の実行について、手順 5 の「残った Low」の issue を作ってください。この記録が、あなたの持つ実行の文脈です。GitHub には読み書きともに触れないでください。`gh issue create` は実行せずに、打つはずのコマンド、題、ラベル、本文をそのまま書き出してください。`guard-public.sh text` はそのまま実行して構いません。",
-      "expected_output": "`issue` に振り分けた R-1 と R-2 だけを 1 つの issue にまとめ、2 件とも `.claude/evals/` か `.claude/skills/` の中なので `documentation` ラベルを付ける。",
+      "prompt": "あなたは implement の実行の手順 5 で PR をマージしたリードです。`.claude/skills/implement/SKILL.md` の手順 5 と、そこが指す `.claude/rules/review.md` の該当節を読み、`.claude/evals/files/implement/run-harness-lows.md` の実行について、手順 5 の「Low:」の issue を、指摘ごとに作ってください。この記録が、あなたの持つ実行の文脈です。GitHub には読み書きともに触れないでください。`gh issue create` は実行せずに、打つはずのコマンド、題、ラベル、本文をそのまま書き出してください。`guard-public.sh text` はそのまま実行して構いません。",
+      "expected_output": "手順 5 のとおり、作る前に開いている「Low:」の issue から同じ指摘を探す（結果は空）。`issue` に振り分けた R-1 と R-2 を、それぞれ別の issue にする（題は「Low: {path} {要旨}」）。2 件とも `.claude/evals/` か `.claude/skills/` の中なので `documentation` ラベルを付ける。`drop` の R-3 は作らない。",
       "files": [
         ".claude/evals/files/implement/run-harness-lows.md"
       ],
       "assertions": [
-        "`gh issue create` が 1 件だけで、題が「PR #1400 のレビューで残った Low」",
-        "ラベルが `importance:low`、`point:2`、`documentation` で、`point:5` と `point:8` は無い（2 件とも `.claude/evals/` か `.claude/skills/` の中にあるので `documentation` を付ける）",
-        "本文に R-1 と R-2 が ID、`path:line` と要旨つきで入り、`drop` の R-3 は入らない",
+        "`gh issue create` の前に、開いている「Low:」の issue から同じ指摘を探している（`gh issue list --state open --search \"Low: in:title\"`）",
+        "`gh issue create` が 2 件で、題が「Low: 」で始まり、1 件目は `.claude/evals/retrospective.json`、2 件目は `.claude/skills/retrospective/SKILL.md` を含む（「PR #1400 のレビューで残った Low」の 1 件にまとめていない）",
+        "2 件とも、ラベルが `importance:low`、`point:2`、`documentation` で、`point:5` と `point:8` は無い（どちらも `.claude/evals/` か `.claude/skills/` の中にあるので `documentation` を付ける）",
+        "本文に ID、`path:line` と要旨が入り、`drop` の R-3 は issue にも本文にも入らない",
         "本文を `gh` に渡す前に `guard-public.sh text` に通している"
       ]
     },
     {
       "id": 2,
       "name": "a-finding-in-code-gets-no-documentation",
-      "prompt": "あなたは implement の実行の手順 5 で PR をマージしたリードです。`.claude/skills/implement/SKILL.md` の手順 5 と、そこが指す `.claude/rules/review.md` の該当節を読み、`.claude/evals/files/implement/run-mixed-lows.md` の実行について、手順 5 の「残った Low」の issue を作ってください。この記録が、あなたの持つ実行の文脈です。GitHub には読み書きともに触れないでください。`gh issue create` は実行せずに、打つはずのコマンド、題、ラベル、本文をそのまま書き出してください。`guard-public.sh text` はそのまま実行して構いません。",
-      "expected_output": "R-2 が `ts/` の中なので、`documentation` ラベルは付けない。",
+      "prompt": "あなたは implement の実行の手順 5 で PR をマージしたリードです。`.claude/skills/implement/SKILL.md` の手順 5 と、そこが指す `.claude/rules/review.md` の該当節を読み、`.claude/evals/files/implement/run-mixed-lows.md` の実行について、手順 5 の「Low:」の issue を、指摘ごとに作ってください。この記録が、あなたの持つ実行の文脈です。GitHub には読み書きともに触れないでください。`gh issue create` は実行せずに、打つはずのコマンド、題、ラベル、本文をそのまま書き出してください。`guard-public.sh text` はそのまま実行して構いません。",
+      "expected_output": "R-1 と R-2 を別の issue にし、R-2 は `ts/` の中なので `documentation` ラベルは付けない。R-1 は `.claude/evals/` の中なので付ける。",
       "files": [
         ".claude/evals/files/implement/run-mixed-lows.md"
       ],
       "assertions": [
-        "`gh issue create` が 1 件だけで、題が「PR #1401 のレビューで残った Low」",
-        "ラベルに `documentation` が無く、`importance:low` と `point:2` がある"
+        "`gh issue create` が 2 件で、題が「Low: 」で始まり、R-1 の path `.claude/evals/retrospective.json` と R-2 の path `ts/slack.ts` をそれぞれ含む",
+        "R-2 の issue のラベルに `documentation` が無く、`importance:low` と `point:2` がある",
+        "R-1 の issue のラベルに `documentation` と `importance:low` と `point:2` がある"
       ]
     },
     {
@@ -144,14 +146,14 @@
       "id": 11,
       "name": "docs-only-low-goes-to-release-preparer",
       "prompt": "あなたは implement の実行の手順 6 にいるリードです。`.claude/skills/implement/SKILL.md` の手順 6 と手順 7 を読み、`.claude/evals/files/implement/docs-only-low.md` の記録について、手順 6.1 でどの項目を取るか、手順 7 で `release-preparer` を起動する prompt に何を書くかを決めてください。この記録が、あなたの持つ実行の文脈です。起動はせず、コマンドも実行しないでください。GitHub には読み書きともに触れないでください。",
-      "expected_output": "R-1 は `docs/orca.md` だけを指すので、手順 6 では取らず、`fix/pre-release-*` のワークツリーも作らない。手順 7 の `release-preparer` の起動の文に、#1450 と R-1（`docs/orca.md:113`、レビューの文は引用の中）を渡し、Release PR の本文に `Closes #1450` を書かせる。",
+      "expected_output": "#1450 は数が 3（1 + 再指摘 2）で取る数に届くが、指摘は `docs/orca.md` だけを指すので、手順 6 では取らず、`fix/pre-release-*` のワークツリーも作らない。手順 7 の `release-preparer` の起動の文に、#1450 と `docs/orca.md:113`（レビューの文は引用の中）を渡し、Release PR の本文に `Closes #1450` を書かせる。",
       "files": [
         ".claude/evals/files/implement/docs-only-low.md"
       ],
       "assertions": [
-        "手順 6.1 で R-1 を取らず、`use-worktree.sh fix/pre-release-...` も `code-implementer` の起動も打たない（`docs/` だけを指す項目は機能のブランチでは直さない）",
-        "手順 7 の `release-preparer` の起動の文に、#1450 と R-1（`docs/orca.md:113`）を渡している",
-        "R-1 のレビューの文を、引用かデータの囲みの中に入れている（地の文に混ぜない）",
+        "手順 6.1 で #1450 を取らず、`use-worktree.sh fix/pre-release-...` も `code-implementer` の起動も打たない（`docs/` だけを指す項目は機能のブランチでは直さない）",
+        "手順 7 の `release-preparer` の起動の文に、#1450 と `docs/orca.md:113` を渡している",
+        "#1450 のレビューの文を、引用かデータの囲みの中に入れている（地の文に混ぜない）",
         "Release PR の本文に `Closes #1450` を書くことを求めている（Release PR のマージのあとに別に閉じるのではない）"
       ]
     },
@@ -187,27 +189,27 @@
       "id": 14,
       "name": "pre-release-branch-is-new-per-run",
       "prompt": "あなたは implement の実行の手順 6 にいるリードです。`.claude/skills/implement/SKILL.md` の手順 6.2 を読み、`.claude/evals/files/implement/pre-release-branch.md` の記録について、直す項目のために `use-worktree.sh` に渡すブランチ名と、その名前にする理由を決めてください。この記録が、あなたの持つ実行の文脈です。コマンドは実行せず、打つはずのコマンドを書き出してください。",
-      "expected_output": "ブランチ名は実行の日時で作る `fix/pre-release-20261125-2017` で、issue の番号にはしない。理由は、一部を直した issue は一番古いままで、番号の名前がまた出てくるから。",
+      "expected_output": "ブランチ名は実行の日時で作る `fix/pre-release-20261125-2017` で、issue の番号にはしない。理由は、前の実行が残した issue は一番古いままで、番号の名前がまた出てくるから。",
       "files": [
         ".claude/evals/files/implement/pre-release-branch.md"
       ],
       "assertions": [
         "`use-worktree.sh` に渡すブランチ名が `fix/pre-release-20261125-2017`（日付と時刻の形 YYYYMMDD-HHMM）である",
         "ブランチ名に issue の番号（#1455 など）を使っていない",
-        "番号の名前にしない理由を、一部を直した issue は一番古いままで、その名前がまた出てくるからと書いている",
+        "番号の名前にしない理由を、前の実行が残した issue は一番古いままで、その名前がまた出てくるからと書いている",
         "前の実行のブランチ `fix/pre-release-20261124-1030` を使い回していない"
       ]
     },
     {
       "id": 15,
       "name": "low-needing-real-machine-goes-to-owner-question",
-      "prompt": "あなたは implement の実行の手順 5 にいるリードです。`.claude/skills/implement/SKILL.md` の手順 5 と手順 9 を読み、`.claude/evals/files/implement/run-real-machine-low.md` の記録について、マージのあとに作る issue と、手順 9 の報告のオーナーへの質問を書き出してください。この記録が、あなたの持つ実行の文脈です。GitHub には読み書きともに触れないでください。`gh issue create` は実行せずに、打つはずのコマンド、題、ラベル、本文をそのまま書き出してください。`guard-public.sh text` はそのまま実行して構いません。",
-      "expected_output": "「PR #1402 のレビューで残った Low」の issue には、直し方が決まっている R-1 だけを入れる。R-2 は実機の IME の確認が要り AI は回せないので issue に入れず、手順 9 の報告に、オーナーへの質問として `ts/orca-terminal.ts:88` と確かめてほしいことを載せる。",
+      "prompt": "あなたは implement の実行の手順 5 にいるリードです。`.claude/skills/implement/SKILL.md` の手順 5 と手順 9 を読み、`.claude/evals/files/implement/run-real-machine-low.md` の記録について、マージのあとに作る「Low:」の issue と、手順 9 の報告のオーナーへの質問を書き出してください。この記録が、あなたの持つ実行の文脈です。GitHub には読み書きともに触れないでください。`gh issue create` は実行せずに、打つはずのコマンド、題、ラベル、本文をそのまま書き出してください。`guard-public.sh text` はそのまま実行して構いません。",
+      "expected_output": "R-1 だけを「Low: ts/orca-files.ts …」の issue にする。R-2 は実機の IME の確認が要り AI は回せないので issue にせず、手順 9 の報告に、オーナーへの質問として `ts/orca-terminal.ts:88` と確かめてほしいことを載せる。",
       "files": [
         ".claude/evals/files/implement/run-real-machine-low.md"
       ],
       "assertions": [
-        "`gh issue create` が 1 件で、本文に R-1（`ts/orca-files.ts:210`）を含み、R-2（`ts/orca-terminal.ts:88`）を含まない",
+        "`gh issue create` が 1 件で、題が「Low: ts/orca-files.ts」で始まり、本文に R-1（`ts/orca-files.ts:210`）を含み、R-2（`ts/orca-terminal.ts:88`）を含まない。R-2 の issue は作らない",
         "R-2 を、手順 9 の報告の、オーナーへの質問として、`ts/orca-terminal.ts:88` と実機の IME で確かめてほしいことを添えて書いている",
         "R-1 の本文に、直し方（`drop` の受け口の先頭で強調のクラスを外す）を書いている"
       ]
@@ -301,6 +303,22 @@
         "`code-explore` の起動の prompt に、#1740 の題と本文（Orca の一覧の行を描く関数にブランチ名を足す、要件は A-8）が文として入っている（番号だけにしていない）",
         "prompt が、issue を `gh issue view` で読むよう `code-explore` に求めていない（シェルが無いため）",
         "prompt にリポジトリのルート `/work/tsunagiai` と 4 つの問い（実装している箇所、E2E の spec、要件の節、呼び出し元）が入っている"
+      ]
+    },
+    {
+      "id": 22,
+      "name": "repeated-low-is-commented-and-only-count-three-is-taken",
+      "prompt": "あなたは implement の実行の手順 5 にいるリードです。`.claude/skills/implement/SKILL.md` の手順 5 と手順 6.1 を読み、`.claude/evals/files/implement/run-repeat-low.md` の記録について、手順 5 で GitHub に書くこと（打つはずの `gh` のコマンドと、題、ラベル、本文かコメントの本文）と、手順 6.1 で取る Low の issue を決めてください。この記録が、あなたの持つ実行の文脈です。GitHub には読み書きともに触れないでください。`gh` は実行せずに、打つはずのコマンドをそのまま書き出してください。`guard-public.sh text` はそのまま実行して構いません。",
+      "expected_output": "R-1 は開いている #1460 と同じ path で同じ欠陥なので、新しい issue は作らず、#1460 に「再指摘: PR #1500」で始まるコメントを、レビュアーの文を引用に入れて付ける。R-2 はどの issue にも無いので、「Low: ts/slack.ts …」の issue を新しく作る（`importance:low`、`point:2`）。手順 6.1 では、数が 3 の #1460（1 + 再指摘 2、今のコメントを含む）と #1465（1 + 再指摘 2）を取り、数が 1 の #1470 と、今作った R-2 の issue は取らずに開いたままにする。",
+      "files": [
+        ".claude/evals/files/implement/run-repeat-low.md"
+      ],
+      "assertions": [
+        "R-1 を新しい issue にせず、#1460 へのコメント（`gh issue comment 1460`）にしている。本文は「再指摘: PR #1500」で始まり、レビュアーの文を引用の中に入れている",
+        "R-2 は `gh issue create` で作り、題が「Low: ts/slack.ts」で始まり、ラベルが `importance:low` と `point:2` で、`point:5` と `point:8` は無い",
+        "コメントの本文と issue の本文を、`gh` に渡す前に `guard-public.sh text` に通している",
+        "手順 6.1 で、#1460（1 + 2 = 3 で、今のコメントを含めて数える）と #1465（1 + 2 = 3）を取る",
+        "#1470（数は 1）と、今作った R-2 の issue（数は 1）は取らず、開いたまま残すと書いている"
       ]
     }
   ]
