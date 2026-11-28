@@ -12,7 +12,7 @@ use crate::{
 };
 
 /// What runs the mail operations of an account. A kind with no backend has no variant: `backend` refuses it.
-/// An iCloud account reads its mail (M-13, the list and the thread); what else it does comes with the later parts, and each entry below refuses it until then.
+/// An iCloud account reads its mail, changes it (read, archive, delete and their undo) and syncs (M-13); sending comes with a later part, and `send` refuses it until then.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
     Gmail,
@@ -29,6 +29,11 @@ pub fn backend(kind: AccountKind) -> Result<Backend, String> {
 /// What an entry says of an operation that an iCloud account cannot do yet.
 fn icloud_unsupported(what: &str) -> ApiError {
     format!("iCloud のメールの{what}にはまだ対応していません").into()
+}
+
+/// Does the move `how` to the thread `id` of the iCloud account `account`.
+async fn icloud_move(account: &str, id: &str, how: icloud::Move) -> Result<Option<bool>, ApiError> {
+    icloud::change(account, id, icloud::Change::Move(how)).await
 }
 
 /// The backend of `account`, by the kind `accounts.json` gives it.
@@ -59,7 +64,7 @@ pub async fn trash_thread(
 ) -> Result<Option<bool>, ApiError> {
     match backend_of(dir, account)? {
         Backend::Gmail => gmail::trash_thread(dir, auth, account, id).await,
-        Backend::Icloud => Err(icloud_unsupported("削除")),
+        Backend::Icloud => icloud_move(account, id, icloud::Move::Trash).await,
     }
 }
 
@@ -81,7 +86,7 @@ pub async fn untrash_thread(
             }
             gmail::unarchive_thread(dir, auth, account, id).await
         }
-        Backend::Icloud => Err(icloud_unsupported("取り消し")),
+        Backend::Icloud => icloud_move(account, id, icloud::Move::Untrash).await,
     }
 }
 
@@ -93,7 +98,7 @@ pub async fn archive_thread(
 ) -> Result<Option<bool>, ApiError> {
     match backend_of(dir, account)? {
         Backend::Gmail => gmail::archive_thread(dir, auth, account, id).await,
-        Backend::Icloud => Err(icloud_unsupported("アーカイブ")),
+        Backend::Icloud => icloud_move(account, id, icloud::Move::Archive).await,
     }
 }
 
@@ -105,7 +110,7 @@ pub async fn unarchive_thread(
 ) -> Result<Option<bool>, ApiError> {
     match backend_of(dir, account)? {
         Backend::Gmail => gmail::unarchive_thread(dir, auth, account, id).await,
-        Backend::Icloud => Err(icloud_unsupported("取り消し")),
+        Backend::Icloud => icloud_move(account, id, icloud::Move::Unarchive).await,
     }
 }
 
@@ -118,7 +123,7 @@ pub async fn set_thread_read(
 ) -> Result<Option<bool>, ApiError> {
     match backend_of(dir, account)? {
         Backend::Gmail => gmail::set_thread_read(dir, auth, account, id, read).await,
-        Backend::Icloud => Err(icloud_unsupported("既読の変更")),
+        Backend::Icloud => icloud::change(account, id, icloud::Change::Read(read)).await,
     }
 }
 
@@ -183,8 +188,8 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// Every operation that an iCloud account cannot do yet is refused before it builds a request: no token is read and nothing is sent.
-    /// (`fetch_thread` is not here: it reads the keychain and asks iCloud.)
+    /// Sending, which an iCloud account cannot do yet, is refused before it builds a request: no token is read and nothing is sent.
+    /// (The reads and the changes are not here: they read the keychain and ask iCloud.)
     #[test]
     fn the_operations_an_icloud_account_cannot_do_yet_are_refused() {
         let dir = temp_dir("entries");
@@ -204,23 +209,10 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        let (d, a, who, id) = (dir.as_path(), &auth, "b@icloud.com", "t1");
+        let (d, a, who) = (dir.as_path(), &auth, "b@icloud.com");
         let refused = |e: ApiError| {
             e.to_string().contains("iCloud") && e.to_string().contains("まだ対応していません")
         };
-        assert!(rt.block_on(trash_thread(d, a, who, id)).is_err_and(refused));
-        assert!(rt
-            .block_on(untrash_thread(d, a, who, id))
-            .is_err_and(refused));
-        assert!(rt
-            .block_on(archive_thread(d, a, who, id))
-            .is_err_and(refused));
-        assert!(rt
-            .block_on(unarchive_thread(d, a, who, id))
-            .is_err_and(refused));
-        assert!(rt
-            .block_on(set_thread_read(d, a, who, id, true))
-            .is_err_and(refused));
         assert!(rt.block_on(send(d, a, who, &mail)).is_err_and(refused));
         std::fs::remove_dir_all(&dir).unwrap();
     }

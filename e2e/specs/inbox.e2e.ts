@@ -1,4 +1,4 @@
-import { account, boot, callsOf, holds, inbox, isoDate, mock, onceId, pressUndo, rejects, release, rowOf, setClock, textsOf, thread, threadDetail, waitForCalls, waitForCount, CARD, CARDS, WARN_CARDS, count, logged, waitForCard, waitForLog } from "../support";
+import { account, boot, callsOf, holds, icloudAccount, icloudInbox, inbox, isoDate, mock, onceId, pressUndo, rejects, release, rowOf, setClock, textsOf, thread, threadDetail, waitForCalls, waitForCount, CARD, CARDS, WARN_CARDS, count, logged, waitForCard, waitForLog } from "../support";
 
 // Fires the event the app's sync round listens for (the window is shown again), which runs one round at once.
 const syncRound = () =>
@@ -873,5 +873,65 @@ describe("inbox", () => {
       await expect($("#new-mail")).toBeDisplayed();
       await expect($("#new-mail-body")).toHaveValue("Hi");
     });
+  });
+});
+
+// M-13: the rows of an iCloud account take the same operations as a Gmail row, with the iCloud address as the account.
+describe("inbox of an iCloud account", () => {
+  beforeEach(async () => {
+    await boot({ inbox: icloudInbox(), icloud_accounts: [{ address: icloudAccount }] });
+    await waitForCount("#unread-threads li", 2);
+  });
+
+  it("archives a row with the iCloud address through archive, and brings it back with Cmd+Z through unarchive", async () => {
+    const archive = await mock("archive", true);
+    const unarchive = await mock("unarchive", true);
+    await rowOf("unread-threads", "First unread").$(".archive-row").click();
+    await waitForCount("#unread-threads li", 1);
+    expect(await waitForCalls(archive)).toEqual([{ account: icloudAccount, id: "i1" }]);
+    await expect($(".toast")).toHaveText(expect.stringContaining("元に戻す"));
+    await pressUndo();
+    expect(await waitForCalls(unarchive)).toEqual([{ account: icloudAccount, id: "i1" }]);
+    await waitForCount("#unread-threads li", 2);
+  });
+
+  it("trashes a row with the iCloud address through trash", async () => {
+    const trash = await mock("trash", true);
+    await rowOf("unread-threads", "Second unread").$(".trash-row").click();
+    await waitForCount("#unread-threads li", 1);
+    expect(await waitForCalls(trash)).toEqual([{ account: icloudAccount, id: "i2" }]);
+    await expect($(".toast")).toHaveText(expect.stringContaining("ゴミ箱へ移動しました"));
+  });
+
+  it("makes every unread thread read with set_read, one request each, with the iCloud address", async () => {
+    const setRead = await mock("set_read", true);
+    await $("#mail-mark-all").click();
+    await waitForCount("#unread-threads li", 0);
+    expect(await waitForCalls(setRead, 2)).toEqual([
+      { account: icloudAccount, id: "i1", read: true },
+      { account: icloudAccount, id: "i2", read: true },
+    ]);
+  });
+
+  it("asks sync about the account with its position, and stops asking once the account is unlinked in the settings", async () => {
+    const sync = await mock("sync", { kind: "unchanged" });
+    await syncRound();
+    expect(await waitForCalls(sync)).toEqual([{ account: icloudAccount, startHistoryId: "1700:5" }]);
+
+    await mock("icloud_check", { state: "ok" });
+    await mock("icloud_accounts", [{ address: icloudAccount }]);
+    await $("#nav-settings").click();
+    await $("#settings-tab-icloud").click();
+    await waitForCalls("icloud_accounts");
+    await mock("icloud_remove_account", []);
+    await $(`button[aria-label="${icloudAccount} の接続を解除"]`).click();
+    await $('[role="alertdialog"]').$("button=解除").click();
+    await waitForCalls("icloud_remove_account");
+    await waitForCount("#icloud-accounts .item-name", 0);
+
+    await mock("sync", { kind: "unchanged" });
+    await syncRound();
+    await browser.pause(500);
+    expect(await callsOf("sync")).toEqual([]);
   });
 });

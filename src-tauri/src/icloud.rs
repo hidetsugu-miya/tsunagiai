@@ -7,10 +7,12 @@
 use std::{fmt, path::Path, sync::Arc, time::Duration};
 
 mod message;
+mod modify;
 mod read;
 mod sync;
 mod threading;
 
+pub use modify::{Change, Move};
 use rustls::{pki_types::ServerName, ClientConfig};
 use rustls_platform_verifier::BuilderVerifierExt;
 use serde::Serialize;
@@ -222,6 +224,20 @@ pub async fn fetch_thread(
     read::thread(id, address, &mails, prefer_plain)
         .map(Some)
         .ok_or_else(|| "スレッドが見つかりません".into())
+}
+
+/// Does `change` (read or unread, archive, delete, or taking one of the last two back) to the thread `id` of `address`, with the mails that the thread has in the folder it is in.
+/// `Ok(None)` means the password must be entered again; `Ok(Some(true))` means it was done.
+pub async fn change(address: &str, id: &str, change: Change) -> Result<Option<bool>, ApiError> {
+    let key = threading::key_of(id).ok_or("スレッド ID が不正です")?;
+    let Some(mut session) = open(address).await? else {
+        return Ok(None);
+    };
+    let done = tokio::time::timeout(READ_TIMEOUT, modify::apply(&mut session, &key, change)).await;
+    close(session).await;
+    done.map_err(|_| ApiError::from("iCloud のメールの変更がタイムアウトしました"))??;
+    // `true`, not `()`: `Some(())` reaches JS as null, the same as `None` (login required).
+    Ok(Some(true))
 }
 
 /// The address as it is kept: trimmed and in lower case (an address has one entry however it is typed), with one `@` between a name and a domain.

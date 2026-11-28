@@ -263,9 +263,9 @@ export const today = isoDate(new Date());
 
 export const account = "me@example.com";
 
-export const thread = (id: string, subject: string, unread: boolean): ThreadItem => ({
+export const thread = (id: string, subject: string, unread: boolean, owner = account): ThreadItem => ({
   id,
-  account,
+  account: owner,
   from: "Alice <alice@example.com>",
   fromName: "Alice",
   fromAddress: "alice@example.com",
@@ -281,6 +281,17 @@ export const inbox = (threads = [thread("t1", "First unread", true), thread("t2"
   needsLogin: [],
   failed: {},
   historyIds: { [account]: "100" },
+});
+
+// An iCloud account (M-13) with no Google account: the same three threads as `inbox()`, owned by it, and the position of its sync.
+export const icloudAccount = "me@icloud.com";
+
+export const icloudInbox = (): Inbox => ({
+  accounts: [],
+  threads: [thread("i1", "First unread", true, icloudAccount), thread("i2", "Second unread", true, icloudAccount), thread("i3", "Already read", false, icloudAccount)],
+  needsLogin: [],
+  failed: {},
+  historyIds: { [icloudAccount]: "1700:5" },
 });
 
 // Waits until the detail view holds its thread: before that it shows the row's subject and a note in the body's place.

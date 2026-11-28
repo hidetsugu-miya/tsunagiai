@@ -5,6 +5,7 @@ import type { IcloudCheck } from "./bindings/IcloudCheck";
 import { $, tag } from "./dom.js";
 import { avatarColor, initials } from "./format.js";
 import { confirmUnlink, hintPopup, toggleHint } from "./hint.js";
+import { historyIds } from "./inbox.js";
 import { invoke } from "./ipc.js";
 import { itemRow } from "./settings.js";
 import { logError, showFailure } from "./error-card.js";
@@ -67,6 +68,8 @@ async function remove(address: string) {
     return showFailure("icloud-settings", e);
   }
   checks.delete(address);
+  // The sync of the list stops asking about an account that is gone.
+  historyIds.delete(address);
   draw();
 }
 

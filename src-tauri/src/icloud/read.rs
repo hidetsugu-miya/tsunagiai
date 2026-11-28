@@ -222,13 +222,23 @@ fn search_for(ids: &[String]) -> String {
 /// The mails of the thread whose root key is `key`, from the inbox and the sent folder: the ones that are it or name it, then the ones that name those, a few rounds deep.
 /// What comes back may hold mails of other threads that a search matched by chance; `thread` picks the thread out.
 pub async fn thread_mails<S: Io>(session: &mut Session<S>, key: &str) -> Result<Vec<Raw>, String> {
+    thread_mails_in(session, key, &[Folder::Inbox, Folder::Sent], FULL).await
+}
+
+/// `thread_mails` over the folders `folders`, asking for `what` (a FETCH item list) of each mail found (`HEADERS` is enough to know which mails a thread holds).
+pub(super) async fn thread_mails_in<S: Io>(
+    session: &mut Session<S>,
+    key: &str,
+    folders: &[Folder],
+    what: &str,
+) -> Result<Vec<Raw>, String> {
     if let Some((tag, validity, uid)) = made_up_parts(key) {
         // A mail with no Message-ID is a thread by itself, found by its place; a UIDVALIDITY that changed makes the place mean another mail.
         let folder = Folder::of_tag(tag).ok_or("スレッド ID が不正です")?;
         let mailbox = examine(session, folder).await?;
         let same = mailbox.filter(|m| m.uid_validity == Some(validity));
         return match same {
-            Some(_) => fetch(session, folder, validity, &uid.to_string(), true, FULL).await,
+            Some(_) => fetch(session, folder, validity, &uid.to_string(), true, what).await,
             None => Ok(Vec::new()),
         };
     }
@@ -243,7 +253,7 @@ pub async fn thread_mails<S: Io>(session: &mut Session<S>, key: &str) -> Result<
         }
         asked.extend(frontier.iter().cloned());
         let query = search_for(&frontier);
-        for folder in [Folder::Inbox, Folder::Sent] {
+        for &folder in folders {
             let Some(mailbox) = examine(session, folder).await?.filter(|m| m.exists > 0) else {
                 continue;
             };
@@ -259,7 +269,7 @@ pub async fn thread_mails<S: Io>(session: &mut Session<S>, key: &str) -> Result<
                 continue;
             }
             let validity = mailbox.uid_validity.unwrap_or(0);
-            mails.extend(fetch(session, folder, validity, &uid_set(&new), true, FULL).await?);
+            mails.extend(fetch(session, folder, validity, &uid_set(&new), true, what).await?);
         }
         let mut next: Vec<String> = Vec::new();
         for n in nodes_of(&parser, &mails) {

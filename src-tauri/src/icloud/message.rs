@@ -19,11 +19,15 @@ use crate::{
     mail_address::{recipients_label, reply_choices, split_address, ReplyChoices},
 };
 
-/// The folders of an iCloud account that a thread is read from.
+/// The folders of an iCloud account that a thread is read from or moved between.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Folder {
     Inbox,
     Sent,
+    /// Where an archived thread goes (it has no mark, so it is chosen by its name).
+    Archive,
+    /// Where a deleted thread goes (it has the `\\Trash` mark).
+    Trash,
 }
 
 impl Folder {
@@ -32,6 +36,8 @@ impl Folder {
         match self {
             Folder::Inbox => "INBOX",
             Folder::Sent => "Sent Messages",
+            Folder::Archive => "Archive",
+            Folder::Trash => "Deleted Messages",
         }
     }
 
@@ -40,11 +46,13 @@ impl Folder {
         match self {
             Folder::Inbox => "i",
             Folder::Sent => "s",
+            Folder::Archive => "a",
+            Folder::Trash => "t",
         }
     }
 
     pub fn of_tag(tag: &str) -> Option<Folder> {
-        [Folder::Inbox, Folder::Sent]
+        [Folder::Inbox, Folder::Sent, Folder::Archive, Folder::Trash]
             .into_iter()
             .find(|f| f.tag() == tag)
     }
