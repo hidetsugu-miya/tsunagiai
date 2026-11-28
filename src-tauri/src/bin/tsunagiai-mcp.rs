@@ -440,19 +440,6 @@ struct ScreenWriteArgs {
     fields: BTreeMap<String, String>,
 }
 
-/// The screen name the Todo draft pane (`--todo-draft`) reaches with `screen_read` and `screen_write`.
-const TODO_DRAFT_SCREEN: &str = "todo-draft";
-
-/// Whether a server restricted to the screen `only` (none: no restriction) may touch `target`, or the reason in Japanese.
-fn screen_allowed(only: Option<&str>, target: &str) -> Result<(), String> {
-    match only {
-        Some(only) if only != target => Err(format!(
-            "このペインから読み書きできる画面は {only} だけです（{target} は使えません）"
-        )),
-        _ => Ok(()),
-    }
-}
-
 /// What `screen_read` answers. The texts are what the owner typed or what a mail or a Slack message holds, written by anyone: they are quoted as JSON strings and the answer says they are data.
 fn screen_read_answer(target: &str, fields: screen_bridge::Fields) -> Result<String, String> {
     json(&serde_json::json!({
@@ -621,17 +608,10 @@ struct Tsunagiai {
     dir: PathBuf,
     /// The formation of the orchestrator that started this server (`--formation {name}`, A-37): the formation tools read and write the record of this one only.
     formation: Option<String>,
-    /// The one screen that `screen_read` and `screen_write` reach (`--todo-draft`: the pane runs in the `auto` mode, so it must not reach the draft of a mail, a thread or a form, S-18, #1148), or none for every screen.
-    only_screen: Option<&'static str>,
     router: ToolRouter<Self>,
 }
 
 impl Tsunagiai {
-    /// Whether `target` may be read or written by this server: any screen when `only_screen` is none, else that one screen.
-    fn check_screen(&self, target: &str) -> Result<(), String> {
-        screen_allowed(self.only_screen, target)
-    }
-
     /// The formation of the formation tools. They are in the router only when it is set, so this does not fail for a client that can call them.
     fn formation(&self) -> Result<String, String> {
         self.formation
@@ -715,24 +695,42 @@ fn calendar_router() -> ToolRouter<Tsunagiai> {
     router
 }
 
+/// `--statusline-cache {claude|antigravity}`: parses the CLI statusLine JSON from stdin and updates `ai-usage-cache.json` atomically.
+fn statusline_cache_arg(
+    args: impl IntoIterator<Item = String>,
+) -> Result<Option<tsunagiai_lib::ai_usage::AiKind>, String> {
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--statusline-cache" {
+            let value = iter.next().ok_or_else(|| {
+                "--statusline-cache には claude か antigravity を指定してください".to_owned()
+            })?;
+            let kind = tsunagiai_lib::ai_usage::AiKind::parse(&value).ok_or_else(|| {
+                format!("--statusline-cache に使えない値です: {value}（claude か antigravity を指定してください）")
+            })?;
+            return Ok(Some(kind));
+        }
+    }
+    Ok(None)
+}
+
+fn run_statusline_cache(kind: tsunagiai_lib::ai_usage::AiKind) -> Result<(), String> {
+    use std::io::Read;
+    let mut buf = Vec::new();
+    std::io::stdin()
+        .take(tsunagiai_lib::ai_usage::MAX_STDIN_BYTES as u64)
+        .read_to_end(&mut buf)
+        .map_err(|e| format!("標準入力を読めません: {e}"))?;
+    let raw = String::from_utf8_lossy(&buf);
+    let config = identity::config_dir()?;
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    tsunagiai_lib::ai_usage::record_from_stdin(&config, kind, &raw, now_ms)?;
+    Ok(())
+}
+
 /// Whether `--calendar` is among `args`: the server then offers the tools of the calendar pane only.
 fn calendar_arg(args: impl IntoIterator<Item = String>) -> bool {
     args.into_iter().any(|arg| arg == "--calendar")
-}
-
-/// The tools of the Claude pane of the page of a Todo's draft (S-18): the two that read and write the screen's fields, and no other. The pane runs in the `auto` permission mode (#1148), so a tool that adds a task to Todoist, trashes a mail or writes a connection would run with no question to the owner, and the draft is made from a Slack message that someone else wrote. The Todoist add stays the button of the page.
-const TODO_DRAFT_TOOLS: [&str; 2] = ["screen_read", "screen_write"];
-
-/// The tools of the Todo draft pane: `TODO_DRAFT_TOOLS` only, offered to the client that `mcp-todo-draft.json` of A-36 starts with `--todo-draft`.
-fn todo_draft_router() -> ToolRouter<Tsunagiai> {
-    let mut router = Tsunagiai::tool_router();
-    keep_only(&mut router, &TODO_DRAFT_TOOLS);
-    router
-}
-
-/// Whether `--todo-draft` is among `args`: the server then offers the tools of the Todo draft pane only.
-fn todo_draft_arg(args: impl IntoIterator<Item = String>) -> bool {
-    args.into_iter().any(|arg| arg == "--todo-draft")
 }
 
 /// The tools of the plugin of #1242 that a Claude Code gets to set up the language servers of a project (A-34): the reads and writes of the servers, and no other. That Claude Code can start from the text of a mail, a message or a Todo as well (A-9), and what a server runs is a command of a shell, so any other tool would be one that an injected instruction could use.
@@ -1286,7 +1284,6 @@ impl Tsunagiai {
         &self,
         Parameters(a): Parameters<ScreenReadArgs>,
     ) -> Result<String, String> {
-        self.check_screen(&a.target)?;
         let fields = screen_bridge::request_app(
             &self.dir,
             &ScreenRequest::Read {
@@ -1356,7 +1353,6 @@ impl Tsunagiai {
         &self,
         Parameters(a): Parameters<ScreenWriteArgs>,
     ) -> Result<String, String> {
-        self.check_screen(&a.target)?;
         screen_bridge::request_app(
             &self.dir,
             &ScreenRequest::Write {
@@ -1710,6 +1706,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(1);
         }
     }
+    // A-48 (#1603): caches AI usage from a CLI's statusLine JSON on stdin and exits without serving MCP.
+    match statusline_cache_arg(std::env::args().skip(1)) {
+        Ok(Some(kind)) => match run_statusline_cache(kind) {
+            Ok(()) => std::process::exit(0),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        },
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    }
     // The plugin of "Claude を起動" (A-45, #986): it writes `preview-plugin/` for this `tsunagiai-mcp`, prints its path and serves no MCP.
     if preview_plugin::requested(std::env::args().skip(1)) {
         match write_preview_plugin() {
@@ -1774,7 +1785,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let formation = formation_arg(std::env::args().skip(1))?;
     let calendar = calendar_arg(std::env::args().skip(1));
     let preview = preview_arg(std::env::args().skip(1));
-    let todo_draft = todo_draft_arg(std::env::args().skip(1));
     let lsp = lsp_arg(std::env::args().skip(1))?;
     if calendar && formation.is_some() {
         return Err("--calendar と --formation は一緒に使えません".into());
@@ -1782,25 +1792,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if preview && (calendar || formation.is_some()) {
         return Err("--preview は --calendar とも --formation とも一緒に使えません".into());
     }
-    if todo_draft && (calendar || preview || formation.is_some()) {
+    if lsp.is_some() && (calendar || preview || formation.is_some()) {
         return Err(
-            "--todo-draft は --calendar、--preview、--formation のどれとも一緒に使えません".into(),
-        );
-    }
-    if lsp.is_some() && (calendar || preview || todo_draft || formation.is_some()) {
-        return Err(
-            "--lsp と --lsp-local は --calendar、--preview、--todo-draft、--formation のどれとも一緒に使えません"
+            "--lsp と --lsp-local は --calendar、--preview、--formation のどれとも一緒に使えません"
                 .into(),
         );
     }
     let server = Tsunagiai {
         auth: Auth::new(),
         dir: identity::config_dir()?,
-        only_screen: todo_draft.then_some(TODO_DRAFT_SCREEN),
         router: if let Some(mode) = lsp {
             lsp_router(mode)
-        } else if todo_draft {
-            todo_draft_router()
         } else if preview {
             preview_router()
         } else if calendar {
@@ -1827,16 +1829,15 @@ mod tests {
         calendar_answer, calendar_arg, calendar_router, child_plugin_args, db_test_answer,
         event_done_answer, form_opened, form_refused, formation_arg, formation_start_arg, lsp_arg,
         lsp_environment, lsp_router, mail_relogin, preview_arg, preview_router, project_args,
-        relogin, relogin_icloud, router, screen_allowed, screen_read_answer, screen_text_answer,
-        skill_get_answer, skill_list_answer, skill_save_answer, skill_summary, todo_draft_arg,
-        todo_draft_router, todoist_answer, CalendarDeleteEventArgs, CalendarEventArgs,
-        CalendarSetShownArgs, CalendarShowSlotsArgs, CalendarUpdateEventArgs, DbProfileSaveArgs,
-        FormationAgent, FormationFilesArgs, FormationGitArgs, FormationLaunchArgs,
-        FormationPlanArgs, FormationReadArgs, FormationStatusArgs, FormationWorktreesArgs, LspMode,
-        LspServerArgs, LspServerSaveArgs, LspServerSettings, LspSshHostArgs, NewEvent,
-        PreviewOpenArgs, ScreenReadArgs, ScreenWriteArgs, Skill, SkillGetArgs, SkillSaveArgs,
-        SkillScreen, TodoistAddTaskArgs, Tsunagiai, LSP_SSH_HOST_TOOL, LSP_TOOLS,
-        TODO_DRAFT_SCREEN,
+        relogin, relogin_icloud, router, screen_read_answer, screen_text_answer, skill_get_answer,
+        skill_list_answer, skill_save_answer, skill_summary, todoist_answer,
+        CalendarDeleteEventArgs, CalendarEventArgs, CalendarSetShownArgs, CalendarShowSlotsArgs,
+        CalendarUpdateEventArgs, DbProfileSaveArgs, FormationAgent, FormationFilesArgs,
+        FormationGitArgs, FormationLaunchArgs, FormationPlanArgs, FormationReadArgs,
+        FormationStatusArgs, FormationWorktreesArgs, LspMode, LspServerArgs, LspServerSaveArgs,
+        LspServerSettings, LspSshHostArgs, NewEvent, PreviewOpenArgs, ScreenReadArgs,
+        ScreenWriteArgs, Skill, SkillGetArgs, SkillSaveArgs, SkillScreen, TodoistAddTaskArgs,
+        Tsunagiai, LSP_SSH_HOST_TOOL, LSP_TOOLS,
     };
 
     #[test]
@@ -2301,7 +2302,6 @@ mod tests {
                 auth: tsunagiai_lib::auth::Auth::new(),
                 dir,
                 formation: None,
-                only_screen: None,
                 router: Tsunagiai::lsp_pushed_router(),
             }
         }
@@ -2448,75 +2448,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_server_for_one_screen_refuses_every_other_screen() {
-        for other in [
-            "mail-draft",
-            "slack-thread",
-            "calendar-form",
-            "calendar-slots",
-            "preview-open",
-            "",
-        ] {
-            let error = screen_allowed(Some(TODO_DRAFT_SCREEN), other).unwrap_err();
-            assert!(error.contains("todo-draft"), "{other}: {error}");
-        }
-        assert!(screen_allowed(Some(TODO_DRAFT_SCREEN), "todo-draft").is_ok());
-        // A server with no restriction leaves the choice to the app.
-        assert!(screen_allowed(None, "mail-draft").is_ok());
-    }
-
-    mod todo_draft_screen_only {
-        use rmcp::handler::server::wrapper::Parameters;
-
-        use super::super::{ScreenReadArgs, ScreenWriteArgs, Tsunagiai, TODO_DRAFT_SCREEN};
-
-        // No app listens in this folder: a call that got past the check would fail with "つなぎAIが動いていません", not with the refusal.
-        fn server() -> Tsunagiai {
-            Tsunagiai {
-                auth: tsunagiai_lib::auth::Auth::new(),
-                dir: std::path::PathBuf::from("/nonexistent/tsunagiai-mcp-test"),
-                formation: None,
-                only_screen: Some(TODO_DRAFT_SCREEN),
-                router: Tsunagiai::tool_router(),
-            }
-        }
-
-        #[tokio::test]
-        async fn screen_read_and_screen_write_refuse_every_screen_but_the_draft_before_asking_the_app(
-        ) {
-            let server = server();
-            for target in ["mail-draft", "slack-thread", "calendar-form"] {
-                let read = server
-                    .screen_read(Parameters(ScreenReadArgs {
-                        target: target.into(),
-                    }))
-                    .await
-                    .unwrap_err();
-                assert!(read.contains("todo-draft だけ"), "{target}: {read}");
-                let write = server
-                    .screen_write(Parameters(ScreenWriteArgs {
-                        target: target.into(),
-                        fields: [("name".to_owned(), "x".to_owned())].into(),
-                    }))
-                    .await
-                    .unwrap_err();
-                assert!(write.contains("todo-draft だけ"), "{target}: {write}");
-            }
-        }
-
-        #[tokio::test]
-        async fn the_screen_of_the_pane_goes_on_to_the_app() {
-            let error = server()
-                .screen_read(Parameters(ScreenReadArgs {
-                    target: TODO_DRAFT_SCREEN.into(),
-                }))
-                .await
-                .unwrap_err();
-            assert!(!error.contains("todo-draft だけ"), "{error}");
-        }
-    }
-
     #[cfg(unix)]
     mod preview_open_routes {
         use std::sync::{Arc, Mutex};
@@ -2535,7 +2466,6 @@ mod tests {
                 auth: tsunagiai_lib::auth::Auth::new(),
                 dir,
                 formation: None,
-                only_screen: None,
                 router: Tsunagiai::tool_router(),
             }
         }
@@ -3140,35 +3070,6 @@ mod tests {
         for none in [&[][..], &["calendar"], &["--calendar=1"], &["--calendars"]] {
             assert!(!calendar_arg(args(none)), "{none:?}");
         }
-    }
-
-    #[test]
-    fn the_todo_draft_flag_is_an_argument_of_its_own() {
-        let args = |list: &[&str]| list.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
-        assert!(todo_draft_arg(args(&["--todo-draft"])));
-        assert!(todo_draft_arg(args(&["--other", "--todo-draft"])));
-        for none in [
-            &[][..],
-            &["todo-draft"],
-            &["--todo-draft=1"],
-            &["--todo-drafts"],
-        ] {
-            assert!(!todo_draft_arg(args(none)), "{none:?}");
-        }
-    }
-
-    #[test]
-    fn the_todo_draft_pane_is_offered_the_two_screen_tools_only() {
-        let mut names: Vec<String> = todo_draft_router()
-            .list_all()
-            .into_iter()
-            .map(|t| t.name.to_string())
-            .collect();
-        names.sort();
-        assert_eq!(names, ["screen_read", "screen_write"]);
-        // No tool that adds a task or posts, and the other clients' tools are as they were.
-        assert!(tool_names(false).iter().any(|n| n == "todoist_add_task"));
-        assert!(!names.iter().any(|n| n == "todoist_add_task"));
     }
 
     #[test]
