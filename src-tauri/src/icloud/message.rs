@@ -9,7 +9,7 @@ use std::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use mail_parser::{AddressList, Message, MessageParser, MessagePart, PartKind};
 
-use super::threading::{made_up_key, valid_key, Node};
+use super::threading::{base_subject, made_up_key, valid_key, Node};
 use crate::{
     gmail::{MessageDetail, ThreadDetail, ThreadItem},
     images::{
@@ -98,6 +98,7 @@ pub fn node(raw: &Raw, msg: &Message) -> Node {
         own,
         refs,
         date_ms: raw.date_ms,
+        subject: base_subject(msg.subject().unwrap_or_default()),
     }
 }
 
@@ -418,6 +419,12 @@ mod tests {
             ("c@x", &["a@x".to_owned(), "b@x".to_owned()][..])
         );
         assert_eq!(n.root_key(), "a@x");
+        assert_eq!(n.subject, "");
+        let r = raw(
+            "Message-ID: <s@x>\nSubject: Re: Plan  B\nFrom: a@example.com\n\nbody\n",
+            false,
+        );
+        assert_eq!(node(&r, &parse(&parser, &r)).subject, "plan b");
         // With only an In-Reply-To the parent is the root; with no Message-ID the key is the mail's place.
         let r = raw("In-Reply-To: <p@x>\nFrom: a@example.com\n\nbody\n", false);
         let n = node(&r, &parse(&parser, &r));

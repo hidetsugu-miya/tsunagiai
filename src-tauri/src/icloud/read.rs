@@ -10,7 +10,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use super::{
     message::{node, parse, thread_detail, thread_item, Folder, Mail, Raw},
-    threading::{group, key_of, made_up_parts, thread_id, valid_key, Node},
+    threading::{group, key_of, linked, made_up_parts, thread_id, valid_key, Group, Node},
 };
 use crate::gmail::{ThreadDetail, ThreadItem};
 
@@ -24,11 +24,13 @@ const ROUNDS: usize = 3;
 const IDS_PER_ROUND: usize = 20;
 const MAX_THREAD_MAILS: usize = 200;
 
-/// The whole mail with its flags and time.
+/// The whole mail with its flags and time: what opening a thread needs.
 const FULL: &str = "(UID FLAGS INTERNALDATE BODY.PEEK[])";
-/// Only what threads need.
+/// What a row of the list needs of a mail: its flags and time, all its header, and the first 8192 bytes of its text for the snippet (a mail is not downloaded whole for its row).
+pub(super) const ROW: &str = "(UID FLAGS INTERNALDATE BODY.PEEK[HEADER] BODY.PEEK[TEXT]<0.8192>)";
+/// Only what threads need: the Message-ID, the mails it answers, and the subject that decides whether the names join.
 pub(super) const HEADERS: &str =
-    "(UID INTERNALDATE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID IN-REPLY-TO REFERENCES)])";
+    "(UID INTERNALDATE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID IN-REPLY-TO REFERENCES SUBJECT)])";
 
 pub trait Io: AsyncRead + AsyncWrite + Unpin + Send + fmt::Debug {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send + fmt::Debug> Io for T {}
@@ -49,7 +51,7 @@ async fn examine<S: Io>(
     }
 }
 
-/// What a FETCH said of one mail; `None` when it carries no UID or no bytes.
+/// What a FETCH said of one mail; `None` when it carries no UID or no bytes. A mail asked for by `ROW` is its header followed by the head of its text, which reads as the mail cut short.
 fn raw_of(folder: Folder, validity: u32, fetch: &async_imap::types::Fetch) -> Option<Raw> {
     Some(Raw {
         folder,
@@ -57,7 +59,10 @@ fn raw_of(folder: Folder, validity: u32, fetch: &async_imap::types::Fetch) -> Op
         validity,
         seen: fetch.flags().any(|f| f == Flag::Seen),
         date_ms: fetch.internal_date().map_or(0, |d| d.timestamp_millis()),
-        bytes: fetch.body().or_else(|| fetch.header())?.to_vec(),
+        bytes: match fetch.body() {
+            Some(body) => body.to_vec(),
+            None => [fetch.header()?, fetch.text().unwrap_or_default()].concat(),
+        },
     })
 }
 
@@ -122,7 +127,7 @@ pub async fn inbox_threads<S: Io>(
         inbox.uid_validity.unwrap_or(0),
         &format!("{first}:{}", inbox.exists),
         false,
-        FULL,
+        ROW,
     )
     .await?;
     let in_inbox = mails.len();
@@ -162,7 +167,7 @@ pub async fn inbox_threads<S: Io>(
                     validity,
                     &uid_set(&replies),
                     true,
-                    FULL,
+                    ROW,
                 )
                 .await?,
             );
@@ -286,13 +291,8 @@ pub(super) async fn thread_mails_in<S: Io>(
     Ok(mails)
 }
 
-/// The thread that `key` names among `mails` (from `thread_mails`), made into what the screen draws by `make`, which is given the thread's ID and its mails, oldest first.
-/// `None` when none of the mails belongs to it.
-pub(super) fn with_thread<T>(
-    key: &str,
-    mails: &[Raw],
-    make: impl FnOnce(String, &[&Mail]) -> T,
-) -> Option<T> {
+/// The mails read, their nodes with only the names that the subject let join (`linked`), and the threads they make.
+fn parsed_threads(mails: &[Raw]) -> (Vec<Mail<'_>>, Vec<Node>, Vec<Group>) {
     let parser = MessageParser::new();
     let parsed: Vec<Mail> = mails
         .iter()
@@ -301,12 +301,46 @@ pub(super) fn with_thread<T>(
             msg: parse(&parser, raw),
         })
         .collect();
-    let nodes: Vec<Node> = parsed.iter().map(|m| node(m.raw, &m.msg)).collect();
-    let found = group(&nodes)
+    let nodes = linked(
+        &parsed
+            .iter()
+            .map(|m| node(m.raw, &m.msg))
+            .collect::<Vec<_>>(),
+    );
+    let groups = group(&nodes);
+    (parsed, nodes, groups)
+}
+
+/// The thread that `key` names among `mails` (from `thread_mails`), made into what the screen draws by `make`, which is given the thread's ID and its mails, oldest first.
+/// A mail that names `key` under another subject is not of it. `None` when none of the mails belongs to it.
+pub(super) fn with_thread<T>(
+    key: &str,
+    mails: &[Raw],
+    make: impl FnOnce(String, &[&Mail]) -> T,
+) -> Option<T> {
+    let (parsed, nodes, groups) = parsed_threads(mails);
+    let found = groups
         .into_iter()
         .find(|g| g.members.iter().any(|&i| nodes[i].belongs_to(key)))?;
     let members: Vec<&Mail> = found.members.iter().map(|&i| &parsed[i]).collect();
     Some(make(thread_id(&found.key), &members))
+}
+
+/// Every thread among `mails` that holds a mail for which `wanted` (given the mail and its node) says yes, made as `with_thread` makes one.
+pub(super) fn with_threads<T>(
+    mails: &[Raw],
+    wanted: impl Fn(&Mail, &Node) -> bool,
+    make: impl Fn(String, &[&Mail]) -> T,
+) -> Vec<T> {
+    let (parsed, nodes, groups) = parsed_threads(mails);
+    groups
+        .into_iter()
+        .filter(|g| g.members.iter().any(|&i| wanted(&parsed[i], &nodes[i])))
+        .map(|g| {
+            let members: Vec<&Mail> = g.members.iter().map(|&i| &parsed[i]).collect();
+            make(thread_id(&g.key), &members)
+        })
+        .collect()
 }
 
 /// The thread `id` (as `inbox_threads` made it) as the screen draws it, from the mails `thread_mails` found. `None` when none of them belongs to it.
@@ -439,13 +473,25 @@ mod tests {
                                 continue;
                             }
                             let head_end = m.raw.find("\r\n\r\n").unwrap() + 4;
+                            // What the query asks for, as the server writes it: the sections, and the head of the text cut at its limit.
                             let (section, data) = if query.contains("HEADER.FIELDS") {
                                 (
-                                    "BODY[HEADER.FIELDS (MESSAGE-ID IN-REPLY-TO REFERENCES)]",
-                                    &m.raw[..head_end],
+                                    "BODY[HEADER.FIELDS (MESSAGE-ID IN-REPLY-TO REFERENCES SUBJECT)]"
+                                        .to_owned(),
+                                    m.raw[..head_end].to_owned(),
+                                )
+                            } else if query.contains("BODY.PEEK[TEXT]<0.8192>") {
+                                let text = &m.raw[head_end..];
+                                let head = &text[..text.len().min(8192)];
+                                (
+                                    format!(
+                                        "BODY[HEADER] {{{head_end}}}\r\n{} BODY[TEXT]<0>",
+                                        &m.raw[..head_end]
+                                    ),
+                                    head.to_owned(),
                                 )
                             } else {
-                                ("BODY[]", &m.raw[..])
+                                ("BODY[]".to_owned(), m.raw.clone())
                             };
                             let flags = if query.contains("FLAGS") {
                                 format!(" FLAGS ({})", m.flags)
@@ -627,8 +673,9 @@ mod tests {
         );
         // The whole inbox is asked for by number, newest 50 of 4 mails: 1:4.
         assert!(
-            seen.iter()
-                .any(|l| l.contains("FETCH 1:4 (UID FLAGS INTERNALDATE BODY.PEEK[])")),
+            seen.iter().any(|l| l.contains(
+                "FETCH 1:4 (UID FLAGS INTERNALDATE BODY.PEEK[HEADER] BODY.PEEK[TEXT]<0.8192>)"
+            )),
             "{seen:?}"
         );
         // Of the sent folder only the headers of its window, and then the reply of the thread (UID 5), never the unrelated mail (UID 6).
@@ -637,10 +684,14 @@ mod tests {
                 .any(|l| l.contains("FETCH 1:2 (UID INTERNALDATE BODY.PEEK[HEADER.FIELDS")),
             "{seen:?}"
         );
+        // The list never downloads a whole mail: no FETCH of the list asks for BODY.PEEK[].
+        assert!(!seen.iter().any(|l| l.contains("BODY.PEEK[]")), "{seen:?}");
         let full: Vec<&String> = seen.iter().filter(|l| l.contains("UID FETCH")).collect();
         assert_eq!(full.len(), 1, "{seen:?}");
         assert!(
-            full[0].contains("UID FETCH 5 (UID FLAGS INTERNALDATE BODY.PEEK[])"),
+            full[0].contains(
+                "UID FETCH 5 (UID FLAGS INTERNALDATE BODY.PEEK[HEADER] BODY.PEEK[TEXT]<0.8192>)"
+            ),
             "{}",
             full[0]
         );
@@ -661,6 +712,105 @@ mod tests {
             items[0].snippet,
             "it&#39;s &lt;b&gt;fine&lt;/b&gt; &amp; done"
         );
+    }
+
+    #[tokio::test]
+    async fn a_long_mail_is_asked_for_by_its_head_and_its_row_still_has_the_snippet_of_its_text() {
+        // The text part comes first and the html part is far past the limit that the row asks for.
+        let big = "<p>x</p>".repeat(5000);
+        let raw = format!(
+            "Message-ID: <big@x>\r\nFrom: {ALICE}\r\nTo: {ME}\r\nSubject: Big\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=\"b\"\r\n\r\n--b\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nthe plain words\r\n--b\r\nContent-Type: text/html; charset=utf-8\r\n\r\n{big}\r\n--b--\r\n"
+        );
+        assert!(raw.len() > 8192 * 4);
+        let (stream, server) = serve(vec![Box {
+            name: "INBOX",
+            validity: 1,
+            mails: vec![Stored {
+                uid: 1,
+                flags: "",
+                date: "27-Nov-2026 10:00:00 +0900",
+                raw,
+            }],
+        }])
+        .await;
+        let mut session = login_session(stream, ME, "pw").await.unwrap();
+        let items = inbox_threads(&mut session, ME).await.unwrap();
+        let _ = session.logout().await;
+        let seen = server.await.unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].subject, "Big");
+        assert_eq!(items[0].snippet, "the plain words");
+        assert!(items[0].unread);
+        assert!(!seen.iter().any(|l| l.contains("BODY.PEEK[]")), "{seen:?}");
+        assert!(
+            seen.iter().any(|l| l.contains("BODY.PEEK[TEXT]<0.8192>")),
+            "{seen:?}"
+        );
+    }
+
+    /// A thread of Alice's, and a mail of someone else that names its root's Message-ID under another subject and arrives last.
+    fn boxes_with_an_outsider() -> Vec<Box> {
+        let inbox = vec![
+            Stored {
+                uid: 10,
+                flags: "\\Seen",
+                date: "27-Nov-2026 10:00:00 +0900",
+                raw: mail(Some("root@x"), &[], ALICE, ME, "Plan", "first"),
+            },
+            Stored {
+                uid: 11,
+                flags: "\\Seen",
+                date: "27-Nov-2026 11:00:00 +0900",
+                raw: mail(Some("a2@x"), &["root@x"], ALICE, ME, "Re: Plan", "second"),
+            },
+            Stored {
+                uid: 12,
+                flags: "",
+                date: "27-Nov-2026 12:00:00 +0900",
+                raw: mail(
+                    Some("evil@x"),
+                    &["root@x"],
+                    "Mallory <mallory@example.net>",
+                    ME,
+                    "You won",
+                    "click here",
+                ),
+            },
+        ];
+        vec![Box {
+            name: "INBOX",
+            validity: 1700,
+            mails: inbox,
+        }]
+    }
+
+    #[tokio::test]
+    async fn a_mail_that_names_a_message_id_under_another_subject_is_a_row_of_its_own_and_not_in_the_thread(
+    ) {
+        let (stream, server) = serve(boxes_with_an_outsider()).await;
+        let mut session = login_session(stream, ME, "pw").await.unwrap();
+        let items = inbox_threads(&mut session, ME).await.unwrap();
+        let mails = thread_mails(&mut session, "root@x").await.unwrap();
+        let _ = session.logout().await;
+        server.await.unwrap();
+
+        // Newest first: the outsider's mail is a thread of its own, and the unread mark of the plan is not its.
+        assert_eq!(items.len(), 2, "{items:?}");
+        assert_eq!(items[0].id, thread_id("evil@x"));
+        assert_eq!(items[0].subject, "You won");
+        assert_eq!(items[1].id, thread_id("root@x"));
+        assert_eq!(items[1].snippet, "second");
+        assert!(!items[1].unread);
+
+        // The thread has Alice's two mails only, and a reply goes to Alice, not to the mail that came last.
+        let detail = thread(&thread_id("root@x"), ME, &mails, false).unwrap();
+        let bodies: Vec<&str> = detail.messages.iter().map(|m| m.body.trim()).collect();
+        assert_eq!(bodies, ["first", "second"]);
+        assert_eq!(detail.reply.one.to[0].label, "Alice");
+        // The outsider's thread is its own.
+        let own = thread(&thread_id("evil@x"), ME, &mails, false).unwrap();
+        assert_eq!(own.messages.len(), 1);
+        assert_eq!(own.messages[0].body.trim(), "click here");
     }
 
     #[tokio::test]

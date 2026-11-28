@@ -1,6 +1,7 @@
 //! The automatic sync of an iCloud account (M-13, M-7): one round asks iCloud whether the inbox changed since the position the screen holds, and reads only the difference.
 //! The position is the UIDVALIDITY and the HIGHESTMODSEQ of INBOX ("{validity}:{modseq}", RFC 7162), a string that the screen keeps and gives back as it is.
 //! A round is: `ENABLE QRESYNC`, `SELECT INBOX (CONDSTORE)`, and, when the HIGHESTMODSEQ moved, `UID FETCH 1:* (UID) (CHANGEDSINCE {modseq} VANISHED)`.
+//! The threads of the changed mails are read with `ROW` (the header and the head of the text), as the list reads its rows, never the whole mails.
 //! What a round decides from the numbers is pure (`step`, `outcome`): a UIDVALIDITY that changed, a mail that vanished (moved or deleted) or too many changes read the inbox again, and the rest reads only the threads of the changed mails.
 
 use std::collections::BTreeMap;
@@ -10,9 +11,11 @@ use futures_util::TryStreamExt;
 use mail_parser::MessageParser;
 
 use super::{
-    message::{thread_item, Folder},
-    read::{self, failed, fetch, nodes_of, thread_mails, uid_set, with_thread, Io, HEADERS},
-    threading::thread_id,
+    message::{thread_item, Folder, Mail},
+    read::{
+        self, failed, fetch, nodes_of, thread_mails_in, uid_set, with_threads, Io, HEADERS, ROW,
+    },
+    threading::{thread_id, Node},
 };
 use crate::gmail::{Sync, ThreadItem};
 
@@ -152,16 +155,22 @@ async fn rows<S: Io>(
     // By thread ID: two changed mails may name different roots of one thread.
     let mut found: BTreeMap<String, Option<ThreadItem>> = BTreeMap::new();
     for key in keys {
-        let mails = thread_mails(session, &key).await?;
-        let row = with_thread(&key, &mails, |id, members| {
+        let mails = thread_mails_in(session, &key, &[Folder::Inbox, Folder::Sent], ROW).await?;
+        // The thread the key names, and the thread of each changed mail: a mail that names the key under another subject is a thread of its own.
+        let wanted = |m: &Mail, n: &Node| {
+            n.belongs_to(&key) || (m.raw.folder == Folder::Inbox && changed.contains(&m.raw.uid))
+        };
+        let rows = with_threads(&mails, wanted, |id, members| {
             let in_inbox = members.iter().any(|m| m.raw.folder == Folder::Inbox);
             (
                 id.clone(),
                 in_inbox.then(|| thread_item(account, id, members)),
             )
-        })
-        .unwrap_or_else(|| (thread_id(&key), None));
-        found.insert(row.0, row.1);
+        });
+        if rows.is_empty() {
+            found.insert(thread_id(&key), None);
+        }
+        found.extend(rows);
     }
     let mut threads = Vec::new();
     let mut removed = Vec::new();
@@ -336,6 +345,16 @@ mod tests {
         )
     }
 
+    /// A FETCH answer to `ROW`: the header and the head of the text of one mail, as iCloud writes them.
+    fn fetched_row(seq: u32, uid: u32, mail: &str) -> String {
+        let (head, text) = mail.split_at(mail.find("\r\n\r\n").unwrap() + 4);
+        format!(
+            "* {seq} FETCH (UID {uid} FLAGS () INTERNALDATE \"27-Nov-2026 10:00:00 +0900\" BODY[HEADER] {{{}}}\r\n{head} BODY[TEXT]<0> {{{}}}\r\n{text})\r\n",
+            head.len(),
+            text.len()
+        )
+    }
+
     const ENABLE: &str = "* ENABLED QRESYNC\r\n{tag} OK ENABLE completed\r\n";
 
     fn select(validity: u32, modseq: Option<u64>) -> String {
@@ -366,7 +385,7 @@ mod tests {
             ("EXAMINE", "{tag} NO no such mailbox\r\n".to_owned()),
             (
                 "FETCH 1:1",
-                done(&fetched(1, 12, "BODY[]", &mail("m12@x", "Plan"))),
+                done(&fetched_row(1, 12, &mail("m12@x", "Plan"))),
             ),
         ]
     }
@@ -446,8 +465,8 @@ mod tests {
             ),
             ("UID SEARCH", done("* SEARCH 12\r\n")),
             (
-                "UID FETCH 12 (UID FLAGS",
-                done(&fetched(3, 12, "BODY[]", &mail("m12@x", "Plan"))),
+                "UID FETCH 12 (UID FLAGS INTERNALDATE BODY.PEEK[HEADER] BODY.PEEK[TEXT]<0.8192>)",
+                done(&fetched_row(3, 12, &mail("m12@x", "Plan"))),
             ),
         ]);
         let (result, seen) = round(rules, "1700:100").await;
@@ -471,6 +490,58 @@ mod tests {
                 .any(|l| l.contains("UID FETCH 1:* (UID) (CHANGEDSINCE 100 VANISHED)")),
             "{seen:?}"
         );
+        assert_never_writes(&seen);
+    }
+
+    #[tokio::test]
+    async fn a_changed_mail_that_names_a_thread_under_another_subject_is_a_row_of_its_own() {
+        // Mail 13 names the Message-ID of 12 and has another subject: the delta gives the row of 13 as well as that of 12, and reads no whole mail.
+        let outsider = "Message-ID: <y@x>\r\nReferences: <m12@x>\r\nFrom: Mallory <mallory@example.net>\r\nTo: me@icloud.com\r\nSubject: You won\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nclick\r\n";
+        let mut rules = rules_with("* 3 FETCH (UID 13 MODSEQ (125))\r\n");
+        rules.extend([
+            (
+                "EXAMINE \"INBOX\"",
+                "* 3 EXISTS\r\n* OK [UIDVALIDITY 1700] ok\r\n{tag} OK [READ-ONLY] done\r\n"
+                    .to_owned(),
+            ),
+            (
+                "EXAMINE",
+                "* 0 EXISTS\r\n* OK [UIDVALIDITY 1800] ok\r\n{tag} OK [READ-ONLY] done\r\n"
+                    .to_owned(),
+            ),
+            (
+                "HEADER.FIELDS",
+                done(&fetched(
+                    3,
+                    13,
+                    "BODY[HEADER.FIELDS (MESSAGE-ID IN-REPLY-TO REFERENCES SUBJECT)]",
+                    "Message-ID: <y@x>\r\nReferences: <m12@x>\r\nSubject: You won\r\n\r\n",
+                )),
+            ),
+            ("UID SEARCH", done("* SEARCH 12 13\r\n")),
+            (
+                "UID FETCH 13,12 (UID FLAGS INTERNALDATE BODY.PEEK[HEADER] BODY.PEEK[TEXT]<0.8192>)",
+                done(&(fetched_row(2, 13, outsider) + &fetched_row(3, 12, &mail("m12@x", "Plan")))),
+            ),
+        ]);
+        let (result, seen) = round(rules, "1700:100").await;
+        let Ok(Sync::Changed {
+            mut threads,
+            removed,
+            ..
+        }) = result
+        else {
+            panic!("{result:?}");
+        };
+        assert!(removed.is_empty(), "{removed:?}");
+        threads.sort_by(|a, b| a.subject.cmp(&b.subject));
+        let rows: Vec<(&str, &str)> = threads
+            .iter()
+            .map(|t| (t.id.as_str(), t.subject.as_str()))
+            .collect();
+        let (plan, won) = (thread_id("m12@x"), thread_id("y@x"));
+        assert_eq!(rows, [(plan.as_str(), "Plan"), (won.as_str(), "You won")]);
+        assert!(!seen.iter().any(|l| l.contains("BODY.PEEK[]")), "{seen:?}");
         assert_never_writes(&seen);
     }
 

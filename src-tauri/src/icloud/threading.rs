@@ -1,6 +1,7 @@
 //! Putting the mails of an iCloud account into threads (M-13), as pure functions on the headers.
 //! IMAP has no thread of its own here (iCloud answers no `THREAD`), so the app joins the mails that name each other in `Message-ID`, `In-Reply-To` and `References`.
 //! A mail with none of these stands alone. The ID of a thread is made from the Message-ID of its root mail, so that the thread can be found again by a search of the mailbox.
+//! A Message-ID that a mail names joins it to that mail's thread only when the subjects agree (`base_subject`, as Gmail does), so a sender cannot put a mail into a thread of someone else's by naming its Message-ID.
 
 use std::collections::HashMap;
 
@@ -15,6 +16,8 @@ pub struct Node {
     /// The Message-IDs the mail answers: the References in order, then the In-Reply-To when it is not among them. Never `own`.
     pub refs: Vec<String>,
     pub date_ms: i64,
+    /// `base_subject` of the mail's subject.
+    pub subject: String,
 }
 
 impl Node {
@@ -36,11 +39,27 @@ pub struct Group {
     pub members: Vec<usize>,
 }
 
-/// Disjoint sets of the Message-IDs seen.
+/// The subject without the `Re:`, `Fwd:` and `Fw:` that replies put in front of it, in lower case with one space between the words: what the mails of one thread have in common.
+pub fn base_subject(subject: &str) -> String {
+    let mut rest = subject.trim();
+    while let Some(prefix) = ["re:", "fwd:", "fw:"]
+        .into_iter()
+        .find(|p| rest.to_ascii_lowercase().starts_with(p))
+    {
+        rest = rest[prefix.len()..].trim_start();
+    }
+    rest.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// Disjoint sets of the Message-IDs seen. A set that holds a mail seen knows its subject; an ID that only a mail names has none, and takes the subject of the set it joins.
 #[derive(Default)]
 struct Sets<'a> {
     slot: HashMap<&'a str, usize>,
     parent: Vec<usize>,
+    subject: Vec<Option<&'a str>>,
 }
 
 impl<'a> Sets<'a> {
@@ -49,8 +68,15 @@ impl<'a> Sets<'a> {
         let id = *self.slot.entry(key).or_insert(next);
         if id == next {
             self.parent.push(next);
+            self.subject.push(None);
         }
         id
+    }
+
+    /// Records the subject of the mail whose own ID is `id`; a second copy of the mail keeps the first one's.
+    fn name(&mut self, id: usize, subject: &'a str) {
+        let root = self.find(id);
+        self.subject[root].get_or_insert(subject);
     }
 
     fn find(&mut self, mut i: usize) -> usize {
@@ -61,24 +87,59 @@ impl<'a> Sets<'a> {
         i
     }
 
-    fn union(&mut self, a: usize, b: usize) {
+    /// Joins the sets of `a` and `b` unless both hold a mail and the subjects differ; whether they are one set now.
+    fn union(&mut self, a: usize, b: usize) -> bool {
         let (a, b) = (self.find(a), self.find(b));
+        if a == b {
+            return true;
+        }
+        if matches!((self.subject[a], self.subject[b]), (Some(x), Some(y)) if x != y) {
+            return false;
+        }
+        self.subject[b] = self.subject[b].or(self.subject[a]);
         self.parent[a] = b;
+        true
     }
 }
 
-/// Joins the mails whose Message-IDs link up, in any chain. A mail that names no other and is named by none is a thread of its own.
+/// The sets of the Message-IDs of `nodes`, the set of each node's own ID, and the nodes with only the References that the subject let join.
+fn link(nodes: &[Node]) -> (Sets<'_>, Vec<usize>, Vec<Node>) {
+    let mut sets = Sets::default();
+    let owns: Vec<usize> = nodes
+        .iter()
+        .map(|n| {
+            let id = sets.id(&n.own);
+            sets.name(id, &n.subject);
+            id
+        })
+        .collect();
+    let mut linked = Vec::with_capacity(nodes.len());
+    for (node, own) in nodes.iter().zip(&owns) {
+        let mut refs = Vec::new();
+        for r in &node.refs {
+            let id = sets.id(r);
+            if sets.union(*own, id) {
+                refs.push(r.clone());
+            }
+        }
+        linked.push(Node {
+            refs,
+            ..node.clone()
+        });
+    }
+    (sets, owns, linked)
+}
+
+/// `nodes` with the References that name a mail of another subject taken out: the thread of a node is what its remaining names lead to.
+pub fn linked(nodes: &[Node]) -> Vec<Node> {
+    link(nodes).2
+}
+
+/// Joins the mails whose Message-IDs link up, in any chain, where the subjects agree. A mail that names no other and is named by none is a thread of its own.
 /// Two nodes with the same Message-ID (a mail kept in two folders) count once: the one that comes first in `nodes` stays.
 /// The groups come in the order of their first node.
 pub fn group(nodes: &[Node]) -> Vec<Group> {
-    let mut sets = Sets::default();
-    let owns: Vec<usize> = nodes.iter().map(|n| sets.id(&n.own)).collect();
-    for (node, own) in nodes.iter().zip(&owns) {
-        for r in &node.refs {
-            let r = sets.id(r);
-            sets.union(*own, r);
-        }
-    }
+    let (mut sets, owns, nodes) = link(nodes);
     let mut order: Vec<usize> = Vec::new();
     let mut by_set: HashMap<usize, Vec<usize>> = HashMap::new();
     for (i, own) in owns.iter().enumerate() {
@@ -153,7 +214,13 @@ mod tests {
             own: own.into(),
             refs: refs.iter().map(|r| (*r).into()).collect(),
             date_ms,
+            subject: "plan".into(),
         }
+    }
+
+    fn about(subject: &str, mut node: Node) -> Node {
+        node.subject = base_subject(subject);
+        node
     }
 
     #[test]
@@ -232,6 +299,79 @@ mod tests {
         assert_eq!(reply.root_key(), "a");
         assert!(reply.belongs_to("a") && reply.belongs_to("b") && !reply.belongs_to("c"));
         assert_eq!(node("a", &[], 10).root_key(), "a");
+    }
+
+    #[test]
+    fn the_base_subject_drops_the_prefixes_of_replies_and_the_case_and_the_spaces() {
+        for same in [
+            "Plan",
+            "Re: Plan",
+            "RE:Plan",
+            "Fwd: Re:  PLAN ",
+            "fw: re: fwd: plan",
+        ] {
+            assert_eq!(base_subject(same), "plan", "{same:?}");
+        }
+        assert_eq!(base_subject("Re: 会議  の  件"), "会議 の 件");
+        assert_eq!(base_subject("Replan"), "replan");
+        assert_eq!(base_subject("Re:"), "");
+        assert_eq!(base_subject(""), "");
+    }
+
+    #[test]
+    fn a_mail_that_names_a_known_message_id_under_another_subject_is_not_in_that_thread() {
+        // y names the Message-ID of a, and nothing else joins them: y has a thread of its own, and its key is not a's.
+        let nodes = [
+            about("Plan", node("a", &[], 10)),
+            about("Re: Plan", node("b", &["a"], 20)),
+            about("Hello", node("y", &["a"], 30)),
+        ];
+        let groups = group(&nodes);
+        assert_eq!(
+            groups,
+            vec![
+                Group {
+                    key: "a".into(),
+                    members: vec![0, 1]
+                },
+                Group {
+                    key: "y".into(),
+                    members: vec![2]
+                }
+            ]
+        );
+        // The same when the outsider's mail comes first.
+        let nodes = [
+            about("Hello", node("y", &["a"], 5)),
+            about("Plan", node("a", &[], 10)),
+        ];
+        assert_eq!(group(&nodes).len(), 2);
+        // What the References of each node come to: y's is empty, so a search that names a does not take y as belonging to it.
+        let kept = linked(&nodes);
+        assert!(kept[0].refs.is_empty() && !kept[0].belongs_to("a"));
+    }
+
+    #[test]
+    fn two_mails_that_name_a_message_id_that_is_not_here_join_only_under_one_subject() {
+        let nodes = [
+            about("Plan", node("r1", &["gone"], 10)),
+            about("Re: Plan", node("r2", &["gone"], 20)),
+            about("Hello", node("r3", &["gone"], 30)),
+        ];
+        let groups = group(&nodes);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].key, "gone");
+        assert_eq!(groups[0].members, vec![0, 1]);
+        assert_eq!(groups[1].key, "r3");
+    }
+
+    #[test]
+    fn a_mail_without_a_subject_joins_no_thread_that_has_one() {
+        let nodes = [
+            about("Plan", node("a", &[], 10)),
+            about("", node("y", &["a"], 20)),
+        ];
+        assert_eq!(group(&nodes).len(), 2);
     }
 
     #[test]
