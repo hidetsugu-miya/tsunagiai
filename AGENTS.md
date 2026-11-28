@@ -10,7 +10,8 @@ User-facing text is in `README.md` and `docs/`.
 ## Scope
 
 - The only user is the owner.
-- Only Gmail accounts are supported.
+- Gmail accounts, and iCloud accounts (M-13: IMAP with an App-specific password), are supported.
+- Other mail providers (generic IMAP, Outlook and so on) are out of scope.
 - Other mail providers (generic IMAP, Outlook and so on) are out of scope.
 - Calendar, Todoist, Slack, Orca and Jira are integrations around the mail client.
 - Jira means Jira Cloud (`https://{name}.atlassian.net`) only; the self-hosted Jira is out of scope.
@@ -25,7 +26,7 @@ A new requirement gets a section there and an entry here.
 
 | Area | File | Requirements |
 |------|------|--------------|
-| Mail | `requirements/mail.md` | M-1 List, M-2 Read, M-3 Delete, M-4 Archive, M-5 Multiple accounts, M-6 Mark read, M-7 Auto sync, M-8 AI summary, M-9 New mail popup (retired), M-10 Reply field, M-11 New mail, M-12 Attach files |
+| Mail | `requirements/mail.md` | M-1 List, M-2 Read, M-3 Delete, M-4 Archive, M-5 Multiple accounts, M-6 Mark read, M-7 Auto sync, M-8 AI summary, M-9 New mail popup (retired), M-10 Reply field, M-11 New mail, M-12 Attach files, M-13 iCloud accounts |
 | Calendar | `requirements/calendar.md` | C-1 View, C-2 Event detail, C-3 First day of the week, C-4 Calendars to show, C-5 Create an event, C-6 Claude pane on the calendar screen, C-7 Edit and delete an event, C-8 Notice of an event before it starts |
 | Tasks | `requirements/tasks.md` | T-1 Todoist, T-2 Nest and unnest tasks, T-3 Comments, T-4 Labels, T-5 Count by due moment, T-6 Move a subtask from the detail, T-7 Claude pane on the Todo screen (retired), T-8 Manage projects, T-9 Search tasks, T-10 Tabs of task details on the Todo screen, T-11 A task's tab in a window of its own |
 | Slack | `requirements/slack.md` | S-1 Paste a mail into Slack (retired), S-2 Summarize a Slack message into a Todo, S-3 Edit the Todo summary prompt, S-4 Proofread the text to paste into Slack with Claude (retired), S-5 Slack list, S-6 Slack thread, S-7 Ask Claude about the thread, S-8 Slack list: unread and read, S-9 Keep a channel off the Slack list, S-10 Emoji in Slack text, S-11 Blocks and attachments in the thread, S-12 Slack styles in the thread, S-13 Watch threads and the header of the Slack list, S-14 Unread replies in the Slack list, S-15 Mark a Slack channel read, S-16 Update the Slack list by Socket Mode events, S-17 New Slack message popup (retired), S-18 Revise the Todo draft with Claude, S-19 Slack side menu, S-20 Slack channel history, S-21 Post to a Slack channel, S-22 Reactions in Slack messages, S-23 Post to Slack by a request to Claude (retired), S-24 Ask Claude on the Slack screen (retired), S-25 Add and take off a reaction, S-26 Custom emoji in reactions as images, S-27 Claude mode and manual mode of the Slack compose screen (retired), S-28 Post to Slack from the mail's right pane, S-29 Sentry connection of a Slack workspace, S-30 Resolve, archive, unresolve and assign a Sentry notification from the thread |
@@ -50,8 +51,10 @@ A new requirement gets a section there and an entry here.
   - A permanent delete (one that skips the trash) needs `https://mail.google.com/`.
 - The Calendar scopes are `calendar.readonly` (read) and `calendar.events.owned` (create, change and delete an event on a calendar the account owns).
   - `calendar.events` is not taken, because it also reaches the calendars that other people shared with the account.
+- The directory scope is `directory.readonly` (the search of the people of the account's organization, C-9). It is a sensitive scope that no verification was applied for, and it is asked for with the others in `SCOPE` of `auth.rs`.
 - The refresh token is stored locally so the user does not log in at every start.
 - Tokens go in the OS keychain (macOS Keychain, Windows Credential Manager), never in a plain file.
+- The App-specific password of an iCloud account is kept the same way (keychain service `jp.mysis.tsunagiai.icloud`), and its row in `accounts.json` holds the address and the kind only.
 - The list of accounts (the email address and the kind, `gmail` or `icloud`, of each; no token) is saved in `accounts.json` in the app config directory. A row that is only an address is a Gmail account.
 - The name the app shows is つなぎAI (the window title, the name in Finder and the Dock, which `LSHasLocalizedDisplayName` in `src-tauri/Info.plist` reads from `src-tauri/macos/ja.lproj/InfoPlist.strings` (`bundle.macOS.files` puts it in the app; `CFBundleDisplayName` stays `tsunagiai`, because Finder shows the file name when the two differ), the texts of the screens, #764). The internal name stays `tsunagiai`: `productName`, `tsunagiai.app`, the crate, `tsunagiai-mcp`, the config folder and the keychain.
 - The identifier is `jp.mysis.tsunagiai`. The config directory and the keychain services of the old identifier `jp.mysis.cookapps` are moved to the new ones by the app (`requirements/constraints.md`, "Settings files").

@@ -23,6 +23,7 @@ import type { DatabaseFavorite } from "./bindings/DatabaseFavorite";
 import type { DatabaseStructure } from "./bindings/DatabaseStructure";
 import type { DatabaseTable } from "./bindings/DatabaseTable";
 import type { DecisionPage } from "./bindings/DecisionPage";
+import type { DirectoryPeople } from "./bindings/DirectoryPeople";
 import type { PageAnswer } from "./bindings/PageAnswer";
 import type { PageVerdict } from "./bindings/PageVerdict";
 import type { Effort } from "./bindings/Effort";
@@ -58,6 +59,7 @@ import type { MachineResources } from "./bindings/MachineResources";
 import type { MailSummary } from "./bindings/MailSummary";
 import type { OutgoingMail } from "./bindings/OutgoingMail";
 import type { PickedAttachment } from "./bindings/PickedAttachment";
+import type { PersonWeek } from "./bindings/PersonWeek";
 import type { MarkdownParts } from "./bindings/MarkdownParts";
 import type { MarkdownPatchResult } from "./bindings/MarkdownPatchResult";
 import type { MenuEntry } from "./bindings/MenuEntry";
@@ -90,6 +92,8 @@ import type { JiraSettings } from "./bindings/JiraSettings";
 import type { JiraSprint } from "./bindings/JiraSprint";
 import type { JiraTransition } from "./bindings/JiraTransition";
 import type { JiraUser } from "./bindings/JiraUser";
+import type { IcloudAccount } from "./bindings/IcloudAccount";
+import type { IcloudCheck } from "./bindings/IcloudCheck";
 import type { NotionAccount } from "./bindings/NotionAccount";
 import type { OrcaBranchSwitched } from "./bindings/OrcaBranchSwitched";
 import type { OrcaCommitFiles } from "./bindings/OrcaCommitFiles";
@@ -168,6 +172,10 @@ export interface Commands {
   set_calendar_shown: { args: { account: string; calendarId: string; shown: boolean }; result: null };
   // C-5: the calendars an event can be created in (those of each account that the user owns), in the shape of `calendar_choices`.
   calendar_owned: { args: undefined; result: CalendarChoices };
+  // C-9: the people of the accounts' organizations whose name or address matches `text` (an empty text finds no one). `needsLogin` lists the accounts that must log in again (the directory scope is not granted yet).
+  calendar_search_people: { args: { text: string }; result: DirectoryPeople };
+  // C-9: the week containing `date` of the person with the address `email`, read with the token of `account` (the `account` of the person that the search gave). `needsLogin` is true when that account must log in again. An event with no shared title is titled 予定あり.
+  calendar_person_week: { args: { account: string; email: string; date: string; firstDay: number }; result: PersonWeek };
   // C-5: creates the event, with the invitations and the Google Meet it asks for. `null` means the account must log in again (it has not granted the permission to create events).
   calendar_create_event: { args: { event: NewEvent }; result: CreatedEvent | null };
   // C-7: rewrites an event that the user organized, on a calendar the user owns (one occurrence of a repeating event). `null` means the account must log in again.
@@ -269,6 +277,14 @@ export interface Commands {
   sentry_assignees: { args: { teamId: string; org: string; issueId: string }; result: SentryAssignees };
   // S-30: assigns the issue (`assignee` is a `value` of `sentry_assignees`: `user:{id}` or `team:{id}`) with the workspace's token.
   sentry_assign: { args: { teamId: string; org: string; issueId: string; assignee: string }; result: null };
+  // M-13: the iCloud accounts (the rows of accounts.json with the kind icloud). Asks iCloud nothing.
+  icloud_accounts: { args: undefined; result: IcloudAccount[] };
+  // M-13: logs in to iCloud with the kept App-specific password and answers whether it works (ok), is refused (needsLogin) or could not be tried (error).
+  icloud_check: { args: { address: string }; result: IcloudCheck };
+  // M-13: tries the login first, and keeps the password and lists the account only when iCloud accepts it (an account already listed has its password entered again); answers the iCloud accounts.
+  icloud_add_account: { args: { address: string; password: string }; result: IcloudAccount[] };
+  // M-13: deletes the password and the row of an iCloud account; answers the iCloud accounts left.
+  icloud_remove_account: { args: { address: string }; result: IcloudAccount[] };
   // The connected Notion workspaces; `reconnect` is true when no token is kept. Asks Notion nothing.
   notion_accounts: { args: undefined; result: NotionAccount[] };
   // Opens the browser for Notion's consent and answers the connected workspace.

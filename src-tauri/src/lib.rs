@@ -19,6 +19,7 @@ pub mod formation_reply;
 pub mod formation_server;
 pub mod ghostty;
 pub mod gmail;
+pub mod icloud;
 pub mod identity;
 pub mod image_senders;
 pub mod images;
@@ -310,6 +311,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             auth::login,
             auth::remove_account,
+            icloud::icloud_accounts,
+            icloud::icloud_check,
+            icloud::icloud_add_account,
+            icloud::icloud_remove_account,
             calendar::calendar_week,
             calendar::calendar_cached,
             calendar::calendar_first_day,
@@ -318,6 +323,8 @@ pub fn run() {
             calendar::calendar_notices,
             calendar::calendar_choices,
             calendar::calendar_owned,
+            calendar::calendar_search_people,
+            calendar::calendar_person_week,
             calendar::calendar_create_event,
             calendar::calendar_update_event,
             calendar::calendar_delete_event,
