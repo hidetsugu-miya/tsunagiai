@@ -26,6 +26,13 @@ impl Account {
             kind: AccountKind::Gmail,
         }
     }
+
+    pub fn icloud(address: &str) -> Self {
+        Self {
+            address: address.to_owned(),
+            kind: AccountKind::Icloud,
+        }
+    }
 }
 
 /// One row of `accounts`. A row that is only an address is a Gmail account (the file as it was before kinds existed),
@@ -67,12 +74,20 @@ struct AccountsFile {
     accounts: Vec<Entry>,
 }
 
-/// The addresses of every account, whatever its kind. `None` means accounts.json does not exist yet.
+/// The addresses of the Gmail accounts: the Google side (login, the calendar, the kept copies) knows no other kind.
+/// `None` means accounts.json does not exist yet.
 pub fn load(dir: &Path) -> Result<Option<Vec<String>>, String> {
-    Ok(load_accounts(dir)?.map(|list| list.into_iter().map(|a| a.address).collect()))
+    Ok(load_accounts(dir)?.map(|list| gmail_addresses(&list)))
 }
 
-/// The accounts with their kinds. `None` means accounts.json does not exist yet.
+fn gmail_addresses(list: &[Account]) -> Vec<String> {
+    list.iter()
+        .filter(|a| a.kind == AccountKind::Gmail)
+        .map(|a| a.address.clone())
+        .collect()
+}
+
+/// The accounts of every kind, with their kinds. `None` means accounts.json does not exist yet.
 pub fn load_accounts(dir: &Path) -> Result<Option<Vec<Account>>, String> {
     let path = dir.join(FILE);
     match std::fs::read_to_string(&path) {
@@ -250,14 +265,9 @@ mod tests {
         .unwrap();
         assert_eq!(kind(&dir, "b@icloud.com"), Ok(AccountKind::Icloud));
         assert_eq!(kind(&dir, "a@example.com"), Ok(AccountKind::Gmail));
-        // The addresses of every kind are listed by `load`.
-        assert_eq!(
-            load(&dir),
-            Ok(Some(vec![
-                "a@example.com".to_string(),
-                "b@icloud.com".to_string()
-            ]))
-        );
+        // `load` lists the Gmail accounts only; `load_accounts` lists every kind.
+        assert_eq!(load(&dir), Ok(Some(vec!["a@example.com".to_string()])));
+        assert_eq!(load_accounts(&dir).unwrap().unwrap().len(), 2);
         let list = load_accounts(&dir).unwrap().unwrap();
         let again = with_account(list.clone(), Account::gmail("b@icloud.com"));
         assert_eq!(again, list);

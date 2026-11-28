@@ -58,6 +58,8 @@ export const TERMINAL_SVG = icon("terminal", '<rect x="3" y="4" width="18" heigh
 export const TRASH_SVG = icon("trash", '<path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/>');
 export const SUMMARY_SVG = icon("summary", '<path d="M8 3l1.4 3.6L13 8l-3.6 1.4L8 13l-1.4-3.6L3 8l3.6-1.4z"/><path d="M16.5 6H21M16.5 11H21M4 17h17M4 21h11"/>');
 export const SLACK_SVG = icon("slack", '<path d="M9.5 4L8 20M16 4l-1.5 16M4 9h16.5M3.5 15H20"/>');
+// M-13: the logo of the iCloud card of the settings (a cloud).
+export const ICLOUD_SVG = icon("icloud", '<path d="M7 18h10a4 4 0 0 0 .6-7.96A6 6 0 0 0 6.2 9.1 4.5 4.5 0 0 0 7 18z"/>');
 export const KEY_SVG = icon("key", '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3M14 9l2 2"/>');
 export const LINK_SVG = icon("link", '<path d="M9 15l6-6"/><path d="M11 6l1.5-1.5a3.5 3.5 0 0 1 5 5L16 11"/><path d="M13 18l-1.5 1.5a3.5 3.5 0 0 1-5-5L8 13"/>');
 export const LOCK_SVG = icon("lock", '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>');

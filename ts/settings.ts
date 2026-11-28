@@ -1,4 +1,4 @@
-// The settings screen: a tab each for Google, the calendar (the day the week starts on), Todoist (whether it is connected), Slack, Notion (`ts/notion-settings.ts`), Claude, the skills (`ts/skill-settings.ts`), the plugins (`ts/plugin-settings.ts`), 開発 (the tab `orca`: the card of the terminal colors `ts/orca-theme.ts`, that of Ghostty's settings `ts/ghostty.ts`, that of the PCs with the server of A-37 `ts/formation-consent-settings.ts`, that of the pairing of this machine's Orca `ts/orca-pairing-settings.ts`), the menu (`ts/settings-menu.ts`: the order and the on and off of the sidebar's screens), the fonts (`ts/font-settings.ts`), the updater and the log (`ts/log-settings.ts`), each with its card.
+// The settings screen: a tab each for Google, iCloud (`ts/icloud-settings.ts`), the calendar (the day the week starts on), Todoist (whether it is connected), Slack, Notion (`ts/notion-settings.ts`), Claude, the skills (`ts/skill-settings.ts`), the plugins (`ts/plugin-settings.ts`), 開発 (the tab `orca`: the card of the terminal colors `ts/orca-theme.ts`, that of Ghostty's settings `ts/ghostty.ts`, that of the PCs with the server of A-37 `ts/formation-consent-settings.ts`, that of the pairing of this machine's Orca `ts/orca-pairing-settings.ts`), the menu (`ts/settings-menu.ts`: the order and the on and off of the sidebar's screens), the fonts (`ts/font-settings.ts`), the updater and the log (`ts/log-settings.ts`), each with its card.
 // The heading and the tabs stay at the top while a card scrolls. A token is never shown; Rust keeps it in the keychain.
 import type { HiddenChannel } from "./bindings/HiddenChannel";
 import type { SlackLoad } from "./bindings/SlackLoad";
@@ -20,6 +20,7 @@ import { loadPromptState } from "./todo-prompt.js";
 import { showConsentCard } from "./formation-consent-settings.js";
 import { showOrcaPairingCard } from "./orca-pairing-settings.js";
 import { showLogTab } from "./log-settings.js";
+import { initIcloudTab, showIcloudTab } from "./icloud-settings.js";
 import { initNotionTab, showNotionTab } from "./notion-settings.js";
 import { initSentryCard, loadSentryCard } from "./sentry-settings.js";
 import { hidePluginClaude, showPluginsTab } from "./plugin-settings.js";
@@ -28,7 +29,7 @@ import { logError, showFailure } from "./error-card.js";
 
 let settingsSeq = 0;
 
-export const SETTINGS_TABS = ["google", "calendar", "todoist", "slack", "notion", "claude", "skill", "plugins", "orca", "menu", "font", "update", "log"] as const;
+export const SETTINGS_TABS = ["google", "icloud", "calendar", "todoist", "slack", "notion", "claude", "skill", "plugins", "orca", "menu", "font", "update", "log"] as const;
 export type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 // The tab shown; the settings screen opens on Google unless the way in names another.
@@ -60,6 +61,8 @@ export function selectSettingsTab(name: SettingsTab) {
   if (name === "orca") showOrcaPairingCard();
   // The workspaces are read each time the Notion tab is shown (N-1).
   if (name === "notion") showNotionTab();
+  // The accounts are read, and iCloud is asked about each one, each time the iCloud tab is shown (M-13).
+  if (name === "icloud") showIcloudTab();
   // The log is read each time the Log tab is shown.
   if (name === "log") showLogTab();
   // The tokens are asked about only once the Slack tab is shown.
@@ -346,6 +349,7 @@ export async function loadSettings() {
 
 export function initSettings() {
   initNotionTab();
+  initIcloudTab();
   initSentryCard();
   for (const t of SETTINGS_TABS) $(`settings-tab-${t}`).onclick = () => selectSettingsTab(t);
   // Left and right move to the neighbour tab (the first and the last are neighbours), and the focus goes with it.

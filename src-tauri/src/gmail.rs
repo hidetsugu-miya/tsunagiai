@@ -959,9 +959,13 @@ async fn account_threads(
 /// Threads of every account merged; accounts needing login or failing to load are listed, not fatal.
 /// `command` names the caller in the failure log.
 pub async fn load_inbox(dir: &Path, auth: &Auth, command: &str) -> Result<Inbox, String> {
-    let listed = accounts::load_accounts(dir)
+    // An iCloud account has no backend here yet (M-13): the inbox lists the Gmail accounts only, so no row or failure of an iCloud address reaches the Google card.
+    let listed: Vec<_> = accounts::load_accounts(dir)
         .map_err(|e| log_failure(command, "-", e))?
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|a| a.kind == accounts::AccountKind::Gmail)
+        .collect();
     let accounts: Vec<String> = listed.iter().map(|a| a.address.clone()).collect();
     let (mut lists, mut needs_login, mut failed, mut history_ids) =
         (Vec::new(), Vec::new(), HashMap::new(), HashMap::new());
@@ -2581,5 +2585,18 @@ mod tests {
             (v["kind"].as_str(), v["historyId"].as_str()),
             (Some("reloaded"), Some("8"))
         );
+    }
+    /// An iCloud account has no backend in the inbox yet: its address is not in the list and no failure is reported for it.
+    #[tokio::test]
+    async fn the_inbox_lists_gmail_accounts_only() {
+        let dir =
+            std::env::temp_dir().join(format!("tsunagiai-test-{}-inbox-kinds", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        accounts::save_accounts(&dir, &[accounts::Account::icloud("me@icloud.com")]).unwrap();
+        let inbox = load_inbox(&dir, &Auth::new(), "inbox").await.unwrap();
+        assert!(
+            inbox.accounts.is_empty() && inbox.failed.is_empty() && inbox.needs_login.is_empty()
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

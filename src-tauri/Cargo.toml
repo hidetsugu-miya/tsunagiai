@@ -15,6 +15,7 @@ e2e = ["dep:keyring-core", "dep:tauri-plugin-wdio", "dep:tauri-plugin-wdio-webdr
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+async-imap = { version = "0.12", default-features = false, features = ["runtime-tokio"] }
 base64 = "0.23"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 crypto_secretbox = "0.1"
@@ -33,6 +34,7 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls", "j
 rmcp = { version = "3.8", features = ["server", "transport-io", "macros"] }
 rusqlite = { version = "0.42", features = ["bundled"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }
+rustls-platform-verifier = "0.7"
 salsa20 = "0.11"
 schemars = "1"
 semver = "1"
@@ -48,6 +50,7 @@ tauri-plugin-updater = "2"
 tauri-plugin-wdio = { version = "1.5.1", optional = true }
 tauri-plugin-wdio-webdriver = { version = "1.5.1", optional = true }
 tokio = { version = "1", features = ["net", "io-util", "macros", "process", "rt", "sync", "time"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs", "tls12"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 url = "2"
 x25519-dalek = "3"
