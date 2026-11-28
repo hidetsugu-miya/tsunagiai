@@ -1,3 +1,5 @@
+import type { DirectoryPeople } from "../../ts/bindings/DirectoryPeople";
+import type { PersonWeek } from "../../ts/bindings/PersonWeek";
 import type { Week } from "../../ts/bindings/Week";
 import { account, boot, calendarChoices, callsOf, copiedTexts, count, holds, inbox, isoDate, meetUrl, mock, ownedCalendars, rejects, release, rfc, setClock, stubClipboard, textsOf, waitForCalls, waitForCard, waitForCount, waitForText, weekOfToday, CARD, CARDS, WARN_CARDS } from "../support";
 
@@ -1119,5 +1121,194 @@ describe("calendar: overlapping events", () => {
     await openOverlapWeek();
     await expect(eventButton("Maybe lunch").$(".cal-time")).toHaveText("12:00 - 13:00");
     await expect(eventButton("Team sync").$(".cal-time")).not.toExist();
+  });
+});
+
+// C-9: the guests of the calendar screen.
+describe("calendar: guests", () => {
+  const yamada = { account, name: "山田 太郎", email: "yamada@example.com" };
+  const yamamoto = { account, name: "山本 花子", email: "yamamoto@example.com" };
+  const directory = (...people: (typeof yamada)[]): DirectoryPeople => ({ people, needsLogin: [], failed: {} });
+
+  // The week of today's column of a person: a titled event, one whose title is not shared, and an all-day event.
+  const guestWeek = (): PersonWeek => {
+    const mine = weekOfToday();
+    const { day, ...event } = mine.timed[0];
+    return {
+      weekStart: mine.weekStart,
+      allDay: [{ ...mine.allDay[0], summary: "出張" }],
+      timed: [
+        { ...event, day, startMin: 540, endMin: 600, summary: "顧客訪問" },
+        { ...event, day, startMin: 780, endMin: 840, summary: "予定あり" },
+      ],
+      needsLogin: false,
+    };
+  };
+
+  async function openGuests(people = directory(yamada, yamamoto)) {
+    await boot({ inbox: inbox(), calendar_week: weekOfToday(), calendar_choices: calendarChoices(), calendar_search_people: people, calendar_person_week: guestWeek() });
+    await $("#nav-calendar").click();
+    await waitForText("#cal-body .cal-name", "Team sync");
+  }
+
+  const search = async (text: string) => {
+    await $("#cal-guest-input").setValue(text);
+    await waitForText("#cal-guest-cands .cal-guest-name", "山田 太郎");
+  };
+
+  const choose = async (name: string) => {
+    await $(`//button[contains(@class, "cal-guest-cand")][contains(., "${name}")]`).click();
+    await waitForText("#cal-guest-chips .cal-guest-name", name);
+  };
+
+  const rect = (selector: string) =>
+    browser.execute((s) => {
+      const r = document.querySelector(s)!.getBoundingClientRect();
+      return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+    }, selector);
+
+  it("puts the field between the month calendar and the calendars, and shows no candidate and no chip before a search", async () => {
+    await openGuests();
+    expect(await browser.execute(() => [...document.getElementById("cal-side")!.children].map((c) => c.id))).toEqual(["cal-month", "cal-guest", "cal-side-feed"]);
+    await expect($("#cal-guest .cal-guest-label")).toHaveText("ゲスト");
+    expect(await $("#cal-guest-input").getAttribute("placeholder")).toBeNull();
+    await expect($("#cal-guest-cands")).not.toBeDisplayed();
+    await expect($("#cal-guest-chips")).not.toBeDisplayed();
+  });
+
+  it("searches the text typed and lists the people with their addresses", async () => {
+    await openGuests();
+    const calls = await mock("calendar_search_people", directory(yamada, yamamoto));
+    await search("yama");
+    expect(await waitForCalls(calls)).toEqual([{ text: "yama" }]);
+    expect(await textsOf("#cal-guest-cands .cal-guest-name")).toEqual(["山田 太郎", "山本 花子"]);
+    expect(await textsOf("#cal-guest-cands .cal-guest-mail")).toEqual(["yamada@example.com", "yamamoto@example.com"]);
+  });
+
+  it("lists a person found in two accounts once, and clears the candidates when the field is emptied", async () => {
+    await openGuests(directory(yamada, { ...yamada, account: "other@example.com" }));
+    await search("yama");
+    expect(await count("#cal-guest-cands .cal-guest-cand")).toBe(1);
+    await $("#cal-guest-input").setValue("");
+    await expect($("#cal-guest-cands")).not.toBeDisplayed();
+  });
+
+  it("shows the person chosen as a chip, reads their week with the account that found them, and draws it right of the user's events in a color of its own", async () => {
+    await openGuests();
+    const calls = await mock("calendar_person_week", guestWeek());
+    await search("yama");
+    await choose("山田 太郎");
+    await expect($("#cal-guest-chips .cal-side-group")).toHaveText("表示中");
+    await expect($("#cal-guest-input")).toHaveValue("");
+    await expect($("#cal-guest-cands")).not.toBeDisplayed();
+    expect(await waitForCalls(calls)).toContainEqual({ account, email: "yamada@example.com", date: weekOfToday().weekStart, firstDay: 0 });
+    await waitForCount("#cal-body .cal-guest", 2);
+    expect(await textsOf("#cal-body .cal-guest .cal-name")).toEqual(["顧客訪問", "予定あり"]);
+    await expect($("#cal-allday .cal-guest")).toHaveText("出張");
+    const own = await rect('#cal-body .cal-event:not(.cal-guest)');
+    const guest = await rect("#cal-body .cal-guest");
+    expect(own.right).toBeLessThanOrEqual(guest.left + 1);
+    const colors = await browser.execute(() => [".cal-event:not(.cal-guest)", ".cal-guest"].map((s) => (document.querySelector(`#cal-body ${s}`) as HTMLElement).style.getPropertyValue("--c")));
+    expect(colors[0]).not.toBe(colors[1]);
+    // A guest's event is not a button: it opens no detail.
+    expect(await count("#cal-body button.cal-guest, #cal-allday button.cal-guest")).toBe(0);
+    await eventButton("Team sync").click();
+    await expect($(".cal-pop")).toBeDisplayed();
+    // The press is sent to the box itself, since the popover may lie over it.
+    await browser.execute(() => (document.querySelector("#cal-body .cal-guest") as HTMLElement).click());
+    await waitForCount(".cal-pop", 0);
+  });
+
+  it("keeps the two guests in strips side by side, and takes the person off the candidates", async () => {
+    await openGuests();
+    await search("yama");
+    await choose("山田 太郎");
+    await $("#cal-guest-input").setValue("yama");
+    await waitForText("#cal-guest-cands .cal-guest-name", "山本 花子");
+    expect(await textsOf("#cal-guest-cands .cal-guest-name")).toEqual(["山本 花子"]);
+    await $("#cal-guest-input").click();
+    await browser.keys("Enter");
+    await waitForCount("#cal-guest-chips .cal-guest-chip", 2);
+    expect(await textsOf("#cal-guest-chips .cal-guest-name")).toEqual(["山田 太郎", "山本 花子"]);
+    await waitForCount("#cal-body .cal-guest", 4);
+    const strips = await browser.execute(() =>
+      ["yamada@example.com", "yamamoto@example.com"].map((m) => {
+        const r = document.querySelector(`#cal-body .cal-guest[data-guest="${m}"]`)!.getBoundingClientRect();
+        return { left: r.left, right: r.right };
+      }),
+    );
+    expect(strips[0].right).toBeLessThanOrEqual(strips[1].left + 1);
+  });
+
+  it("takes the person off with the ✕ of the chip, and the week gets its whole width back", async () => {
+    await openGuests();
+    await search("yama");
+    await choose("山田 太郎");
+    await waitForCount("#cal-body .cal-guest", 2);
+    expect(await browser.execute(() => (document.querySelector("#cal-body .cal-event:not(.cal-guest)") as HTMLElement).style.width)).not.toBe("100%");
+    await $('#cal-guest-chips button[aria-label="山田 太郎を外す"]').click();
+    await waitForCount("#cal-guest-chips .cal-guest-chip", 0);
+    await waitForCount("#cal-body .cal-guest, #cal-allday .cal-guest", 0);
+    await expect($("#cal-guest-chips")).not.toBeDisplayed();
+    expect(await browser.execute(() => (document.querySelector("#cal-body .cal-event") as HTMLElement).style.width)).toBe("100%");
+  });
+
+  it("reads the guest's week again with the week the screen moves to, and not at all once the guest is off", async () => {
+    await openGuests();
+    const calls = await mock("calendar_person_week", guestWeek());
+    await search("yama");
+    await choose("山田 太郎");
+    await waitForCount("#cal-body .cal-guest", 2);
+    await $("#cal-next").click();
+    const [y, m, d] = weekOfToday().weekStart.split("-").map(Number);
+    const next = isoDate(new Date(y, m - 1, d + 7));
+    await browser.waitUntil(async () => ((await callsOf(calls)) as { date: string }[]).some((c) => c.date === next), { timeoutMsg: "the guest's next week was not read" });
+    await $('#cal-guest-chips button[aria-label="山田 太郎を外す"]').click();
+    const before = (await callsOf(calls)).length;
+    await $("#cal-today").click();
+    await waitForText("#cal-body .cal-name", "Team sync");
+    await browser.pause(500);
+    expect((await callsOf(calls)).length).toBe(before);
+  });
+
+  it("takes a guest off when the guest's account is gone", async () => {
+    await openGuests();
+    await search("yama");
+    await choose("山田 太郎");
+    await waitForCount("#cal-body .cal-guest", 2);
+    await mock("calendar_choices", { accounts: [], needsLogin: [], failed: {} });
+    await redrawWith(weekOfToday());
+    await waitForCount("#cal-guest-chips .cal-guest-chip", 0);
+    await waitForCount("#cal-body .cal-guest", 0);
+  });
+
+  it("asks an account of the search to log in again with a warning card", async () => {
+    await openGuests({ people: [], needsLogin: [account], failed: {} });
+    await $("#cal-guest-input").setValue("yama");
+    await waitForCard(`${account} はユーザーを探すため再ログインが必要です`);
+    expect(await count(WARN_CARDS)).toBe(1);
+    await $("#nav-mail").click();
+    await waitForCount(CARDS, 0);
+  });
+
+  it("tells an account whose directory failed in a card", async () => {
+    await openGuests({ people: [], needsLogin: [], failed: { [account]: "boom" } });
+    await $("#cal-guest-input").setValue("yama");
+    await waitForCard(`${account} のユーザー検索に失敗しました: boom`);
+  });
+
+  it("shows the error when the search fails", async () => {
+    await openGuests();
+    await mock("calendar_search_people", rejects("検索できません"));
+    await $("#cal-guest-input").setValue("yama");
+    await waitForCard("検索できません");
+  });
+
+  it("asks the account of a guest whose week needs a login to log in again", async () => {
+    await openGuests();
+    await mock("calendar_person_week", { ...guestWeek(), allDay: [], timed: [], needsLogin: true });
+    await search("yama");
+    await choose("山田 太郎");
+    await waitForCard(`${account} はユーザーを探すため再ログインが必要です`);
   });
 });
