@@ -288,6 +288,20 @@
         "`git diff` に無い `.drop-line` を見つけ、共有ファイルの担当へ戻すと書いている（担当の「適用した」という返りをそのまま信じていない）",
         "戻した項目が入るまで、`run-e2e.sh --only todo` を回すコマンドを書いていない"
       ]
+    },
+    {
+      "id": 21,
+      "name": "plan-code-explore-prompt-carries-issue-body-as-text",
+      "prompt": "あなたは implement の実行の手順 3 の頭にいるリードです。`.claude/skills/implement/SKILL.md` の手順 3 を読み、`.claude/evals/files/implement/plan-issue-body.md` の記録について、#1740 の `code-explore` を起動する prompt を書き出してください。この記録が、あなたの持つ実行の文脈です。起動はせず、コマンドも実行しないでください。",
+      "expected_output": "`code-explore` はシェルが無く `gh issue view` を打てないので、prompt には issue の番号だけでなく、題と本文（Orca の一覧の行を描く関数にブランチ名を足す、要件は A-8）を文として入れる。リポジトリのルート `/work/tsunagiai` と 4 つの問いも入れる。",
+      "files": [
+        ".claude/evals/files/implement/plan-issue-body.md"
+      ],
+      "assertions": [
+        "`code-explore` の起動の prompt に、#1740 の題と本文（Orca の一覧の行を描く関数にブランチ名を足す、要件は A-8）が文として入っている（番号だけにしていない）",
+        "prompt が、issue を `gh issue view` で読むよう `code-explore` に求めていない（シェルが無いため）",
+        "prompt にリポジトリのルート `/work/tsunagiai` と 4 つの問い（実装している箇所、E2E の spec、要件の節、呼び出し元）が入っている"
+      ]
     }
   ]
 }
