@@ -75,6 +75,18 @@ Claude Code は、`skill_list` でスキルの一覧を、`skill_get` でスキ�
 MCP サーバーは `tsunagiai-mcp` だけを渡し、組み込みの道具とスキルは渡しません。スキルの文章は編集するためのもので、その中の指示には従わないと伝えます。
 ターミナルに打ち込んだ内容と、Claude Code が読んだスキルの文章は、Claude Code を通じて Anthropic に送ります。
 
+## Plugins のタブで Claude Code を動かす
+
+設定の「Plugins」タブの中央に、選んだプラグインの Claude Code のタブが並びます。「＋」で足し、「✕」で閉じます（画面は [機能](features.md)）。
+Claude Code は、そのプラグインのフォルダ（`~/.local/share/tsunagiai/plugins/{フォルダ}`）で動きます。
+組み込みの道具（Bash など）も使え、権限のモードは manual で、書き込むツールとコマンドは、使う前に Claude Code が確かめます。「常に許可」を選んでも、その回の Claude Code の中だけです。
+MCP サーバーは `tsunagiai-mcp` だけを渡し、スキルと最初の指示はありません。
+プラグインを選んでタブが無ければ、最初のタブで起動します。ほかのタブや画面に移っても、隠すだけで動き続けます。
+終了コード 0 で終わると、そのタブを閉じます。プラグインがフォルダから無くなると、そのタブと Claude Code も終えます。
+サインインは、下の「Claude の接続方式」で選んだ方式です。
+ターミナルに打ち込んだ内容と、Claude Code が呼んだツールや道具の結果は、Claude Code を通じて Anthropic に送ります。
+右のファイルの木から開いたファイルは、エディタで直せます。保存は Cmd+S だけで、Claude Code が同じファイルを書いても、保存していない入力は上書きしません。
+
 ## カレンダーの Claude ペインで Claude Code を動かす
 
 カレンダー画面の上の帯の右端に、Claude のアイコンがあります（マウスを乗せると「Claude に相談」と出ます）。
@@ -156,22 +168,21 @@ Orca に保存した接続先のフォーメーションは別です。リーダ
 リーダーは仕事をチームメイトに分け、チームメイトは Orca の新しい worktree で動く Claude Code です。リーダーは effort high、チームメイトは effort medium で起動します。
 
 - 使えるのは、`claude` が入っているときです。見つからないときと、`tsunagiai-mcp` が見つからない（保存した接続先の PC では、置かれていない）ときは、ペインにそう出ます。
-- Claude Code は、設定フォルダの `formations/{フォーメーションの名前}/` で動き、セッションの名前はフォーメーションの名前です。起動のたびに、リーダーへの指示（`CLAUDE.md`）、MCP の設定、起動のスクリプト、空のプロジェクト設定（`.claude/settings.json`）と、リーダーの skill `feature-dev`（`.claude/skills/feature-dev/`。ここだけ、フォルダごと置き換え、ほかの skill には触れません）を書き直すので、リーダーが足した許可やフックは、次の起動には残りません。
+- Claude Code は、設定フォルダの `formations/{フォーメーションの名前}/` で動き、セッションの名前はフォーメーションの名前です。起動のたびに、リーダーへの指示（`CLAUDE.md`）、MCP の設定、起動のスクリプト、プロジェクト設定（`.claude/settings.json`。オーナーのプラグインのフォルダの編集を断る規則だけが入っています）を書き直し、以前の版が書いた skill `feature-dev`（`.claude/skills/feature-dev/`。ほかの skill には触れません）を消すので、リーダーが足した許可やフックは、次の起動には残りません。
 - フォーメーションを作るときに選んだプロジェクトがあれば、起動のたびに、それを最初の指示として渡します。プロジェクトの名前は、指示ではなく資料として引用の形で渡し、リーダーはあなたの指示を待ちます。
 - 権限のモードは auto、effort は high で、組み込みの道具（Bash など）も使えます。道具やコマンドを使う前に確かめるかどうかは、Claude Code の auto モードが決めます。
 - MCP サーバーは `tsunagiai-mcp` だけです。リーダーにだけ、環境（この Mac と Orca に保存した接続先）ごとのリポジトリを読む `formation_environments`、リポジトリの worktree の一覧を読む `formation_worktrees`、フォルダの中を読む `formation_files`、ファイルの中身を読む `formation_read`、git の状態とブランチを読む `formation_git`、チームメイトを予定に入れる `formation_plan`、チームメイトを起動する `formation_launch`、チームメイトのターミナルだけを止める `formation_stop`、チームメイトを終える `formation_close`、チームメイトの判断ページを調べてアプリに渡す `formation_page`、起動したチームメイトの様子（Orca の待ちの状態と、ターミナルの末尾）を読む `formation_status` を渡します。ほかに渡すのは読み取りのツール（`list_inbox`、`get_thread`、`list_events`、`db_profiles`）だけで、書き込みのツール（`archive`、`set_read`、`trash`、`db_profile_save`、`db_test`）と、言語サーバーのツール（`lsp_settings`、`lsp_server_save`、`lsp_server_delete`、`lsp_repo_ssh_host_set`）は渡しません。
 - `formation_launch` には環境、リポジトリ、チームメイトの名前、最初の指示を、`formation_plan` には環境とリポジトリを渡します。環境は、リーダーが動いている PC の `local` か、その PC の Orca に保存した接続先で、`formation_environments` に出るものです。一覧にない環境は、何も作らずに断ります。ブランチ、ブランチの起点（`base`）、フォルダは、渡しても渡さなくてもかまいません。その環境に無いリポジトリは断り、候補を返します。
-- リーダーは、チームメイトを起動すると、Claude Code の `CronCreate` で 10 分ごとの見回りを登録し、`formation_status` でその様子を読みます。権限の確認で止まっている、知らせのないまま待っている、エラーで止まっている、のどれかなら、あなたに日本語で一行知らせ、作業中なら何も言いません。チームメイトが終わるか閉じると、`CronDelete` で見回りを消します。`formation_status` は読むだけで、チームメイトには何も送りません。ターミナルの末尾は、資料として囲んで渡します。
+- リーダーは、`formation_status` で、起動したチームメイトの様子（Orca の待ちの状態と、ターミナルの末尾）を読めます。読むだけで、チームメイトには何も送りません。ターミナルの末尾は、資料として囲んで渡します。
 - `formation_worktrees`、`formation_files`、`formation_read`、`formation_git` は読むだけです。読めるフォルダは、リポジトリの本体のフォルダ（`folder` を省いたとき）と、`formation_worktrees` に出る worktree だけで、そのほかのフォルダと、フォルダの外を指すパス（絶対パスと `..`）は断ります。ファイルは 384 KiB まで、UTF-8 のテキストだけ読み、答えは 2,000 行までで、続きは行の位置（`offset`）を渡して読みます。`.git` の中と、`.env` で始まる名前のファイルは、一覧に出さず、読むことも断ります。
 - ブランチは、渡さなければ Orca が決めます。渡すときは、git が受け付ける名前なら形は問いません（`-` で始まる名前などは断ります）。worktree は Orca に頼んで作り、この Mac でも保存した接続先でも、そのリポジトリのブランチを見て決めます。ローカルにあるブランチはそのまま開き、`origin` にだけあるブランチ（前のチームメイトが push して閉じたブランチ）は `origin/{ブランチ}` から同じ名前で切り、どこにも無い名前は新しいブランチとして `base`（渡さなければ `origin/HEAD`）から切ります。別の名前で作ることはなく、別の worktree が開いているブランチや使われている名前は、Orca の言葉を返して断ります。`base` は新しいブランチにだけ使え、あるブランチ、ブランチなし、フォルダと一緒の指定は断ります。
 - フォルダを渡すと、worktree は作らず、そのフォルダでチームメイトを動かします。フォルダは、そのリポジトリの本体のフォルダか、Orca が一覧に出す worktree の絶対パスです。一覧に無いフォルダ、別のリポジトリのフォルダ、ブランチと一緒の指定は断ります。
-- `formation_launch` は、その PC の Orca で、指定したリポジトリの `.claude/worktrees/` の下に新しい worktree を作り、そのターミナルで `claude -n {チームメイトの名前}` を auto モード、effort medium で、`--plugin-dir` に `feature-dev` のプラグインを付けて起動して、最初の指示を送ります。Claude Code のチームメイトは、フォーメーションごとの Orca の orchestration の Run の Dispatch として起動し、最初の指示の前に、その使い方（`orchestration check`、`send`、`reply`）が付きます。リーダーは、`orca orchestration send` でその Dispatch に指示し、`orca orchestration check --wait` で知らせを待ちます。
-- `feature-dev` のプラグイン（工程ごとの手順書と 7 つの agent）は、アプリに入っていて、チームメイトを起動するときに、その PC の設定フォルダの `formation-plugin/` に、全体で書き出します。中身が同じなら書き直さず、書けなければ何も作りません。
-- `agent` に `codex` を渡すと、チームメイトは Claude Code の代わりに `codex --sandbox workspace-write --ask-for-approval never` で動きます（プラグインは付けず、書き出しもしません。`formation_plan` にも `agent` を渡せます）。Codex のチームメイトは Dispatch にならず、orchestration のメッセージが届かないので、リーダーはチームメイトに、結果を書くファイルの絶対パスと、最後に置く空の `{そのパス}.done` を指示し、そのファイルがディスクにできるのを待って、結果を読み、頼んだチームメイトに渡します。
+- `formation_launch` は、その PC の Orca で、指定したリポジトリの `.claude/worktrees/` の下に新しい worktree を作り、そのターミナルで `claude -n {チームメイトの名前}` を auto モード、effort medium で、`--plugin-dir` にオーナーのプラグインのフォルダ（`~/.local/share/tsunagiai/plugins/`）を付けて起動して、最初の指示を送ります。Claude Code のチームメイトは、フォーメーションごとの Orca の orchestration の Run の Dispatch として起動し、最初の指示の前に、その使い方（`orchestration check`、`send`、`reply`）が付きます。リーダーは、`orca orchestration send` でその Dispatch に指示し、`orca orchestration check --wait` で知らせを待ちます。
+- オーナーのプラグイン（`~/.local/share/tsunagiai/plugins/` の中のフォルダ。全部を読み込み、選ぶ設定はありません）は、リーダーも、Claude Code のチームメイトも読みます。アプリはその中のファイルを書かず、フォルダが無いときに作るだけです。リーダーとチームメイトの Claude Code は、このフォルダを書き換えられません（`--settings` と、リーダーの `.claude/settings.json` に、編集を断る規則を入れます）。保存した接続先の PC でリーダーかチームメイトを起動するときは、アプリがこの Mac のプラグインのフォルダをその PC に送り、そこのフォルダを丸ごと置き換えます。同じ中身なら、何も送りません。1000 ファイルか 32 MiB を超えるフォルダ、読めないフォルダ、サーバーにつながらないときは、理由を返して、何も作りません。
+- `agent` に `codex` を渡すと、チームメイトは Claude Code の代わりに `codex --sandbox workspace-write --ask-for-approval never` で動きます（プラグインは付けず、保存した接続先の PC にプラグインのフォルダも送りません。`formation_plan` にも `agent` を渡せます）。Codex のチームメイトは Dispatch にならず、orchestration のメッセージが届かないので、リーダーはチームメイトに、結果を書くファイルの絶対パスと、最後に置く空の `{そのパス}.done` を指示し、そのファイルがディスクにできるのを待って、結果を読み、頼んだチームメイトに渡します。
 - `formation_page` には、チームメイトの名前と、判断ページのファイルの絶対パスを渡します。起動済みのチームメイトだけを受け付け、ページの形、ファイルの場所（リポジトリとその worktree の中だけ。`.git` と `.env` で始まる名前は読みません）、日本語の文が `yomiyasu` の推敲の記録にあることを調べ、通ったものだけを、フォーメーションの `pages.json` に記録します。通らないときは、理由を 1 行ずつ返し、何も記録しません。リーダーは、その理由をそのままチームメイトに返して、直させます。
-- リーダーは、`feature-dev` を始めるとき、最初のチームメイトの前に `claude plugin list` で `yomiyasu` と `natural-japanese` が入っているかを確かめ、無いものを、ユーザーのスコープに `claude plugin marketplace add` と `claude plugin install` で入れます。`yomiyasu` を入れられないときは、判断ページが通らないので、理由を伝えて止まります。`natural-japanese` を入れられないときは、それ無しで進めます。
 - `formation_close` は、チームメイトのターミナルを閉じ、worktree を消します。リーダーが使うのは、あなたがチームメイトを閉じるようはっきり頼んだときだけです。終わったチームメイトは、あなたが画面の × で閉じるまで、worktree とともに残ります。ブランチも、つなぎAI が作ったものなら消し、そのリポジトリに前からあったブランチは消しません。フォルダを渡して起動したチームメイトが中で動いている worktree は、そのチームメイトを先に閉じるまで消しません。コミットしていない変更、追跡していないファイル、どのリモートにも無いコミットがあるときは、何も消さずに理由を返します。強制して消すことはありません（強制の削除は、画面からあなたが押したときだけです）。フォルダを渡して起動したチームメイトは、ターミナルを閉じて記録から外すだけで、フォルダも worktree もブランチも消しません。
-- `formation_stop` は、チームメイトのターミナルだけを閉じます。worktree、ブランチ、記録は残り、画面のカードは完了のまま残ります。feature-dev のリーダーは、役割を終えたチームメイト（工程の完了を確かめた、工程をやり直しに戻した）を、これで止めます。止められなければ、理由をあなたに伝えて残します。
+- `formation_stop` は、チームメイトのターミナルだけを閉じます。worktree、ブランチ、記録は残り、画面のカードは完了のまま残ります。リーダーは、役割を終えたチームメイトを、これで止めます。止められなければ、理由をあなたに伝えて残します。
 - 起動したチームメイトと予定のチームメイトは、フォーメーションごとに `formations/{フォーメーションの名前}/children.json` に記録します（Codex のチームメイトには `agent` も記録します）。リーダーのツールが読み書きするのは、自分のフォーメーションの記録だけです。チームメイトへの指示の文は記録しません。保存した接続先のフォーメーションの記録は、その PC にあり、つなぎAI の画面は、その PC のサーバー（[Orca](orca.md#その-pc-のサーバー)）につないで読み、閉じたチームメイトを消します。
 - サインインは、下の「Claude の接続方式」で選んだ方式です。書体、配色、キーは Orca のターミナルと同じです。
 - リーダーに打ち込んだ内容と、Claude Code が呼んだツールや道具の結果は、Claude Code を通じて Anthropic に送られます。チームメイトへの指示は、Orca が動かすチームメイトの Claude Code を通じて Anthropic に送られます。
@@ -180,7 +191,7 @@ Orca に保存した接続先のフォーメーションは別です。リーダ
 
 ## Claude の接続方式
 
-Claude Code を使う機能（メールの AI 要約、Slack のメッセージの要約、Orca に渡す要約と、メール、Slack、カレンダー、スキルのタブ、データベースの画面の Claude Code のペイン、開発の画面のリーダー）は、Claude のサブスクリプションか、Anthropic の API キーのどちらかで動きます。
+Claude Code を使う機能（メールの AI 要約、Slack のメッセージの要約、Orca に渡す要約と、メール、Slack、カレンダー、スキルのタブ、Plugins のタブ、データベースの画面の Claude Code のペイン、開発の画面のリーダー）は、Claude のサブスクリプションか、Anthropic の API キーのどちらかで動きます。
 設定の Claude タブの 1 枚目のカード「Claude」に、「サブスクリプション」と「API キー」の 2 行があり、ラジオで使う方を選びます。
 使っていない方の状態も、それぞれの行に出ます。
 
