@@ -8,12 +8,13 @@ use std::{fmt, path::Path, sync::Arc, time::Duration};
 
 mod message;
 mod read;
+mod sync;
 mod threading;
 
 use rustls::{pki_types::ServerName, ClientConfig};
 use rustls_platform_verifier::BuilderVerifierExt;
 use serde::Serialize;
-use tauri::AppHandle;
+use tauri::{AppHandle, State};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpStream,
@@ -24,7 +25,7 @@ use crate::{
     accounts::{self, Account, AccountKind},
     auth::config_dir,
     disk_cache,
-    gmail::{log_failure, ApiError, ThreadDetail, ThreadItem},
+    gmail::{log_failure, ApiError, Sync, SyncState, ThreadDetail, ThreadItem},
     keychain,
 };
 
@@ -169,15 +170,40 @@ fn read_timeout() -> ApiError {
     "iCloud からの読み込みがタイムアウトしました".into()
 }
 
-/// The threads of the newest mails of the inbox of `address` (as many as Gmail's list holds), newest first.
+/// The threads of the newest mails of the inbox of `address` (as many as Gmail's list holds), newest first, and the position the sync of the account starts from (empty when iCloud did not tell it).
+/// The position is asked before the mails are read, so that what changes meanwhile is read again by the sync.
 /// `Ok(None)` means the password must be entered again.
-pub async fn inbox_threads(address: &str) -> Result<Option<Vec<ThreadItem>>, ApiError> {
+pub async fn inbox_threads(address: &str) -> Result<Option<(Vec<ThreadItem>, String)>, ApiError> {
     let Some(mut session) = open(address).await? else {
         return Ok(None);
     };
-    let read = tokio::time::timeout(READ_TIMEOUT, read::inbox_threads(&mut session, address)).await;
+    let read = tokio::time::timeout(READ_TIMEOUT, async {
+        let position = sync::position(&mut session).await;
+        let threads = read::inbox_threads(&mut session, address).await?;
+        Ok::<_, String>((
+            threads,
+            position.map_or_else(String::new, sync::Position::text),
+        ))
+    })
+    .await;
     close(session).await;
     Ok(Some(read.map_err(|_| read_timeout())??))
+}
+
+/// One round of the sync of `address` from `start`, the position that the last load or sync gave (see `sync.rs`).
+/// A password that iCloud refuses is `Sync::NeedsLogin`. A server that cannot be reached is a `throttled` failure, so that `SyncState` leaves the account alone for a while as it does after a rate limit.
+pub async fn sync(address: &str, start: &str) -> Result<Sync, ApiError> {
+    let mut session = match open(address).await {
+        Ok(Some(session)) => session,
+        Ok(None) => return Ok(Sync::NeedsLogin),
+        Err(message) => return Err(ApiError::throttled(message)),
+    };
+    let read = tokio::time::timeout(READ_TIMEOUT, sync::sync(&mut session, address, start)).await;
+    close(session).await;
+    match read {
+        Ok(synced) => Ok(synced?),
+        Err(_) => Err(ApiError::throttled(read_timeout().to_string())),
+    }
 }
 
 /// The thread `id` of `address` (an ID that `inbox_threads` gave) as the screen draws it. `Ok(None)` means the password must be entered again.
@@ -360,9 +386,11 @@ pub async fn icloud_add_account(
 #[tauri::command]
 pub async fn icloud_remove_account(
     app: AppHandle,
+    sync: State<'_, SyncState>,
     address: String,
 ) -> Result<Vec<IcloudAccount>, String> {
     let dir = config_dir(&app)?;
+    sync.forget(&address);
     ensure_listed(&read_accounts(&dir)?, &address)
         .map_err(|e| fail("icloud_remove_account", &address, e))?;
     let owned = address.clone();

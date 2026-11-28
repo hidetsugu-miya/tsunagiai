@@ -26,7 +26,7 @@ Mark a thread read or unread with the checkbox in the list. The button "すべ�
 
 ## M-7 Auto sync
 
-Sync the inbox with Gmail about every 10 seconds. A round that fails shows nothing on the screen: the third round in a row that fails writes one line to the log (A-28), 「自動同期に失敗しています: …」, and the count starts again when a round works
+Sync the inbox with Gmail and with each iCloud account (M-13) about every 10 seconds. A round that fails shows nothing on the screen: the third round in a row that fails writes one line to the log (A-28), 「自動同期に失敗しています: …」, and the count starts again when a round works
 
 Off in the menu (A-50, #680). The inbox cannot be turned off, so auto sync does not depend on the menu. The new-mail popup (M-9) is retired and has no code to stop.
 
@@ -104,7 +104,7 @@ Tests (#491). `cargo test`: in `mail_send.rs`, the message with files (the `mult
 
 ## M-13 iCloud accounts
 
-An iCloud mail address can be added as an account beside the Gmail accounts, with the address and an App-specific password (the owner's request, 2026-11-28; #1571). This is the part of M-13 that adds, checks and removes the account (#1573) and the part that shows its inbox and its threads (#1574): the operations, the sync, the sending and the MCP tools of an iCloud account come with the later parts. The threads of an iCloud account are in the list of mail with the Gmail ones; the account is in no calendar, and the Google card shows only Gmail accounts.
+An iCloud mail address can be added as an account beside the Gmail accounts, with the address and an App-specific password (the owner's request, 2026-11-28; #1571). This is the part of M-13 that adds, checks and removes the account (#1573), the part that shows its inbox and its threads (#1574) and the part that syncs it (#1575): the operations, the sending and the MCP tools of an iCloud account come with the later parts. The threads of an iCloud account are in the list of mail with the Gmail ones; the account is in no calendar, and the Google card shows only Gmail accounts.
 
 iCloud has no mail API and no OAuth for other apps, so the account is IMAP to `imap.mail.me.com:993` over TLS, logged in with the full address and the App-specific password (made at account.apple.com; it needs the two-factor authentication of the Apple Account, and changing the Apple Account's password makes every App-specific password invalid).
 
@@ -127,4 +127,5 @@ The inbox and the threads (#1574).
 - The body is the HTML when the mail has it, else the text. 「テキストで読む」 takes the text first. The images inside the mail (`cid:`) are embedded when the thread is read. An image from outside is asked about each time (「表示するか」): iCloud gives no mark that vouches for the sender, so nothing is shown without the press (Gmail's mark of mx.google.com has no counterpart).
 - The AI summary (M-8), the choice of the reply's destination (M-10) and the images take the same shape as a Gmail thread's, and are not changed.
 - When an iCloud account could not be read (the password is invalid, or the network failed), the card of the list says so. When the password is invalid, the words are 「App 用パスワードが無効です。設定の iCloud タブで入れ直してください」. The row of Google's login again is not shown.
-- Not in this part (the later parts of M-13): the automatic sync (#4); marking read, deleting, archiving and their undo (#5); sending, replying and attaching files (#6). Until then these operations answer 「iCloud のメールの…にはまだ対応していません」, and so does the call that marks a thread read when it is opened (`set_read`).
+- The sync (#1575): an iCloud account is synced about every 10 seconds with the Gmail accounts (M-7), through the same `sync` command and the same screen code: the list adds, replaces and takes out rows as it does for Gmail, and the position that the load gives (`historyIds`) is a string that the screen keeps and gives back (for iCloud, the UIDVALIDITY and the HIGHESTMODSEQ of INBOX). Only a change of INBOX is seen: a new mail, a change of flags, and a mail that left. iCloud is asked for the difference since the position and nothing more when nothing changed, and the inbox is read again when that is cheaper or needed (the UIDVALIDITY changed, a mail left, many mails changed). A refused password reads the list again, which tells the account on the card; a server that cannot be reached makes the account wait, longer each time (20 seconds up to 5 minutes), with nothing on the screen. The details are in `requirements/constraints.md`, Mail.
+- Not in this part (the later parts of M-13): marking read, deleting, archiving and their undo (#5); sending, replying and attaching files (#6). Until then these operations answer 「iCloud のメールの…にはまだ対応していません」, and so does the call that marks a thread read when it is opened (`set_read`).

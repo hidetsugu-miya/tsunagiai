@@ -27,13 +27,13 @@ const MAX_THREAD_MAILS: usize = 200;
 /// The whole mail with its flags and time.
 const FULL: &str = "(UID FLAGS INTERNALDATE BODY.PEEK[])";
 /// Only what threads need.
-const HEADERS: &str =
+pub(super) const HEADERS: &str =
     "(UID INTERNALDATE BODY.PEEK[HEADER.FIELDS (MESSAGE-ID IN-REPLY-TO REFERENCES)])";
 
 pub trait Io: AsyncRead + AsyncWrite + Unpin + Send + fmt::Debug {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send + fmt::Debug> Io for T {}
 
-fn failed(e: Error) -> String {
+pub(super) fn failed(e: Error) -> String {
     format!("iCloud のメールを読めません: {e}")
 }
 
@@ -62,7 +62,7 @@ fn raw_of(folder: Folder, validity: u32, fetch: &async_imap::types::Fetch) -> Op
 }
 
 /// The mails of `set` in the folder that is open: message numbers, or UIDs when `by_uid`.
-async fn fetch<S: Io>(
+pub(super) async fn fetch<S: Io>(
     session: &mut Session<S>,
     folder: Folder,
     validity: u32,
@@ -93,14 +93,14 @@ async fn fetch<S: Io>(
         .collect())
 }
 
-fn uid_set(uids: &[u32]) -> String {
+pub(super) fn uid_set(uids: &[u32]) -> String {
     uids.iter()
         .map(u32::to_string)
         .collect::<Vec<_>>()
         .join(",")
 }
 
-fn nodes_of(parser: &MessageParser, raws: &[Raw]) -> Vec<Node> {
+pub(super) fn nodes_of(parser: &MessageParser, raws: &[Raw]) -> Vec<Node> {
     raws.iter().map(|r| node(r, &parse(parser, r))).collect()
 }
 
@@ -276,9 +276,13 @@ pub async fn thread_mails<S: Io>(session: &mut Session<S>, key: &str) -> Result<
     Ok(mails)
 }
 
-/// The thread `id` (as `inbox_threads` made it) as the screen draws it, from the mails `thread_mails` found. `None` when none of them belongs to it.
-pub fn thread(id: &str, account: &str, mails: &[Raw], prefer_plain: bool) -> Option<ThreadDetail> {
-    let key = key_of(id)?;
+/// The thread that `key` names among `mails` (from `thread_mails`), made into what the screen draws by `make`, which is given the thread's ID and its mails, oldest first.
+/// `None` when none of the mails belongs to it.
+pub(super) fn with_thread<T>(
+    key: &str,
+    mails: &[Raw],
+    make: impl FnOnce(String, &[&Mail]) -> T,
+) -> Option<T> {
     let parser = MessageParser::new();
     let parsed: Vec<Mail> = mails
         .iter()
@@ -290,9 +294,17 @@ pub fn thread(id: &str, account: &str, mails: &[Raw], prefer_plain: bool) -> Opt
     let nodes: Vec<Node> = parsed.iter().map(|m| node(m.raw, &m.msg)).collect();
     let found = group(&nodes)
         .into_iter()
-        .find(|g| g.members.iter().any(|&i| nodes[i].belongs_to(&key)))?;
+        .find(|g| g.members.iter().any(|&i| nodes[i].belongs_to(key)))?;
     let members: Vec<&Mail> = found.members.iter().map(|&i| &parsed[i]).collect();
-    Some(thread_detail(account, &members, prefer_plain))
+    Some(make(thread_id(&found.key), &members))
+}
+
+/// The thread `id` (as `inbox_threads` made it) as the screen draws it, from the mails `thread_mails` found. `None` when none of them belongs to it.
+pub fn thread(id: &str, account: &str, mails: &[Raw], prefer_plain: bool) -> Option<ThreadDetail> {
+    let key = key_of(id)?;
+    with_thread(&key, mails, |_, members| {
+        thread_detail(account, members, prefer_plain)
+    })
 }
 
 #[cfg(test)]

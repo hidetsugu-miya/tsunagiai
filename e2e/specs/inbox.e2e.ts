@@ -397,13 +397,55 @@ describe("inbox", () => {
       await expect($("#login")).toBeDisplayed();
     });
 
-    it("syncs the Google accounts only: the load gives an iCloud account no history ID", async () => {
-      await boot({ inbox: inbox([thread("t1", "First unread", true), lunch]) });
+    // What the load of an iCloud account gives as its history ID is the position of its sync: the screen keeps it and gives it back as it is (M-13, #1575).
+    const position = "1700:120";
+    const withPosition = (threads = [thread("t1", "First unread", true), lunch]) => ({ ...inbox(threads), historyIds: { [account]: "100", [icloud]: position } });
+
+    it("syncs an iCloud account from the position its load gave, as it syncs a Google account", async () => {
+      await boot({ inbox: withPosition() });
       await waitForCount("#unread-threads li", 2);
       const sync = await mock("sync", { kind: "unchanged" });
       await syncRound();
-      await waitForCalls(sync);
-      expect(await callsOf(sync)).toEqual([{ account, startHistoryId: "100" }]);
+      const calls = await waitForCalls(sync, 2);
+      expect(calls).toHaveLength(2);
+      expect(calls).toEqual(expect.arrayContaining([{ account, startHistoryId: "100" }, { account: icloud, startHistoryId: position }]));
+    });
+
+    it("syncs an owner who has an iCloud account and no Google account", async () => {
+      await boot({ inbox: { ...withPosition([lunch]), accounts: [], historyIds: { [icloud]: position } }, icloud_accounts: [{ address: icloud }] });
+      await waitForCount("#unread-threads li", 1);
+      const sync = await mock("sync", { kind: "unchanged" });
+      await syncRound();
+      expect(await waitForCalls(sync)).toEqual([{ account: icloud, startHistoryId: position }]);
+    });
+
+    it("draws what a sync changed in an iCloud thread, takes one out, and gives the new position at the next round", async () => {
+      const other = { ...thread("6f74686572406578616d706c65", "Other mail", true), account: icloud };
+      await boot({ inbox: withPosition([lunch, other]) });
+      await waitForCount("#unread-threads li", 2);
+      await mock("sync", { kind: "changed", threads: [{ ...lunch, subject: "Lunch moved to Saturday" }], removed: [other.id], historyId: "1700:130" });
+      await syncRound();
+      await waitForCount("#unread-threads li", 1);
+      await expect($("#unread-threads")).toHaveText(expect.stringContaining("Lunch moved to Saturday"));
+      const sync = await mock("sync", { kind: "unchanged" });
+      await syncRound();
+      expect(await waitForCalls(sync, 2)).toEqual(expect.arrayContaining([{ account: icloud, startHistoryId: "1700:130" }]));
+    });
+
+    it("reads the list again when a sync says an iCloud account needs its password again, and syncs it no more until a load gives it a position", async () => {
+      await boot({ inbox: withPosition() });
+      await waitForCount("#unread-threads li", 2);
+      const refused = "App 用パスワードが無効です。設定の iCloud タブで入れ直してください";
+      await mock("inbox", { ...inbox(), failed: { [icloud]: refused } });
+      const sync = await mock("sync", { kind: "needsLogin" });
+      await syncRound();
+      await waitForCalls(sync, 2);
+      await waitForCard(refused);
+      const calls = await callsOf(sync);
+      await mock("sync", { kind: "unchanged" });
+      await syncRound();
+      expect(await waitForCalls("sync")).toEqual([{ account, startHistoryId: "100" }]);
+      expect(calls.filter((c) => (c as { account: string }).account === icloud)).toHaveLength(1);
     });
 
     it("says in the card of the list what an iCloud account could not load, and still lists the Google threads", async () => {

@@ -593,6 +593,15 @@ impl ApiError {
             message,
         }
     }
+
+    /// A failure after which `SyncState` leaves the account alone for a while, as after a rate limit (an iCloud server that cannot be reached, M-13).
+    pub(crate) fn throttled(message: String) -> Self {
+        Self {
+            status: None,
+            rate_limited: true,
+            message,
+        }
+    }
 }
 
 impl From<String> for ApiError {
@@ -802,7 +811,7 @@ pub struct Inbox {
     /// Accounts whose threads are missing because loading them failed, with the error to show.
     failed: HashMap<String, String>,
     /// Per account, where the next `sync` starts, as of the full load: a string that only the account's own backend reads
-    /// (Gmail: the mailbox history ID). The screen keeps it and gives it back as it is.
+    /// (Gmail: the mailbox history ID; iCloud: the UIDVALIDITY and the HIGHESTMODSEQ of INBOX, which is empty when iCloud did not tell them). The screen keeps it and gives it back as it is.
     history_ids: HashMap<String, String>,
 }
 
@@ -960,7 +969,7 @@ async fn account_threads(
 /// Threads of every account merged; accounts needing login or failing to load are listed, not fatal.
 /// `command` names the caller in the failure log.
 pub async fn load_inbox(dir: &Path, auth: &Auth, command: &str) -> Result<Inbox, String> {
-    // The threads of an iCloud account (M-13) are in the list, but the account is not in `accounts`, `needs_login` or `history_ids`: those are the Google accounts, and the screen draws the Google card and the calendar from them.
+    // The threads of an iCloud account (M-13) are in the list, and it has a history ID (its sync position), but it is not in `accounts` or `needs_login`: those are the Google accounts, and the screen draws the Google card and the calendar from them.
     // What an iCloud account could not load is in `failed`, which the list shows whatever the account.
     let listed = accounts::load_accounts(dir)
         .map_err(|e| log_failure(command, "-", e))?
@@ -984,11 +993,11 @@ pub async fn load_inbox(dir: &Path, auth: &Auth, command: &str) -> Result<Inbox,
             tokio::spawn(async move {
                 match mail::backend(kind) {
                     Ok(Backend::Gmail) => account_threads(&dir, &auth, &address, MAX_RETRIES).await,
+                    // Its "history ID" is the position of its sync (`icloud/sync.rs`).
                     Ok(Backend::Icloud) => icloud::inbox_threads(&address).await.map(|found| {
-                        // No history ID: the sync of an iCloud account is a later part of M-13.
-                        found.map(|threads| AccountInbox {
+                        found.map(|(threads, history_id)| AccountInbox {
                             threads,
-                            history_id: String::new(),
+                            history_id,
                         })
                     }),
                     Err(e) => Err(e.into()),
@@ -1021,8 +1030,8 @@ struct Gathered {
 }
 
 impl Gathered {
-    /// Puts the answer of one account where it belongs. The threads of every account go to the list, but only a Google account has a history ID and can need a login:
-    /// those fields are the Google accounts', which the screen draws the Google card and the calendar from, and a Google login would not mend an iCloud password.
+    /// Puts the answer of one account where it belongs. The threads and the history ID (the position of the sync) of every account go in, but only a Google account can need a login:
+    /// that field is the Google accounts', which the screen draws the Google card and the calendar from, and a Google login would not mend an iCloud password.
     /// An iCloud account whose password is refused is a failure of the list, with words that name the iCloud tab.
     fn place(
         &mut self,
@@ -1031,16 +1040,15 @@ impl Gathered {
         account: &str,
         result: Result<Option<AccountInbox>, ApiError>,
     ) {
-        let google = kind == accounts::AccountKind::Gmail;
         match result {
             Ok(Some(loaded)) => {
                 self.lists.push(loaded.threads);
-                if google {
-                    self.history_ids
-                        .insert(account.to_owned(), loaded.history_id);
-                }
+                self.history_ids
+                    .insert(account.to_owned(), loaded.history_id);
             }
-            Ok(None) if google => self.needs_login.push(account.to_owned()),
+            Ok(None) if kind == accounts::AccountKind::Gmail => {
+                self.needs_login.push(account.to_owned())
+            }
             Ok(None) => {
                 self.failed
                     .insert(account.to_owned(), icloud::PASSWORD_REFUSED.to_owned());
@@ -1329,8 +1337,7 @@ pub async fn sync(
     let dir = config_dir(&app).map_err(|e| log_failure("sync", &account, e))?;
     let synced = match mail::backend_of(&dir, &account) {
         Ok(Backend::Gmail) => sync_account(&dir, &auth, &account, &start_history_id).await,
-        // The screen syncs the accounts that have a history ID, and `load_inbox` gives an iCloud account none.
-        Ok(Backend::Icloud) => Err("iCloud の自動同期にはまだ対応していません".into()),
+        Ok(Backend::Icloud) => icloud::sync(&account, &start_history_id).await,
         Err(e) => Err(e.into()),
     };
     match synced {
@@ -2639,9 +2646,9 @@ mod tests {
         }))
     }
 
-    /// The threads of an iCloud account are in the list, and nothing of it reaches the fields that the Google card and the calendar read.
+    /// The threads and the sync position of an iCloud account are in the answer, and nothing of it reaches the fields that the Google card and the calendar read.
     #[test]
-    fn an_icloud_account_adds_threads_but_no_history_id_and_no_login() {
+    fn an_icloud_account_adds_threads_and_its_sync_position_but_no_login() {
         let mut g = Gathered::default();
         g.place(
             "inbox",
@@ -2653,12 +2660,15 @@ mod tests {
             "inbox",
             accounts::AccountKind::Icloud,
             "me@icloud.com",
-            loaded("i1", ""),
+            loaded("i1", "1700:130"),
         );
         assert_eq!(g.lists.len(), 2);
         assert_eq!(
             g.history_ids,
-            HashMap::from([("g@example.com".to_owned(), "100".to_owned())])
+            HashMap::from([
+                ("g@example.com".to_owned(), "100".to_owned()),
+                ("me@icloud.com".to_owned(), "1700:130".to_owned())
+            ])
         );
         assert!(g.needs_login.is_empty() && g.failed.is_empty());
     }

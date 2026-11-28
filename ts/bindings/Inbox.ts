@@ -12,6 +12,6 @@ needsLogin: Array<string>,
 failed: { [key in string]: string }, 
 /**
  * Per account, where the next `sync` starts, as of the full load: a string that only the account's own backend reads
- * (Gmail: the mailbox history ID). The screen keeps it and gives it back as it is.
+ * (Gmail: the mailbox history ID; iCloud: the UIDVALIDITY and the HIGHESTMODSEQ of INBOX, which is empty when iCloud did not tell them). The screen keeps it and gives it back as it is.
  */
 historyIds: { [key in string]: string }, };

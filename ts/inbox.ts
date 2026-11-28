@@ -1,4 +1,4 @@
-// The inbox list: loading, syncing with Gmail, and taking a row out (archive / trash) with its undo.
+// The inbox list: loading, syncing with Gmail and iCloud, and taking a row out (archive / trash) with its undo.
 import type { Inbox } from "./bindings/Inbox";
 import type { Sync } from "./bindings/Sync";
 import type { ThreadItem } from "./bindings/ThreadItem";
@@ -274,7 +274,7 @@ const SYNC_MS = 10000;
 let syncFails = 0;
 let syncing = false;
 
-// Brings the list up to date with Gmail through `sync`, without leaving the current view.
+// Brings the list up to date with Gmail and iCloud through `sync`, without leaving the current view.
 // A load that is due (a failed one, or one asked for by a sync that needs a login) comes first: it may leave no history IDs to sync from.
 async function syncAll() {
   if (loading || document.hidden) return;
