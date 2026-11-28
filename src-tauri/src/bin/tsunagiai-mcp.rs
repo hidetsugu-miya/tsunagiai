@@ -600,8 +600,8 @@ struct PreviewOpenArgs {
     file: String,
 }
 
-/// What `preview_open` answers once the app took the request: the tab is opened by the app, not by this server.
-const PREVIEW_ASKED: &str = "つなぎAIにプレビューのタブを開くよう頼みました";
+/// What `preview_open` answers once the app took the request: the window is opened by the app, not by this server.
+const PREVIEW_ASKED: &str = "つなぎAIにプレビューを別ウィンドウで開くよう頼みました";
 
 struct Tsunagiai {
     auth: Auth,
@@ -1310,7 +1310,7 @@ impl Tsunagiai {
     }
 
     #[tool(
-        description = "Open an HTML file of a worktree as a preview tab in the development screen of the app (つなぎAI), so that the owner sees the page you wrote without looking for the file. Give the absolute path of the worktree (the folder you are working in) and the path of the file from it, for example worktree \"/Users/me/work/app\" and file \"docs/report.html\". Only an .html file (whatever the case) inside the worktree opens, and no part of its path may start with a dot. The worktree must be one that Orca lists for the project; any other is refused by the app. The tab is opened in the app of the owner, also when this Claude Code runs on another PC that the app is connected to, and the answer only says that the app took the request: the owner looks at the screen. It saves and sends nothing outside the app. It fails, in Japanese, when the path breaks a rule above, or when the app is not running, is not connected to this PC, or refuses the request (the answer says what each way answered)."
+        description = "Open an HTML file of a worktree as a preview in a window of its own of the app (つなぎAI), never as a tab of the development screen, so that the owner sees the page you wrote without looking for the file. Give the absolute path of the worktree (the folder you are working in) and the path of the file from it, for example worktree \"/Users/me/work/app\" and file \"docs/report.html\". Only an .html file (whatever the case) inside the worktree opens, and no part of its path may start with a dot. The worktree must be one that Orca lists for the project; any other is refused by the app. The window is opened by the app of the owner, also when this Claude Code runs on another PC that the app is connected to, and the answer only says that the app took the request: the owner looks at the screen. It saves and sends nothing outside the app. It fails, in Japanese, when the path breaks a rule above, or when the app is not running, is not connected to this PC, or refuses the request (the answer says what each way answered)."
     )]
     async fn preview_open(
         &self,
@@ -2093,6 +2093,7 @@ mod tests {
             "absolute path of the worktree",
             ".html",
             "dot",
+            "window of its own",
             "another PC",
             "in Japanese",
         ] {

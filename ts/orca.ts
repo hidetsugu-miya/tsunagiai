@@ -1151,8 +1151,8 @@ function openPlace(place: DefinitionOpen) {
   goTo(id, line, character);
 }
 
-// A request to open an HTML preview (A-45, #985), from a Claude Code through the app (a push of a saved environment's PC, or the screen bridge of this PC): the file is a tab of the project that has the worktree, in the preview (a new tab is placed at the right end, below; a file that is open already is selected when that project is the one selected). The request is data from outside, so Rust checks it again (`orca_preview_check`: the file A-31 opens, a worktree of the list read just now), and the list held here must have the worktree (it is read again once when it lacks it, for a worktree that was made a moment ago). The screen is not switched and no project is selected for it: another project, or a formation selected, only gets the tab; a screen that is not shown has it ready when it is shown again.
-// A tab that is new is placed in the pane at the right end of that project's layout, whichever project is selected, and no pane takes the focus: with one pane that pane is split to the right, and with more the tab is stacked on the rightmost pane (A-17, `placeRight`). A file that is open already stays where it is and is selected there (as it is when it is opened from the file list).
+// A request to open an HTML preview (A-45, #985, #1541), from a Claude Code through the app (a push of a saved environment's PC, or the screen bridge of this PC): the file is opened in the preview (A-42) in a window of its own (A-46), never as a tab left in a pane. The request is data from outside, so Rust checks it again (`orca_preview_check`: the file A-31 opens, a worktree of the list read just now), and the list held here must have the worktree (it is read again once when it lacks it, for a worktree that was made a moment ago). The screen is not switched and no project is selected for it: another project, or a formation selected, gets no tab of its own; a screen that is not shown opens the window all the same.
+// A file that a window holds already comes to the front (`focusPopout`). Any other is opened as a tab of the project that has the worktree, then put in a window as the menu of the tab does (`popOutTab`: a file that is open in a pane is saved and leaves it); when the save fails or is refused, or the window cannot be made, the tab stays in its pane.
 // The screen answers once the check has passed, and opens the tab after the answer: the read of the list may take longer than the wait of the bridge (5 seconds), and a tool that failed on the wait would leave a tab that opens later. A refusal after the answer is a card (A-28).
 async function openPreview(fields: Fields) {
   const [path, relative, environment] = [fields.path ?? "", fields.relative ?? "", fields.environment || null];
@@ -1162,7 +1162,7 @@ async function openPreview(fields: Fields) {
   void openCheckedPreview(path, relative, environment, true).catch((e) => showFailure("orca", e instanceof Error ? e.message : e));
 }
 
-async function openCheckedPreview(path: string, relative: string, environment: string | null, right = false) {
+async function openCheckedPreview(path: string, relative: string, environment: string | null, popout = false) {
   const find = () => mix.worktrees.find((w) => w.path === path && placeOf(w) === environment);
   let worktree = find();
   if (worktree === undefined) {
@@ -1171,10 +1171,11 @@ async function openCheckedPreview(path: string, relative: string, environment: s
   }
   if (worktree === undefined) throw new Error("そのフォルダは、一覧のプロジェクトにありません");
   const { projectKey: key } = worktree;
-  const open = new Set(filesOf(environment, key).map((f) => f.id));
   const id = openEditorFile(environment, key, path, relative);
-  // A tab that is new (not a file open here, and not one in a window of its own) goes to the right end; the focus stays where it is.
-  if (right && !open.has(id) && !isAway(id)) runPaneOp({ kind: "placeRight", tab: id }, key);
+  if (popout && focusPopout(id)) return;
+  const tab = popout ? tabsOf(key).find((t) => t.id === id) : undefined;
+  const entry = tab === undefined ? null : popoutTab(tab, key);
+  if (tab !== undefined && entry !== null) await popOutTab(entry, tab);
   else if (currentFormation() === null && key === projectKey) chooseTab(id);
   draw();
 }

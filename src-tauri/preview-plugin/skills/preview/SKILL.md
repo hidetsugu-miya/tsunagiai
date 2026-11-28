@@ -1,13 +1,13 @@
 ---
 name: preview
-description: Opens an HTML file of the worktree as a preview tab in the owner's app. Use it after you write or change an HTML file (a report, a page, a mock-up) that the owner should look at, and when the owner asks you to show or preview one.
+description: Opens an HTML file of the worktree as a preview in a window of its own of the owner's app. Use it after you write or change an HTML file (a report, a page, a mock-up) that the owner should look at, and when the owner asks you to show or preview one.
 ---
 
 # preview
 
 ## Purpose
 
-Show the owner an HTML file you wrote, in the preview tab of the development screen of the app, so that the owner does not have to look for the file.
+Show the owner an HTML file you wrote, in a window of its own of the app (never as a tab of the development screen), so that the owner does not have to look for the file.
 
 ## Steps
 
@@ -21,5 +21,5 @@ Show the owner an HTML file you wrote, in the preview tab of the development scr
 
 - Only an `.html` file (whatever the case) inside the worktree opens, and no part of its path may start with a dot.
 - The worktree must be one that Orca lists for the project. Any other is refused by the app.
-- The tab opens in the owner's app, also when you run on another PC.
+- The window opens in the owner's app, also when you run on another PC.
 - When the tool fails, say what its answer says (the app is not running, is not connected to this PC, or refuses the request) and go on. Do not open the file by another means.
