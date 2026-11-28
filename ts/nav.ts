@@ -17,6 +17,7 @@ import { pauseLsp } from "./orca-lsp.js";
 import { showOrca, watchFiles } from "./orca.js";
 import { applyMenu, everyScreenOn } from "./menu-state.js";
 import { loadSettings, selectSettingsTab, type SettingsTab } from "./settings.js";
+import { hidePluginClaude } from "./plugin-settings.js";
 import { hideSkillClaude } from "./skill-settings.js";
 import { showSlackList } from "./slack-list.js";
 import { hideThreadClaude } from "./slack-thread.js";
@@ -89,6 +90,8 @@ export function setScreen(name: Screen, tab?: SettingsTab) {
   hidePromptClaude();
   // The same for the Claude pane of the settings' Skill tab, which another screen leaves through here (the tab shows it again).
   hideSkillClaude();
+  // The same for the Claude Code panes of the settings' Plugins tab (A-51).
+  hidePluginClaude();
   if (name !== "orca") {
     hideFormation();
     // The language server's settings are read by the clock only while the Orca screen is shown (A-34).

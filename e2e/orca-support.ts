@@ -150,13 +150,13 @@ export const claimFocus = () =>
   });
 
 // Gives the editor the focus as the owner's click does (the page says its window has it).
-export const focusEditor = () =>
-  browser.execute(() => {
+export const focusEditor = (body = ".orca-edit-body") =>
+  browser.execute((selector) => {
     document.hasFocus = () => true;
-    const content = document.querySelector<HTMLElement>(".orca-edit-body .cm-content")!;
+    const content = document.querySelector<HTMLElement>(`${selector} .cm-content`)!;
     content.focus({ preventScroll: true });
     content.dispatchEvent(new FocusEvent("focus"));
-  });
+  }, body);
 
 // Takes the focus from the editor, and the page says its window has none again.
 export const blurEditor = () =>
@@ -241,9 +241,9 @@ async function typeKeys(text: string) {
   }
 }
 
-// Types `add` at the end of the text of the editor, as the owner does (the keys go to the editor, which has the focus); the page says its window has the focus until the keys are typed.
-export async function typeIn(add: string) {
-  await focusEditor();
+// Types `add` at the end of the text of the editor, as the owner does (the keys go to the editor, which has the focus); the page says its window has the focus until the keys are typed. `body` is the selector of the editor's body: the Plugins tab of the settings has its own (`.plugin-edit-body`).
+export async function typeIn(add: string, body = ".orca-edit-body") {
+  await focusEditor(body);
   await browser.keys([META, ARROW_DOWN]);
   await typeKeys(add);
   await browser.execute(() => {

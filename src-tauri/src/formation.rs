@@ -75,7 +75,7 @@ const STEP_WORKTREE: &str = "worktree の作成";
 const STEP_BRANCHES: &str = "branch の確認";
 const STEP_TERMINAL: &str = "ターミナルの作成";
 const STEP_RECORD: &str = "記録の書き込み";
-const STEP_PLUGIN: &str = "プラグインの書き出し";
+const STEP_PLUGIN: &str = "プラグインのフォルダの用意";
 const STEP_SETTINGS: &str = "子の設定の書き出し";
 const STEP_IDLE: &str = "子のエージェントの立ち上がり待ち";
 const STEP_SEND: &str = "最初の指示の送信";
@@ -1138,19 +1138,25 @@ fn child_settings_file(name: &str) -> String {
     format!("settings-{name}.json")
 }
 
-/// The settings that a Claude Code child's `--settings` takes: the `permissions` for the Figma server of its plugin (`formation_assets::figma_permissions`, A-41, #1162), because the child runs in the auto mode. No hook records its messages: they are read from the Run of Orca (#1238).
-fn child_settings() -> String {
-    serde_json::to_string_pretty(
-        &json!({"permissions": crate::formation_assets::figma_permissions()}),
-    )
-    .unwrap_or_default()
+/// The settings that a Claude Code child's `--settings` takes: the `permissions` for the Figma server of its plugins (A-41, #1162) and the rule that denies editing the plugins' folder (`plugins::edit_deny_rule`), because the child runs in the auto mode. No hook records its messages: they are read from the Run of Orca (#1238).
+fn child_settings(permissions: &Value) -> String {
+    serde_json::to_string_pretty(&json!({ "permissions": permissions })).unwrap_or_default()
 }
 
-/// Writes the settings of a Claude Code child in the folder of its formation and answers its path. A Codex child has none.
-fn write_child_settings(config: &Path, formation: &str, name: &str) -> Result<PathBuf, String> {
+/// Writes the settings of a Claude Code child in the folder of its formation and answers its path: the Figma permissions of each plugin of `plugins` that has the server and the rule that denies editing `plugins` (`plugins::agent_permissions`), made at each launch. A Codex child has none.
+fn write_child_settings(
+    config: &Path,
+    formation: &str,
+    name: &str,
+    plugins: &Path,
+) -> Result<PathBuf, String> {
     let folder = dir(config, formation);
     let file = child_settings_file(name);
-    accounts::write_atomic(&folder, &file, &child_settings())?;
+    accounts::write_atomic(
+        &folder,
+        &file,
+        &child_settings(&crate::plugins::agent_permissions(plugins)?),
+    )?;
     Ok(folder.join(file))
 }
 
@@ -1160,7 +1166,7 @@ const CODEX_COMMAND: &str = "codex --sandbox workspace-write --ask-for-approval 
 /// What a Claude Code child runs at: the auto mode (it never stops to ask) at the effort `medium` (#911).
 const CLAUDE_CHILD_MODE: &str = "--permission-mode auto --effort medium";
 
-/// The command of the child's terminal: for Claude Code, Claude Code in auto mode at the effort `medium` (#911) under its name (`claude -n`), with the plugin of A-41 (`--plugin-dir`, in single quotes: the path of the config folder may hold a space) and its settings (`--settings {settings}`, the Figma permissions, #1162). The name was checked, so the rest of the command line holds nothing a shell would read.
+/// The command of the child's terminal: for Claude Code, Claude Code in auto mode at the effort `medium` (#911) under its name (`claude -n`), with the folder of the owner's plugins (`--plugin-dir`, A-41, in single quotes: the path may hold a space) and its settings (`--settings {settings}`, the Figma permissions, #1162). The name was checked, so the rest of the command line holds nothing a shell would read.
 fn child_command(agent: FormationAgent, name: &str, plugin_dir: &Path, settings: &Path) -> String {
     match agent {
         FormationAgent::Claude => format!(
@@ -1217,10 +1223,10 @@ fn terminal_command_args(path: &str, name: &str, command: &str, environment: &st
     on(args, environment)
 }
 
-/// What the command of a remote child's terminal prints when the program of that PC wrote no plugin or settings (an older program does not know `--child-plugin`, and ends with no output).
+/// What the command of a remote child's terminal prints when the program of that PC wrote no settings and gave no plugins' folder (an older program does not know `--child-plugin`, and ends with no output).
 const CHILD_FILES_MISSING: &str = "子のプラグインを書き出せませんでした";
 
-/// The command of the terminal of a Claude Code child on another PC (#1239). The plugin of A-41 and the child's `--settings` are files of that PC, so the `remote/tsunagiai-mcp` that the app put there (`formation_remote::program_path`) writes them (`--child-plugin {formation} {name}`, `write_child_files`: it prints the plugin's folder on the first line and the settings file on the second) and `claude` is started with them, under the same name and mode as a child of this PC (`child_command`). The sentence begins with `exec`, so the `sh` takes the place of the login shell, as the orchestrator's does (`orchestrator_command`): a failure ends the terminal at once (no program, or no files), and the idle wait that follows says so, so that the prompt is never typed into a shell. `</dev/null`: a program of an older version that serves in place of printing would wait for the terminal's input. The script has no single quote and no backslash, and the formation and the child are its arguments, in single quotes (both passed `check_name`).
+/// The command of the terminal of a Claude Code child on another PC (#1239). The owner's plugins and the child's `--settings` are files of that PC (the plugins were sent there before the launch, `formation_remote::send_plugins_from_here`), so the `remote/tsunagiai-mcp` that the app put there (`formation_remote::program_path`) writes the settings (`--child-plugin {formation} {name}`, `write_child_files`: it prints the plugins' folder on the first line and the settings file on the second) and `claude` is started with them, under the same name and mode as a child of this PC (`child_command`). The sentence begins with `exec`, so the `sh` takes the place of the login shell, as the orchestrator's does (`orchestrator_command`): a failure ends the terminal at once (no program, or no files), and the idle wait that follows says so, so that the prompt is never typed into a shell. `</dev/null`: a program of an older version that serves in place of printing would wait for the terminal's input. The script has no single quote and no backslash, and the formation and the child are its arguments, in single quotes (both passed `check_name`).
 fn remote_child_command(formation: &str, name: &str) -> String {
     let program = crate::formation_remote::program_path();
     let script = format!(
@@ -1234,25 +1240,39 @@ fn remote_child_command(formation: &str, name: &str) -> String {
     )
 }
 
-/// The argument of `tsunagiai-mcp` that writes a child's plugin and settings on its PC (`write_child_files`), prints their paths and serves nothing.
+/// The argument of `tsunagiai-mcp` that writes a child's settings on its PC and prints them with the folder of the plugins there (`write_child_files`), and serves nothing.
 pub const CHILD_PLUGIN_FLAG: &str = "--child-plugin";
 
 /// The folder of the config folder that holds the `--settings` files of the children of other PCs' leaders. It is not under `formations/`: a folder there is a formation (`formation_names`), and this PC has no record of these children.
 const CHILD_SETTINGS_FOLDER: &str = "child-settings";
 
-/// Writes the plugin of A-41 and the `--settings` file of the child `name` of `formation` in `config` of this PC, for a leader on another PC (`remote_child_command`), and answers their paths: the plugin's folder and the settings file.
+/// Makes the folder of the owner's plugins of this PC when it is missing (it holds what the app sent, `formation_remote::send_plugins`, #1535) and writes the `--settings` file of the child `name` of `formation` in `config` of this PC, for a leader on another PC (`remote_child_command`), with the Figma permissions of each plugin there that has the server. It answers their paths: the plugins' folder and the settings file. It writes no plugin of its own.
 pub fn write_child_files(
     config: &Path,
     formation: &str,
     name: &str,
 ) -> Result<(PathBuf, PathBuf), String> {
+    write_child_files_in(config, formation, name, crate::plugins::prepared_dir()?)
+}
+
+/// `write_child_files` with the plugins' folder `plugins`, which is made when it is missing.
+fn write_child_files_in(
+    config: &Path,
+    formation: &str,
+    name: &str,
+    plugins: PathBuf,
+) -> Result<(PathBuf, PathBuf), String> {
     check_name(formation)?;
     check_name(name)?;
-    let plugin = crate::formation_assets::write_plugin(config)?;
+    let plugins = crate::plugins::ensure_dir(plugins)?;
     let folder = config.join(CHILD_SETTINGS_FOLDER);
     let file = format!("{formation}-{name}.json");
-    accounts::write_atomic(&folder, &file, &child_settings())?;
-    Ok((plugin, folder.join(file)))
+    accounts::write_atomic(
+        &folder,
+        &file,
+        &child_settings(&crate::plugins::agent_permissions(&plugins)?),
+    )?;
+    Ok((plugins, folder.join(file)))
 }
 
 fn terminal_wait_args(handle: &str, environment: &str) -> Vec<String> {
@@ -2084,7 +2104,7 @@ fn make_worktree(
     })
 }
 
-/// Launches a child: a terminal with `claude -n {name}` and the plugin of A-41 (`--plugin-dir`, written first) in a worktree, the first instruction, and the record. Every command of Orca is run against that environment.
+/// Launches a child: a terminal with `claude -n {name}` and the folder of the owner's plugins (`--plugin-dir`, made first) in a worktree, the first instruction, and the record. Every command of Orca is run against that environment.
 /// With no `place.folder` the worktree is made here in the repository of the environment (`create_worktree`: Orca's RPC, not its CLI), on `place.branch` (or on the branch Orca names, when there is none): a branch that the repository has is opened as it is, one that only `origin` has is taken from there, and a new one starts from `place.base`. A step that fails after the worktree was made says which, and leaves the worktree; a worktree whose branch is not the one asked for is removed again at once.
 /// With `place.folder` nothing is made: the folder must be the repository's own folder or a worktree of it that `orca worktree ps` lists (`folder_in`), and the child works there. The record says that tsunagiai did not make it (`Launch::created`), so that no close removes it.
 #[allow(clippy::too_many_arguments)]
@@ -2109,16 +2129,21 @@ pub fn launch(
     let agent = agent_for(agent, &record, name);
     let environment = chosen_environment(&mut None, environment)?;
     let environment = environment.as_str();
-    // A Claude Code child of another PC gets its plugin and settings from that PC's own `tsunagiai-mcp`, which its terminal's command runs (`remote_child_command`).
+    // A Claude Code child of another PC gets its settings from that PC's own `tsunagiai-mcp`, which its terminal's command runs (`remote_child_command`), and the owner's plugins that this PC sends it before anything is made.
     let remote_claude = agent == FormationAgent::Claude && environment != LOCAL;
-    // The plugin of A-41 is written (replaced as a whole) before anything is made, so that a failure leaves no worktree. A Codex child has none: it reads the prompt alone.
+    if remote_claude {
+        crate::formation_remote::send_plugins_from_here(config, environment)
+            .map_err(|e| Refusal::failed(STEP_PLUGIN, e))?;
+    }
+    // The folder of the owner's plugins is made when it is missing, and the settings are written, before anything is made, so that a failure leaves no worktree. A Codex child has none: it reads the prompt alone.
     let (plugin_dir, settings) = match agent {
-        FormationAgent::Claude if !remote_claude => (
-            crate::formation_assets::write_plugin(config)
-                .map_err(|e| Refusal::failed(STEP_PLUGIN, e))?,
-            write_child_settings(config, formation, name)
-                .map_err(|e| Refusal::failed(STEP_SETTINGS, e))?,
-        ),
+        FormationAgent::Claude if !remote_claude => {
+            let plugins =
+                crate::plugins::prepared_dir().map_err(|e| Refusal::failed(STEP_PLUGIN, e))?;
+            let settings = write_child_settings(config, formation, name, &plugins)
+                .map_err(|e| Refusal::failed(STEP_SETTINGS, e))?;
+            (plugins, settings)
+        }
         _ => (PathBuf::new(), PathBuf::new()),
     };
     let list = repos(environment)?;
@@ -4890,6 +4915,7 @@ fn terminal_is_gone(
 
 /// The terminal of the orchestrator of `formation`, a formation of a saved environment (A-37): the one the file records when it is still in that Orca's `terminal list` (of every terminal), else a new one. With `restart` the recorded one is closed first, so that the new one starts Claude Code again; one that cannot be closed and is still listed stops the restart, because a new terminal beside it would run a second orchestrator.
 /// A new terminal is made in the floating terminal of that PC's Orca (`FLOATING_WORKTREE`), titled with the formation's name, running `orchestrator_command` with the address of that PC (`host_of`: where the server of A-37 listens), which gives the projects to Claude Code as its first instruction (every project in `local`, as the orchestrator of this Mac has it). The app does not wait for Claude Code and sends it nothing: Claude Code first asks whether to trust the folder (its answer is No, exit), and the owner answers that in the terminal the screen shows, as in the pane of this Mac (A-36), which nothing here answers. Only when the terminal is made and its handle is written in `formation.json` (the screen's polls read the PC's record only of a formation that has one, `Meta::orchestrator_terminal`) does the start succeed; a terminal whose handle cannot be recorded is closed, so none is left running with no record. A recorded handle that is no longer listed stays in the file until the new one replaces it, so that the children the orchestrator launched stay in the screen's reads when the start fails. When Claude Code ends, the terminal ends with it (`orchestrator_command` replaces the login shell), so it leaves that list and the next ask makes a new one (#943).
+/// Before a new terminal is made, `send_plugins` puts the owner's plugins of this PC on that PC (`formation_remote::send_plugins`): a failure stops the start with nothing made. A restart sends them before the leader that runs is closed, so a failure leaves that leader running.
 /// A formation of this Mac has no such terminal (its orchestrator runs in a pseudo terminal of the app): it is refused.
 fn start_orchestrator_with(
     config: &Path,
@@ -4898,6 +4924,7 @@ fn start_orchestrator_with(
     read: &dyn Fn(&[String]) -> Result<Value, String>,
     write: &dyn Fn(&[String]) -> Result<Value, String>,
     host_of: &dyn Fn(&str) -> Result<String, String>,
+    send_plugins: &dyn Fn(&str) -> Result<(), String>,
 ) -> Result<FormationOrchestrator, String> {
     check_name(formation)?;
     if !dir(config, formation).is_dir() {
@@ -4925,6 +4952,10 @@ fn start_orchestrator_with(
     } else {
         None
     };
+    // A restart sends the plugins before it closes the leader that runs, so a failed send leaves that leader as it is.
+    if restart {
+        send_plugins(environment).map_err(failed)?;
+    }
     if let Some(handle) = &meta.orchestrator_terminal {
         let list = read(&all_terminals_args(environment)).map_err(failed)?;
         if restart {
@@ -4949,13 +4980,12 @@ fn start_orchestrator_with(
         Some(host) => host,
         None => host_of(environment).map_err(failed)?,
     };
-    let made = write(&orchestrator_create_args(
-        formation,
-        environment,
-        &repos,
-        &host,
-    )?)
-    .map_err(failed)?;
+    let create = orchestrator_create_args(formation, environment, &repos, &host)?;
+    // The owner's plugins of this PC are on that PC before the leader starts, which reads them with `--plugin-dir` (#1535). A restart sent them already.
+    if !restart {
+        send_plugins(environment).map_err(failed)?;
+    }
+    let made = write(&create).map_err(failed)?;
     let handle = orca::created_of(&made)
         .handle
         .ok_or_else(|| failed("Orca がターミナルの handle を答えませんでした".into()))?;
@@ -5011,7 +5041,9 @@ pub async fn formation_orchestrator(
     restart: bool,
 ) -> Result<FormationOrchestrator, String> {
     let dir = config_dir(&app)?;
+    let version = app.package_info().version.to_string();
     orca::blocking(move || {
+        let open = pc_connect(&dir, &version, true);
         start_orchestrator_with(
             &dir,
             &name,
@@ -5019,6 +5051,14 @@ pub async fn formation_orchestrator(
             &orca_read,
             &|args| orca::write(args),
             &crate::formation_remote::bind_host,
+            &|environment| {
+                on_pc(
+                    environment,
+                    &open,
+                    crate::formation_remote::PLUGINS_SEND_WAIT,
+                    crate::formation_remote::send_plugins,
+                )
+            },
         )
     })
     .await?
@@ -6157,7 +6197,7 @@ mod tests {
                 "/w/a",
                 FormationAgent::Claude,
                 "web-2",
-                Path::new("/c/formation-plugin"),
+                Path::new("/c/plugins"),
                 Path::new("/c/formations/f/settings-web-2.json"),
                 "local"
             ),
@@ -6169,7 +6209,7 @@ mod tests {
                 "--title",
                 "web-2",
                 "--command",
-                "claude -n web-2 --permission-mode auto --effort medium --plugin-dir '/c/formation-plugin' --settings '/c/formations/f/settings-web-2.json'",
+                "claude -n web-2 --permission-mode auto --effort medium --plugin-dir '/c/plugins' --settings '/c/formations/f/settings-web-2.json'",
                 "--json",
                 "--environment=local"
             ]
@@ -6246,21 +6286,32 @@ mod tests {
             std::process::id(),
             now_ms()
         ));
-        let path = write_child_settings(&config, "api-work", "web-2").unwrap();
+        let plugins = config.join("plugins");
+        std::fs::create_dir_all(plugins.join("client-a")).unwrap();
+        std::fs::write(
+            plugins.join("client-a/.mcp.json"),
+            r#"{"mcpServers": {"figma": {"type": "http", "url": "https://mcp.figma.com/mcp"}}}"#,
+        )
+        .unwrap();
+        let path = write_child_settings(&config, "api-work", "web-2", &plugins).unwrap();
         assert_eq!(path, dir(&config, "api-work").join("settings-web-2.json"));
-        // Only the permissions for the Figma server: no hook records the messages (#1238).
+        // Only the permissions for the Figma server of the plugin that has it: no hook records the messages (#1238).
         let settings: Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
             settings,
-            json!({"permissions": crate::formation_assets::figma_permissions()})
+            json!({"permissions": crate::plugins::agent_permissions(&plugins).unwrap()})
+        );
+        assert_eq!(
+            settings["permissions"]["allow"][0],
+            "mcp__plugin_client-a_figma__get_metadata"
         );
         std::fs::remove_dir_all(&config).unwrap();
     }
 
     #[test]
     fn a_codex_child_is_started_with_its_sandbox_and_no_plugin_or_name_flag() {
-        let plugin = Path::new("/c/formation-plugin");
+        let plugin = Path::new("/c/plugins");
         let settings = Path::new("/c/formations/f/settings-web-2.json");
         let command = child_command(FormationAgent::Codex, "web-2", plugin, settings);
         assert_eq!(
@@ -6352,20 +6403,20 @@ mod tests {
             child_command(
                 FormationAgent::Claude,
                 "web-2",
-                Path::new("/c/formation-plugin"),
+                Path::new("/c/plugins"),
                 settings
             ),
-            "claude -n web-2 --permission-mode auto --effort medium --plugin-dir '/c/formation-plugin' --settings '/c/formations/f/settings-web-2.json'"
+            "claude -n web-2 --permission-mode auto --effort medium --plugin-dir '/c/plugins' --settings '/c/formations/f/settings-web-2.json'"
         );
         // A folder with a space or a quote stays one word.
         assert!(child_command(
             FormationAgent::Claude,
             "web-2",
-            Path::new("/c/it's here/formation-plugin"),
+            Path::new("/c/it's here/plugins"),
             Path::new("/c/it's here/settings.json")
         )
         .ends_with(
-            r"--plugin-dir '/c/it'\''s here/formation-plugin' --settings '/c/it'\''s here/settings.json'"
+            r"--plugin-dir '/c/it'\''s here/plugins' --settings '/c/it'\''s here/settings.json'"
         ));
     }
 
@@ -6380,7 +6431,7 @@ mod tests {
                 "/w/a",
                 FormationAgent::Claude,
                 "web-2",
-                Path::new("/c/formation-plugin"),
+                Path::new("/c/plugins"),
                 Path::new("/c/settings.json"),
                 environment,
             ),
@@ -11727,6 +11778,7 @@ mod tests {
                 &|args| self.run(args),
                 &|args| self.run(args),
                 &|_| Ok(HOST.to_owned()),
+                &|_| Ok(()),
             )
         }
         fn steps(&self) -> Vec<String> {
@@ -11880,6 +11932,7 @@ mod tests {
                     asked.borrow_mut().push(environment.to_owned());
                     host(environment)
                 },
+                &|_| Ok(()),
             )
         };
         let refuse = |_: &str| Err("接続先「mac.local」は IP アドレスではありません".to_owned());
@@ -11978,16 +12031,115 @@ mod tests {
             Ok(json!({}))
         };
         let read = |_: &[String]| -> Result<Value, String> { Ok(json!({"terminals": []})) };
-        assert!(
-            start_orchestrator_with(&config, "api-work", false, &read, &write, &|_| Ok(
-                HOST.to_owned()
-            ))
-            .is_err()
-        );
+        assert!(start_orchestrator_with(
+            &config,
+            "api-work",
+            false,
+            &read,
+            &write,
+            &|_| Ok(HOST.to_owned()),
+            &|_| Ok(())
+        )
+        .is_err());
         let steps: Vec<String> = calls.borrow().iter().map(|a| a[..2].join(" ")).collect();
         assert_eq!(steps, ["terminal create", "terminal close"]);
         assert_eq!(calls.borrow()[1][3], "term_new");
         std::fs::remove_dir_all(&config).ok();
+    }
+
+    #[test]
+    fn the_plugins_are_sent_to_the_pc_before_its_leader_terminal_is_made_and_a_failure_makes_none()
+    {
+        let config = temp_dir("orchestrator-plugins");
+        unstarted_remote_formation(&config, "api-work");
+        let orca = Stand::new();
+        let seen = std::cell::RefCell::new(Vec::<(String, Vec<String>)>::new());
+        let start = |send: &dyn Fn(&str) -> Result<(), String>| {
+            start_orchestrator_with(
+                &config,
+                "api-work",
+                false,
+                &|args| orca.run(args),
+                &|args| orca.run(args),
+                &|_| Ok(HOST.to_owned()),
+                &|environment| {
+                    seen.borrow_mut()
+                        .push((environment.to_owned(), orca.steps()));
+                    send(environment)
+                },
+            )
+        };
+        // A send that fails stops the start before a terminal is made: nothing is recorded.
+        let err = start(&|_| Err("サーバーにつなげません\n二行目".to_owned())).unwrap_err();
+        assert!(err.contains("リーダーを起動できません"), "{err}");
+        assert!(
+            err.contains("サーバーにつなげません") && !err.contains("二行目"),
+            "{err}"
+        );
+        assert!(!orca.steps().contains(&"terminal create".to_owned()));
+        assert_eq!(recorded_terminal(&config, "api-work"), None);
+        // Sent to the formation's environment, and before the terminal is made.
+        start(&|_| Ok(())).unwrap();
+        let seen = seen.borrow();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[1].0, "mac-studio");
+        assert!(!seen[1].1.contains(&"terminal create".to_owned()));
+        assert!(orca.steps().contains(&"terminal create".to_owned()));
+        assert_eq!(
+            recorded_terminal(&config, "api-work"),
+            Some("term_new".into())
+        );
+        std::fs::remove_dir_all(&config).unwrap();
+    }
+
+    #[test]
+    fn a_restart_whose_plugins_cannot_be_sent_leaves_the_leader_that_runs() {
+        let config = temp_dir("orchestrator-restart-plugins");
+        unstarted_remote_formation(&config, "api-work");
+        update_meta(&config, "api-work", |m| {
+            m.orchestrator_terminal = Some("term_old".into());
+        })
+        .unwrap();
+        let mut orca = Stand::new();
+        orca.listed = json!({"terminals": [{"handle": "term_old"}]});
+        let sent = std::cell::Cell::new(0);
+        let start = |restart: bool, fail: bool| {
+            start_orchestrator_with(
+                &config,
+                "api-work",
+                restart,
+                &|args| orca.run(args),
+                &|args| orca.run(args),
+                &|_| Ok(HOST.to_owned()),
+                &|_| {
+                    sent.set(sent.get() + 1);
+                    if fail {
+                        Err("サーバーにつなげません".to_owned())
+                    } else {
+                        Ok(())
+                    }
+                },
+            )
+        };
+        // The send fails: no terminal is closed or made, and the recorded one stays.
+        assert!(start(true, true)
+            .unwrap_err()
+            .contains("サーバーにつなげません"));
+        assert_eq!(sent.get(), 1);
+        assert!(!orca.steps().contains(&"terminal close".to_owned()));
+        assert!(!orca.steps().contains(&"terminal create".to_owned()));
+        assert_eq!(
+            recorded_terminal(&config, "api-work"),
+            Some("term_old".into())
+        );
+        // It succeeds: sent once, before the close, and the new terminal is made.
+        assert_eq!(start(true, false).unwrap().handle, "term_new");
+        assert_eq!(sent.get(), 2);
+        assert_eq!(
+            orca.steps(),
+            ["terminal list", "terminal close", "terminal create"]
+        );
+        std::fs::remove_dir_all(&config).unwrap();
     }
 
     #[test]
@@ -12162,6 +12314,7 @@ mod tests {
                 secret: SERVER_SECRET,
                 client_public: public_of(&CLIENT_SECRET),
                 version: "1.2.3".into(),
+                plugins: Err("プラグインのフォルダがありません".to_owned()),
             };
             let task = tokio::spawn(async move {
                 serve(tokio::net::TcpListener::from_std(listener).unwrap(), setup).await;
@@ -13364,24 +13517,60 @@ mod tests {
     }
 
     #[test]
-    fn the_program_of_a_pc_writes_the_plugin_and_the_settings_of_a_child_there() {
+    fn the_program_of_a_pc_gives_the_owners_plugins_and_writes_the_settings_of_a_child_there() {
         let config = temp_dir("child-files");
-        let (plugin, settings) = write_child_files(&config, "alpha", "api-fix").unwrap();
-        assert_eq!(plugin, crate::formation_assets::plugin_dir(&config));
-        assert!(plugin.join(".claude-plugin/plugin.json").is_file());
-        let written: Value =
-            serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        let plugins = config.join("home/plugins");
+        // The plugins' folder is made when it is missing, and no plugin of the app's own is written in it.
+        let (folder, settings) =
+            write_child_files_in(&config, "alpha", "api-fix", plugins.clone()).unwrap();
+        assert_eq!(folder, plugins);
+        assert!(std::fs::read_dir(&plugins).unwrap().next().is_none());
+        let figma = |settings: &Path| -> Value {
+            serde_json::from_str::<Value>(&std::fs::read_to_string(settings).unwrap()).unwrap()
+                ["permissions"]
+                .clone()
+        };
+        // No plugin has the Figma server: the one deny rule is the one that stops the child from editing the plugins' folder.
         assert_eq!(
-            written["permissions"],
-            crate::formation_assets::figma_permissions()
+            figma(&settings),
+            json!({"allow": [], "deny": [format!("Edit(/{}/**)", plugins.display())]})
         );
+        // The settings follow the plugins that the PC holds now: one with the Figma server gets its rules.
+        std::fs::create_dir_all(plugins.join("client-a/.claude-plugin")).unwrap();
+        std::fs::write(
+            plugins.join("client-a/.claude-plugin/plugin.json"),
+            r#"{"name": "client-a"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            plugins.join("client-a/.mcp.json"),
+            r#"{"mcpServers": {"figma": {}}}"#,
+        )
+        .unwrap();
+        let (_, again) =
+            write_child_files_in(&config, "alpha", "api-fix", plugins.clone()).unwrap();
+        assert_eq!(again, settings);
+        assert_eq!(
+            figma(&settings),
+            crate::plugins::agent_permissions(&plugins).unwrap()
+        );
+        assert!(figma(&settings)["allow"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("mcp__plugin_client-a_figma__"));
         // The settings are not in the folder of a formation: a folder there would be listed as one.
         assert_eq!(settings, config.join("child-settings/alpha-api-fix.json"));
         assert!(formation_names(&config, None).is_empty());
         // A name that is no name of a formation or child never becomes a path.
         for bad in ["../x", "A", "", "a/b"] {
-            assert!(write_child_files(&config, bad, "a").is_err(), "{bad}");
-            assert!(write_child_files(&config, "alpha", bad).is_err(), "{bad}");
+            assert!(
+                write_child_files_in(&config, bad, "a", plugins.clone()).is_err(),
+                "{bad}"
+            );
+            assert!(
+                write_child_files_in(&config, "alpha", bad, plugins.clone()).is_err(),
+                "{bad}"
+            );
         }
         std::fs::remove_dir_all(&config).unwrap();
     }

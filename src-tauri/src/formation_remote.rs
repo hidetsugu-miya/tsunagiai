@@ -27,6 +27,7 @@ use crate::{
     accounts,
     auth::config_dir,
     formation::{self, terminal_close_args, FLOATING_WORKTREE, LOCAL},
+    formation_assets,
     formation_server::{
         self, canonical_32, error_line, parse_error_line, parse_ready_line, public_of, random_32,
         Client, PushHandler, PushRequest, STOPPED_LINE,
@@ -894,6 +895,37 @@ async fn act_on_pc(
         return Err(in_progress(what));
     }
     work.await.map_err(|e| e.to_string())?
+}
+
+/// How long the send of the owner's plugins to a PC may take, the connection included (a placement of the program is up to `PLACE_WAIT`, and the files go in several requests).
+pub(crate) const PLUGINS_SEND_WAIT: Duration = Duration::from_secs(180);
+
+/// Sends the plugins' folder of this PC (`plugins::plugins_dir`) to the PC that `client` is connected to, which replaces its own as a whole, unless it holds the very same files already (#1535). A folder that is not there is sent as no file.
+pub async fn send_plugins(client: &mut Client) -> Result<(), String> {
+    send_plugins_from(&crate::plugins::plugins_dir()?, client).await
+}
+
+async fn send_plugins_from(dir: &Path, client: &mut Client) -> Result<(), String> {
+    let files = formation_assets::read_plugins_folder(dir)?;
+    client.plugins_send(&files).await.map(|_| ())
+}
+
+/// `send_plugins` for a process that has no version of the app to compare (the `tsunagiai-mcp` of the leader, which launches a child in a saved environment): it connects with the pinned key and starts or places nothing, so a PC whose server is not running refuses with the reason. An environment with no pinned key is one this process has no consent for (the leader runs on a PC that is not the app's): nothing is sent and it is not an error. Run it on a thread that may block, inside the runtime.
+pub fn send_plugins_from_here(config: &Path, environment: &str) -> Result<(), String> {
+    if !pins(config)?.contains_key(environment) {
+        return Ok(());
+    }
+    let work = async {
+        let pin = pin_of(config, environment)?;
+        let key = canonical_32(&pin.key).ok_or("固定したサーバーの鍵が壊れています")?;
+        let host = bind_host(environment)?;
+        let mut client = Client::connect(&host, formation_server::PORT, app_secret()?, key).await?;
+        send_plugins(&mut client).await
+    };
+    tokio::runtime::Handle::current()
+        .block_on(async { tokio::time::timeout(PLUGINS_SEND_WAIT, work).await })
+        .unwrap_or_else(|_| Err("時間内に送れませんでした".to_owned()))
+        .map_err(|e| format!("その PC にプラグインを送れません: {e}"))
 }
 
 /// Reads the pinned server of `environment`: the owner must have allowed it.
@@ -2392,6 +2424,7 @@ mod tests {
             secret,
             client_public,
             version: version.to_owned(),
+            plugins: Err("プラグインのフォルダがありません".to_owned()),
         };
         tokio::spawn(async move {
             serve(TcpListener::from_std(listener).unwrap(), setup).await;
@@ -2755,6 +2788,7 @@ mod tests {
             secret,
             client_public,
             version: "1.2.3".to_owned(),
+            plugins: Err("プラグインのフォルダがありません".to_owned()),
         };
         let hub = Hub::new();
         let task = tokio::spawn(serve_with(

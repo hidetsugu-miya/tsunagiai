@@ -45,7 +45,7 @@ use x25519_dalek::{x25519, X25519_BASEPOINT_BYTES};
 
 use crate::{
     formation::{self, Child, CHILDREN_FILE},
-    formation_ask, formation_image, formation_message,
+    formation_ask, formation_assets, formation_image, formation_message,
     formation_page::{self, DecisionPage, PageRecord},
 };
 
@@ -393,6 +393,10 @@ type Place = (String, String, String, String);
 /// How many images that `image.read` has checked are held for their next chunks.
 const SERVED_MAX: usize = 4;
 
+/// How many bytes of files one `plugins.write` carries at most (a request holds them as base64, a third more, and the frame is 1 MiB), and how many pieces: a file of no byte is a piece too.
+const PLUGINS_PIECE: usize = 256 * 1024;
+const PLUGINS_BATCH: usize = 200;
+
 /// The images that the first chunk (offset 0) of `image.read` checked and prepared, the newest first, so that the chunks that follow are cut from them and do not ask Orca, check the page and make the image again for each chunk.
 #[derive(Default)]
 struct HeldImages(Vec<(Place, Arc<formation_image::Prepared>)>);
@@ -470,6 +474,29 @@ struct AskedClearParams {
 struct DropParams {
     formation: String,
     names: Vec<String>,
+}
+
+/// `plugins.begin` and `plugins.commit`: the id of the send, the hash of the set of the owner's plugins and its files with their sizes.
+#[derive(Deserialize)]
+struct PluginsBeginParams {
+    id: String,
+    mark: String,
+    files: Vec<formation_assets::PluginEntry>,
+}
+
+/// `plugins.write`: pieces of files, each at its place in the file, as base64.
+#[derive(Deserialize)]
+struct PluginsWriteParams {
+    id: String,
+    mark: String,
+    items: Vec<PluginPiece>,
+}
+
+#[derive(Deserialize)]
+struct PluginPiece {
+    path: String,
+    offset: u64,
+    data: String,
 }
 
 /// The record of one formation as `children.read` answers it: its children, `None` when it has no `children.json` (the formation is not there, or has had no child), or why it could not be read.
@@ -555,7 +582,12 @@ fn drop_children(config: &Path, formation: &str, names: &[String]) -> Result<usi
     Ok(removed)
 }
 
-fn dispatch(config: &Path, version: &str, request: &[u8]) -> Reply {
+fn dispatch(
+    config: &Path,
+    plugins: &Result<PathBuf, String>,
+    version: &str,
+    request: &[u8],
+) -> Reply {
     let Ok(request) = serde_json::from_slice::<Request>(request) else {
         return Reply::error("要求の形式が正しくありません");
     };
@@ -670,6 +702,57 @@ fn dispatch(config: &Path, version: &str, request: &[u8]) -> Reply {
                 formation::now_ms(),
             ) {
                 Ok(()) => Reply::ok(json!({"answered": true})),
+                Err(e) => Reply::error(&e),
+            }
+        }
+        "plugins.begin" => {
+            let Ok(params) = serde_json::from_value::<PluginsBeginParams>(request.params) else {
+                return bad_params();
+            };
+            let dir = match plugins {
+                Ok(dir) => dir,
+                Err(e) => return Reply::error(e),
+            };
+            match formation_assets::plugins_begin(dir, &params.id, &params.mark, &params.files) {
+                Ok(same) => Reply::ok(json!({"same": same})),
+                Err(e) => Reply::error(&e),
+            }
+        }
+        "plugins.write" => {
+            let Ok(params) = serde_json::from_value::<PluginsWriteParams>(request.params) else {
+                return bad_params();
+            };
+            let dir = match plugins {
+                Ok(dir) => dir,
+                Err(e) => return Reply::error(e),
+            };
+            let Ok(pieces) = params
+                .items
+                .into_iter()
+                .map(|piece| {
+                    STANDARD
+                        .decode(&piece.data)
+                        .map(|bytes| (piece.path, piece.offset, bytes))
+                })
+                .collect::<Result<Vec<_>, _>>()
+            else {
+                return bad_params();
+            };
+            match formation_assets::plugins_write(dir, &params.id, &params.mark, &pieces) {
+                Ok(()) => Reply::ok(json!({"written": pieces.len()})),
+                Err(e) => Reply::error(&e),
+            }
+        }
+        "plugins.commit" => {
+            let Ok(params) = serde_json::from_value::<PluginsBeginParams>(request.params) else {
+                return bad_params();
+            };
+            let dir = match plugins {
+                Ok(dir) => dir,
+                Err(e) => return Reply::error(e),
+            };
+            match formation_assets::plugins_commit(dir, &params.id, &params.mark, &params.files) {
+                Ok(()) => Reply::ok(json!({"replaced": true})),
                 Err(e) => Reply::error(&e),
             }
         }
@@ -928,6 +1011,8 @@ pub struct Setup {
     pub secret: [u8; 32],
     pub client_public: [u8; 32],
     pub version: String,
+    /// The folder of the owner's plugins of this PC (`plugins::plugins_dir`) that `plugins.begin`, `plugins.write` and `plugins.commit` replace, or why it cannot be told.
+    pub plugins: Result<PathBuf, String>,
 }
 
 fn socket_config() -> WebSocketConfig {
@@ -988,10 +1073,15 @@ where
         limit = IDLE_LIMIT;
         let request = channel.open(&frame)?;
         // `page.read` runs `orca` and `git`, so a request is served on a thread that may block.
-        let (config, version) = (setup.config.clone(), setup.version.clone());
-        let reply = tokio::task::spawn_blocking(move || dispatch(&config, &version, &request))
-            .await
-            .ok()?;
+        let (config, version, plugins) = (
+            setup.config.clone(),
+            setup.version.clone(),
+            setup.plugins.clone(),
+        );
+        let reply =
+            tokio::task::spawn_blocking(move || dispatch(&config, &plugins, &version, &request))
+                .await
+                .ok()?;
         // The connection is the one of the pushes from before the reply, so a push right after it is not lost.
         let deliveries = reply.subscribe.then(|| hub.attach());
         let sealed = sealed_reply(&mut channel, &reply.body)?;
@@ -1294,6 +1384,75 @@ impl Client {
         self.call(
             "page.answer",
             json!({"formation": formation, "child": child, "at": at}),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Makes the plugins' folder of that PC hold `files` (as `formation_assets::read_plugins_folder` gives them) as a whole, and answers whether it sent them: a PC that holds the very set already (by its hash) is sent nothing (#1535). What is sent goes in requests whose files add up to `PLUGINS_PIECE` bytes at most, so that one is far under the frame of 1 MiB, and a file that is larger goes in several; the PC checks the whole against the hash before it replaces its folder.
+    pub async fn plugins_send(&mut self, files: &[(String, Vec<u8>)]) -> Result<bool, String> {
+        let mark = formation_assets::plugins_mark_of(files);
+        let entries = formation_assets::plugin_entries(files);
+        // A send of its own: two sends of one set to one PC at once (two children launched side by side) do not share the folder that the files arrive in.
+        let mut random = [0u8; 16];
+        getrandom::fill(&mut random).map_err(|_| "乱数を作れません".to_owned())?;
+        let id: String = random.iter().map(|b| format!("{b:02x}")).collect();
+        let begun = self
+            .call(
+                "plugins.begin",
+                json!({"id": id, "mark": mark, "files": entries}),
+            )
+            .await?;
+        let same = begun["same"]
+            .as_bool()
+            .ok_or_else(|| "サーバーの答えの形式が正しくありません".to_owned())?;
+        if same {
+            return Ok(false);
+        }
+        let mut batch: Vec<Value> = Vec::new();
+        let mut budget = 0usize;
+        for (path, bytes) in files {
+            let mut offset = 0usize;
+            loop {
+                if budget >= PLUGINS_PIECE || batch.len() >= PLUGINS_BATCH {
+                    self.plugins_flush(&id, &mark, &mut batch).await?;
+                    budget = 0;
+                }
+                let take = (bytes.len() - offset).min(PLUGINS_PIECE - budget);
+                batch.push(json!({
+                    "path": path,
+                    "offset": offset,
+                    "data": STANDARD.encode(&bytes[offset..offset + take]),
+                }));
+                budget += take;
+                offset += take;
+                if offset >= bytes.len() {
+                    break;
+                }
+            }
+        }
+        self.plugins_flush(&id, &mark, &mut batch).await?;
+        self.call(
+            "plugins.commit",
+            json!({"id": id, "mark": mark, "files": entries}),
+        )
+        .await?;
+        Ok(true)
+    }
+
+    async fn plugins_flush(
+        &mut self,
+        id: &str,
+        mark: &str,
+        batch: &mut Vec<Value>,
+    ) -> Result<(), String> {
+        if batch.is_empty() {
+            return Ok(());
+        }
+        let items = std::mem::take(batch);
+        self.call(
+            "plugins.write",
+            json!({"id": id, "mark": mark, "items": items}),
         )
         .await
         .map(|_| ())
@@ -1716,6 +1875,7 @@ pub async fn run_daemon(config: &Path, bind: &str) -> Result<(), String> {
             secret,
             client_public,
             version,
+            plugins: crate::plugins::plugins_dir(),
         },
         hub,
     )
@@ -2229,7 +2389,7 @@ mod tests {
 
     fn call(config: &Path, method: &str, params: Value) -> Reply {
         let request = serde_json::to_vec(&json!({"method": method, "params": params})).unwrap();
-        dispatch(config, "1.2.3", &request)
+        dispatch(config, &Ok(config.join("owner-plugins")), "1.2.3", &request)
     }
 
     #[test]
@@ -2245,7 +2405,10 @@ mod tests {
         let unknown = call(&config, "nope", Value::Null);
         assert_eq!(unknown.body["ok"], false);
         assert!(!unknown.stop);
-        assert_eq!(dispatch(&config, "1", b"not json").body["ok"], false);
+        assert_eq!(
+            dispatch(&config, &Err("x".to_owned()), "1", b"not json").body["ok"],
+            false
+        );
         assert_eq!(
             call(&config, "children.read", json!({"x": 1})).body["ok"],
             false
@@ -2589,6 +2752,8 @@ mod tests {
 
     struct Served {
         config: PathBuf,
+        /// The plugins' folder of the server's PC.
+        plugins: PathBuf,
         hub: Arc<Hub>,
         port: u16,
         client_secret: [u8; 32],
@@ -2599,6 +2764,7 @@ mod tests {
     async fn served(name: &str) -> Served {
         let config = temp_dir(name);
         std::fs::create_dir_all(&config).unwrap();
+        let plugins = config.join("owner-plugins");
         let (client_secret, client_public) = pair(1);
         let (server_secret, server_public) = pair(2);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2608,10 +2774,12 @@ mod tests {
             secret: server_secret,
             client_public,
             version: "9.9.9".to_owned(),
+            plugins: Ok(plugins.clone()),
         };
         let hub = Hub::new();
         let task = tokio::spawn(serve_with(listener, setup, hub.clone()));
         Served {
+            plugins,
             config,
             hub,
             port,
@@ -2632,6 +2800,118 @@ mod tests {
             .await
             .unwrap()
         }
+    }
+
+    #[tokio::test]
+    async fn the_owners_plugins_are_sent_over_the_socket_in_pieces_and_not_again_when_the_same() {
+        let served = served("net-plugins").await;
+        let mut client = served.client().await;
+        std::fs::create_dir_all(served.plugins.join("old")).unwrap();
+        std::fs::write(served.plugins.join("old/stale.md"), "stale").unwrap();
+        // A file of more than one piece, a few small ones and an empty one: pieces fill requests up to `PLUGINS_PIECE`.
+        let big: Vec<u8> = (0..PLUGINS_PIECE * 2 + 5)
+            .map(|i| (i % 253) as u8)
+            .collect();
+        let mut files = vec![
+            ("a/.claude-plugin/plugin.json".to_owned(), b"{}".to_vec()),
+            ("a/big.bin".to_owned(), big.clone()),
+            ("a/skills/x/SKILL.md".to_owned(), b"skill".to_vec()),
+            ("empty".to_owned(), Vec::new()),
+        ];
+        assert!(client.plugins_send(&files).await.unwrap());
+        assert_eq!(
+            std::fs::read(served.plugins.join("a/big.bin")).unwrap(),
+            big
+        );
+        assert_eq!(
+            std::fs::read_to_string(served.plugins.join("a/skills/x/SKILL.md")).unwrap(),
+            "skill"
+        );
+        assert!(served.plugins.join("empty").is_file());
+        assert!(!served.plugins.join("old").exists());
+        // The same set is sent nothing, also over another connection; another set replaces the folder.
+        assert!(!client.plugins_send(&files).await.unwrap());
+        assert!(!served.client().await.plugins_send(&files).await.unwrap());
+        files[2].1 = b"changed".to_vec();
+        assert!(client.plugins_send(&files).await.unwrap());
+        assert_eq!(
+            std::fs::read_to_string(served.plugins.join("a/skills/x/SKILL.md")).unwrap(),
+            "changed"
+        );
+        assert!(client.plugins_send(&[]).await.unwrap());
+        assert!(!served.plugins.join("a").exists());
+        // The connection still answers after all of it.
+        assert_eq!(client.version().await.unwrap(), "9.9.9");
+        served.task.abort();
+        std::fs::remove_dir_all(&served.config).unwrap();
+    }
+
+    #[tokio::test]
+    async fn two_sends_of_one_set_at_once_both_succeed_and_leave_nothing_beside() {
+        let served = served("net-plugins-twice").await;
+        let (mut one, mut two) = (served.client().await, served.client().await);
+        let files = vec![
+            ("a/big.bin".to_owned(), vec![7u8; PLUGINS_PIECE * 2 + 1]),
+            ("b.md".to_owned(), b"b".to_vec()),
+        ];
+        let (first, second) = tokio::join!(one.plugins_send(&files), two.plugins_send(&files));
+        first.unwrap();
+        second.unwrap();
+        assert_eq!(
+            std::fs::read(served.plugins.join("a/big.bin")).unwrap(),
+            files[0].1
+        );
+        let beside: Vec<String> = std::fs::read_dir(&served.config)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".owner-plugins."))
+            .collect();
+        assert_eq!(beside, Vec::<String>::new());
+        served.task.abort();
+        std::fs::remove_dir_all(&served.config).unwrap();
+    }
+
+    #[test]
+    fn a_pc_that_cannot_tell_its_plugins_folder_and_a_bad_request_are_refused() {
+        let config = temp_dir("api-plugins");
+        let call_with = |plugins: &Result<PathBuf, String>, method: &str, params: Value| {
+            let request = serde_json::to_vec(&json!({"method": method, "params": params})).unwrap();
+            dispatch(&config, plugins, "1", &request).body
+        };
+        let none = Err("環境変数 HOME がありません".to_owned());
+        let mark = "0".repeat(64);
+        let id = "1".repeat(32);
+        for method in ["plugins.begin", "plugins.write", "plugins.commit"] {
+            let params = if method == "plugins.write" {
+                json!({"id": id, "mark": mark, "items": []})
+            } else {
+                json!({"id": id, "mark": mark, "files": []})
+            };
+            let body = call_with(&none, method, params);
+            assert_eq!(body["ok"], false, "{method}");
+            assert!(body["error"].as_str().unwrap().contains("HOME"), "{method}");
+            // Parameters that are not the method's are a bad request, whatever the folder is.
+            assert_eq!(
+                call_with(&none, method, json!({"mark": 1}))["error"],
+                "引数が正しくありません",
+                "{method}"
+            );
+        }
+        let here = Ok(config.join("plugins"));
+        let body = call_with(
+            &here,
+            "plugins.write",
+            json!({"id": id, "mark": mark, "items": [{"path": "a", "offset": 0, "data": "***"}]}),
+        );
+        assert_eq!(body["error"], "引数が正しくありません");
+        let body = call_with(
+            &here,
+            "plugins.begin",
+            json!({"id": id, "mark": "x", "files": []}),
+        );
+        assert!(body["error"].as_str().unwrap().contains("ハッシュ"));
+        assert!(!config.join("plugins").exists());
+        let _ = std::fs::remove_dir_all(&config);
     }
 
     #[tokio::test]
@@ -2843,6 +3123,7 @@ mod tests {
             secret: server_secret,
             client_public,
             version: "9.9.9".to_owned(),
+            plugins: Err("プラグインのフォルダがありません".to_owned()),
         };
         let (client_end, server_end) = tokio::io::duplex(64 * 1024);
         let server =
@@ -3141,6 +3422,7 @@ mod tests {
             secret: server_secret,
             client_public,
             version: "9.9.9".to_owned(),
+            plugins: Err("プラグインのフォルダがありません".to_owned()),
         };
         let server = tokio::spawn(serve_with(listener, setup, hub));
         let seen = Arc::new(Mutex::new(Vec::new()));

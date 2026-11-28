@@ -4,10 +4,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// The folders of `src-tauri/` that are embedded in the binary (A-41, A-45 and #1242), and the constant of each in the generated `formation_assets.rs`.
-const EMBEDDED: [(&str, &str); 4] = [
-    ("formation/leader/feature-dev", "LEADER_SKILL"),
-    ("formation/plugin", "PLUGIN"),
+/// The folders of `src-tauri/` that are embedded in the binary (A-45 and #1242), and the constant of each in the generated `formation_assets.rs`.
+const EMBEDDED: [(&str, &str); 2] = [
     ("preview-plugin", "PREVIEW_PLUGIN"),
     ("lsp-plugin", "LSP_PLUGIN"),
 ];

@@ -195,6 +195,8 @@ const answers = {
   claude_code_input: null,
   claude_code_resize: null,
   claude_code_close: null,
+  // A-51: no plugin yet; a spec of the Plugins tab gives its own.
+  plugins_list: [],
   // A-37: no children yet.
   formation_children: [],
   // A-37 (#1087): no child is waiting for an answer to an instruction.
@@ -351,6 +353,8 @@ const computed = {
     if (held === undefined) throw `Jira が 404 を返しました: no project ${projectId}`;
     return held;
   },
+  // A-51: the entries of a folder of a plugin for its file tree, from the fixture `plugin_dirs` ({ "{dir}": the answer of `plugin_files` }, "" is the plugin's own folder); a folder it does not hold is empty. A spec that wants one answer for every folder mocks `plugin_files`; the file's text is `plugin_file_read`, which a spec mocks.
+  plugin_files: ({ dir }) => fixtures.plugin_dirs?.[dir] ?? [],
   // A-8: the titles as Rust answers a save of one title alone (the one saved, or none for an empty title); a spec that holds more mocks `orca_title_set`.
   orca_title_set: ({ target, key, title }) => (title.trim() === "" ? {} : { [target]: { [key]: title.trim() } }),
   // A-8: the titles left once the keys are taken out, as Rust answers when it held no other title.

@@ -49,6 +49,7 @@ pub mod orca_preview;
 pub mod orca_stream;
 pub mod orca_theme;
 pub mod orca_titles;
+pub mod plugins;
 pub mod preview_plugin;
 pub mod screen_bridge;
 pub mod sentry;
@@ -575,6 +576,11 @@ pub fn run() {
             update::check_update,
             update::install_update,
             update::restart_app,
+            plugins::plugins_list,
+            plugins::plugin_create,
+            plugins::plugin_files,
+            plugins::plugin_file_read,
+            plugins::plugin_file_write,
             claude_code::claude_code_start,
             claude_code::claude_code_input,
             claude_code::claude_code_resize,

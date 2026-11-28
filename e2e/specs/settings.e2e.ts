@@ -1,8 +1,9 @@
 import type { NotionAccount } from "../../ts/bindings/NotionAccount";
 import type { SentryConnection } from "../../ts/bindings/SentryConnection";
-import { account, boot, copiedTexts, logLine, skill, stubClipboard, checked, chooseAppearance, chooseOption, fontSettings, formationConsent, chooseTheme, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, emitEvent, holds, inbox, mock, rejects, onceId, release, slackLoad, socketStatus, workspace, terminalThemes, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf, CARD, CARDS, waitForLog } from "../support";
+import { typeIn } from "../orca-support";
+import { account, boot, copiedTexts, logLine, skill, stubClipboard, checked, chooseAppearance, chooseOption, fontSettings, formationConsent, chooseTheme, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, emitEvent, holds, inbox, mock, rejects, onceId, release, sendClaudeCode, slackLoad, socketStatus, workspace, terminalThemes, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf, CARD, CARDS, waitForLog } from "../support";
 
-type Tab = "google" | "calendar" | "todoist" | "slack" | "notion" | "claude" | "skill" | "orca" | "menu" | "font" | "update" | "log";
+type Tab = "google" | "calendar" | "todoist" | "slack" | "notion" | "claude" | "skill" | "plugins" | "orca" | "menu" | "font" | "update" | "log";
 
 // Presses a tab of the settings screen.
 const openTab = (tab: Tab) => $(`#settings-tab-${tab}`).click();
@@ -15,7 +16,7 @@ async function openSettings(missingScopes: string[], claude: unknown = claudeMis
   if (tab !== "google") await openTab(tab);
 }
 
-const TABS: [Tab, string][] = [["google", "Google"], ["calendar", "カレンダー"], ["todoist", "Todoist"], ["slack", "Slack"], ["notion", "Notion"], ["claude", "Claude"], ["skill", "スキル"], ["orca", "開発"], ["menu", "メニュー"], ["font", "フォント"], ["update", "アップデート"], ["log", "ログ"]];
+const TABS: [Tab, string][] = [["google", "Google"], ["calendar", "カレンダー"], ["todoist", "Todoist"], ["slack", "Slack"], ["notion", "Notion"], ["claude", "Claude"], ["skill", "スキル"], ["plugins", "Plugins"], ["orca", "開発"], ["menu", "メニュー"], ["font", "フォント"], ["update", "アップデート"], ["log", "ログ"]];
 
 const unlinkButton = () => $('button[aria-label="Example Team の接続を解除"]');
 
@@ -2983,5 +2984,456 @@ describe("settings: log (the ログ tab, A-3, A-28)", () => {
     await openTab("google");
     await openTab("log");
     await waitForCount("#log-body tbody tr", 1);
+  });
+});
+
+describe("settings: plugins (the Plugins tab, A-51)", () => {
+  // A plugin as `plugins_list` answers it.
+  const plugin = (folder: string, skills: string[] = [], name = folder) => ({ folder, name, path: `~/.local/share/tsunagiai/plugins/${folder}`, skills });
+  const rows = () => textsOf("#plugin-list .plugin-row");
+  const row = (n: number) => $(`#plugin-list .plugin-item:nth-child(${n}) .plugin-row`);
+  const tabs = () => textsOf("#plugin-tabs .plugin-tab-title");
+  const term = "#plugin-term";
+
+  // The app with the plugins `list` and the Plugins tab open.
+  async function openPlugins(list = [plugin("alpha", ["review", "design"]), plugin("beta", [], "client-b")], fixtures: Record<string, unknown> = {}) {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, plugins_list: list, ...fixtures });
+    await $("#nav-settings").click();
+    await openTab("plugins");
+  }
+
+  it("reads the plugins only when the tab is shown, and again each time it is shown", async () => {
+    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, plugins_list: [plugin("alpha")] });
+    await $("#nav-settings").click();
+    await openTab("claude");
+    await browser.pause(300);
+    expect(await callsOf("plugins_list")).toEqual([]);
+    await openTab("plugins");
+    await waitForCalls("plugins_list");
+    await openTab("google");
+    await openTab("plugins");
+    expect((await waitForCalls("plugins_list", 2)).length).toBe(2);
+  });
+
+  it("lists each plugin by its name with its skills as plugin:skill under it, and starts no pane until one is pressed", async () => {
+    await openPlugins();
+    await waitForCount("#plugin-list .plugin-row", 2);
+    expect(await rows()).toEqual(["alpha", "client-b"]);
+    expect(await textsOf("#plugin-list .plugin-skill")).toEqual(["alpha:review", "alpha:design"]);
+    expect(await count("#plugin-list [aria-current='true']")).toBe(0);
+    expect(await tabs()).toEqual([]);
+    await expect($("#plugin-tab-add")).toBeDisabled();
+    await expect($("#plugin-files")).toExist();
+    await browser.pause(300);
+    expect(await callsOf("claude_code_start")).toEqual([]);
+  });
+
+  it("says there are none when the folder holds no plugin, and writes a failed read to the log", async () => {
+    await openPlugins([]);
+    await expect($("#plugin-list .plugin-empty")).toHaveText("プラグインはまだありません");
+    await openPlugins([], { plugins_list: rejects("プラグインを読めません") });
+    await waitForLog("プラグインを読めません");
+    await expect($(CARDS)).not.toExist();
+  });
+
+  it("starts Claude Code in the plugin pressed, with its own tools, the manual mode, no skill and no first instruction", async () => {
+    await openPlugins();
+    await waitForCount("#plugin-list .plugin-row", 2);
+    await row(2).click();
+    await expect(row(2)).toHaveAttribute("aria-current", "true");
+    await expect(row(1)).toHaveAttribute("aria-current", "false");
+    const [start] = await waitForCalls("claude_code_start");
+    expect(start).toMatchObject({ id: "plugin:beta/1", builtinTools: true, permissionMode: "manual", skill: null, prompt: null });
+    expect(((start as { viewport: { cols: number } }).viewport).cols).toBeGreaterThan(20);
+    expect(await tabs()).toEqual(["Claude Code"]);
+    await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
+    await expect($("#plugin-tab-add")).toBeEnabled();
+  });
+
+  it("adds a tab with the plus, starts another pane for it, and shows a tab again without a new start", async () => {
+    await openPlugins();
+    await waitForCount("#plugin-list .plugin-row", 2);
+    await row(1).click();
+    await waitForCalls("claude_code_start");
+    await $("#plugin-tab-add").click();
+    const starts = await waitForCalls("claude_code_start", 2);
+    expect(starts.map((s) => (s as { id: string }).id)).toEqual(["plugin:alpha/1", "plugin:alpha/2"]);
+    expect(await tabs()).toEqual(["Claude Code", "Claude Code 2"]);
+    await expect($("#plugin-tabs .plugin-tab:nth-child(2) .plugin-tab-btn")).toHaveAttribute("aria-selected", "true");
+    await $("#plugin-tabs .plugin-tab:nth-child(1) .plugin-tab-btn").click();
+    await expect($("#plugin-tabs .plugin-tab:nth-child(1) .plugin-tab-btn")).toHaveAttribute("aria-selected", "true");
+    await browser.pause(500);
+    expect((await callsOf("claude_code_start")).length).toBe(2);
+  });
+
+  it("ends the process of a tab that is closed, and shows the tab next to it", async () => {
+    await openPlugins();
+    await waitForCount("#plugin-list .plugin-row", 2);
+    await row(1).click();
+    await waitForCalls("claude_code_start");
+    await $("#plugin-tab-add").click();
+    await waitForCalls("claude_code_start", 2);
+    const close = await mock("claude_code_close", null);
+    await $("#plugin-tabs .plugin-tab:nth-child(2) .plugin-tab-close").click();
+    expect(await waitForCalls(close)).toEqual([{ id: "plugin:alpha/2", launch: 1 }]);
+    expect(await tabs()).toEqual(["Claude Code"]);
+    await expect($("#plugin-tabs .plugin-tab-btn")).toHaveAttribute("aria-selected", "true");
+    await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
+  });
+
+  it("drops the tab of a process that ended by itself", async () => {
+    await openPlugins();
+    await waitForCount("#plugin-list .plugin-row", 2);
+    await row(1).click();
+    await waitForCalls("claude_code_start");
+    await sendClaudeCode({ kind: "ended", message: "Claude Code が終わりました", clean: true });
+    await waitForCount("#plugin-tabs .plugin-tab", 0);
+  });
+
+  it("keeps the tabs of each plugin, and a plugin that is pressed with no tab left opens its first again", async () => {
+    await openPlugins();
+    await waitForCount("#plugin-list .plugin-row", 2);
+    await row(1).click();
+    await waitForCalls("claude_code_start");
+    await $("#plugin-tab-add").click();
+    await waitForCalls("claude_code_start", 2);
+    await row(2).click();
+    expect((await waitForCalls("claude_code_start", 3)).map((s) => (s as { id: string }).id)).toEqual(["plugin:alpha/1", "plugin:alpha/2", "plugin:beta/1"]);
+    expect(await tabs()).toEqual(["Claude Code"]);
+    await row(1).click();
+    expect(await tabs()).toEqual(["Claude Code", "Claude Code 2"]);
+    await browser.pause(500);
+    expect((await callsOf("claude_code_start")).length).toBe(3);
+    // The only tab closed: pressing the plugin opens a new first one (the next number).
+    await row(2).click();
+    await $("#plugin-tabs .plugin-tab-close").click();
+    expect(await tabs()).toEqual([]);
+    await row(2).click();
+    expect((await waitForCalls("claude_code_start", 4)).map((s) => (s as { id: string }).id).at(-1)).toBe("plugin:beta/2");
+  });
+
+  it("hides the terminal while another tab is shown, and starts nothing again when the tab is shown again", async () => {
+    await openPlugins();
+    await waitForCount("#plugin-list .plugin-row", 2);
+    await row(1).click();
+    await waitForCalls("claude_code_start");
+    const close = await mock("claude_code_close", null);
+    await openTab("google");
+    await expect($(term)).not.toBeDisplayed();
+    await openTab("plugins");
+    await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
+    expect(await tabs()).toEqual(["Claude Code"]);
+    await browser.pause(500);
+    expect((await callsOf("claude_code_start")).length).toBe(1);
+    expect(await callsOf(close)).toEqual([]);
+  });
+
+  it("ends the panes of a plugin that is no longer in the folder when the list is read again", async () => {
+    await openPlugins();
+    await waitForCount("#plugin-list .plugin-row", 2);
+    await row(2).click();
+    await waitForCalls("claude_code_start");
+    await mock("plugins_list", [plugin("alpha", ["review", "design"])]);
+    const close = await mock("claude_code_close", null);
+    await openTab("google");
+    await openTab("plugins");
+    expect(await waitForCalls(close)).toEqual([{ id: "plugin:beta/1", launch: 1 }]);
+    await waitForCount("#plugin-list .plugin-row", 1);
+    expect(await tabs()).toEqual([]);
+    await expect($("#plugin-tab-add")).toBeDisabled();
+  });
+
+  it("makes a plugin with the name typed, reads the list again and selects the new plugin", async () => {
+    await openPlugins([plugin("alpha")]);
+    await waitForCount("#plugin-list .plugin-row", 1);
+    await expect($("#plugin-new-row")).not.toBeDisplayed();
+    // The page's own click: the driver's click focuses the button after the handler, which takes the focus off the field.
+    await browser.execute(() => {
+      document.getElementById("plugin-new")!.click();
+    });
+    await expect($("#plugin-new-name")).toBeFocused();
+    await expect($("#plugin-new-name")).not.toHaveAttribute("placeholder");
+    const create = await mock("plugin_create", plugin("client-a"));
+    await mock("plugins_list", [plugin("alpha"), plugin("client-a")]);
+    await $("#plugin-new-name").setValue("client-a");
+    await browser.keys("Enter");
+    expect(await waitForCalls(create)).toEqual([{ name: "client-a" }]);
+    await waitForCount("#plugin-list .plugin-row", 2);
+    await expect($("#plugin-new-row")).not.toBeDisplayed();
+    await expect($("#plugin-new-name")).toHaveValue("");
+    await expect(row(2)).toHaveAttribute("aria-current", "true");
+    expect((await waitForCalls("claude_code_start")).map((s) => (s as { id: string }).id)).toEqual(["plugin:client-a/1"]);
+  });
+
+  it("shows the refusal of a name on a card and keeps the name typed", async () => {
+    await openPlugins([plugin("alpha")]);
+    await waitForCount("#plugin-list .plugin-row", 1);
+    await $("#plugin-new").click();
+    await mock("plugin_create", rejects("プラグイン「alpha」はもうあります"));
+    await $("#plugin-new-name").setValue("alpha");
+    await browser.keys("Enter");
+    await expect($(CARD)).toHaveText("プラグイン「alpha」はもうあります");
+    await expect($("#plugin-new-name")).toHaveValue("alpha");
+    await expect($("#plugin-new-row")).toBeDisplayed();
+    expect(await count("#plugin-list .plugin-row")).toBe(1);
+  });
+
+  it("makes nothing for an empty name, and Escape closes the field", async () => {
+    await openPlugins([plugin("alpha")]);
+    await $("#plugin-new").click();
+    const create = await mock("plugin_create", plugin("x"));
+    await browser.keys("Enter");
+    await browser.pause(300);
+    expect(await callsOf(create)).toEqual([]);
+    await $("#plugin-new-name").setValue("abc");
+    await browser.keys("Escape");
+    await expect($("#plugin-new-row")).not.toBeDisplayed();
+    await expect($("#plugin-new-name")).toHaveValue("");
+  });
+
+  // A-51 (#1537): the file tree at the right and the editors of its files in the tabs.
+  const entry = (name: string, folder = false) => ({ name, folder });
+  const TREE = { "": [entry(".claude-plugin", true), entry("skills", true), entry(".mcp.json"), entry("README.md")], skills: [entry("review", true)], "skills/review": [entry("SKILL.md")] };
+  const names = () => textsOf("#plugin-tree .plugin-file-name");
+  const treeRow = (path: string) => $(`#plugin-tree .plugin-file[data-path="${path}"]`);
+  const text = (content: string, signature = "sig-1", language = "markdown") => ({ content, crlf: false, signature, language });
+  const saved = (signature: string) => ({ state: "saved", signature });
+  // The page's own double press: the driver's cannot be told from two presses in a row.
+  const doublePress = (path: string) =>
+    browser.execute((p) => {
+      document.querySelector(`#plugin-tree .plugin-file[data-path="${p}"]`)!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+    }, path);
+  // The text of the editor that is shown, all of it (the page draws only the lines near the window).
+  const shownText = () =>
+    browser.execute(() => {
+      const dom = document.querySelector("#plugin-editors .plugin-edit:not([hidden]) .cm-editor");
+      return window.__e2e_editors__.find((editor) => editor.dom === dom)?.text() ?? "";
+    });
+  const waitForShown = (content: string) => browser.waitUntil(async () => (await shownText()) === content, { timeoutMsg: `the editor never held ${JSON.stringify(content)}` });
+  const COMMAND = "\u{E03D}";
+  const tabClose = (n: number) => $(`#plugin-tabs .plugin-tab:nth-child(${n}) .plugin-tab-close`);
+
+  // The app with the plugin alpha selected and its tree read.
+  async function openTree(dirs: Record<string, unknown> = TREE) {
+    await openPlugins([plugin("alpha", ["review"]), plugin("beta")], { plugin_dirs: dirs });
+    await waitForCount("#plugin-list .plugin-row", 2);
+    await row(1).click();
+    await waitForCount("#plugin-tree .plugin-file", (dirs[""] as unknown[]).length);
+  }
+
+  // The app with README.md opened as a tab.
+  async function openReadme(content = "# Readme\n") {
+    await openTree();
+    await mock("plugin_file_read", text(content));
+    await doublePress("README.md");
+    await waitForShown(content);
+  }
+
+  it("draws the tree of the plugin selected, with the path of its folder, and none before one is selected", async () => {
+    await openPlugins([plugin("alpha"), plugin("beta")], { plugin_dirs: TREE });
+    await waitForCount("#plugin-list .plugin-row", 2);
+    expect(await count("#plugin-tree .plugin-file")).toBe(0);
+    await expect($("#plugin-files-reload")).toBeDisabled();
+    await row(1).click();
+    await waitForCount("#plugin-tree .plugin-file", 4);
+    expect(await names()).toEqual([".claude-plugin", "skills", ".mcp.json", "README.md"]);
+    expect(await browser.execute(() => [...document.querySelectorAll<HTMLElement>("#plugin-tree .plugin-file")].map((r) => r.dataset.kind))).toEqual(["dir", "dir", "file", "file"]);
+    expect(await textsOf("#plugin-files-path")).toEqual(["~/.local/share/tsunagiai/plugins/alpha"]);
+    await expect($("#plugin-files-reload")).toBeEnabled();
+    await expect($("#plugin-files-reload")).toHaveAttribute("aria-label", "読み直す");
+    expect(await callsOf("plugin_files")).toEqual([{ folder: "alpha", dir: "" }]);
+    // Another plugin has its own tree.
+    await mock("plugin_files", [entry("agents", true)]);
+    await row(2).click();
+    await waitForCount("#plugin-tree .plugin-file", 1);
+    expect(await names()).toEqual(["agents"]);
+    expect(await textsOf("#plugin-files-path")).toEqual(["~/.local/share/tsunagiai/plugins/beta"]);
+    expect(await callsOf("plugin_files")).toEqual([{ folder: "beta", dir: "" }]);
+  });
+
+  it("opens a folder with a press and reads it, closes it with no read, and reads the open folders again with the button", async () => {
+    await openTree();
+    await treeRow("skills").click();
+    await waitForCount("#plugin-tree .plugin-file", 5);
+    expect(await names()).toEqual([".claude-plugin", "skills", "review", ".mcp.json", "README.md"]);
+    await expect(treeRow("skills")).toHaveAttribute("aria-expanded", "true");
+    expect(await browser.execute(() => document.querySelector<HTMLElement>('#plugin-tree .plugin-file[data-path="skills/review"]')!.style.getPropertyValue("--depth"))).toBe("1");
+    expect(await callsOf("plugin_files")).toEqual([{ folder: "alpha", dir: "" }, { folder: "alpha", dir: "skills" }]);
+    await treeRow("skills/review").click();
+    await waitForCount("#plugin-tree .plugin-file", 6);
+    await treeRow("skills").click();
+    await waitForCount("#plugin-tree .plugin-file", 4);
+    await expect(treeRow("skills")).toHaveAttribute("aria-expanded", "false");
+    expect((await callsOf("plugin_files")).length).toBe(3);
+    // Open again, then the button reads the plugin's folder and each open one once more.
+    await treeRow("skills").click();
+    await waitForCount("#plugin-tree .plugin-file", 6);
+    const again = await mock("plugin_files", [entry("skills", true), entry("NEW.md")]);
+    await browser.execute(() => document.getElementById("plugin-files-reload")!.click());
+    await waitForCalls(again, 3);
+    expect((await callsOf(again)).map((c) => (c as { dir: string }).dir).sort()).toEqual(["", "skills", "skills/review"]);
+  });
+
+  it("opens a file on a double press as a tab with its text, and a single press only selects it", async () => {
+    await openTree();
+    const read = await mock("plugin_file_read", text("# Readme\n"));
+    await treeRow("README.md").click();
+    await expect(treeRow("README.md")).toHaveAttribute("data-selected", "true");
+    await browser.pause(300);
+    expect(await callsOf(read)).toEqual([]);
+    await doublePress("README.md");
+    expect(await waitForCalls(read)).toEqual([{ folder: "alpha", path: "README.md" }]);
+    await waitForShown("# Readme\n");
+    expect(await tabs()).toEqual(["Claude Code", "README.md"]);
+    await expect($("#plugin-tabs .plugin-tab:nth-child(2) .plugin-tab-btn")).toHaveAttribute("aria-selected", "true");
+    await expect($(term)).not.toBeDisplayed();
+    await expect(treeRow("README.md")).toHaveAttribute("data-open", "true");
+    expect(await textsOf("#plugin-editors .plugin-edit:not([hidden]) .plugin-edit-path")).toEqual(["README.md"]);
+    // The tab of Claude Code shows its terminal again, with no new start, and the editor is kept.
+    await $("#plugin-tabs .plugin-tab:nth-child(1) .plugin-tab-btn").click();
+    await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
+    await expect($("#plugin-editors")).not.toBeDisplayed();
+    // The same file again shows its tab: no second tab and no second read.
+    await doublePress("README.md");
+    await waitForShown("# Readme\n");
+    expect(await tabs()).toEqual(["Claude Code", "README.md"]);
+    expect(await count("#plugin-editors .plugin-edit")).toBe(1);
+    expect((await callsOf("claude_code_start")).length).toBe(1);
+  });
+
+  it("shows the file that cannot be read as a card and gives its tab back", async () => {
+    await openTree();
+    await mock("plugin_file_read", rejects("バイナリのファイルは開けません"));
+    await doublePress("README.md");
+    await expect($(CARD)).toHaveText("バイナリのファイルは開けません");
+    await waitForCount("#plugin-tabs .plugin-tab", 1);
+    expect(await tabs()).toEqual(["Claude Code"]);
+    await expect($(`${term}.claude-code-pane`)).toBeDisplayed();
+    expect(await count("#plugin-editors .plugin-edit")).toBe(0);
+  });
+
+  it("saves with Command and S, with the signature that was read and never by itself, and marks the tab until then", async () => {
+    await openReadme();
+    const write = await mock("plugin_file_write", saved("sig-2"));
+    await typeIn("x", ".plugin-edit-body");
+    await waitForCount("#plugin-tabs .plugin-tab-dirty", 1);
+    await expect($("#plugin-editors .plugin-edit:not([hidden]) .plugin-edit-state")).toHaveText("未保存");
+    await browser.pause(1500);
+    expect(await callsOf(write)).toEqual([]);
+    await browser.keys([COMMAND, "s"]);
+    expect(await waitForCalls(write)).toEqual([{ folder: "alpha", path: "README.md", content: "# Readme\nx", crlf: false, signature: "sig-1" }]);
+    await waitForCount("#plugin-tabs .plugin-tab-dirty", 0);
+    await expect($("#plugin-editors .plugin-edit:not([hidden]) .plugin-edit-state")).toHaveText("保存しました");
+    // The signature the save answered is the next save's.
+    await typeIn("y", ".plugin-edit-body");
+    await browser.keys([COMMAND, "s"]);
+    expect(((await waitForCalls(write, 2))[1] as { signature: string; content: string })).toMatchObject({ signature: "sig-2", content: "# Readme\nxy" });
+  });
+
+  it("says a refused save on a card, writes nothing more and keeps the typing, and closes the tab with it", async () => {
+    await openReadme();
+    const write = await mock("plugin_file_write", { state: "changed", signature: "sig-1" });
+    await typeIn("x", ".plugin-edit-body");
+    await browser.keys([COMMAND, "s"]);
+    await waitForCalls(write);
+    await waitForText(CARD, "ディスクのファイルが変わっています");
+    await expect($("#plugin-editors .plugin-edit:not([hidden]) .plugin-edit-state")).toHaveText("ディスクのファイルが変わっています");
+    expect(await shownText()).toBe("# Readme\nx");
+    expect(await count("#plugin-tabs .plugin-tab-dirty")).toBe(1);
+    // The tab goes with the typing: the refusal stands and nothing is tried again.
+    await tabClose(2).click();
+    await waitForCount("#plugin-tabs .plugin-tab", 1);
+    expect((await callsOf(write)).length).toBe(1);
+    expect(await count("#plugin-editors .plugin-edit")).toBe(0);
+  });
+
+  it("saves the typing when its tab is closed, and keeps the tab when that save fails", async () => {
+    await openReadme();
+    const write = await mock("plugin_file_write", rejects("README.md を保存できません"));
+    await typeIn("x", ".plugin-edit-body");
+    await tabClose(2).click();
+    await waitForCalls(write);
+    await waitForText(CARD, "README.md を保存できません");
+    expect(await tabs()).toEqual(["Claude Code", "README.md"]);
+    expect(await shownText()).toBe("# Readme\nx");
+    // Saved by hand, the tab closes at once with nothing more to write.
+    await mock("plugin_file_write", saved("sig-2"));
+    await browser.keys([COMMAND, "s"]);
+    await waitForCalls(write);
+    await waitForCount("#plugin-tabs .plugin-tab-dirty", 0);
+    await tabClose(2).click();
+    await waitForCount("#plugin-tabs .plugin-tab", 1);
+    expect(await callsOf(write)).toEqual([{ folder: "alpha", path: "README.md", content: "# Readme\nx", crlf: false, signature: "sig-1" }]);
+  });
+
+  it("saves the typing of a file when its tab is closed", async () => {
+    await openReadme();
+    const write = await mock("plugin_file_write", saved("sig-2"));
+    await typeIn("x", ".plugin-edit-body");
+    await tabClose(2).click();
+    await waitForCount("#plugin-tabs .plugin-tab", 1);
+    expect(await callsOf(write)).toEqual([{ folder: "alpha", path: "README.md", content: "# Readme\nx", crlf: false, signature: "sig-1" }]);
+    expect(await count("#plugin-editors .plugin-edit")).toBe(0);
+  });
+
+  it("reads the tree and an open file again by the clock, and never puts a text over typing", async () => {
+    await openReadme();
+    await mock("plugin_file_read", text("# Changed\n", "sig-2"));
+    await mock("plugin_files", [entry("NEW.md")]);
+    await waitForShown("# Changed\n");
+    await waitForCount("#plugin-tree .plugin-file", 1);
+    expect(await names()).toEqual(["NEW.md"]);
+    // Typing is not replaced, whatever the disk holds.
+    await typeIn("x", ".plugin-edit-body");
+    const read = await mock("plugin_file_read", text("# Third\n", "sig-3"));
+    await browser.pause(4500);
+    expect(await shownText()).toBe("# Changed\nx");
+    expect(await callsOf(read)).toEqual([]);
+  });
+
+  it("reads an open file again with the signature it holds and draws the tree again only when a name changed", async () => {
+    await openReadme();
+    // The disk still holds the text: the answer carries no text, and the editor keeps what it has.
+    const read = await mock("plugin_file_read", text("", "sig-1", ""));
+    expect(((await waitForCalls(read))[0] as { known?: string }).known).toBe("sig-1");
+    expect(await shownText()).toBe("# Readme\n");
+    // The rows of the tree stay the same elements while the entries are the same.
+    const mark = () =>
+      browser.execute(() => {
+        const found = document.querySelector('#plugin-tree .plugin-file[data-path="README.md"]');
+        (window as unknown as { __row?: Element }).__row = found ?? undefined;
+        return found !== null;
+      });
+    const same = () => browser.execute(() => (window as unknown as { __row?: Element }).__row === document.querySelector('#plugin-tree .plugin-file[data-path="README.md"]'));
+    expect(await mark()).toBe(true);
+    const files = await mock("plugin_files", TREE[""]);
+    await waitForCalls(files);
+    await browser.pause(300);
+    expect(await same()).toBe(true);
+    // A new name draws it again.
+    await mock("plugin_files", [...TREE[""], entry("NEW.md")]);
+    await waitForCount("#plugin-tree .plugin-file", 5);
+    expect(await same()).toBe(false);
+  });
+
+  it("says on a card which unsaved typing went when its plugin left the folder", async () => {
+    await openReadme();
+    await typeIn("x", ".plugin-edit-body");
+    await mock("plugins_list", [plugin("beta")]);
+    await openTab("google");
+    await openTab("plugins");
+    await waitForCount("#plugin-list .plugin-row", 1);
+    await expect($(CARD)).toHaveText("保存していない変更を破棄しました: alpha/README.md");
+    expect(await count("#plugin-editors .plugin-edit")).toBe(0);
+  });
+
+  it("reads nothing while the tab of the settings is left, and again when it is shown", async () => {
+    await openTree();
+    const files = await mock("plugin_files", TREE[""]);
+    await openTab("google");
+    await browser.pause(4500);
+    expect(await callsOf(files)).toEqual([]);
+    await openTab("plugins");
+    await waitForCalls(files);
   });
 });

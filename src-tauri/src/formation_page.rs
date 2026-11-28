@@ -742,7 +742,7 @@ impl Allowed {
         Ok(real)
     }
 
-    /// The page's own file: a file whose real path is inside the worktree of the child, or inside a `.feature-dev/` of a repository folder or worktree. The worktree must itself be inside an allowed folder, because the record names it and the orchestrator can write the record.
+    /// The page's own file: a file whose real path is inside the worktree of the child, or inside a repository folder or a worktree that this PC lists (the roots that a page's evidence may use). The worktree must itself be inside an allowed folder, because the record names it and the orchestrator can write the record.
     fn check_page_file(&self, given: &str, worktree: &str) -> Result<PathBuf, String> {
         let path = Path::new(given);
         if !path.is_absolute() || path.components().any(|c| matches!(c, Component::ParentDir)) {
@@ -757,24 +757,13 @@ impl Allowed {
             return Err("子の worktree が、フォーメーションのリポジトリの中にありません".into());
         }
         let base = if file.starts_with(&tree) {
-            tree
+            tree.as_path()
         } else {
-            match self
-                .dirs
-                .iter()
-                .map(|dir| dir.join(".feature-dev"))
-                .find(|dir| file.starts_with(dir))
-            {
-                Some(dir) => dir,
-                None => {
-                    return Err(
-                        "ページのファイルは、その子の worktree か、リポジトリの `.feature-dev/` の下に置いてください"
-                            .into(),
-                    )
-                }
-            }
+            self.under(&file).ok_or(
+                "ページのファイルは、その子の worktree か、リポジトリのフォルダか worktree の下に置いてください",
+            )?
         };
-        check_names(file.strip_prefix(&base).unwrap_or(Path::new("")))?;
+        check_names(file.strip_prefix(base).unwrap_or(Path::new("")))?;
         Ok(file)
     }
 }
@@ -3944,7 +3933,7 @@ mod tests {
     }
 
     #[test]
-    fn the_page_file_is_taken_from_the_child_worktree_or_a_feature_dev_folder_only() {
+    fn the_page_file_is_taken_from_the_child_worktree_or_a_repository_folder_only() {
         let repo = repo("page-file");
         let other = temp_dir("page-file-other");
         write(&other, "page.json", "{}");
@@ -3957,8 +3946,20 @@ mod tests {
         };
         assert!(ok(&work.join("page.json"), &work).is_ok());
         assert!(ok(&repo.dir.join(".feature-dev/current/notes.md"), &work).is_ok());
-        assert!(ok(&repo.dir.join("src/page.json"), &work).is_err());
+        // A repository folder is enough: the file need not be in a `.feature-dev/`.
+        assert!(ok(&repo.dir.join("src/page.json"), &work).is_ok());
         assert!(ok(&other.join("page.json"), &work).is_err());
+        // The secret names are refused wherever the file is, and a link that leads out is not followed.
+        write(&repo.dir, "src/.env.json", "{}");
+        assert!(ok(&repo.dir.join("src/.env.json"), &work).is_err());
+        write(&repo.dir, ".git/page.json", "{}");
+        assert!(ok(&repo.dir.join(".git/page.json"), &work).is_err());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(other.join("page.json"), repo.dir.join("src/link.json"))
+                .unwrap();
+            assert!(ok(&repo.dir.join("src/link.json"), &work).is_err());
+        }
         // The worktree of the record is itself checked.
         assert!(ok(&other.join("page.json"), &other).is_err());
         assert!(ok(&work.join("../src/page.json"), &work).is_err());
@@ -4791,13 +4792,10 @@ mod tests {
             "api-work",
             &[child("one", &work.to_string_lossy(), 100)],
         );
-        // The page is in the repository and not in the child's worktree or a `.feature-dev/` folder.
-        write(
-            &repo.dir,
-            "src/page.json",
-            &open_questions(&repo).to_string(),
-        );
-        let path = repo.dir.join("src/page.json");
+        // The page is in no repository folder or worktree of the formation, and not in the child's worktree.
+        let other = temp_dir("record-other-outside");
+        write(&other, "page.json", &open_questions(&repo).to_string());
+        let path = other.join("page.json");
         let refusal = record_with(
             &config,
             "api-work",
