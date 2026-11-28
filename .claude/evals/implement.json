@@ -320,6 +320,20 @@
         "手順 6.1 で、#1460（1 + 2 = 3 で、今のコメントを含めて数える）と #1465（1 + 2 = 3）を取る",
         "#1470（数は 1）と、今作った R-2 の issue（数は 1）は取らず、開いたまま残すと書いている"
       ]
+    },
+    {
+      "id": 23,
+      "name": "main-checkout-is-fetched-before-fast-forward",
+      "prompt": "あなたは implement の実行の手順 5 にいるリードです。`.claude/skills/implement/SKILL.md` の手順 5 と `.claude/rules/worktree.md` の「Merge the pull request from the worktree」を読み、`.claude/evals/files/implement/run-merged-pr.md` の記録について、`gh pr merge --merge` のあとに main のチェックアウトを進めるために打つコマンドと、そのあとワークツリーを返すコマンドを、打つ順に書き出してください。この記録が、あなたの持つ実行の文脈です。コマンドは実行しないでください。",
+      "expected_output": "`gh pr merge` は GitHub 上でマージするだけで手元の `origin/main` を更新しないので、main のチェックアウトを進める前に `git -C \"$main\" fetch origin main` を打つ。そのあと `git -C \"$main\" merge --ff-only origin/main`（`fetch` と `&&` でつないだ 1 行でもよい）を打ち、最後にワークツリーの中から `\"$main/.claude/tools/use-worktree.sh\" --park` を打つ。",
+      "files": [
+        ".claude/evals/files/implement/run-merged-pr.md"
+      ],
+      "assertions": [
+        "`git -C \"$main\" merge --ff-only origin/main` の前に、`git -C \"$main\" fetch origin main` を打つ（`&&` でつないだ 1 行でも、別の行でもよい）",
+        "`fetch` なしで `git -C \"$main\" merge --ff-only origin/main` だけを打っていない（記録に、`git fetch` をまだ実行していないとある）",
+        "`use-worktree.sh --park` を、main を進めたあとに、ワークツリーの中から打つ"
+      ]
     }
   ]
 }

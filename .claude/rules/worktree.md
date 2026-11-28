@@ -71,7 +71,7 @@ After a merge, fast-forward the main checkout, because its tools and hooks are w
 
 ```sh
 gh pr merge --merge
-git -C "$main" merge --ff-only origin/main
+git -C "$main" fetch origin main && git -C "$main" merge --ff-only origin/main
 "$main/.claude/tools/use-worktree.sh" --park   # from inside the worktree
 ```
 
