@@ -25,11 +25,12 @@ use ts_rs::TS;
 use url::Url;
 
 use super::{
-    blocking, call, call_scoped_retrying, check_threads, check_watched, is_bot_token,
-    kept_channel_name, load_hidden, load_watched, load_workspaces, lookup_users, needing_lookup,
-    own_user_id, people_of, raw_of, refresh_read_marks, token_key, token_of, valid_channel,
-    valid_ts, Channel, Hidden, Payload, Raw, SlackState, TimelineCache, WatchKey, Watched,
-    Workspace, HISTORY_LIMIT, USER_LOOKUPS,
+    blocking, call, call_scoped_retrying, check_threads, check_watched, dm_from_value,
+    is_bot_token, kept_channel, kept_channel_name, load_hidden, load_watched, load_workspaces,
+    lookup_users, needing_lookup, own_user_id, people_of, raw_of, refresh_read_marks,
+    resolve_dm_names, token_key, token_of, upsert_kept_channel, valid_channel, valid_ts, Channel,
+    Hidden, Payload, Raw, SlackState, TimelineCache, WatchKey, Watched, Workspace, HISTORY_LIMIT,
+    USER_LOOKUPS,
 };
 use crate::{
     auth::{config_dir, Auth},
@@ -164,9 +165,9 @@ fn ack_text(envelope_id: &str) -> String {
     json!({ "envelope_id": envelope_id }).to_string()
 }
 
-/// The channel of a message event of a public or private channel of `team_id` (posted, changed or deleted), and its thread.
-/// Direct messages (`channel_type` `im` or `mpim`), other events and another workspace's are `None`.
-/// An event with no `channel_type` (the example of `message_deleted` has none) is taken: the channel list the app holds decides, in `refresh_channel`, which are channels the user is in.
+/// The channel or DM of a message event of `team_id` (posted, changed or deleted), and its thread (S-16, S-31).
+/// Other events and another workspace's are `None`.
+/// An event with no `channel_type` (the example of `message_deleted` has none) is taken: the channel list the app holds decides, in `refresh_channel`, which conversations are read.
 fn event_of(payload: &Value, team_id: &str) -> Option<ChannelEvent> {
     if payload["type"] != "event_callback" || payload["team_id"] != team_id {
         return None;
@@ -175,7 +176,7 @@ fn event_of(payload: &Value, team_id: &str) -> Option<ChannelEvent> {
     if event["type"] != "message"
         || event["channel_type"]
             .as_str()
-            .is_some_and(|kind| !matches!(kind, "channel" | "group"))
+            .is_some_and(|kind| !matches!(kind, "channel" | "group" | "im" | "mpim"))
     {
         return None;
     }
@@ -803,15 +804,16 @@ async fn refresh_channel(
             return false;
         }
     };
-    let Some(name) = name_to_read(
-        hidden,
-        team_id,
-        &request.channel,
-        kept_channel_name(&state.channels, team_id, &request.channel),
-        cache.rate_limited(team_id),
-    ) else {
+    let kept_off = hidden
+        .iter()
+        .any(|h| h.team_id == team_id && h.channel == request.channel);
+    if kept_off || cache.rate_limited(team_id) {
         return false;
-    };
+    }
+    let existing = kept_channel(&state.channels, team_id, &request.channel);
+    if existing.is_none() && !request.channel.starts_with(['D', 'G']) {
+        return false;
+    }
     let token = match token_of(team_id).await {
         Ok(token) if !is_bot_token(&token) => token,
         Ok(_) => return false,
@@ -821,10 +823,26 @@ async fn refresh_channel(
         }
     };
     let http = auth.http();
-    let channel = Channel {
-        id: request.channel.clone(),
-        name,
-        private: false,
+    let channel = match existing {
+        Some(ch) => ch,
+        None => {
+            // A closed DM/MPIM received a new message: inspect it once and add it to the cache so it appears in the side menu and unread list (S-31).
+            let form = [("channel", request.channel.clone())];
+            let Ok((reply, _)) =
+                call_scoped_retrying(http, &token, "conversations.info", Payload::Form(&form), 0)
+                    .await
+            else {
+                return false;
+            };
+            let Some(mut dm) = dm_from_value(&reply["channel"]) else {
+                return false;
+            };
+            let mut slice = [dm];
+            resolve_dm_names(http, cache, team_id, &token, &mut slice).await;
+            dm = slice.into_iter().next().unwrap();
+            upsert_kept_channel(&state.channels, team_id, dm.clone());
+            dm
+        }
     };
     let form = [
         ("channel", channel.id.clone()),
@@ -957,7 +975,10 @@ async fn refresh_worker(app: &AppHandle, team_id: &str, mut rx: UnboundedReceive
             std::mem::take(&mut waiting),
             &hidden,
             team_id,
-            |channel| kept_channel_name(&state.channels, team_id, channel),
+            |channel| {
+                kept_channel_name(&state.channels, team_id, channel)
+                    .or_else(|| channel.starts_with(['D', 'G']).then(|| channel.to_owned()))
+            },
             state.timeline.rate_limited(team_id),
         );
         let (ready, rest, next_wake) = budget.admit(std::mem::take(&mut waiting), Instant::now());
@@ -1266,11 +1287,7 @@ mod tests {
         }));
         assert_eq!(event_of(&changed, "T1"), Some(event("G9", Some("1.2"))));
         // A direct message has an ID of its own kind, and is not in the list of channels.
-        let list = vec![Channel {
-            id: "C1".into(),
-            name: "dev".into(),
-            private: false,
-        }];
+        let list = vec![Channel::channel("C1".into(), "dev".into(), false)];
         assert_eq!(name_in(&list, "C1").as_deref(), Some("dev"));
         assert_eq!(name_in(&list, "D1"), None);
         assert_eq!(name_in(&list, "C2"), None);
@@ -1286,8 +1303,9 @@ mod tests {
             }
             message_payload(e)
         };
-        assert_eq!(event_of(&message(Some("im")), "T1"), None);
-        assert_eq!(event_of(&message(Some("mpim")), "T1"), None);
+        assert_eq!(event_of(&message(Some("im")), "T1"), Some(event("C1", None)));
+        assert_eq!(event_of(&message(Some("mpim")), "T1"), Some(event("C1", None)));
+        assert_eq!(event_of(&message(Some("app_home")), "T1"), None);
         assert_eq!(event_of(&message(Some("channel")), "T2"), None);
         let mut no_team = message(Some("channel"));
         no_team.as_object_mut().unwrap().remove("team_id");
@@ -1659,11 +1677,7 @@ mod tests {
 
     #[test]
     fn the_threads_to_check_take_their_count_from_the_history_just_read() {
-        let channel = Channel {
-            id: "C1".into(),
-            name: "dev".into(),
-            private: false,
-        };
+        let channel = Channel::channel("C1".into(), "dev".into(), false);
         let parent = |ts: &str, replies: u32| {
             raw_from(
                 "T1",

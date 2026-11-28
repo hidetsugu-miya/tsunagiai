@@ -91,7 +91,18 @@ pub struct Workspace {
     url: String,
 }
 
-/// A channel the user is in.
+/// The kind of a direct message conversation (S-31); `None` on `Channel` / `SideChannel` / `TimelineMessage` means a public or private channel.
+#[derive(Serialize, Debug, PartialEq, Eq, Clone, Copy)]
+#[cfg_attr(test, derive(TS))]
+#[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
+#[serde(rename_all = "camelCase")]
+pub enum ConversationKind {
+    Im,
+    Mpim,
+}
+
+/// A channel or direct message the user is in.
+/// `slack_channels` (S-28) returns only channels, so the DM-only fields are skipped on serialize and `Channel`'s TypeScript shape stays unchanged.
 #[derive(Serialize, Debug, PartialEq, Clone)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -100,6 +111,38 @@ pub struct Channel {
     name: String,
     /// A private channel (`is_private` of `users.conversations`).
     private: bool,
+    #[serde(skip)]
+    kind: Option<ConversationKind>,
+    #[serde(skip)]
+    dm_user: Option<String>,
+    #[serde(skip)]
+    icon_url: Option<String>,
+    #[serde(skip)]
+    member_count: Option<u32>,
+    #[serde(skip)]
+    self_dm: bool,
+    #[serde(skip)]
+    is_open: bool,
+}
+
+impl Channel {
+    pub(super) fn channel(id: String, name: String, private: bool) -> Self {
+        Self {
+            id,
+            name,
+            private,
+            kind: None,
+            dm_user: None,
+            icon_url: None,
+            member_count: None,
+            self_dm: false,
+            is_open: false,
+        }
+    }
+
+    pub(super) fn is_dm(&self) -> bool {
+        self.kind.is_some()
+    }
 }
 
 #[derive(Serialize)]
@@ -206,10 +249,10 @@ fn moves_legacy_token(registered: &[Workspace], team_id: &str) -> bool {
     !registered.iter().any(|w| w.team_id == team_id)
 }
 
-/// The form of a `users.conversations` request: the channels the user is in, public and private, and the page after `cursor`.
-fn channels_params(cursor: Option<&str>) -> Vec<(&'static str, String)> {
+/// The form of a `users.conversations` request for the given conversation `types`, and the page after `cursor`.
+fn conversations_params(types: &str, cursor: Option<&str>) -> Vec<(&'static str, String)> {
     let mut params = vec![
-        ("types", "public_channel,private_channel".to_owned()),
+        ("types", types.to_owned()),
         ("exclude_archived", "true".to_owned()),
         ("limit", "200".to_owned()),
     ];
@@ -219,6 +262,28 @@ fn channels_params(cursor: Option<&str>) -> Vec<(&'static str, String)> {
     params
 }
 
+/// The form of a `users.conversations` request: the channels the user is in, public and private, and the page after `cursor`.
+fn channels_params(cursor: Option<&str>) -> Vec<(&'static str, String)> {
+    conversations_params("public_channel,private_channel", cursor)
+}
+
+/// Which DM `types` to ask `users.conversations` for, given the workspace's remembered scopes (`None` before any read asks for both).
+fn dm_types_for_scopes(scopes: Option<&str>) -> Option<&'static str> {
+    match scopes {
+        None => Some("im,mpim"),
+        Some(s) => {
+            let has_im = missing_scopes(s, &["im:read"]).is_empty();
+            let has_mpim = missing_scopes(s, &["mpim:read"]).is_empty();
+            match (has_im, has_mpim) {
+                (true, true) => Some("im,mpim"),
+                (true, false) => Some("im"),
+                (false, true) => Some("mpim"),
+                (false, false) => None,
+            }
+        }
+    }
+}
+
 fn channels_of(reply: &Value) -> Vec<Channel> {
     reply["channels"]
         .as_array()
@@ -226,12 +291,97 @@ fn channels_of(reply: &Value) -> Vec<Channel> {
         .flatten()
         .filter_map(|c| {
             let (id, name) = (c["id"].as_str()?, c["name"].as_str()?);
-            valid_channel(id).then(|| Channel {
-                id: id.to_owned(),
-                name: name.to_owned(),
-                private: c["is_private"].as_bool().unwrap_or(false),
+            valid_channel(id).then(|| {
+                Channel::channel(
+                    id.to_owned(),
+                    name.to_owned(),
+                    c["is_private"].as_bool().unwrap_or(false),
+                )
             })
         })
+        .collect()
+}
+
+/// Fallback label for a group DM when `conversations.members` is not available: strips Slack's
+/// `"Group messaging with: "` prefix or cleans up the `mpdm-` slug.
+fn mpim_fallback_name(c: &Value) -> String {
+    if let Some(purpose) = c["purpose"]["value"].as_str() {
+        let rest = purpose
+            .strip_prefix("Group messaging with:")
+            .unwrap_or(purpose)
+            .trim();
+        let names: Vec<&str> = rest
+            .split_whitespace()
+            .map(|part| part.trim_start_matches('@').trim_end_matches(','))
+            .filter(|part| !part.is_empty())
+            .collect();
+        if !names.is_empty() {
+            return names.join("、");
+        }
+    }
+    if let Some(raw) = c["name"].as_str() {
+        let trimmed = raw
+            .strip_prefix("mpdm-")
+            .unwrap_or(raw)
+            .trim_end_matches(|ch: char| ch.is_ascii_digit() || ch == '-');
+        let parts: Vec<&str> = trimmed.split("--").filter(|p| !p.is_empty()).collect();
+        if !parts.is_empty() {
+            return parts.join("、");
+        }
+        if !raw.is_empty() {
+            return raw.to_owned();
+        }
+    }
+    "グループ DM".to_owned()
+}
+
+/// Parses one DM or group DM object from `users.conversations` or `conversations.info`.
+fn dm_from_value(c: &Value) -> Option<Channel> {
+    let id = c["id"].as_str().filter(|id| valid_channel(id))?;
+    let is_open = c["is_open"].as_bool().unwrap_or(false);
+    if c["is_im"] == true {
+        let user = c["user"].as_str().filter(|u| valid_channel(u))?;
+        return Some(Channel {
+            id: id.to_owned(),
+            name: user.to_owned(),
+            private: true,
+            kind: Some(ConversationKind::Im),
+            dm_user: Some(user.to_owned()),
+            icon_url: None,
+            member_count: None,
+            self_dm: false,
+            is_open,
+        });
+    }
+    if c["is_mpim"] == true {
+        return Some(Channel {
+            id: id.to_owned(),
+            name: mpim_fallback_name(c),
+            private: true,
+            kind: Some(ConversationKind::Mpim),
+            dm_user: None,
+            icon_url: None,
+            member_count: None,
+            self_dm: false,
+            is_open,
+        });
+    }
+    None
+}
+
+fn dms_of(reply: &Value) -> Vec<Channel> {
+    reply["channels"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(dm_from_value)
+        .collect()
+}
+
+/// Keeps only DMs that are open in Slack (`is_open`) or currently have unread messages/replies.
+fn filter_dms(dms: Vec<Channel>, unread_ids: &HashSet<String>) -> Vec<Channel> {
+    dms.into_iter()
+        .filter(|dm| dm.is_open || unread_ids.contains(&dm.id))
         .collect()
 }
 
@@ -344,28 +494,37 @@ fn missing_history_scopes(scopes: &str) -> Vec<&'static str> {
     missing_scopes(scopes, &HISTORY_SCOPES)
 }
 
-/// The scopes only the timeline and the thread use: names and icons (`users:read`), attached images (`files:read`), the read position that opening a message or "既読にする" sets (`channels:write`, `groups:write`),
-/// the images of custom emoji in the reactions (`emoji:read`, S-26) and adding or taking off a reaction (`reactions:write`, S-25).
-/// A token without them still posts, summarises and lists messages, so they are kept apart from `HISTORY_SCOPES`. `emoji:read` and `reactions:write` are not in `TIMELINE_SCOPES`: the list does not warn of them.
-const OPTIONAL_SCOPES: [&str; 6] = [
+/// The scopes only the timeline and the thread use: names and icons (`users:read`), attached images (`files:read`),
+/// the read position that opening a message or "既読にする" sets (`channels:write`, `groups:write`, `im:write`, `mpim:write`),
+/// listing direct messages (`im:read`, `mpim:read`), the images of custom emoji in the reactions (`emoji:read`, S-26) and adding or taking off a reaction (`reactions:write`, S-25).
+/// A token without them still posts, summarises and lists channels, so they are kept apart from `HISTORY_SCOPES`. `emoji:read` and `reactions:write` are not in `TIMELINE_SCOPES`: the list does not warn of them.
+const OPTIONAL_SCOPES: [&str; 10] = [
     "users:read",
     "files:read",
     "channels:write",
     "groups:write",
+    "im:read",
+    "mpim:read",
+    "im:write",
+    "mpim:write",
     "emoji:read",
     "reactions:write",
 ];
 
 /// Every scope the timeline wants, which the list answer says a workspace's token lacks.
-const TIMELINE_SCOPES: [&str; 8] = [
+const TIMELINE_SCOPES: [&str; 12] = [
     "channels:read",
     "groups:read",
+    "im:read",
+    "mpim:read",
     "channels:history",
     "groups:history",
     "users:read",
     "files:read",
     "channels:write",
     "groups:write",
+    "im:write",
+    "mpim:write",
 ];
 
 /// The message for a failed `conversations.replies`: a missing scope says which workspace's token to replace, and which scope it lacks.
@@ -1078,7 +1237,143 @@ async fn fetch_channels(http: &reqwest::Client, token: &str) -> Result<Vec<Chann
     Ok(all)
 }
 
-/// The channels the workspace's user is in. The list is kept for `CHANNELS_TTL`; `refresh` asks Slack again.
+/// Pages of DM conversations read from `users.conversations` (at most 2 pages = 400 DMs).
+const DM_PAGES: usize = 2;
+
+/// Fetches open/unread DMs and group DMs for a workspace when the token has `im:read` / `mpim:read`.
+/// A `missing_scope` or transient failure returns an empty list so channel reads are never broken.
+async fn fetch_dms(
+    http: &reqwest::Client,
+    token: &str,
+    types: &str,
+) -> (Vec<Channel>, Option<String>) {
+    let mut all = Vec::new();
+    let mut cursor = None;
+    let mut scopes = None;
+    for _ in 0..DM_PAGES {
+        let params = conversations_params(types, cursor.as_deref());
+        match call_scoped(http, token, "users.conversations", Payload::Form(&params)).await {
+            Ok((reply, got_scopes)) => {
+                scopes = scopes.or(got_scopes);
+                all.extend(dms_of(&reply));
+                cursor = next_cursor(&reply);
+                if cursor.is_none() {
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    (all, scopes)
+}
+
+/// Resolves display names, icons, self-DM flags, and MPIM member counts for DMs using `own_user_id`, `conversations.members`, and `users.info` cache.
+async fn resolve_dm_names(
+    http: &reqwest::Client,
+    cache: &Arc<TimelineCache>,
+    team_id: &str,
+    token: &str,
+    dms: &mut [Channel],
+) {
+    if dms.is_empty() {
+        return;
+    }
+    let own = own_user_id(http, cache, team_id, token).await;
+    // Fetch member IDs for group DMs (MPIM) concurrently.
+    let mpim_ids: Vec<String> = dms
+        .iter()
+        .filter(|d| d.kind == Some(ConversationKind::Mpim))
+        .map(|d| d.id.clone())
+        .collect();
+    let member_jobs = mpim_ids.into_iter().map(|cid| {
+        let (http, token) = (http.clone(), token.to_owned());
+        async move {
+            let form = [("channel", cid.clone()), ("limit", "20".to_owned())];
+            let got = call(&http, &token, "conversations.members", Payload::Form(&form))
+                .await
+                .ok()
+                .and_then(|reply| {
+                    reply["members"].as_array().map(|arr| {
+                        arr.iter()
+                            .filter_map(Value::as_str)
+                            .filter(|u| valid_channel(u))
+                            .map(str::to_owned)
+                            .collect::<Vec<_>>()
+                    })
+                });
+            (cid, got)
+        }
+    });
+    let members_by_id: HashMap<String, Vec<String>> =
+        run_limited(member_jobs, HISTORY_CONCURRENCY)
+            .await
+            .into_iter()
+            .filter_map(|(cid, m)| m.map(|list| (cid, list)))
+            .collect();
+
+    // Collect all user IDs needed for 1-to-1 DMs and MPIM members.
+    let mut seen = HashSet::new();
+    let mut wanted_ids = Vec::new();
+    for dm in dms.iter() {
+        if let Some(uid) = &dm.dm_user {
+            if seen.insert(uid.clone()) {
+                wanted_ids.push(uid.clone());
+            }
+        }
+        if let Some(members) = members_by_id.get(&dm.id) {
+            for uid in members {
+                if own.as_deref() != Some(uid.as_str()) && seen.insert(uid.clone()) {
+                    wanted_ids.push(uid.clone());
+                }
+            }
+        }
+    }
+    let wanted: Vec<(String, String, String)> = needing_lookup(
+        wanted_ids.into_iter(),
+        |uid| cache.needs_lookup(team_id, uid),
+        USER_LOOKUPS,
+    )
+    .into_iter()
+    .map(|uid| (team_id.to_owned(), token.to_owned(), uid))
+    .collect();
+    if !wanted.is_empty() {
+        lookup_users(http, cache, wanted).await;
+    }
+
+    for dm in dms.iter_mut() {
+        match dm.kind {
+            Some(ConversationKind::Im) => {
+                if let Some(uid) = dm.dm_user.as_deref() {
+                    dm.self_dm = own.as_deref() == Some(uid);
+                    if let Some(user) = cache.user(team_id, uid) {
+                        dm.name = user.name;
+                        dm.icon_url = user.icon_url;
+                    }
+                }
+            }
+            Some(ConversationKind::Mpim) => {
+                if let Some(members) = members_by_id.get(&dm.id) {
+                    let others: Vec<&String> = members
+                        .iter()
+                        .filter(|uid| own.as_deref() != Some(uid.as_str()))
+                        .collect();
+                    let count = u32::try_from(others.len()).unwrap_or(u32::MAX);
+                    dm.member_count = Some(count.max(1));
+                    let names: Vec<String> = others
+                        .iter()
+                        .filter_map(|uid| cache.user(team_id, uid).map(|u| u.name))
+                        .collect();
+                    if !names.is_empty() {
+                        dm.name = names.join("、");
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+}
+
+/// The channels (excluding DMs, S-28) the workspace's user is in. The list is kept for `CHANNELS_TTL`; `refresh` asks Slack again.
 #[tauri::command]
 pub async fn slack_channels(
     auth: State<'_, Auth>,
@@ -1089,15 +1384,17 @@ pub async fn slack_channels(
     let command = "slack_channels";
     if !refresh {
         if let Some(list) = fresh_channels(&state.channels, &team_id) {
-            return Ok(list);
+            return Ok(list.into_iter().filter(|c| !c.is_dm()).collect());
         }
     }
     let token = token_of(&team_id)
         .await
         .map_err(|e| log_failure(command, &team_id, e))?;
-    fetch_and_keep_channels(auth.http(), &state.channels, &team_id, &token)
-        .await
-        .map_err(|e| log_failure(command, &team_id, e))
+    let list =
+        fetch_and_keep_channels(auth.http(), &state.channels, &state.timeline, &team_id, &token)
+            .await
+            .map_err(|e| log_failure(command, &team_id, e))?;
+    Ok(list.into_iter().filter(|c| !c.is_dm()).collect())
 }
 
 /// A workspace's channel list and when it was read, by `team_id`.
@@ -1113,14 +1410,31 @@ fn fresh_channels(cache: &ChannelCache, team_id: &str) -> Option<Vec<Channel>> {
         .map(|(_, list)| list.clone())
 }
 
-/// Asks Slack for the workspace's channels and keeps the list.
+/// Asks Slack for the workspace's channels and open/unread DMs, resolves DM names, and keeps the combined list.
 async fn fetch_and_keep_channels(
     http: &reqwest::Client,
     cache: &ChannelCache,
+    timeline: &Arc<TimelineCache>,
     team_id: &str,
     token: &str,
 ) -> Result<Vec<Channel>, String> {
-    let list = fetch_channels(http, token).await?;
+    let mut list = fetch_channels(http, token).await?;
+    let remembered_scopes = timeline.scopes(team_id);
+    if let Some(dm_types) = dm_types_for_scopes(remembered_scopes.as_deref()) {
+        let (raw_dms, dm_scopes) = fetch_dms(http, token, dm_types).await;
+        if let Some(s) = dm_scopes {
+            timeline.put_scopes(team_id, &s);
+        }
+        let unread_ids: HashSet<String> = timeline
+            .team_messages(team_id)
+            .into_iter()
+            .filter(|m| unread_by_cache(timeline, m))
+            .map(|m| m.channel)
+            .collect();
+        let mut dms = filter_dms(raw_dms, &unread_ids);
+        resolve_dm_names(http, timeline, team_id, token, &mut dms).await;
+        list.extend(dms);
+    }
     cache
         .lock()
         .unwrap()
@@ -1345,6 +1659,18 @@ pub struct TimelineMessage {
     workspace_url: Option<String>,
     channel: String,
     channel_name: String,
+    /// Direct message kind (`im` / `mpim`, S-31); omitted for public and private channels.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
+    channel_kind: Option<ConversationKind>,
+    /// Avatar URL of the 1-to-1 DM peer (S-31).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
+    channel_icon_url: Option<String>,
+    /// Number of other participants in a group DM (S-31).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
+    channel_member_count: Option<u32>,
     ts: String,
     thread_ts: Option<String>,
     user: Option<String>,
@@ -1549,7 +1875,7 @@ pub struct Timeline {
     side: Vec<SideWorkspace>,
 }
 
-/// A channel of the side menu (S-19). `unread` is the unread messages held for it and the unread replies of its threads, as the badge counts them.
+/// A channel or direct message of the side menu (S-19, S-31). `unread` is the unread messages held for it and the unread replies of its threads, as the badge counts them.
 #[derive(Serialize, Debug, PartialEq)]
 #[cfg_attr(test, derive(TS))]
 #[cfg_attr(test, ts(export, export_to = crate::BINDINGS))]
@@ -1559,6 +1885,18 @@ pub struct SideChannel {
     name: String,
     private: bool,
     unread: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
+    kind: Option<ConversationKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
+    icon_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
+    member_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(test, ts(optional))]
+    self_dm: Option<bool>,
 }
 
 /// A workspace's heading in the side menu (S-19) and its channels by name.
@@ -1640,6 +1978,9 @@ struct Raw {
     team_id: String,
     channel: String,
     channel_name: String,
+    channel_kind: Option<ConversationKind>,
+    channel_icon_url: Option<String>,
+    channel_member_count: Option<u32>,
     ts: String,
     thread_ts: Option<String>,
     user: Option<String>,
@@ -2253,6 +2594,10 @@ fn side_channels(
             name: c.name.clone(),
             private: c.private,
             unread: unread.get(&c.id).copied().unwrap_or(0),
+            kind: c.kind,
+            icon_url: c.icon_url.clone(),
+            member_count: c.member_count,
+            self_dm: c.self_dm.then_some(true),
         })
         .collect();
     channels.sort_by_cached_key(|c| (c.name.to_lowercase(), c.id.clone()));
@@ -2509,6 +2854,9 @@ fn watch_row(
         team_id: w.team_id.clone(),
         channel: w.channel.clone(),
         channel_name: channel_name.to_owned(),
+        channel_kind: None,
+        channel_icon_url: None,
+        channel_member_count: None,
         ts: w.ts.clone(),
         thread_ts: None,
         user: None,
@@ -2997,6 +3345,28 @@ fn hidden_channels(
         .collect()
 }
 
+/// The conversation in the list kept for the workspace (also an old one), or `None`.
+fn kept_channel(cache: &ChannelCache, team_id: &str, channel: &str) -> Option<Channel> {
+    cache
+        .lock()
+        .unwrap()
+        .get(team_id)
+        .and_then(|(_, list)| list.iter().find(|c| c.id == channel).cloned())
+}
+
+/// Inserts or updates one conversation in the workspace's `ChannelCache` (used when Socket Mode receives a DM event for a closed DM or when `slack_open_dm` opens a DM).
+fn upsert_kept_channel(cache: &ChannelCache, team_id: &str, channel: Channel) {
+    let mut map = cache.lock().unwrap();
+    let entry = map
+        .entry(team_id.to_owned())
+        .or_insert_with(|| (Instant::now(), Vec::new()));
+    if let Some(slot) = entry.1.iter_mut().find(|c| c.id == channel.id) {
+        *slot = channel;
+    } else {
+        entry.1.push(channel);
+    }
+}
+
 /// The name of the channel in the list kept for the workspace (also an old one), or `None`.
 fn kept_channel_name(cache: &ChannelCache, team_id: &str, channel: &str) -> Option<String> {
     name_in(&cache.lock().unwrap().get(team_id)?.1, channel)
@@ -3229,6 +3599,9 @@ fn raw_with(team_id: &str, channel: &Channel, m: &Value, slim: fn(&Value) -> Val
         team_id: team_id.to_owned(),
         channel: channel.id.clone(),
         channel_name: channel.name.clone(),
+        channel_kind: channel.kind,
+        channel_icon_url: channel.icon_url.clone(),
+        channel_member_count: channel.member_count,
         ts: ts.to_owned(),
         // The parent of a thread carries its own `ts` as `thread_ts`; only a reply names another.
         thread_ts: m["thread_ts"]
@@ -3657,6 +4030,9 @@ fn timeline_message(
         workspace_url,
         channel: raw.channel.clone(),
         channel_name: raw.channel_name.clone(),
+        channel_kind: raw.channel_kind,
+        channel_icon_url: raw.channel_icon_url.clone(),
+        channel_member_count: raw.channel_member_count,
         ts: raw.ts.clone(),
         thread_ts: raw.thread_ts.clone(),
         user: raw.user.clone(),
@@ -4414,12 +4790,8 @@ async fn check_watched(
         match got {
             None => {}
             Some(Ok((reply, _))) => {
-                let channel = Channel {
-                    name: kept_channel_name(channels, &team, &key.1)
-                        .unwrap_or_else(|| key.1.clone()),
-                    id: key.1.clone(),
-                    private: false,
-                };
+                let channel = kept_channel(channels, &team, &key.1)
+                    .unwrap_or_else(|| Channel::channel(key.1.clone(), key.1.clone(), false));
                 let own = cache.own_user(&team);
                 let read = watch_read_of(&reply, &team, &channel, &key.2, own.as_deref());
                 cache.record_watch(key, Some(read));
@@ -4496,12 +4868,8 @@ async fn check_threads(
         match got {
             None => {}
             Some(Ok((reply, _))) => {
-                let channel = Channel {
-                    name: kept_channel_name(channels, &team, &key.1)
-                        .unwrap_or_else(|| key.1.clone()),
-                    id: key.1.clone(),
-                    private: false,
-                };
+                let channel = kept_channel(channels, &team, &key.1)
+                    .unwrap_or_else(|| Channel::channel(key.1.clone(), key.1.clone(), false));
                 let own = cache.own_user(&team).unwrap_or_default();
                 let read = thread_read_of(&reply, &team, &channel, &key.2, &own);
                 cache.record_thread(key, count, read);
@@ -4550,7 +4918,7 @@ struct WorkspaceRead {
 async fn fill_workspace(
     http: &reqwest::Client,
     channels: &ChannelCache,
-    cache: &TimelineCache,
+    cache: &Arc<TimelineCache>,
     hidden: &HashSet<String>,
     read: &mut WorkspaceRead,
 ) -> Result<(), String> {
@@ -4561,7 +4929,7 @@ async fn fill_workspace(
     }
     let list = match fresh_channels(channels, &team_id) {
         Some(list) => list,
-        None => fetch_and_keep_channels(http, channels, &team_id, &read.token).await?,
+        None => fetch_and_keep_channels(http, channels, cache, &team_id, &read.token).await?,
     };
     // The channels kept off the list are not read, not counted, and drop out of the history kept.
     let list = visible_channels(list, hidden);
@@ -5445,12 +5813,8 @@ pub async fn slack_watch(
                 }
                 log_failure(command, &team_id, read_error(e, &workspace.team))
             })?;
-            let named = Channel {
-                name: kept_channel_name(&state.channels, &team_id, &channel)
-                    .unwrap_or_else(|| channel.clone()),
-                id: channel.clone(),
-                private: false,
-            };
+            let named = kept_channel(&state.channels, &team_id, &channel)
+                .unwrap_or_else(|| Channel::channel(channel.clone(), channel.clone(), false));
             let own = state.timeline.own_user(&team_id);
             let read = watch_read_of(&reply, &team_id, &named, &ts, own.as_deref());
             let WatchRead::Thread { latest_reply, .. } = &read else {
@@ -6322,16 +6686,8 @@ mod tests {
         assert_eq!(
             channels_of(&page),
             vec![
-                Channel {
-                    id: "C1".into(),
-                    name: "general".into(),
-                    private: false
-                },
-                Channel {
-                    id: "G4".into(),
-                    name: "secret".into(),
-                    private: true
-                }
+                Channel::channel("C1".into(), "general".into(), false),
+                Channel::channel("G4".into(), "secret".into(), true),
             ]
         );
         assert_eq!(next_cursor(&page), Some("abc".into()));
@@ -6954,11 +7310,7 @@ mod tests {
     }
 
     fn channel(id: &str) -> Channel {
-        Channel {
-            id: id.into(),
-            name: format!("name {id}"),
-            private: false,
-        }
+        Channel::channel(id.into(), format!("name {id}"), false)
     }
 
     fn raw(channel: &str, ts: &str) -> Raw {
@@ -6966,6 +7318,9 @@ mod tests {
             team_id: "T1".into(),
             channel: channel.into(),
             channel_name: format!("name {channel}"),
+            channel_kind: None,
+            channel_icon_url: None,
+            channel_member_count: None,
             ts: ts.into(),
             thread_ts: None,
             user: None,
@@ -6986,11 +7341,7 @@ mod tests {
 
     #[test]
     fn the_side_menu_lists_the_channels_by_name_without_the_hidden_ones() {
-        let named = |id: &str, name: &str, private: bool| Channel {
-            id: id.into(),
-            name: name.into(),
-            private,
-        };
+        let named = |id: &str, name: &str, private: bool| Channel::channel(id.into(), name.into(), private);
         let list = vec![
             named("C1", "release", false),
             named("G2", "Ops", true),
@@ -7902,6 +8253,10 @@ mod tests {
             [
                 "channels:write",
                 "groups:write",
+                "im:read",
+                "mpim:read",
+                "im:write",
+                "mpim:write",
                 "emoji:read",
                 "reactions:write"
             ]
@@ -7909,9 +8264,18 @@ mod tests {
         // `emoji:read` and `reactions:write` are optional but the list does not warn of them (S-26, S-25).
         assert_eq!(
             missing_scopes(scopes, &TIMELINE_SCOPES),
-            ["channels:write", "groups:write"]
+            [
+                "im:read",
+                "mpim:read",
+                "channels:write",
+                "groups:write",
+                "im:write",
+                "mpim:write"
+            ]
         );
-        let all = format!("{scopes},channels:write,groups:write,emoji:read,reactions:write");
+        let all = format!(
+            "{scopes},channels:write,groups:write,im:read,mpim:read,im:write,mpim:write,emoji:read,reactions:write"
+        );
         assert!(missing_scopes(&all, &OPTIONAL_SCOPES).is_empty());
         assert!(missing_scopes(&all, &TIMELINE_SCOPES).is_empty());
         // The history scopes stay what a token must have; the write scopes are not among them.
@@ -10819,5 +11183,58 @@ mod tests {
         )
         .unwrap();
         assert_eq!(people_of(&plain), ["U2", "U3"]);
+    }
+
+    #[test]
+    fn dm_types_follow_remembered_scopes() {
+        assert_eq!(dm_types_for_scopes(None), Some("im,mpim"));
+        assert_eq!(
+            dm_types_for_scopes(Some("channels:read,im:read,mpim:read")),
+            Some("im,mpim")
+        );
+        assert_eq!(dm_types_for_scopes(Some("channels:read,im:read")), Some("im"));
+        assert_eq!(
+            dm_types_for_scopes(Some("channels:read,mpim:read")),
+            Some("mpim")
+        );
+        assert_eq!(
+            dm_types_for_scopes(Some("channels:read,groups:read")),
+            None
+        );
+    }
+
+    #[test]
+    fn dms_are_parsed_filtered_by_open_or_unread_and_listed_in_side_channels() {
+        let page = json!({
+            "ok": true,
+            "channels": [
+                {"id": "D1", "is_im": true, "user": "U2", "is_open": true},
+                {"id": "D2", "is_im": true, "user": "U3", "is_open": false},
+                {"id": "D3", "is_im": true, "user": "U4", "is_open": false},
+                {
+                    "id": "G10",
+                    "is_mpim": true,
+                    "name": "mpdm-alice--bob--1",
+                    "purpose": {"value": "Group messaging with: @alice @bob"},
+                    "is_open": true
+                },
+                {"id": "C1", "name": "general"}
+            ]
+        });
+        let parsed = dms_of(&page);
+        assert_eq!(parsed.len(), 4);
+        assert_eq!(parsed[0].kind, Some(ConversationKind::Im));
+        assert_eq!(parsed[0].dm_user.as_deref(), Some("U2"));
+        assert_eq!(parsed[3].kind, Some(ConversationKind::Mpim));
+        assert_eq!(parsed[3].name, "alice、bob");
+
+        let unread_ids = HashSet::from(["D3".to_owned()]);
+        let kept = filter_dms(parsed, &unread_ids);
+        assert_eq!(ids(&kept), ["D1", "D3", "G10"]);
+
+        let side = side_channels(&kept, &HashSet::new(), &HashMap::from([("D3".to_owned(), 2)]));
+        let d3 = side.iter().find(|c| c.id == "D3").unwrap();
+        assert_eq!(d3.kind, Some(ConversationKind::Im));
+        assert_eq!(d3.unread, 2);
     }
 }
