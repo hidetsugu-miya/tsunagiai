@@ -1,4 +1,4 @@
-// Inline SVG icons. This is the one place that holds the shape of an icon (`.claude/tools/check-icons.sh` fails on a shape written anywhere else): ts/ takes the `*_SVG` strings, and index.html writes `<svg data-svg="{name}">`, which `fillIcons` fills at the start.
+// Inline SVG icons. This is the one place that holds the shape of an icon (`.agents/tools/check-icons.sh` fails on a shape written anywhere else): ts/ takes the `*_SVG` strings, and index.html writes `<svg data-svg="{name}">`, which `fillIcons` fills at the start.
 
 type Shape = { paths: string; viewBox: string };
 const shapes = new Map<string, Shape>();
