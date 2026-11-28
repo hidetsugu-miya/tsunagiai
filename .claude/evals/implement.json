@@ -273,6 +273,21 @@
         "共有ファイルの commit（d4e5f6a）の #1722 の分を戻す commit を、`code-implementer` で足すと書いている",
         "複数の issue の番号を持つ commit（共有ファイルの commit d4e5f6a と、その直しの commit）は `git revert` していない（#1721 と #1723 の分が消えるため）"
       ]
+    },
+    {
+      "id": 20,
+      "name": "shell-file-item-missing-goes-back-before-spec",
+      "prompt": "あなたは implement の実行の手順 3 で、共有ファイルの担当の返りを受け取るリードです。`.claude/skills/implement/SKILL.md` の手順 3 を読み、`.claude/evals/files/implement/shell-files-item-missing.md` の記録について、共有ファイルの担当を起動したときの命令の要点と、返りを受け取ってから spec を回すまでに何をするかを決めてください。この記録が、あなたの持つ実行の文脈です。コマンドは実行せず、打つはずのコマンドと、担当に何をさせるかを書き出してください。",
+      "expected_output": "共有ファイルの担当には、返りの項目ごとに入れた場所（`path` と足した名前）を返すよう命じる。リードは返りのあと、その名前が `git diff` にあるかを `rg` で確かめ、無かった `.drop-line` を共有ファイルの担当へ戻してから、`run-e2e.sh --only` で spec を回す。`.drop-line` が抜けたまま spec は回さない。",
+      "files": [
+        ".claude/evals/files/implement/shell-files-item-missing.md"
+      ],
+      "assertions": [
+        "共有ファイルの担当への命令に、返りの項目ごとに入れた場所（`path` と足した名前）を返させることが入っている",
+        "spec を回す前に、返りの各項目の名前（`.drop-line`、`#todo-drop-hint`、`.slack-card`）が `git diff` にあるかを `rg` で確かめると書いている",
+        "`git diff` に無い `.drop-line` を見つけ、共有ファイルの担当へ戻すと書いている（担当の「適用した」という返りをそのまま信じていない）",
+        "戻した項目が入るまで、`run-e2e.sh --only todo` を回すコマンドを書いていない"
+      ]
     }
   ]
 }
