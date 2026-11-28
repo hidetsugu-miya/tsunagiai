@@ -803,7 +803,10 @@
           <div id="orca-jira-bar">
             <select id="orca-jira-board" aria-label="ボード" hidden></select>
             <select id="orca-jira-sprint" aria-label="スプリント" hidden></select>
-            <select id="orca-jira-status" aria-label="ステータス" hidden></select>
+            <div id="orca-jira-filters" hidden>
+              <select id="orca-jira-status" aria-label="ステータス" hidden></select>
+              <select id="orca-jira-assignee" aria-label="担当者" hidden></select>
+            </div>
             <button id="orca-jira-new" class="icon-btn" type="button" aria-label="チケットを作る" hidden></button>
             <button id="orca-jira-reload" class="icon-btn" type="button" aria-label="再読み込み" hidden></button>
             <button id="orca-jira-config" class="icon-btn" type="button" aria-label="接続の設定" hidden></button>

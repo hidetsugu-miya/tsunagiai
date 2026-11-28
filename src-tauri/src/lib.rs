@@ -27,6 +27,7 @@ mod keychain;
 pub mod lsp;
 pub mod lsp_plugin;
 pub mod machine_stats;
+pub mod mail;
 pub mod mail_address;
 pub mod mail_attach;
 pub mod mail_send;
@@ -355,6 +356,7 @@ pub fn run() {
             jira::jira_sprints,
             jira::jira_sprint_issues,
             jira::jira_backlog,
+            jira::jira_myself,
             jira::jira_issue,
             jira::jira_transitions,
             jira::jira_transition,
@@ -465,7 +467,6 @@ pub fn run() {
             orca_attach::orca_drop_file,
             orca_browse::orca_browse_dir,
             machine_stats::machine_resources,
-            machine_stats::machine_usage,
             orca_pairing::orca_pairing_status,
             orca_pairing::orca_pairing_save,
             orca_pairing::orca_pairing_revoke,

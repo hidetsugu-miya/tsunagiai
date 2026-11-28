@@ -148,12 +148,12 @@ function week(): Week {
     guests: [],
     ...detail,
   });
-  const ev = (day: number, from: string, to: string, summary: string, detail: Partial<Info> = {}, col = 0, cols = 1) => {
+  const ev = (day: number, from: string, to: string, summary: string, detail: Partial<Info> = {}) => {
     const min = (t: string) => {
       const [h, mm] = t.split(":").map(Number);
       return h * 60 + mm;
     };
-    return { day, startMin: min(from), endMin: min(to), col, cols, ...info(day, summary, ` ${clock(min(from))} - ${clock(min(to))}`, detail) };
+    return { day, startMin: min(from), endMin: min(to), left: 0, width: 1000, layer: 0, ...info(day, summary, ` ${clock(min(from))} - ${clock(min(to))}`, detail) };
   };
   const home = { account: HOME, calendar: "プライベート" };
   const todayIndex = now.getDay();

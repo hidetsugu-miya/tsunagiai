@@ -75,10 +75,6 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .stat-num { font-weight: bold; }
 .stat-num.hot { color: var(--warn); }
 .stat-sep { width: 1px; height: 16px; background: var(--chip-line); }
-.stat-icon { display: inline-flex; margin-right: 4px; }
-.stat-icon svg { width: 13px; height: 13px; stroke-width: 2.4; }
-.stat-icon[data-ai="claude"] { color: var(--claude); }
-.stat-icon[data-ai="antigravity"] { color: var(--google); }
 /* A-35: the pane of the unread opens from the right over the screen, down to the footer. */
 #unread-pane, #resource-pane { position: fixed; z-index: 11; top: 0; right: 0; bottom: var(--footer-h); box-sizing: border-box; width: 380px; max-width: 100%; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--surface); box-shadow: -8px 0 24px rgba(0, 0, 0, .12); }
 #unread-pane header, #resource-pane header { box-sizing: border-box; min-height: var(--header-h); padding: 0 12px 0 20px; background: var(--bar); border-bottom: 1px solid var(--line); }
@@ -90,8 +86,6 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .res-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; align-items: baseline; font-size: calc(13px * var(--fs)); }
 .res-key { color: var(--ink-soft); }
 .res-sub { grid-column: 1 / 3; font-size: calc(11px * var(--fs)); color: var(--muted); }
-.res-group { display: flex; flex-direction: column; gap: 8px; }
-.res-group-name { display: flex; align-items: center; font-size: calc(12px * var(--fs)); color: var(--muted); }
 .unread-item { display: grid; grid-template-columns: 16px 32px minmax(0, 1fr); column-gap: 10px; align-items: start; padding: 10px 8px; border-radius: 12px; cursor: pointer; }
 .unread-item.bare { grid-template-columns: 16px minmax(0, 1fr); }
 .unread-item.bare .unread-actions { grid-column: 2; }
@@ -1721,7 +1715,7 @@ button.status { border: 0; font: inherit; font-size: calc(12px * var(--fs)); cur
 #orca-jira { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 #orca-jira-bar { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 8px 6px; border-bottom: 1px solid var(--line); }
 #orca-jira-bar select { flex: 1 1 0; min-width: 0; height: 26px; padding: 0 8px; border: 1px solid var(--chip-line); border-radius: 13px; background: var(--surface); font: inherit; font-size: calc(12px * var(--fs)); color: inherit; }
-#orca-jira-bar #orca-jira-status { order: 1; flex: 1 1 100%; }
+#orca-jira-bar #orca-jira-filters { order: 1; flex: 1 1 100%; display: flex; gap: 6px; min-width: 0; }
 #orca-jira-reload, #orca-jira-new, #orca-jira-config { flex: none; width: 24px; height: 24px; color: var(--ink-soft); }
 #orca-jira-reload { margin-left: auto; }
 #orca-jira-reload svg, #orca-jira-new svg, #orca-jira-config svg { width: 14px; height: 14px; }
@@ -2579,6 +2573,14 @@ a.st-att-title, .st-att > .st-img, .st-att > .st-acc-img { align-self: flex-star
 .database-dot[data-state="connected"] { background: var(--accent); }
 .database-dot[data-state="connecting"] { background: var(--agent-working); }
 .database-note { margin: 0; padding: 2px 8px 2px calc(26px + var(--depth, 0) * 16px); font-size: calc(12px * var(--fs)); color: var(--muted); overflow-wrap: anywhere; }
+/* A-52 (#1540): the section of the favorite tables above the tree of the database part */
+.database-head { margin: 0; padding: 4px 10px 2px; font-size: calc(11px * var(--fs)); letter-spacing: .06em; color: var(--muted); }
+.database-fav { gap: 6px; padding-left: 10px; }
+.database-fav .database-name { flex: none; max-width: 60%; }
+.database-sub { min-width: 0; margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(11.5px * var(--fs)); color: var(--muted); }
+.database-star { flex: none; margin-left: auto; font-size: calc(13px * var(--fs)); line-height: 1; color: var(--agent-working); }
+.database-fav .database-star { margin-left: 0; }
+.database-sep { height: 1px; margin: 6px 8px; background: var(--line); }
 #database-work, .orca-database-tab { padding: 16px 24px; font-size: calc(13px * var(--fs)); }
 .database-work-title { margin: 0 0 12px; font-size: calc(15px * var(--fs)); overflow-wrap: anywhere; }
 #database-work .database-note, .orca-database-tab .database-note { padding: 0; }

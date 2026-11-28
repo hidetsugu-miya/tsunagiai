@@ -167,9 +167,8 @@ const answers = {
   },
   // A-18: the files and the editor are answered by the spec that opens them; the settings are read at the start.
   editor_settings: { autosaveMs: 1000, autosaveMin: 100, autosaveMax: 3000, autosaveStep: 100 },
-  // A-48: the footer reads the load of this Mac and the use of the AI; a spec that checks the numbers answers both with its own values.
+  // A-48: the footer reads the load of this Mac; a spec that checks the numbers answers with its own values.
   machine_resources: [{ environment: null, name: "この Mac", cpuPercent: 38, loadAverage: 4.52, cores: 12, memoryPercent: 10, usedBytes: 6871947674, totalBytes: 68719476736, error: null }],
-  machine_usage: [{ environment: null, name: "この Mac", claude: { status: "ok", session: null, weekly: { usedPercent: 74, resetsAt: 1795744799969 } }, antigravity: { status: "idle", session: null, weekly: null } }],
   // A-12: this machine's Orca is not paired; a spec that streams its list answers `orca_pairing_status` with a pairing, and one that saves or revokes one mocks `orca_pairing_save` or `orca_pairing_revoke`.
   orca_pairing_status: { paired: false },
   orca_pairing_save: { paired: true },
@@ -244,6 +243,8 @@ const answers = {
   formation_consents: [],
   // J-1: no Jira connection saved yet; a spec that saves or tries one mocks `jira_save` or `jira_test`, and one that starts with a saved connection gives `jira_settings`.
   jira_settings: { site: "", email: "", hasToken: false, boardId: null },
+  // J-2 (#1544): who the credential is; no account id, so the assignee select starts with 「すべての担当者」. A spec of the default gives `jira_myself`.
+  jira_myself: { accountId: null, displayName: "", emailAddress: null },
   // J-1 (#1425): no connection of another project to copy; a spec of the copy gives `jira_connections`, and presses 「使う」 with `jira_copy` mocked.
   jira_connections: [],
   // A-13: no Ghostty settings imported yet; a spec that presses the import button mocks `ghostty_import`.
