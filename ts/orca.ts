@@ -41,7 +41,7 @@ import { closeTodoTab, initOrcaTodo, openTodoTab as openTaskTab, showTodoTabs, t
 import { todoState } from "./todo-data.js";
 import { closeJiraTab, hasJiraDraft, initJiraTab, jiraTabsOf, jiraTitleOf, openJiraTab, openNewJiraTab, showJiraTabs } from "./orca-jira-tab.js";
 import { closeConnectionTabs, closeDatabaseTab, conditionOf, databaseTabsOf, initDatabaseTabs, openQuery, openTable, showDatabaseTabs } from "./orca-database-tabs.js";
-import { initOrcaDatabase, lostConnection } from "./orca-database.js";
+import { initOrcaDatabase, lostConnection, syncOrcaDatabasePlace } from "./orca-database.js";
 import { closeDiff, type DiffCommit, diffsOf, hasDiffIn, openDiff as openDiffTab, refreshDiffs, showDiffs } from "./orca-diff.js";
 import { closeFile, dirtyIds, discardFiles, filesOf, goTo, hasFileIn, holdFiles, initOrcaEditor, nameOf, openedIn, openFile as openFileHere, refreshEditors, resolveServers, saveFile, showEditors } from "./orca-editor.js";
 import { ensureServer, initLsp, mayAsk, pauseLsp, syncServers } from "./orca-lsp.js";
@@ -1102,6 +1102,8 @@ function filesWorktree(tabs: Tab[]): { path: string; label: string; environment:
 
 // The file pane follows its worktree and the files open in it.
 function drawFiles(tabs: Tab[]) {
+  // The favorite tables of the database part follow the selected project (A-52).
+  syncOrcaDatabasePlace(projectKey === null ? null : { environment: projectPlace(projectKey), project: projectKey });
   const worktree = filesWorktree(tabs);
   const target = worktree?.environment ?? null;
   // The branch of the heading is a button (A-25) for a worktree of the list that is on a git branch. It is the git branch, not Orca's name of the worktree.

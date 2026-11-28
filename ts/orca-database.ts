@@ -1,7 +1,9 @@
 // The database part of the file pane of the Orca screen (A-43): the connections of the database screen (D-1) as the tree of D-3, in the fourth part of the pane. A press on a connection opens it (`database_connect`) and lists its databases, a press on a database lists its tables (`database_tables`), as the side menu of the database screen does; the tree is drawn by the same module (database-side.ts). A press on a table selects its row and opens it as a tab of the work pane.
 // This module holds the list that `database_profiles` last answered and what each connection has opened here; the database screen holds its own (database.ts), and the two share only Rust's sessions (a connection opened in one is open in the other, and a press here reads again). The menus have no edit and no delete (the edit pane belongs to the database screen).
 // The list and the open connections (`database_connections`) are read each time the part is shown, and nothing is read at an interval.
+// The favorite tables of the project the screen follows (A-52, #1540) are read with them (`database_favorites`), and again when the project changes while the part is shown (`syncOrcaDatabasePlace`, told by the screen); they are drawn above the tree (database-side.ts), and a press on one connects when it must and opens its table as a tab. No project, no section.
 // A press on a table, and 「新規クエリ」 of a database, open a tab of the work pane (A-43, orca-database-tabs.ts), which the screen makes (`hooks`); a connection that is disconnected, deleted from the list or closed by Rust takes its tabs with it (`gone`).
+import type { DatabaseFavorite } from "./bindings/DatabaseFavorite";
 import type { DatabaseProfileView } from "./bindings/DatabaseProfileView";
 import type { DatabaseScriptOutput } from "./bindings/DatabaseScriptOutput";
 import { drawDatabaseSide, showScriptOutput, type Selected, type SideActions, type SideState } from "./database-side.js";
@@ -36,6 +38,18 @@ interface Handlers {
 }
 let hooks: Handlers = { table: () => {}, query: () => {}, gone: () => {} };
 
+// The project whose favorites the part shows: where it is (null: this machine) and its key; null while none is selected.
+export interface FavoritePlace {
+  environment: string | null;
+  project: string;
+}
+const samePlace = (a: FavoritePlace | null, b: FavoritePlace | null) => (a === null || b === null ? a === b : a.environment === b.environment && a.project === b.project);
+let place: FavoritePlace | null = null;
+let favorites: DatabaseFavorite[] = [];
+// The newest request of the favorites (a read or a change), and the newest answer that was drawn: an answer older than that, or of another project, is dropped.
+let favSeq = 0;
+let favApplied = 0;
+
 let profiles: DatabaseProfileView[] = [];
 let selected: Selected | null = null;
 const connections = new Map<string, ConnectionState>();
@@ -59,6 +73,14 @@ const databaseOf = (c: ConnectionState, name: string) => {
 function sideState(): SideState {
   return {
     selected,
+    // A favorite of a connection that is gone from the list is not drawn (the file keeps it).
+    favorites:
+      place === null
+        ? undefined
+        : favorites.flatMap((f) => {
+            const profile = profiles.find((p) => p.id === f.connection);
+            return profile === undefined ? [] : [{ profile, database: f.database, table: f.table }];
+          }),
     connections: profiles.map((profile) => {
       const c = connections.get(profile.id) ?? emptyConnection();
       return {
@@ -79,8 +101,29 @@ function sideState(): SideState {
 
 const draw = () => drawDatabaseSide($("orca-database"), sideState(), actions);
 
+function applyFavorites(at: FavoritePlace, seq: number, list: DatabaseFavorite[]) {
+  if (!samePlace(place, at) || seq < favApplied) return;
+  favApplied = seq;
+  favorites = list;
+  draw();
+}
+
+// Reads the favorites of the project that the screen follows. A failure (a file that cannot be read) shows none and goes to the log; the next change says why on a card.
+async function readFavorites() {
+  const at = place;
+  if (at === null) return;
+  const seq = ++favSeq;
+  try {
+    applyFavorites(at, seq, await invoke("database_favorites", { environment: at.environment, project: at.project }));
+  } catch (e) {
+    logError("orca-database", e);
+    applyFavorites(at, seq, []);
+  }
+}
+
 // Reads the connections and the ids that Rust holds open, and draws them. A connection that Rust holds open and this part has no state of is marked connected (its row stays closed); one that Rust closed loses what it opened; one gone from the list loses its state.
 async function read() {
+  void readFavorites();
   const seq = ++loadSeq;
   try {
     const [list, open] = await Promise.all([invoke("database_profiles"), invoke("database_connections")]);
@@ -222,6 +265,29 @@ const actions: SideActions = {
     draw();
     hooks.table(profile, database, table);
   },
+  // A favorite opens its table as a tab (A-52): a connection that is not open is opened first (a failure is the card of the connection, as for its row, and nothing opens), one that is being read or whose disconnect is on its way only selects the row.
+  pressFavorite: async (profile, database, table) => {
+    selected = { id: profile.id, database, table };
+    const c = connections.get(profile.id);
+    if (closing.has(profile.id) || c?.loading) return draw();
+    if (c?.connected !== true) {
+      await openConnection(profile);
+      if (connections.get(profile.id)?.connected !== true) return;
+    }
+    draw();
+    hooks.table(profile, database, table);
+  },
+  // The table is added to the favorites of the project, or taken off (A-52): what Rust saved is drawn, and a refusal is a card.
+  favorite: async (profile, database, table, add) => {
+    const at = place;
+    if (at === null) return;
+    const seq = ++favSeq;
+    try {
+      applyFavorites(at, seq, await invoke("database_favorite_set", { environment: at.environment, project: at.project, connection: profile.id, database, table, on: add }));
+    } catch (e) {
+      showFailure("orca-database", e);
+    }
+  },
   // The SQL of the database opens as a tab of the work pane.
   newQuery: (profile, database) => {
     selected = { id: profile.id, database, table: null };
@@ -249,6 +315,16 @@ const actions: SideActions = {
     closing.delete(profile.id);
   },
 };
+
+// Told which project the screen follows (null: none selected): its favorites are read when the part is shown, and at once when the project changes while it is.
+export function syncOrcaDatabasePlace(next: FavoritePlace | null) {
+  if (samePlace(place, next)) return;
+  place = next;
+  favorites = [];
+  if (!on) return;
+  void readFavorites();
+  draw();
+}
 
 // Told whether the part is shown: it reads the connections when it comes to be shown.
 export function syncOrcaDatabase(shown: boolean) {

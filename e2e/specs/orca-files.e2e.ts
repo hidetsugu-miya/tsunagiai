@@ -4435,9 +4435,9 @@ describe("orca: files and editor (A-18)", () => {
     await waitForCount("#orca-database .database-children .database-btn", 1);
     await dbRow("p1/d/shop").click();
     await waitForCount("#orca-database [data-key='p1/d/shop/t/orders']", 1);
+    // A table has the one row of the favorites, because the part follows a project (A-52).
     await dbRightPress("p1/d/shop/t/orders");
-    await browser.pause(200);
-    expect(await count(".menu")).toBe(0);
+    expect(await textsOf('.menu button[role="menuitem"]')).toEqual(["お気に入りに追加"]);
     await dbRightPress("p1/d/shop");
     await expect($('.menu[role="menu"]')).toBeDisplayed();
     expect(await textsOf('.menu button[role="menuitem"]')).toEqual(["新規クエリ", "データベースを閉じる"]);
@@ -4513,6 +4513,134 @@ describe("orca: files and editor (A-18)", () => {
       add,
       onceId(),
     );
+
+  // A-52: the favorite tables of the selected project, above the tree of the database part.
+  const orders = { connection: "p1", database: "shop", table: "orders" };
+  const audit = { connection: "p2", database: "ops", table: "audit" };
+  const gone = { connection: "gone", database: "x", table: "y" };
+  const favNames = () => textsOf("#orca-database .database-fav .database-name");
+  const favKey = (c: { connection: string; database: string; table: string }) => `fav/${c.connection}/d/${c.database}/t/${c.table}`;
+  const setCall = (c: { connection: string; database: string; table: string }, on: boolean) => ({ environment: null, project: "proj_example-app", ...c, on });
+  const itemTexts = () => textsOf('.menu button[role="menuitem"]');
+
+  it("draws the favorite tables of the selected project above the tree, with the database and the connection, and not those of a connection that is gone (A-52)", async () => {
+    await openDatabasePart({ database_favorites: [orders, gone, audit] });
+    expect(await waitForCalls("database_favorites")).toEqual([{ environment: null, project: "proj_example-app" }]);
+    await waitForCount("#orca-database .database-fav", 2);
+    expect(await favNames()).toEqual(["orders", "audit"]);
+    expect(await textsOf("#orca-database .database-fav .database-sub")).toEqual(["shop · Example direct", "ops · Example tunnel"]);
+    expect(await browser.execute(() => document.querySelector("#orca-database")!.firstElementChild!.className)).toBe("database-favorites");
+    expect(await count("#orca-database .database-item")).toBe(2);
+    expect(await count("#orca-database [placeholder]")).toBe(0);
+    expect(await callsOf("database_connect")).toEqual([]);
+    expect(await callsOf("database_records")).toEqual([]);
+  });
+
+  it("draws no section for a project with no favorite, and none while no project is selected, and reads when a project is selected (A-52)", async () => {
+    await openOrca(orcaOverview(sample(), worktrees()), dbFixtures({ database_favorites: [orders], orca_files_list: root() }));
+    await filesToggle().click();
+    await paneMode("データベース").click();
+    await waitForCount("#orca-database .database-item", 2);
+    expect(await count("#orca-database .database-favorites")).toBe(0);
+    expect(await callsOf("database_favorites")).toEqual([]);
+    await project("example-app").click();
+    expect(await waitForCalls("database_favorites")).toEqual([{ environment: null, project: "proj_example-app" }]);
+    await waitForCount("#orca-database .database-fav", 1);
+    await mock("database_favorites", []);
+    await project("example-api").click();
+    await waitForCount("#orca-database .database-favorites", 0);
+    expect(await callsOf("database_favorites")).toEqual([{ environment: null, project: "proj_example-api" }]);
+  });
+
+  it("reads the favorites again when another project is selected, with no other read, and draws each project's own (A-52)", async () => {
+    await openDatabasePart({ database_favorites: [orders] });
+    await waitForCount("#orca-database .database-fav", 1);
+    expect(await favNames()).toEqual(["orders"]);
+    expect(await callsOf("database_favorites")).toEqual([{ environment: null, project: "proj_example-app" }]);
+    await mock("database_favorites", [audit]);
+    await project("example-api").click();
+    expect(await waitForCalls("database_favorites")).toEqual([{ environment: null, project: "proj_example-api" }]);
+    await browser.waitUntil(async () => (await favNames()).join() === "audit", { timeoutMsg: "the favorites of the other project were never drawn" });
+    await mock("database_favorites", [orders]);
+    await project("example-app").click();
+    expect(await waitForCalls("database_favorites")).toEqual([{ environment: null, project: "proj_example-app" }]);
+    await browser.waitUntil(async () => (await favNames()).join() === "orders", { timeoutMsg: "the favorites of the first project were never drawn again" });
+    expect(await callsOf("database_profiles")).toHaveLength(1);
+  });
+
+  it("opens the connection of a favorite that is not open, and then its table as a tab, and opens only the table when the connection is open (A-52)", async () => {
+    await openDatabasePart({ database_favorites: [orders, audit], database_connect: ["shop"], database_records: shopRecords });
+    await waitForCount("#orca-database .database-fav", 2);
+    await dbRow(favKey(orders)).click();
+    expect(await waitForCalls("database_connect")).toEqual([{ id: "p1" }]);
+    expect(await waitForCalls("database_records")).toEqual([{ id: "p1", database: "shop", table: "orders", page: 0, estimate: null }]);
+    await waitForCount(".orca-database-tab .database-grid", 1);
+    expect(await dbTabs()).toEqual(["orders · Example direct"]);
+    await expect(dbDot("p1")).toHaveAttribute("data-state", "connected");
+    expect(await callsOf("database_tables")).toEqual([]);
+    await dbRow(favKey(orders)).click();
+    await waitForCalls("database_records", 2);
+    expect(await callsOf("database_connect")).toHaveLength(1);
+    expect(await dbTabs()).toEqual(["orders · Example direct"]);
+    await dbRow(favKey(audit)).click();
+    await waitForCalls("database_connect", 2);
+    expect((await callsOf("database_connect"))[1]).toEqual({ id: "p2" });
+    await waitForCount(".orca-database-tab .database-grid", 1);
+    expect(await dbTabs()).toEqual(["orders · Example direct", "audit · Example tunnel"]);
+  });
+
+  it("shows the failure to open the connection of a favorite as the card of the connection, and opens no tab (A-52)", async () => {
+    await openDatabasePart({ database_favorites: [orders], database_connect: rejects("接続できません") });
+    await waitForCount("#orca-database .database-fav", 1);
+    await dbRow(favKey(orders)).click();
+    await waitForCard("接続できません");
+    await expect(dbDot("p1")).toHaveAttribute("data-state", "closed");
+    expect(await callsOf("database_records")).toEqual([]);
+    expect(await count('.orca-tab[data-database="true"]')).toBe(0);
+    expect(await favNames()).toEqual(["orders"]);
+  });
+
+  it("adds a table to the favorites from the menu of its row, marks it with a star, and takes it off from the menu of the tree row and of the favorite row (A-52)", async () => {
+    await openShop({ database_favorites: [] });
+    await waitForCalls("database_favorites");
+    expect(await count("#orca-database .database-favorites")).toBe(0);
+    await dbRightPress("p1/d/shop/t/orders");
+    expect(await itemTexts()).toEqual(["お気に入りに追加"]);
+    await mock("database_favorite_set", [orders]);
+    await $('.menu button[role="menuitem"]').click();
+    expect(await waitForCalls("database_favorite_set")).toEqual([setCall(orders, true)]);
+    await waitForCount("#orca-database .database-fav", 1);
+    expect(await favNames()).toEqual(["orders"]);
+    expect(await count('#orca-database [data-key="p1/d/shop/t/orders"] .database-star')).toBe(1);
+    expect(await count('#orca-database [data-key="p1/d/shop/t/users"] .database-star')).toBe(0);
+    await dbRightPress("p1/d/shop/t/orders");
+    expect(await itemTexts()).toEqual(["お気に入りから外す"]);
+    await mock("database_favorite_set", []);
+    await $('.menu button[role="menuitem"]').click();
+    expect(await waitForCalls("database_favorite_set")).toEqual([setCall(orders, false)]);
+    await waitForCount("#orca-database .database-favorites", 0);
+    expect(await count("#orca-database .database-star")).toBe(0);
+    await mock("database_favorite_set", [orders]);
+    await dbRightPress("p1/d/shop/t/orders");
+    await $('.menu button[role="menuitem"]').click();
+    await waitForCount("#orca-database .database-fav", 1);
+    await dbRightPress(favKey(orders));
+    expect(await itemTexts()).toEqual(["お気に入りから外す"]);
+    await mock("database_favorite_set", []);
+    await $('.menu button[role="menuitem"]').click();
+    expect(await waitForCalls("database_favorite_set")).toEqual([setCall(orders, false)]);
+    await waitForCount("#orca-database .database-favorites", 0);
+  });
+
+  it("shows the refusal of a change of the favorites as a card and keeps the section as it was (A-52)", async () => {
+    await openShop({ database_favorites: [audit], database_favorite_set: rejects("お気に入りは 100 件までです") });
+    await waitForCount("#orca-database .database-fav", 1);
+    await dbRightPress("p1/d/shop/t/orders");
+    await $('.menu button[role="menuitem"]').click();
+    await waitForCard("お気に入りは 100 件までです");
+    expect(await favNames()).toEqual(["audit"]);
+    expect(await count("#orca-database .database-star")).toBe(1);
+  });
 
   it("opens a table of the database part as a tab named after the table and the connection, selected, with its records read (A-43)", async () => {
     await openShop();
