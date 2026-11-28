@@ -51,8 +51,6 @@ export const EDIT_SVG = icon("edit", '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d
 export const OUTDENT_SVG = icon("outdent", '<path d="M3 5h18M13 12h8M3 19h18"/><path d="M8 9l-4 3 4 3"/>');
 export const FOLDER_SVG = icon("folder", '<path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/>');
 export const CLAUDE_SVG = icon("claude", '<path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/>');
-// A-48: the mark of Antigravity in the footer (an arch with a bar across it).
-export const ANTIGRAVITY_SVG = icon("antigravity", '<path d="M4 20C6 9 9 4 12 4s6 5 8 16"/><path d="M8.5 14h7"/>');
 export const SCRATCHPAD_SVG = icon("scratchpad", '<path d="M5 4h11l3 3v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/><path d="M8 12h8M8 16h5"/>');
 // A-16: an AI CLI other than Claude in the menu of the plus (a four-pointed star).
 export const AGENT_SVG = icon("agent", '<path d="M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2z"/>');

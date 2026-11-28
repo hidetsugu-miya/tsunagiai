@@ -1,6 +1,4 @@
-import type { AiUsage } from "../../ts/bindings/AiUsage";
 import type { MachineResources } from "../../ts/bindings/MachineResources";
-import type { MachineUsage } from "../../ts/bindings/MachineUsage";
 import type { EventNotice } from "../../ts/bindings/EventNotice";
 import type { Week } from "../../ts/bindings/Week";
 import { account, boot, callsOf, claudeReady, count, holds, inbox, isoDate, mock, onceId, rejects, release, rfc, slackLoad, slackThread, slackTs, textsOf, thread, threadDetail, threadLoaded, threadMessage, timeline, timelineMessage, timers, todoData, waitForCalls, waitForCount, waitForText, weekOfToday, workspace, CARD } from "../support";
@@ -458,35 +456,20 @@ describe("footer", () => {
 });
 
 describe("footer: the resources (A-48)", () => {
-  const reset = new Date(2026, 10, 27, 11, 0).getTime();
   const machine = (name: string, extra: Partial<MachineResources> = {}): MachineResources => ({ environment: null, name, cpuPercent: 38, loadAverage: 4.52, cores: 12, memoryPercent: 10, usedBytes: 6871947674, totalBytes: 68719476736, error: null, ...extra });
   const saved = (name: string, extra: Partial<MachineResources> = {}) => machine(name, { environment: name, cpuPercent: 9, loadAverage: 1.56, cores: 18, memoryPercent: 11, ...extra });
-  const ai = (status: string, session: number | null, weekly: number | null): AiUsage => ({
-    status,
-    session: session === null ? null : { usedPercent: session, resetsAt: reset },
-    weekly: weekly === null ? null : { usedPercent: weekly, resetsAt: reset },
-  });
-  const usageOf = (environment: string | null, claude: AiUsage, antigravity: AiUsage): MachineUsage => ({ environment, name: environment ?? "この Mac", claude, antigravity });
-  const idle = ai("idle", null, null);
-  // The icon of each AI in the footer: the color of `--claude` and `--google`, and the first path of `CLAUDE_SVG` and of `ANTIGRAVITY_SVG`.
-  const CLAUDE_COLOR = "rgb(217, 119, 87)";
-  const GOOGLE_COLOR = "rgb(26, 115, 232)";
-  const CLAUDE_SHAPE = "M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4";
-  const ANTIGRAVITY_SHAPE = "M4 20C6 9 9 4 12 4s6 5 8 16";
+  const silent = { cpuPercent: null, loadAverage: null, cores: null, memoryPercent: null, usedBytes: null, totalBytes: null, error: "unavailable" };
   const start = (fixtures: Record<string, unknown> = {}) =>
     boot({ inbox: inbox(), slack_load: slackLoad, slack_timeline: timeline(heap(3), { refreshSecs: 1 }), claude_status: claudeReady, calendar_week: weekOfToday(), ...fixtures });
-  // The two readings never come by themselves in a spec that does not shorten them: only the start and the opening of the pane read.
-  const quiet = timers({ machineResources: 600_000, machineUsage: 600_000 });
+  // The reading never comes by itself in a spec that does not shorten it: only the start and the opening of the pane read.
+  const quiet = timers({ machineResources: 600_000 });
   const stats = () => textsOf("#footer-stats .stat");
   const names = () => textsOf("#footer-stats .stat-name");
-  // The weekly of each AI in the footer, machine by machine (Claude then Antigravity), and the wait for them to be drawn.
-  const ais = () => textsOf("#footer-stats .stat-ai");
-  const waitForAis = (count: number) => browser.waitUntil(async () => (await ais()).length === count, { timeoutMsg: `the footer never drew ${count} AI numbers` });
-  // The pane as it is drawn: a line for each machine's heading, group heading and row (the texts of its parts).
+  // The pane as it is drawn: a line for each machine's heading and row (the texts of its parts).
   const pane = () =>
     browser.execute(() =>
       [...document.querySelectorAll("#resource-pane-list .res-machine")].map((section) =>
-        [...section.querySelectorAll("h3, .res-group-name, .res-row")].map((n) => (n.matches(".res-row") ? [...n.children].map((c) => c.textContent).join(" ") : (n.textContent ?? ""))),
+        [...section.querySelectorAll("h3, .res-row")].map((n) => (n.matches(".res-row") ? [...n.children].map((c) => c.textContent).join(" ") : (n.textContent ?? ""))),
       ),
     );
   const open = async () => {
@@ -494,13 +477,11 @@ describe("footer: the resources (A-48)", () => {
     await expect($("#resource-pane")).toBeDisplayed();
   };
 
-  it("shows the CPU, the memory and the weekly of Claude and Antigravity of each machine, this Mac and a saved environment, as numbers at the left of the footer, before the bell, with a dash where there is none", async () => {
-    await start({ machine_resources: [machine("この Mac"), saved("PC 1")], machine_usage: [usageOf(null, ai("ok", 30, 74), idle), usageOf("PC 1", ai("ok", null, 12), ai("ok", 46, 93))], ...quiet });
-    await waitForAis(4);
+  it("shows the CPU and the memory of each machine, this Mac and a saved environment, as numbers at the left of the footer, before the bell, with a dash where there is none", async () => {
+    await start({ machine_resources: [machine("この Mac"), saved("PC 1", { memoryPercent: null })], ...quiet });
+    await waitForText("#footer-stats", "PC 1");
     expect(await names()).toEqual(["この Mac", "PC 1"]);
-    expect(await stats()).toEqual(["CPU 38%", "メモリ 10%", "CPU 9%", "メモリ 11%"]);
-    // The AI of the machine of its own row: this Mac's Claude 74% and Antigravity idle (a dash), then PC 1's Claude 12% and Antigravity 93%.
-    expect(await ais()).toEqual(["74%", "—", "12%", "93%"]);
+    expect(await stats()).toEqual(["CPU 38%", "メモリ 10%", "CPU 9%", "メモリ —"]);
     const place = await browser.execute(() => {
       const s = document.getElementById("footer-stats")!.getBoundingClientRect();
       const b = document.getElementById("footer-bell")!.getBoundingClientRect();
@@ -511,53 +492,38 @@ describe("footer: the resources (A-48)", () => {
     expect(place.beforeBell).toBe(true);
   });
 
-  it("puts the AI of a machine inside its group, names it by the aria-label of its icon with no text of its name and none on the number's group, and stands one separator between two machines", async () => {
-    await start({ machine_resources: [machine("この Mac"), saved("PC 1")], machine_usage: [usageOf(null, ai("ok", 30, 74), idle), usageOf("PC 1", ai("ok", null, 12), ai("ok", 46, 93))], ...quiet });
-    await waitForAis(4);
+  it("stands one separator between two machines, and draws no mark or number of an AI", async () => {
+    await start({ machine_resources: [machine("この Mac"), saved("PC 1")], ...quiet });
+    await waitForText("#footer-stats", "PC 1");
     const shape = await browser.execute(() => {
       const kids = [...document.getElementById("footer-stats")!.children];
       return {
         order: kids.map((k) => (k.classList.contains("stat-sep") ? "sep" : k.classList.contains("stat-machine") ? "machine" : "other")),
-        groups: kids.filter((k) => k.classList.contains("stat-machine")).map((k) => [...k.querySelectorAll(".stat-ai")].map((a) => ({ group: a.getAttribute("aria-label") ?? a.getAttribute("role"), role: a.querySelector(".stat-icon")?.getAttribute("role"), label: a.querySelector(".stat-icon")?.getAttribute("aria-label"), ai: a.querySelector(".stat-icon")?.getAttribute("data-ai"), color: a.querySelector(".stat-icon") ? getComputedStyle(a.querySelector(".stat-icon")!).color : null, shape: a.querySelector(".stat-icon svg path")?.getAttribute("d") ?? null, text: a.textContent }))),
-        outside: document.querySelectorAll("#footer-stats > .stat-ai").length,
+        parts: kids.filter((k) => k.classList.contains("stat-machine")).map((k) => [...k.children].map((c) => c.className)),
+        ai: document.querySelectorAll("#footer-stats .stat-ai, #footer-stats .stat-icon, #footer-stats svg").length,
       };
     });
     expect(shape.order).toEqual(["machine", "sep", "machine"]);
-    expect(shape.outside).toBe(0);
-    expect(shape.groups).toEqual([
-      [
-        { group: null, role: "img", label: "Claude", ai: "claude", color: CLAUDE_COLOR, shape: CLAUDE_SHAPE, text: "74%" },
-        { group: null, role: "img", label: "Antigravity", ai: "antigravity", color: GOOGLE_COLOR, shape: ANTIGRAVITY_SHAPE, text: "—" },
-      ],
-      [
-        { group: null, role: "img", label: "Claude", ai: "claude", color: CLAUDE_COLOR, shape: CLAUDE_SHAPE, text: "12%" },
-        { group: null, role: "img", label: "Antigravity", ai: "antigravity", color: GOOGLE_COLOR, shape: ANTIGRAVITY_SHAPE, text: "93%" },
-      ],
+    expect(shape.parts).toEqual([
+      ["stat-name", "stat", "stat"],
+      ["stat-name", "stat", "stat"],
     ]);
-    expect((await textsOf("#footer-stats"))[0]).not.toMatch(/Claude|AG/);
+    expect(shape.ai).toBe(0);
+    expect(await textsOf("#footer-stats")).toEqual([expect.not.stringMatching(/Claude|Antigravity/)]);
   });
 
-  it("draws a dash for a machine that gave nothing and for an AI whose status is not ok, and draws 80% and over in orange", async () => {
-    await start({
-      machine_resources: [machine("この Mac", { cpuPercent: 80, memoryPercent: 79 }), saved("PC 1", { cpuPercent: null, loadAverage: null, cores: null, memoryPercent: null, usedBytes: null, totalBytes: null, error: "unavailable" })],
-      machine_usage: [usageOf(null, ai("error", null, 90), ai("ok", null, 100)), usageOf("PC 1", ai("unavailable", null, null), ai("unavailable", null, null))],
-      ...quiet,
-    });
-    await waitForAis(4);
+  it("draws a dash for a machine that gave nothing, and draws 80% and over in orange", async () => {
+    await start({ machine_resources: [machine("この Mac", { cpuPercent: 80, memoryPercent: 79 }), saved("PC 1", silent)], ...quiet });
+    await waitForText("#footer-stats", "PC 1");
     expect(await stats()).toEqual(["CPU 80%", "メモリ 79%", "CPU —", "メモリ —"]);
-    expect(await ais()).toEqual(["—", "100%", "—", "—"]);
     const colors = await browser.execute(() => [...document.querySelectorAll("#footer-stats .stat-num")].map((n) => getComputedStyle(n).color));
     const [hot, plain] = [colors[0], colors[1]];
     expect(hot).toBe("rgb(154, 91, 0)");
     expect(plain).not.toBe(hot);
-    expect(colors.map((c) => c === hot)).toEqual([true, false, false, true, false, false, false, false]);
+    expect(colors.map((c) => c === hot)).toEqual([true, false, false, false]);
   });
 
-  it("draws no AI before the first reading of the usage is back, and nothing when there is no machine", async () => {
-    await start({ machine_usage: holds, ...quiet });
-    await waitForText("#footer-stats", "CPU 38%");
-    expect(await stats()).toEqual(["CPU 38%", "メモリ 10%"]);
-    expect(await ais()).toEqual([]);
+  it("draws nothing when there is no machine", async () => {
     await boot({ machine_resources: [], ...quiet });
     await waitForCalls("machine_resources");
     await expect($("#footer-stats")).not.toBeDisplayed();
@@ -570,9 +536,9 @@ describe("footer: the resources (A-48)", () => {
     expect(await browser.execute(() => document.querySelectorAll("#footer-stats i:not(.stat-sep)").length)).toBe(0);
   });
 
-  it("opens the pane from the right, with the heading リソース, the same place and width as the pane of the unread, and the numbers of each machine under it", async () => {
-    await start({ machine_resources: [machine("この Mac"), saved("PC 1", { cpuPercent: 85 })], machine_usage: [usageOf(null, ai("ok", null, 74), idle), usageOf("PC 1", ai("error", null, null), ai("ok", 46, 93))], ...quiet });
-    await waitForAis(4);
+  it("opens the pane from the right, with the heading リソース, the same place and width as the pane of the unread, and the CPU and the memory of each machine under it", async () => {
+    await start({ machine_resources: [machine("この Mac"), saved("PC 1", { cpuPercent: 85 })], ...quiet });
+    await waitForText("#footer-stats", "PC 1");
     await expect($("#resource-pane")).not.toBeDisplayed();
     await open();
     await expect($("#resource-pane h2")).toHaveText("リソース");
@@ -584,29 +550,19 @@ describe("footer: the resources (A-48)", () => {
     });
     expect(place).toEqual({ width: 380, right: 0, above: 0 });
     expect(await pane()).toEqual([
-      ["この Mac", "CPU 38% 4.52 / 12 コア", "メモリ 10% 6.4 / 64 GB", "Claude", "weekly 74% 金 11:00 にリセット", "Antigravity", "weekly —"],
-      ["PC 1", "CPU 85% 1.56 / 18 コア", "メモリ 11% 6.4 / 64 GB", "Claude", "weekly —", "Antigravity", "5 時間 46% 金 11:00 にリセット", "weekly 93% 金 11:00 にリセット"],
+      ["この Mac", "CPU 38% 4.52 / 12 コア", "メモリ 10% 6.4 / 64 GB"],
+      ["PC 1", "CPU 85% 1.56 / 18 コア", "メモリ 11% 6.4 / 64 GB"],
     ]);
     const hot = await browser.execute(() => [...document.querySelectorAll("#resource-pane-list .stat-num")].filter((n) => n.classList.contains("hot")).map((n) => n.textContent));
-    expect(hot).toEqual(["85%", "93%"]);
+    expect(hot).toEqual(["85%"]);
+    expect(await browser.execute(() => document.querySelectorAll("#resource-pane-list .res-group, #resource-pane-list svg").length)).toBe(0);
   });
 
   it("draws a machine that gave nothing in the pane as dashes with no small text", async () => {
-    await start({ machine_resources: [machine("この Mac", { cpuPercent: null, loadAverage: null, cores: null, memoryPercent: null, usedBytes: null, totalBytes: null, error: "unavailable" })], machine_usage: [usageOf(null, ai("unavailable", null, null), ai("unavailable", null, null))], ...quiet });
-    await waitForAis(2);
+    await start({ machine_resources: [machine("この Mac", silent)], ...quiet });
+    await waitForText("#footer-stats", "CPU —");
     await open();
-    expect(await pane()).toEqual([["この Mac", "CPU —", "メモリ —", "Claude", "weekly —", "Antigravity", "weekly —"]]);
-  });
-
-  it("draws the AI of a machine that gave nothing as dashes in the pane, though its usage was read", async () => {
-    await start({ machine_resources: [machine("この Mac"), saved("PC 1", { cpuPercent: null, loadAverage: null, cores: null, memoryPercent: null, usedBytes: null, totalBytes: null, error: "unavailable" })], machine_usage: [usageOf(null, ai("ok", null, 74), idle), usageOf("PC 1", ai("ok", 46, 93), ai("ok", null, 20))], ...quiet });
-    await waitForAis(4);
-    expect(await ais()).toEqual(["74%", "—", "—", "—"]);
-    await open();
-    expect(await pane()).toEqual([
-      ["この Mac", "CPU 38% 4.52 / 12 コア", "メモリ 10% 6.4 / 64 GB", "Claude", "weekly 74% 金 11:00 にリセット", "Antigravity", "weekly —"],
-      ["PC 1", "CPU —", "メモリ —", "Claude", "weekly —", "Antigravity", "weekly —"],
-    ]);
+    expect(await pane()).toEqual([["この Mac", "CPU —", "メモリ —"]]);
   });
 
   it("closes the pane with the close button, with the button of the footer and with a press outside it", async () => {
@@ -639,30 +595,23 @@ describe("footer: the resources (A-48)", () => {
     await expect($("#footer-bell")).toHaveAttribute("aria-expanded", "false");
   });
 
-  it("reads both commands at once when the pane is opened, and reads again by the period only", async () => {
+  it("reads the load when the pane is opened, reads again by the period only", async () => {
     await start(quiet);
     await waitForText("#footer-stats", "CPU 38%");
     const resources = await mock("machine_resources", [machine("この Mac", { cpuPercent: 51 })]);
-    const usage = await mock("machine_usage", [usageOf(null, ai("ok", null, 20), idle)]);
     await browser.pause(300);
     expect(await callsOf(resources)).toEqual([]);
-    expect(await callsOf(usage)).toEqual([]);
     await open();
     await waitForCalls(resources);
-    await waitForCalls(usage);
     expect(await callsOf(resources)).toHaveLength(1);
-    expect(await callsOf(usage)).toHaveLength(1);
     await waitForText("#resource-pane-list", "51%");
-    await waitForText("#footer-stats", "20%");
   });
 
-  it("reads the load every period and the usage by its own, one reading at a time", async () => {
-    await start(timers({ machineResources: 300, machineUsage: 700 }));
-    await waitForText("#footer-stats", "74%");
+  it("reads the load every period, one reading at a time", async () => {
+    await start(timers({ machineResources: 300 }));
+    await waitForText("#footer-stats", "CPU 38%");
     const resources = await mock("machine_resources", holds);
-    const usage = await mock("machine_usage", [usageOf(null, ai("ok", null, 74), idle)]);
     await waitForCalls(resources);
-    await waitForCalls(usage, 2);
     // The reading that is not back is not followed by another.
     await browser.pause(900);
     expect(await callsOf(resources)).toHaveLength(1);
@@ -672,17 +621,14 @@ describe("footer: the resources (A-48)", () => {
   });
 
   it("reads nothing while the window is hidden, and reads again when it is shown", async () => {
-    await start(timers({ machineResources: 300, machineUsage: 300 }));
-    await waitForText("#footer-stats", "74%");
+    await start(timers({ machineResources: 300 }));
+    await waitForText("#footer-stats", "CPU 38%");
     await browser.execute(() => Object.defineProperty(document, "hidden", { get: () => true, configurable: true }));
     const resources = await mock("machine_resources", [machine("この Mac")]);
-    const usage = await mock("machine_usage", [usageOf(null, idle, idle)]);
     await browser.pause(1000);
     expect(await callsOf(resources)).toEqual([]);
-    expect(await callsOf(usage)).toEqual([]);
     await browser.execute(() => Object.defineProperty(document, "hidden", { get: () => false, configurable: true }));
     await waitForCalls(resources);
-    await waitForCalls(usage);
   });
 
   it("draws the machines of the last reading only: a saved environment that left the list goes from the footer and from the open pane", async () => {
