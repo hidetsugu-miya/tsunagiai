@@ -9,18 +9,20 @@ title: セットアップと起動
 - Rust（stable）
 - Node.js
 - Windows では、Tauri の前提条件（Microsoft C++ Build Tools と WebView2）
-- Gmail API と Google Calendar API を有効にした Google Cloud プロジェクト
+- Gmail API、Google Calendar API と People API を有効にした Google Cloud プロジェクト
 
 ## セットアップ
 
-1. Google Cloud で Gmail API と Google Calendar API を有効にし、OAuth 同意画面を設定します。
+1. Google Cloud で Gmail API、Google Calendar API と People API を有効にし、OAuth 同意画面を設定します。
 2. 種類「デスクトップアプリ」の OAuth クライアントを作り、JSON をダウンロードします。
 3. JSON を `client_secret.json` という名前で、Tauri の `app_config_dir` に置きます。
    - macOS では `~/Library/Application Support/jp.mysis.tsunagiai/client_secret.json` です。
    - Windows では `%APPDATA%\jp.mysis.tsunagiai\client_secret.json`（`C:\Users\{ユーザー名}\AppData\Roaming\jp.mysis.tsunagiai\client_secret.json`）です。
    - ファイルが無いと、ログイン時に配置先の絶対パス付きでエラーが出ます。
 
-要求するスコープは `gmail.modify`、`calendar.readonly` と `calendar.events.owned`（予定の作成、編集、削除）です。
+要求するスコープは `gmail.modify`、`calendar.readonly`、`calendar.events.owned`（予定の作成、編集、削除）と `directory.readonly`（カレンダー画面の「ゲスト」の欄で、アカウントの組織の人を探す。探した人と、その人の予定は保存しません）です。
+`directory.readonly` は機密のスコープなので、OAuth 同意画面のデータアクセスに足しておきます。
+`directory.readonly` が付く前にログインしたアカウントは、「ゲスト」の欄で探すと「再ログイン」が表示されるので、押して許可し直します。
 予定の作成のスコープが付く前にログインしたアカウントは、予定を保存したり削除したりすると「再ログイン」が表示されるので、押して許可し直します。
 カレンダーのスコープが付く前にログインしたアカウントは、カレンダーを開くと「再ログイン」が表示されるので、押して許可し直します。
 同意画面が「外部」かつ「テスト」のままだと、リフレッシュトークンは 7 日で失効します。
@@ -38,7 +40,7 @@ npx tauri dev
 初回は「Google でログイン」を押すと、既定のブラウザが開きます。
 2 つ目以降のアカウントは、設定画面の「Google」タブにある「アカウントを追加」から同じ手順で追加します。
 リフレッシュトークンはアカウントごとに OS の資格情報の保管場所（macOS ではキーチェーン、Windows では資格情報マネージャー）へ保存されるので、次回からはログインが要りません。
-アカウントの一覧（メールアドレスのみ）は、`app_config_dir` の `accounts.json` に保存されます。
+アカウントの一覧（メールアドレスと、iCloud のアカウントの印のみ）は、`app_config_dir` の `accounts.json` に保存されます。
 「画像を表示」を押した送信者の一覧（メールアドレスのみ）は、同じ場所の `image_senders.json` に保存されます。覚えた送信者を外す画面はないので、外すにはアプリを終了してから、このファイルからそのアドレスを消してください。
 Todoist に接続している場合は、取得したタスクとプロジェクトとラベルが、同じ場所の `todoist-cache.json` に保存されます（接続できないときの表示に使い、接続を解除すると消えます）。
 表示した週の予定は、場所や説明などの詳細と参加者のメールアドレスを含めて、同じ場所の `calendar-cache.json` に保存されます（起動直後の表示に使い、アカウントを削除すると消えます）。
@@ -49,6 +51,18 @@ Slack の絵文字ピッカーの「よく使う」のために、付けた絵�
 Sentry のトークンを保存したワークスペースの ID の一覧が、同じ場所の `sentry-connections.json` に保存されます（ワークスペースの ID だけで、トークンは入りません。トークンは OS の資格情報の保管場所に保存します）。
 Claude Code の接続方式（サブスクリプションか API キーか）は、同じ場所の `claude-auth.json` に保存されます。API キーは OS の資格情報の保管場所に保存し、画面には出しません。
 Todo の要約プロンプトを編集すると、編集した指示が同じ場所の `todo-prompt.json` に保存されます（デフォルトに戻すと消えます）。
+開発の画面のデータベースのお気に入りのテーブルは、同じ場所の `database-favorites.json` に保存されます（プロジェクトごとに、接続の ID、データベースの名前、テーブルの名前だけです）。
+
+## iCloud のメールを足す
+
+iCloud のメールは、Google Cloud の設定が要りません。
+
+1. account.apple.com で、App 用パスワードを作ります（Apple Account の二要素認証が必要です）。
+2. つなぎAIの設定の「iCloud」タブに、iCloud のメールアドレスと、作った App 用パスワードを入れて「追加」を押します。
+
+つなぎAIは、`imap.mail.me.com`（ポート 993）で受信し、送信は `smtp.mail.me.com`（ポート 587）を通します。
+App 用パスワードは、OS のキーチェーンにだけ保存します。
+Apple Account のパスワードを変えると、作った App 用パスワードはすべて無効になるので、「iCloud」タブの「入れ直す」から入れ直します。
 
 ## アプリとして入れる
 
