@@ -67,6 +67,8 @@ if grep -q -E "${g}push" <<< "$cmd"; then
   fi
   grep -q -E '^\.agents/hooks/(guard-e2e|hook-log)\.sh$|^\.agents/tools/check-guard-e2e\.sh$' <<< "$changed" \
     && gate "guard-e2e.sh の自己テスト" "$top/.agents/tools/check-guard-e2e.sh"
+  grep -q -E '^\.agents/hooks/agy-adapter\.sh$|^\.agents/tools/check-agy-adapter\.sh$' <<< "$changed" \
+    && gate "agy-adapter.sh の自己テスト" "$top/.agents/tools/check-agy-adapter.sh"
   grep -q -E '^\.agents/hooks/(pre-git|hook-log)\.sh$|^\.agents/tools/(check-pre-git|check-ci|check-e2e|check-records|release-only-diff)\.sh$' <<< "$changed" \
     && gate "pre-git.sh の自己テスト" "$top/.agents/tools/check-pre-git.sh"
   grep -q -E '^\.agents/hooks/record-review\.sh$|^\.agents/tools/(range-check|check-range-check|check-ci|check-e2e|check-records|release-only-diff)\.sh$' <<< "$changed" \

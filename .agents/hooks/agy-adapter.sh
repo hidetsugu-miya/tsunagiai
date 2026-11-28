@@ -14,21 +14,33 @@ if [ -n "${TSUNAGIAI_HOOKS_DIR:-}" ]; then
   target="$TSUNAGIAI_HOOKS_DIR/$script"
 else
   here="$(cd "$(dirname "$0")" && pwd)"
-  common="$(git -C "$here" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || common=""
-  if [ -n "$common" ] && [ -x "$common/../.agents/hooks/$script" ]; then
-    target="$common/../.agents/hooks/$script"
-  else
+  if [ -d "$here/../../.git" ]; then
     target="$here/$script"
+  else
+    common="$(git -C "$here" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || common=""
+    if [ -n "$common" ] && [ -x "$common/../.agents/hooks/$script" ]; then
+      target="$common/../.agents/hooks/$script"
+    else
+      target="$here/$script"
+    fi
   fi
 fi
 
-# Extract project dir and translate Antigravity stdin JSON to Claude Code stdin JSON.
-project_dir=$(jq -r '.workspacePaths[0] // .cwd // empty' <<< "$input")
-translated=$(jq -c '
+# Extract metadata and translate Antigravity stdin JSON to Claude Code stdin JSON in a single jq call.
+{
+  IFS= read -r project_dir
+  IFS= read -r transcript_path
+  IFS= read -r agent_type
+  IFS= read -r translated
+} < <(jq -r '
   (.toolCall.name // "") as $name |
   (.toolCall.args // {}) as $args |
-  {
+  (.workspacePaths[0] // .cwd // ""),
+  (.transcriptPath // ""),
+  (.agentType // .agent_type // ""),
+  ({
     cwd: (.cwd // ""),
+    agent_type: (.agentType // .agent_type // ""),
     tool_name: (
       if $name == "run_command" then "Bash"
       elif $name == "write_file" then "Write"
@@ -43,15 +55,25 @@ translated=$(jq -c '
       else $args
       end
     )
-  }
+  } | tojson)
 ' <<< "$input")
 
-err_file=$(mktemp) || exit 1
-trap 'rm -f "$err_file"' EXIT
+# Antigravity PreToolUse payloads do not include agent_type. For guard-review.sh, identify a
+# release-verifier subagent from step 0 of its transcript (a lead session has source=USER_EXPLICIT,
+# whereas a subagent starts with a SYSTEM_MESSAGE delivered by the parent).
+if [ "$script" = "guard-review.sh" ] && [ -z "$agent_type" ] && [ -n "$transcript_path" ] && [ -r "$transcript_path" ]; then
+  if head -n 1 "$transcript_path" | jq -e '
+    .step_index == 0
+    and .source == "SYSTEM"
+    and .type == "SYSTEM_MESSAGE"
+    and ((.content // "") | test("\\[Message\\] timestamp=[^ ]+ sender=[^ ]+ priority=[^ ]+ content=You are `?release-verifier`?"))
+  ' >/dev/null 2>&1; then
+    translated=$(jq -c '.agent_type = "release-verifier"' <<< "$translated")
+  fi
+fi
 
-CLAUDE_PROJECT_DIR="${project_dir:-$PWD}" "$target" <<< "$translated" >/dev/null 2>"$err_file"
+err=$(CLAUDE_PROJECT_DIR="${project_dir:-$PWD}" "$target" <<< "$translated" 2>&1 >/dev/null)
 rc=$?
-err=$(cat "$err_file")
 
 case "$event" in
   PreToolUse)
