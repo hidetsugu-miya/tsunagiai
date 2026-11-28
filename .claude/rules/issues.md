@@ -168,5 +168,5 @@ Before the merge, only the pass or failure of the pull request goes to GitHub, a
 gh pr create --title "Slack 一覧をウォッチ式にする" --body "Closes #13"
 "$main/.claude/tools/post-checks.sh"
 gh pr merge --merge
-git -C "$main" merge --ff-only origin/main
+git -C "$main" fetch origin main && git -C "$main" merge --ff-only origin/main
 ```
