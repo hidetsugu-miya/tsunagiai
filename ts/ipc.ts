@@ -197,10 +197,10 @@ export interface Commands {
   set_read: { args: Thread & { read: boolean }; result: boolean | null };
   // Sends the mail from the account (a reply when `replyThreadId` is set). null: that account must log in again. true: sent.
   send_mail: { args: Account & { mail: OutgoingMail }; result: boolean | null };
-  // M-12: whether a file may be added to a mail that holds `held` bytes of files already (a refusal is a Japanese message); the page reads the file only after it was accepted. null: it may.
-  mail_attach_check: { args: { name: string; size: number; held: number }; result: null };
+  // M-12: whether a file may be added to a mail of `account` that holds `held` bytes of files already (a refusal is a Japanese message; the limit is the backend's of the account, Gmail's 25 MB or iCloud's, M-13); the page reads the file only after it was accepted. null: it may.
+  mail_attach_check: { args: Account & { name: string; size: number; held: number }; result: null };
   // M-12: opens the dialog that picks files, and answers them read (the dialog gives the place, never the page); an empty list when it was cancelled.
-  mail_attach_pick: { args: { held: number }; result: PickedAttachment[] };
+  mail_attach_pick: { args: Account & { held: number }; result: PickedAttachment[] };
   fetch_images: { args: { urls: string[] }; result: Record<string, string> };
   image_sender_known: { args: { froms: string[] }; result: string[] };
   remember_image_sender: { args: { from: string }; result: null };

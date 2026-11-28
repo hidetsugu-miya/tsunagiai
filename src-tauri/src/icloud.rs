@@ -9,12 +9,14 @@ use std::{fmt, path::Path, sync::Arc, time::Duration};
 mod message;
 mod modify;
 mod read;
+mod send;
 mod sync;
 mod threading;
 
 pub use modify::{Change, Move};
 use rustls::{pki_types::ServerName, ClientConfig};
 use rustls_platform_verifier::BuilderVerifierExt;
+pub use send::ATTACHMENTS_LIMIT;
 use serde::Serialize;
 use tauri::{AppHandle, State};
 use tokio::{
@@ -29,6 +31,7 @@ use crate::{
     disk_cache,
     gmail::{log_failure, ApiError, Sync, SyncState, ThreadDetail, ThreadItem},
     keychain,
+    mail_send::OutgoingMail,
 };
 
 const HOST: &str = "imap.mail.me.com";
@@ -238,6 +241,11 @@ pub async fn change(address: &str, id: &str, change: Change) -> Result<Option<bo
     done.map_err(|_| ApiError::from("iCloud のメールの変更がタイムアウトしました"))??;
     // `true`, not `()`: `Some(())` reaches JS as null, the same as `None` (login required).
     Ok(Some(true))
+}
+
+/// Sends the mail from `address` (a reply when the mail names a thread of the account). `Ok(None)` means the password must be entered again; `Ok(Some(true))` means iCloud took the mail.
+pub async fn send(address: &str, mail: &OutgoingMail) -> Result<Option<bool>, ApiError> {
+    send::send(address, mail).await
 }
 
 /// The address as it is kept: trimmed and in lower case (an address has one entry however it is typed), with one `@` between a name and a domain.

@@ -903,6 +903,29 @@ describe("inbox of an iCloud account", () => {
     await expect($(".toast")).toHaveText(expect.stringContaining("ゴミ箱へ移動しました"));
   });
 
+  it("writes a new mail from the iCloud account when there is no Google account, and sends it with the iCloud address", async () => {
+    const send = await mock("send_mail", true);
+    await $("#mail-compose").click();
+    await expect($("#new-mail")).toBeDisplayed();
+    await expect($("#new-mail-from-text")).toHaveText(icloudAccount);
+    await $("#new-mail-to-input").setValue("dan@example.com");
+    await browser.keys(["Enter"]);
+    await $("#new-mail-subject").setValue("Hello");
+    await $("#new-mail-body").setValue("Hi");
+    await $("#new-mail-send").click();
+    expect(await waitForCalls(send)).toEqual([{ account: icloudAccount, mail: { to: ["dan@example.com"], cc: [], bcc: [], subject: "Hello", body: "Hi" } }]);
+    await expect($("#threads")).toBeDisplayed();
+  });
+
+  it("offers the Google accounts and then the iCloud ones as the sender", async () => {
+    await boot({ inbox: inbox(), icloud_accounts: [{ address: icloudAccount }] });
+    await waitForCount("#unread-threads li", 2);
+    await $("#mail-compose").click();
+    await expect($("#new-mail")).toBeDisplayed();
+    expect(await textsOf("#new-mail-from-select option")).toEqual([account, icloudAccount]);
+    await expect($("#new-mail-from-select")).toHaveValue(account);
+  });
+
   it("makes every unread thread read with set_read, one request each, with the iCloud address", async () => {
     const setRead = await mock("set_read", true);
     await $("#mail-mark-all").click();

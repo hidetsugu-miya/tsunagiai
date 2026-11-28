@@ -14,7 +14,7 @@ use tauri_plugin_dialog::DialogExt;
 #[cfg(test)]
 use ts_rs::TS;
 
-use crate::mail_send::{check_attachment, MAX_ATTACHMENTS};
+use crate::{auth::config_dir, mail, mail_send::check_attachment};
 
 /// A file the open dialog picked: its name, its size, and its bytes as base64.
 #[derive(Serialize, Debug, PartialEq)]
@@ -27,10 +27,20 @@ pub struct PickedAttachment {
     pub data: String,
 }
 
-/// Whether the file may be added to a mail that holds `held` bytes of files already. A refusal is a Japanese message.
+/// Whether the file may be added to a mail of `account` that holds `held` bytes of files already: the total that the account's backend takes is the limit (Gmail 25 MB, iCloud what its SMTP's SIZE leaves, M-13). A refusal is a Japanese message.
+fn check_for(dir: &Path, account: &str, name: &str, size: u64, held: u64) -> Result<(), String> {
+    check_attachment(name, size, held, mail::attachment_limit(dir, account)?)
+}
+
 #[tauri::command]
-pub fn mail_attach_check(name: String, size: u64, held: u64) -> Result<(), String> {
-    check_attachment(&name, size, held)
+pub fn mail_attach_check(
+    app: AppHandle,
+    account: String,
+    name: String,
+    size: u64,
+    held: u64,
+) -> Result<(), String> {
+    check_for(&config_dir(&app)?, &account, &name, size, held)
 }
 
 /// The last part of the path, which is the name the mail carries.
@@ -40,8 +50,8 @@ fn name_of(path: &Path) -> Result<String, String> {
         .ok_or_else(|| "ファイルの場所が正しくありません".to_owned())
 }
 
-/// Reads the files at `paths`, one after another, with `held` bytes of files in the mail already. One that may not be added, or cannot be read, refuses all of them: nothing is returned.
-fn read_picked(paths: &[PathBuf], held: u64) -> Result<Vec<PickedAttachment>, String> {
+/// Reads the files at `paths`, one after another, with `held` bytes of files in the mail already, within `limit` in all. One that may not be added, or cannot be read, refuses all of them: nothing is returned.
+fn read_picked(paths: &[PathBuf], held: u64, limit: u64) -> Result<Vec<PickedAttachment>, String> {
     let mut total = held;
     let mut out = Vec::with_capacity(paths.len());
     for path in paths {
@@ -51,14 +61,14 @@ fn read_picked(paths: &[PathBuf], held: u64) -> Result<Vec<PickedAttachment>, St
         if !meta.is_file() {
             return Err(format!("{name} はファイルではありません"));
         }
-        check_attachment(&name, meta.len(), total)?;
+        check_attachment(&name, meta.len(), total, limit)?;
         // The file may have grown since its size was read: the read stops one byte past what may still be added, and the size read is checked again.
         let mut bytes = Vec::with_capacity(meta.len() as usize);
         File::open(path)
-            .and_then(|f| f.take(MAX_ATTACHMENTS - total + 1).read_to_end(&mut bytes))
+            .and_then(|f| f.take(limit - total + 1).read_to_end(&mut bytes))
             .map_err(|_| unreadable())?;
         let size = bytes.len() as u64;
-        check_attachment(&name, size, total)?;
+        check_attachment(&name, size, total, limit)?;
         total += size;
         out.push(PickedAttachment {
             name,
@@ -74,8 +84,10 @@ fn read_picked(paths: &[PathBuf], held: u64) -> Result<Vec<PickedAttachment>, St
 pub async fn mail_attach_pick(
     app: AppHandle,
     window: WebviewWindow,
+    account: String,
     held: u64,
 ) -> Result<Vec<PickedAttachment>, String> {
+    let limit = mail::attachment_limit(&config_dir(&app)?, &account)?;
     let (sender, receiver) = tokio::sync::oneshot::channel();
     app.dialog()
         .file()
@@ -96,7 +108,7 @@ pub async fn mail_attach_pick(
                 .map_err(|_| "ファイルの場所が正しくありません".to_owned())
         })
         .collect::<Result<Vec<_>, _>>()?;
-    tokio::task::spawn_blocking(move || read_picked(&paths, held))
+    tokio::task::spawn_blocking(move || read_picked(&paths, held, limit))
         .await
         .map_err(|_| "ファイルを読めません".to_owned())?
 }
@@ -104,6 +116,10 @@ pub async fn mail_attach_pick(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        accounts::{save_accounts, Account},
+        mail_send::MAX_ATTACHMENTS,
+    };
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir =
@@ -114,16 +130,33 @@ mod tests {
     }
 
     #[test]
-    fn the_check_is_the_one_the_send_makes() {
-        assert!(mail_attach_check("a.txt".into(), 10, 0).is_ok());
+    fn the_check_is_the_one_the_send_makes_with_the_limit_of_the_account() {
+        let dir = temp_dir("check");
+        let icloud = Account {
+            address: "b@icloud.com".into(),
+            kind: crate::accounts::AccountKind::Icloud,
+        };
+        save_accounts(&dir, &[Account::gmail("a@example.com"), icloud]).unwrap();
+        let (gmail, icloud_limit) = ("a@example.com", crate::icloud::ATTACHMENTS_LIMIT);
+        assert!(check_for(&dir, gmail, "a.txt", 10, 0).is_ok());
         assert_eq!(
-            mail_attach_check("a.txt".into(), 1, MAX_ATTACHMENTS),
+            check_for(&dir, gmail, "a.txt", 1, MAX_ATTACHMENTS),
             Err("添付の合計は 25 MB までです".into())
         );
         assert_eq!(
-            mail_attach_check("a.txt".into(), 0, 0),
+            check_for(&dir, gmail, "a.txt", 0, 0),
             Err("a.txt は空のファイルです".into())
         );
+        // The same size that Gmail takes is too much for iCloud, whose SMTP takes 27 MB of the whole message.
+        let size = MAX_ATTACHMENTS - 1;
+        assert!(check_for(&dir, gmail, "a.bin", size, 0).is_ok());
+        assert_eq!(
+            check_for(&dir, "b@icloud.com", "a.bin", size, 0),
+            Err("添付の合計は 19 MB までです".into())
+        );
+        assert!(check_for(&dir, "b@icloud.com", "a.bin", icloud_limit, 0).is_ok());
+        assert!(check_for(&dir, "b@icloud.com", "a.bin", 1, icloud_limit).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -131,7 +164,12 @@ mod tests {
         let dir = temp_dir("read");
         std::fs::write(dir.join("a.txt"), b"hello").unwrap();
         std::fs::write(dir.join("請求書.pdf"), [0u8, 255, 7]).unwrap();
-        let got = read_picked(&[dir.join("a.txt"), dir.join("請求書.pdf")], 0).unwrap();
+        let got = read_picked(
+            &[dir.join("a.txt"), dir.join("請求書.pdf")],
+            0,
+            MAX_ATTACHMENTS,
+        )
+        .unwrap();
         assert_eq!(
             got,
             [
@@ -157,25 +195,33 @@ mod tests {
         std::fs::write(dir.join("empty.txt"), b"").unwrap();
         std::fs::create_dir(dir.join("folder")).unwrap();
         assert_eq!(
-            read_picked(&[dir.join("a.txt"), dir.join("empty.txt")], 0),
+            read_picked(
+                &[dir.join("a.txt"), dir.join("empty.txt")],
+                0,
+                MAX_ATTACHMENTS
+            ),
             Err("empty.txt は空のファイルです".into())
         );
         assert_eq!(
-            read_picked(&[dir.join("a.txt"), dir.join("folder")], 0),
+            read_picked(&[dir.join("a.txt"), dir.join("folder")], 0, MAX_ATTACHMENTS),
             Err("folder はファイルではありません".into())
         );
         assert_eq!(
-            read_picked(&[dir.join("missing.txt")], 0),
+            read_picked(&[dir.join("missing.txt")], 0, MAX_ATTACHMENTS),
             Err("missing.txt を読めません".into())
         );
         // The files already in the mail count, and so do the ones read before.
         assert_eq!(
-            read_picked(&[dir.join("a.txt")], MAX_ATTACHMENTS - 4),
+            read_picked(&[dir.join("a.txt")], MAX_ATTACHMENTS - 4, MAX_ATTACHMENTS),
             Err("添付の合計は 25 MB までです".into())
         );
-        assert!(read_picked(&[dir.join("a.txt")], MAX_ATTACHMENTS - 5).is_ok());
+        assert!(read_picked(&[dir.join("a.txt")], MAX_ATTACHMENTS - 5, MAX_ATTACHMENTS).is_ok());
         assert_eq!(
-            read_picked(&[dir.join("a.txt"), dir.join("a.txt")], MAX_ATTACHMENTS - 9),
+            read_picked(
+                &[dir.join("a.txt"), dir.join("a.txt")],
+                MAX_ATTACHMENTS - 9,
+                MAX_ATTACHMENTS
+            ),
             Err("添付の合計は 25 MB までです".into())
         );
         std::fs::remove_dir_all(dir).unwrap();
@@ -187,7 +233,7 @@ mod tests {
         let big = File::create(dir.join("big.bin")).unwrap();
         big.set_len(MAX_ATTACHMENTS + 1).unwrap();
         assert_eq!(
-            read_picked(&[dir.join("big.bin")], 0),
+            read_picked(&[dir.join("big.bin")], 0, MAX_ATTACHMENTS),
             Err("添付の合計は 25 MB までです".into())
         );
         std::fs::remove_dir_all(dir).unwrap();
@@ -196,7 +242,7 @@ mod tests {
     #[test]
     fn a_path_with_no_name_is_refused() {
         assert_eq!(
-            read_picked(&[PathBuf::from("/")], 0),
+            read_picked(&[PathBuf::from("/")], 0, MAX_ATTACHMENTS),
             Err("ファイルの場所が正しくありません".into())
         );
     }

@@ -41,9 +41,14 @@ function drawFrom(accounts: string[]) {
   fromSelect().value = account;
 }
 
-// Opens the screen with nothing written, from the first account.
-function openCompose() {
-  const accounts = accountList();
+// Opens the screen with nothing written, from the first account: the Google accounts, then the iCloud ones (M-13).
+async function openCompose() {
+  let accounts: string[];
+  try {
+    accounts = [...accountList(), ...(await invoke("icloud_accounts")).map((a) => a.address)];
+  } catch (e) {
+    return showFailure("mail-compose", e);
+  }
   if (accounts.length === 0) return;
   openCount++;
   clearUndo(side);
@@ -126,7 +131,7 @@ export function initMailCompose() {
   initMailClaude();
   setMailKey(() => (currentScreen() === "new-mail" ? `new:${openCount}` : null));
   recipients.init();
-  attachments = mailAttachments($("new-mail"), $("new-mail-attach"), $<HTMLButtonElement>("new-mail-attach-open"), "mail-compose");
+  attachments = mailAttachments($("new-mail"), $("new-mail-attach"), $<HTMLButtonElement>("new-mail-attach-open"), "mail-compose", () => account);
   $("mail-compose").onclick = openCompose;
   $("new-mail-back").onclick = leave;
   $("new-mail-discard").onclick = leave;

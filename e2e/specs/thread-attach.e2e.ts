@@ -1,4 +1,4 @@
-import { boot, callsOf, fire, holds, image, inbox, mock, note, PNG, rejects, release, rowOf, textsOf, threadDetail, threadLoaded, waitForCalls, waitForCount, CARD, CARDS } from "../support";
+import { account, boot, callsOf, fire, holds, icloudAccount, icloudInbox, image, inbox, mock, note, PNG, rejects, release, rowOf, textsOf, threadDetail, threadLoaded, waitForCalls, waitForCount, CARD, CARDS } from "../support";
 import type { PickedAttachment } from "../../ts/bindings/PickedAttachment";
 
 // M-12 (#491): the files of a reply and of a new mail: the clip beside "送信" (the open dialog, which Rust opens), a file dropped on the field or pasted in it, the chips under the text (name, size, ×) and the files that go with `send_mail`.
@@ -64,7 +64,7 @@ describe("mail: attaching files", () => {
       const pick = await mock("mail_attach_pick", [pdf, picked("big.zip", "z", 1572864)]);
       await $("#mail-reply-attach-open").click();
       await waitForChips(strip, 2);
-      expect(await callsOf(pick)).toEqual([{ held: 0 }]);
+      expect(await callsOf(pick)).toEqual([{ account, held: 0 }]);
       expect(await names(strip)).toEqual(["請求書.pdf", "big.zip"]);
       expect(await sizes(strip)).toEqual(["3 B", "1.5 MB"]);
       await expect($(strip)).toBeDisplayed();
@@ -72,7 +72,7 @@ describe("mail: attaching files", () => {
       await $("#mail-reply-attach-open").click();
       await waitForChips(strip, 3);
       expect(await sizes(strip)).toEqual(["3 B", "1.5 MB", "12 KB"]);
-      expect(await callsOf("mail_attach_pick")).toEqual([{ held: 1572864 + 3 }]);
+      expect(await callsOf("mail_attach_pick")).toEqual([{ account, held: 1572864 + 3 }]);
     });
 
     it("adds nothing when the dialog is cancelled", async () => {
@@ -90,7 +90,7 @@ describe("mail: attaching files", () => {
       expect(await fire("dragover", "#mail-reply", [note])).toBe(true);
       expect(await fire("drop", "#mail-reply", [note])).toBe(true);
       await waitForChips(strip, 1);
-      expect(await callsOf(check)).toEqual([{ name: "notes.txt", size: 5, held: 0 }]);
+      expect(await callsOf(check)).toEqual([{ account, name: "notes.txt", size: 5, held: 0 }]);
       expect(await names(strip)).toEqual(["notes.txt"]);
       expect(await sizes(strip)).toEqual(["5 B"]);
       await expect($("#mail-reply")).not.toHaveElementClass("dropping");
@@ -103,14 +103,14 @@ describe("mail: attaching files", () => {
       expect(await count0(strip)).toBe(0);
       expect(await fire("paste", "#mail-reply-body-input .ProseMirror", [image()])).toBe(true);
       await waitForChips(strip, 1);
-      expect(await callsOf(check)).toEqual([{ name: "shot.png", size: PNG_SIZE, held: 0 }]);
+      expect(await callsOf(check)).toEqual([{ account, name: "shot.png", size: PNG_SIZE, held: 0 }]);
       expect(await names(strip)).toEqual(["shot.png"]);
       // The next file is checked against the first.
       await fire("drop", "#mail-reply", [note]);
       await waitForChips(strip, 2);
       expect(await callsOf(check)).toEqual([
-        { name: "shot.png", size: PNG_SIZE, held: 0 },
-        { name: "notes.txt", size: 5, held: PNG_SIZE },
+        { account, name: "shot.png", size: PNG_SIZE, held: 0 },
+        { account, name: "notes.txt", size: 5, held: PNG_SIZE },
       ]);
     });
 
@@ -243,6 +243,49 @@ describe("mail: attaching files", () => {
     });
   });
 
+  // M-13: the limit of the files is the backend's of the account that sends, so Rust is asked with that account.
+  describe("an iCloud account", () => {
+    beforeEach(async () => {
+      await boot({ inbox: icloudInbox(), icloud_accounts: [{ address: icloudAccount }] });
+      await waitForCount("#unread-threads li", 2);
+    });
+
+    it("asks Rust about a dropped file and about the dialog's pick with the iCloud address, in a reply", async () => {
+      await mock("thread", threadDetail(subject, "Hello from Alice", false));
+      await rowOf("unread-threads", "First unread").$(".subject").click();
+      await threadLoaded();
+      await $("#mail-reply-open").click();
+      const check = await mock("mail_attach_check", null);
+      await fire("drop", "#mail-reply", [note]);
+      await waitForChips("#mail-reply-attach", 1);
+      expect(await callsOf(check)).toEqual([{ account: icloudAccount, name: "notes.txt", size: 5, held: 0 }]);
+      const pick = await mock("mail_attach_pick", [pdf]);
+      await $("#mail-reply-attach-open").click();
+      await waitForChips("#mail-reply-attach", 2);
+      expect(await callsOf(pick)).toEqual([{ account: icloudAccount, held: 5 }]);
+    });
+
+    it("shows the refusal of the iCloud limit on a card, and sends the files with the iCloud address from a new mail", async () => {
+      await $("#mail-compose").click();
+      await expect($("#new-mail")).toBeDisplayed();
+      await mock("mail_attach_check", rejects("添付の合計は 19 MB までです"));
+      await fire("drop", "#new-mail", [note]);
+      await expect($(CARD)).toHaveText(expect.stringContaining("添付の合計は 19 MB までです"));
+      await expect($("#new-mail-attach")).not.toBeDisplayed();
+      const check = await mock("mail_attach_check", null);
+      const send = await mock("send_mail", true);
+      await fire("drop", "#new-mail", [note]);
+      await waitForChips("#new-mail-attach", 1);
+      expect(await callsOf(check)).toEqual([{ account: icloudAccount, name: "notes.txt", size: 5, held: 0 }]);
+      await $("#new-mail-to-input").setValue("dan@example.com");
+      await browser.keys(["Enter"]);
+      await $("#new-mail-body").setValue("Hi");
+      await $("#new-mail-send").click();
+      const [call] = await waitForCalls(send);
+      expect(call).toMatchObject({ account: icloudAccount, mail: { attachments: [{ name: "notes.txt", data: note.base64 }] } });
+    });
+  });
+
   describe("the new mail", () => {
     const strip = "#new-mail-attach";
     const compose = async () => {
@@ -277,14 +320,14 @@ describe("mail: attaching files", () => {
       const pick = await mock("mail_attach_pick", [pdf]);
       await $("#new-mail-attach-open").click();
       await waitForChips(strip, 1);
-      expect(await callsOf(pick)).toEqual([{ held: 0 }]);
+      expect(await callsOf(pick)).toEqual([{ account, held: 0 }]);
       await fire("drop", "#new-mail", [note]);
       await waitForChips(strip, 2);
       await fire("paste", "#new-mail-body", [image()]);
       await waitForChips(strip, 3);
       expect(await callsOf(check)).toEqual([
-        { name: "notes.txt", size: 5, held: 3 },
-        { name: "shot.png", size: PNG_SIZE, held: 8 },
+        { account, name: "notes.txt", size: 5, held: 3 },
+        { account, name: "shot.png", size: PNG_SIZE, held: 8 },
       ]);
       expect(await names(strip)).toEqual(["請求書.pdf", "notes.txt", "shot.png"]);
       expect(await sizes(strip)).toEqual(["3 B", "5 B", `${PNG_SIZE} B`]);

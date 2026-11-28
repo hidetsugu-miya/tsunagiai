@@ -12,7 +12,7 @@ use crate::{
 };
 
 /// What runs the mail operations of an account. A kind with no backend has no variant: `backend` refuses it.
-/// An iCloud account reads its mail, changes it (read, archive, delete and their undo) and syncs (M-13); sending comes with a later part, and `send` refuses it until then.
+/// An iCloud account reads its mail, changes it (read, archive, delete and their undo), syncs and sends (M-13).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
     Gmail,
@@ -26,11 +26,6 @@ pub fn backend(kind: AccountKind) -> Result<Backend, String> {
     }
 }
 
-/// What an entry says of an operation that an iCloud account cannot do yet.
-fn icloud_unsupported(what: &str) -> ApiError {
-    format!("iCloud のメールの{what}にはまだ対応していません").into()
-}
-
 /// Does the move `how` to the thread `id` of the iCloud account `account`.
 async fn icloud_move(account: &str, id: &str, how: icloud::Move) -> Result<Option<bool>, ApiError> {
     icloud::change(account, id, icloud::Change::Move(how)).await
@@ -39,6 +34,14 @@ async fn icloud_move(account: &str, id: &str, how: icloud::Move) -> Result<Optio
 /// The backend of `account`, by the kind `accounts.json` gives it.
 pub fn backend_of(dir: &Path, account: &str) -> Result<Backend, String> {
     backend(accounts::kind(dir, account)?)
+}
+
+/// The total of the files that a mail of `account` may carry (M-12, M-13): Gmail's 25 MB, or what the SMTP of iCloud leaves of its message size.
+pub fn attachment_limit(dir: &Path, account: &str) -> Result<u64, String> {
+    Ok(match backend_of(dir, account)? {
+        Backend::Gmail => mail_send::MAX_ATTACHMENTS,
+        Backend::Icloud => icloud::ATTACHMENTS_LIMIT,
+    })
 }
 
 /// `Ok(None)` means `account` must log in again, as in `gmail`.
@@ -135,7 +138,7 @@ pub async fn send(
 ) -> Result<Option<bool>, ApiError> {
     match backend_of(dir, account)? {
         Backend::Gmail => mail_send::send(dir, auth, account, mail).await,
-        Backend::Icloud => Err(icloud_unsupported("送信")),
+        Backend::Icloud => icloud::send(account, mail).await,
     }
 }
 
@@ -188,32 +191,18 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// Sending, which an iCloud account cannot do yet, is refused before it builds a request: no token is read and nothing is sent.
-    /// (The reads and the changes are not here: they read the keychain and ask iCloud.)
+    /// The files of a mail may total what the account's backend takes: Gmail's 25 MB, and for iCloud what its SMTP's SIZE leaves after base64.
     #[test]
-    fn the_operations_an_icloud_account_cannot_do_yet_are_refused() {
-        let dir = temp_dir("entries");
+    fn the_limit_of_the_files_follows_the_backend() {
+        let dir = temp_dir("limit");
         with_icloud(&dir);
-        let auth = Auth::new();
-        let mail = OutgoingMail {
-            to: vec!["a@example.com".into()],
-            cc: vec![],
-            bcc: vec![],
-            subject: "s".into(),
-            body: "b".into(),
-            markdown: None,
-            reply_thread_id: None,
-            attachments: None,
-        };
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let (d, a, who) = (dir.as_path(), &auth, "b@icloud.com");
-        let refused = |e: ApiError| {
-            e.to_string().contains("iCloud") && e.to_string().contains("まだ対応していません")
-        };
-        assert!(rt.block_on(send(d, a, who, &mail)).is_err_and(refused));
+        assert_eq!(
+            attachment_limit(&dir, "a@example.com"),
+            Ok(mail_send::MAX_ATTACHMENTS)
+        );
+        let limit = attachment_limit(&dir, "b@icloud.com").unwrap();
+        assert_eq!(limit, icloud::ATTACHMENTS_LIMIT);
+        assert!(limit < mail_send::MAX_ATTACHMENTS);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

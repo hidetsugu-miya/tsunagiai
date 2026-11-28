@@ -164,6 +164,21 @@ describe("thread of an iCloud account", () => {
     await waitForCount("#unread-threads li", 1);
   });
 
+  it("sends a reply with the iCloud address as the account and the iCloud thread's ID", async () => {
+    await mock("thread", threadDetail("First unread", "Hello from Alice", false));
+    const send = await mock("send_mail", true);
+    await rowOf("unread-threads", "First unread").$(".subject").click();
+    await threadLoaded();
+    await $("#mail-reply-open").click();
+    const field = $("#mail-reply-body-input .ProseMirror");
+    await browser.waitUntil(async () => (await field.getAttribute("contenteditable")) === "true");
+    await field.click();
+    await browser.keys("Thanks".split(""));
+    await $("#mail-reply-send").click();
+    const [call] = await waitForCalls(send);
+    expect(call).toMatchObject({ account: icloudAccount, mail: { subject: "First unread", body: "Thanks\n", markdown: true, replyThreadId: "i1" } });
+  });
+
   it("archives and trashes the open thread with the iCloud address", async () => {
     await mock("thread", threadDetail("First unread", "Hello from Alice", true));
     await mock("set_read", true);

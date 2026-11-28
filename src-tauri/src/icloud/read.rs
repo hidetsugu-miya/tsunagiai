@@ -194,7 +194,7 @@ fn list_items(account: &str, mails: &[Raw], in_inbox: usize) -> Vec<ThreadItem> 
     items
 }
 
-fn quote(id: &str) -> String {
+pub(super) fn quote(id: &str) -> String {
     format!("\"{}\"", id.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
