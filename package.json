@@ -13,7 +13,7 @@
     "e2e:check": "tsc --noEmit -p e2e/tsconfig.json"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.6.7",
+    "@biomejs/biome": "^2.6.8",
     "@codemirror/commands": "^6.11.1",
     "@codemirror/lang-cpp": "^6.0.3",
     "@codemirror/lang-css": "^6.3.1",
