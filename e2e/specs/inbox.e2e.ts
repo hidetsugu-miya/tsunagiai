@@ -955,6 +955,8 @@ describe("inbox of an iCloud account", () => {
     await $("#settings-tab-icloud").click();
     await waitForCalls("icloud_accounts");
     await mock("icloud_remove_account", []);
+    // The list is read again after the unlink, and it no longer has the account.
+    await mock("inbox", { ...icloudInbox(), threads: [], historyIds: {} });
     await $(`button[aria-label="${icloudAccount} の接続を解除"]`).click();
     await $('[role="alertdialog"]').$("button=解除").click();
     await waitForCalls("icloud_remove_account");

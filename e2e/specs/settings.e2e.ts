@@ -1,7 +1,7 @@
 import type { NotionAccount } from "../../ts/bindings/NotionAccount";
 import type { SentryConnection } from "../../ts/bindings/SentryConnection";
 import { typeIn } from "../orca-support";
-import { account, boot, copiedTexts, logLine, skill, stubClipboard, checked, chooseAppearance, chooseOption, fontSettings, formationConsent, chooseTheme, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, emitEvent, holds, inbox, mock, rejects, onceId, release, sendClaudeCode, slackLoad, socketStatus, workspace, terminalThemes, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf, CARD, CARDS, waitForLog } from "../support";
+import { account, boot, thread, copiedTexts, logLine, skill, stubClipboard, checked, chooseAppearance, chooseOption, fontSettings, formationConsent, chooseTheme, ghosttyImport, hiddenChannel, claudeKeyReady, claudeLoggedOut, claudeMissing, claudeReady, claudeSettings, connection, count, emitEvent, holds, inbox, mock, rejects, onceId, release, sendClaudeCode, slackLoad, socketStatus, workspace, terminalThemes, textsOf, timeline, todoData, todoPrompt, waitForCalls, waitForCount, waitForText, weekOfToday, callsOf, CARD, CARDS, waitForLog } from "../support";
 
 type Tab = "google" | "icloud" | "calendar" | "todoist" | "slack" | "notion" | "claude" | "skill" | "plugins" | "orca" | "menu" | "font" | "update" | "log";
 
@@ -2355,8 +2355,10 @@ describe("settings: iCloud (M-13)", () => {
   const second = { address: "taro@me.com" };
   const ok = { state: "ok" };
   const lapsed = { state: "needsLogin" };
-  const openIcloud = async (list: unknown[], check: unknown = ok) => {
-    await boot({ inbox: inbox(), slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, icloud_accounts: list, icloud_check: check });
+  // The list of mail as the inbox gives it with an iCloud thread of `first` added to the Google ones.
+  const withIcloud = () => ({ ...inbox(), threads: [...inbox().threads, thread("i1", "iCloud unread", true, first.address)], historyIds: { ...inbox().historyIds, [first.address]: "1700:5" } });
+  const openIcloud = async (list: unknown[], check: unknown = ok, mail: unknown = inbox()) => {
+    await boot({ inbox: mail, slack_load: slackLoad, slack_check: checked([]), claude_status: claudeMissing, icloud_accounts: list, icloud_check: check });
     await $("#nav-settings").click();
     await expect($("#settings")).toBeDisplayed();
     await openTab("icloud");
@@ -2453,6 +2455,30 @@ describe("settings: iCloud (M-13)", () => {
     await expect($("#icloud-add-button")).toBeEnabled();
     // The login just accepted needs no second login to draw the state.
     expect(await callsOf("icloud_check")).toEqual([]);
+  });
+
+  it("reads the list of mail again after an add, so the mail of the new account shows", async () => {
+    await openIcloud([]);
+    await waitForCount("#unread-threads li", 2);
+    await mock("inbox", withIcloud());
+    await mock("icloud_add_account", [first]);
+    await addForm("hanako@icloud.com", "abcd-efgh-ijkl-mnop");
+    await waitForCalls("inbox");
+    await waitForCount("#unread-threads li", 3);
+  });
+
+  it("drops the rows of an unlinked account at once and reads the list again", async () => {
+    await openIcloud([first], ok, withIcloud());
+    await waitForCount("#unread-threads li", 3);
+    await mock("icloud_remove_account", []);
+    // The read of the list is held, so only what the unlink itself drew can be seen.
+    await mock("inbox", holds);
+    await unlinkOf(first.address).click();
+    await $('[role="alertdialog"]').$("button=解除").click();
+    await waitForCalls("inbox");
+    await waitForCount("#unread-threads li", 2);
+    await release("inbox", inbox());
+    await waitForCount("#unread-threads li", 2);
   });
 
   it("shows the failure on a card and leaves the list, the address and an empty password field when iCloud refuses the login", async () => {

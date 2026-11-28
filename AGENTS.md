@@ -12,7 +12,6 @@ User-facing text is in `README.md` and `docs/`.
 - The only user is the owner.
 - Gmail accounts, and iCloud accounts (M-13: IMAP with an App-specific password), are supported.
 - Other mail providers (generic IMAP, Outlook and so on) are out of scope.
-- Other mail providers (generic IMAP, Outlook and so on) are out of scope.
 - Calendar, Todoist, Slack, Orca and Jira are integrations around the mail client.
 - Jira means Jira Cloud (`https://{name}.atlassian.net`) only; the self-hosted Jira is out of scope.
 - The app updates itself on macOS (Apple Silicon) only.

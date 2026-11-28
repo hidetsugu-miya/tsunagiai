@@ -5,9 +5,11 @@ import type { IcloudCheck } from "./bindings/IcloudCheck";
 import { $, tag } from "./dom.js";
 import { avatarColor, initials } from "./format.js";
 import { confirmUnlink, hintPopup, toggleHint } from "./hint.js";
-import { historyIds } from "./inbox.js";
+import { forgetRemoved, historyIds, load } from "./inbox.js";
+import { rows, updateBadge } from "./inbox-rows.js";
 import { invoke } from "./ipc.js";
 import { itemRow } from "./settings.js";
+import { forgetThread, loading, opened } from "./thread.js";
 import { logError, showFailure } from "./error-card.js";
 
 // The accounts as last read, or null until the first read.
@@ -68,9 +70,18 @@ async function remove(address: string) {
     return showFailure("icloud-settings", e);
   }
   checks.delete(address);
-  // The sync of the list stops asking about an account that is gone.
-  historyIds.delete(address);
   draw();
+  // As Google's removal does: the rows and the open thread of the account go, the sync stops asking about it, and the list is read again.
+  for (const [key, r] of rows) {
+    if (r.t.account !== address) continue;
+    r.li.remove();
+    rows.delete(key);
+  }
+  historyIds.delete(address);
+  forgetRemoved(address);
+  if ((opened.current ?? loading.current)?.account === address) forgetThread();
+  updateBadge();
+  await load();
 }
 
 // Asks iCloud about the kept password of each account; a row says its state when its answer comes.
@@ -126,6 +137,8 @@ export function initIcloudTab() {
       for (const a of list) checks.set(a.address, { state: "ok" });
       address.value = "";
       draw();
+      // The list reads the new account's mail, and the sync of the list starts asking about it (an iCloud-only start leaves the login screen).
+      await load();
     } catch (err) {
       showFailure("icloud-settings", err);
     } finally {

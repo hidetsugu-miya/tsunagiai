@@ -242,6 +242,14 @@ impl Auth {
             .ok_or("リフレッシュトークンが返されませんでした")?;
         let access = access_token_of(res)?;
         let email = self.fetch_email(&access).await?;
+        // Before the keychain: a token that no listed Gmail account owns would stay there unseen and unremovable.
+        let list = accounts::load_accounts(&dir)?.unwrap_or_default();
+        if let Err(e) = check_loginable(&list, &email) {
+            if let Err(r) = revoke(&self.http, REVOKE_URL, &refresh_token).await {
+                eprintln!("tsunagiai: revoke account={email} status=- error={r}");
+            }
+            return Err(e);
+        }
         keychain::write(KEYRING_SERVICE, &email, &refresh_token)?;
         add_gmail_account(&dir, &email)?;
         self.access.lock().unwrap().insert(email.clone(), access);
@@ -385,6 +393,16 @@ fn check_removable(list: &[accounts::Account], account: &str) -> Result<(), Stri
             Err("Google のアカウントではありません".into())
         }
         Some(_) => Ok(()),
+    }
+}
+
+/// A Google login may add a new address or log an existing Gmail account in again, never take over an iCloud account's row.
+fn check_loginable(list: &[accounts::Account], email: &str) -> Result<(), String> {
+    match list.iter().find(|a| a.address == email) {
+        Some(a) if a.kind == accounts::AccountKind::Icloud => Err(format!(
+            "{email} は iCloud のアカウントとして登録されています"
+        )),
+        _ => Ok(()),
     }
 }
 
@@ -608,6 +626,21 @@ mod tests {
         assert!(err.contains("Google のアカウントではありません"), "{err}");
         let err = check_removable(&list, "x@example.com").unwrap_err();
         assert!(err.contains("登録されていない"), "{err}");
+    }
+
+    #[test]
+    fn a_google_login_is_refused_for_an_address_listed_as_icloud() {
+        let list = vec![
+            accounts::Account::gmail("a@example.com"),
+            accounts::Account::icloud("i@icloud.com"),
+        ];
+        assert_eq!(check_loginable(&list, "a@example.com"), Ok(()));
+        assert_eq!(check_loginable(&list, "new@example.com"), Ok(()));
+        let err = check_loginable(&list, "i@icloud.com").unwrap_err();
+        assert_eq!(
+            err,
+            "i@icloud.com は iCloud のアカウントとして登録されています"
+        );
     }
 
     #[test]
